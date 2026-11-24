@@ -11,13 +11,13 @@ use super::clash::FileDiff;
 use super::{GitError, GitFuture, RunGit, TaskTree, TreeMode, TrialResult};
 use crate::agents::lock::PROTECTED_RO;
 use crate::matrix_gate::Gate;
+use crate::proc::Command;
 use runstav::methods::matrix::Facts;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::process::Command;
 
 #[cfg(test)]
 mod tests;
@@ -181,8 +181,7 @@ impl HubGit {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("LC_ALL", "C")
-            .stdin(std::process::Stdio::null())
-            .kill_on_drop(true);
+            .deadline(self.deadline);
         for (k, v) in self.shell.overlay() {
             c.env(k, v);
         }
@@ -195,7 +194,7 @@ impl HubGit {
         if let Some(d) = dir {
             c.current_dir(d);
         }
-        let out = crate::clock::timeout(self.deadline, c.output())
+        let out = crate::clock::timeout(self.deadline, c.output_async())
             .await
             .map_err(|_| err(what.clone(), "past its deadline"))?
             .map_err(|e| err(what.clone(), e.to_string()))?;

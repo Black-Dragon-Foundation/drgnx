@@ -940,12 +940,13 @@ fn spawn(cfg: &HostCfg) -> Result<Spawned, (i32, String)> {
     let (err_r, err_w) = pipe().map_err(io("the stderr pipe"))?;
     #[cfg(test)]
     tests::fork_holder();
-    let null = File::options()
-        .read(true)
-        .write(true)
-        .open("/dev/null")
-        .map(OwnedFd::from)
-        .map_err(io("/dev/null"))?;
+    // a device, not a regular file: eitri refuses it
+    let null = rustix::fs::open(
+        "/dev/null",
+        rustix::fs::OFlags::RDWR | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|e| io("/dev/null")(e.into()))?;
     // above every number the child moves them to, so no dup2 there overwrites one before it is used
     let moved = [&in_r, &out_w, &err_w, &null]
         .map(high)

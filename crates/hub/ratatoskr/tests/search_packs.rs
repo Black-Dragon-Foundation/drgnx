@@ -326,7 +326,7 @@ fn closed_repo_on_disk_counts_as_possession() {
         let b = Machine::new();
         let closed = b.repo("closed", &[Y]).await;
         let wanted = key_count(&closed).await as u64;
-        tokio::task::spawn_blocking(move || closed.shutdown())
+        saman::spawn_blocking("close-machine", move || closed.shutdown())
             .await
             .unwrap();
         let got = import(&b, &pack, &[], &[tiny().fp], false).await.unwrap();

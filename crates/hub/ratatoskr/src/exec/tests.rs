@@ -1390,7 +1390,9 @@ fn finished_job_folders_past_the_retention_are_pruned() {
         let make = |name: &str, age: u64| {
             let dir = root.join(name);
             std::fs::create_dir_all(&dir).unwrap();
-            let f = std::fs::File::create(dir.join("result.json")).unwrap();
+            let f = eitri::create_exclusive(&dir.join("result.json"), 0o666)
+                .map_err(std::io::Error::from)
+                .unwrap();
             f.set_modified(ago(age)).unwrap();
         };
         for i in 0..(KEEP_JOBS + 5) {
@@ -1469,9 +1471,13 @@ fn a_tail_takes_no_slice_and_a_bounded_size() {
 #[test]
 fn waiting_for_a_process_ends_with_the_process() {
     saman::block_on_current(async move {
-        let mut child = std::process::Command::new("sleep")
+        let mut child = crate::proc::Command::new("sleep")
             .arg("30")
-            .spawn()
+            .spawn(
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+            )
             .unwrap();
         let pid = child.id() as i32;
         let start = draugr::start_time(pid).unwrap();
@@ -1661,9 +1667,13 @@ fn running_meta(id: &str, relay: Option<&str>, pid: i32, start_time: Option<u64>
 fn reattach_ends_a_networked_job() {
     let d = tempfile::tempdir().unwrap();
     let hooks = net_hooks(d.path(), &info_net("5.4.2", true));
-    let mut adopted = std::process::Command::new("sleep")
+    let mut adopted = crate::proc::Command::new("sleep")
         .arg("30")
-        .spawn()
+        .spawn(
+            crate::proc::Io::Inherit,
+            crate::proc::Io::Inherit,
+            crate::proc::Io::Inherit,
+        )
         .unwrap();
     let pid = adopted.id() as i32;
     let start = draugr::start_time(pid).ok();

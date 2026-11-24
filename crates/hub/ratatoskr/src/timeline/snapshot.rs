@@ -6,7 +6,6 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Names that never enter a snapshot, besides the sandbox's secret files ([`gleipnir::toolchain::SECRET_FILES`]).
 pub(crate) const ALSO_SECRET: &[&str] = &["secrets.env", "*.pem", "*.key", "id_rsa", "id_ed25519"];
@@ -73,7 +72,7 @@ fn git_bytes(
     index: Option<&Path>,
     args: &[&str],
 ) -> villa::Result<Vec<u8>> {
-    let mut c = Command::new("git");
+    let mut c = crate::proc::Command::new("git");
     c.env("GIT_DIR", repo)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -1232,7 +1231,6 @@ mod tests {
     #[test]
     #[ignore = "timing: prints what the tree before a write costs"]
     fn write_tree_before_cost() {
-        use std::time::Instant;
         for n in [100usize, 1_000, 10_000] {
             let d = tempfile::tempdir().unwrap();
             let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
@@ -1243,7 +1241,7 @@ mod tests {
             }
             write_tree_before(&root, &wt, "s1").unwrap();
             let runs = 20;
-            let t = Instant::now();
+            let t = crate::clock::real_now();
             for i in 0..runs {
                 crate::fsio::write(wt.join("d0/f0.txt"), format!("write {i}\n")).unwrap();
                 write_tree_before(&root, &wt, "s1").unwrap();

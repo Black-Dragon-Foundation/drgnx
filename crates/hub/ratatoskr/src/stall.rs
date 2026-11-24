@@ -298,7 +298,7 @@ fn start_to(threshold: Duration, seen: Option<Arc<Mutex<Vec<String>>>>) -> Watch
         // since when the stall being reported began (ms on the beat's clock)
         let mut stalled: Option<u64> = None;
         loop {
-            std::thread::sleep(TICK);
+            stund::real::sleep_blocking(TICK);
             if stop.load(Ordering::Relaxed) {
                 return;
             }

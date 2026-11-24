@@ -2,7 +2,6 @@
 //! `cargo test`; docs/develop/work-space.md).
 
 use ratatoskr::work::shell_read::parse;
-use std::time::Instant;
 
 const CORPUS: &str = include_str!("../src/work/shell_read/corpus.txt");
 
@@ -21,7 +20,7 @@ fn shell_parse_within_200_us() {
     let mut times = Vec::new();
     for _ in 0..200 {
         for l in &lines {
-            let t = Instant::now();
+            let t = stund::real::instant();
             std::hint::black_box(parse(std::hint::black_box(l)));
             times.push(t.elapsed().as_nanos());
         }

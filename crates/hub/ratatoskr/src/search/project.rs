@@ -340,9 +340,8 @@ pub struct Project {
 
 impl Drop for Project {
     fn drop(&mut self) {
-        if let Ok(mut t) = self.tier2.lock()
-            && let Some(h) = t.take()
-        {
+        let held = saman::lock(&self.tier2).take();
+        if let Some(h) = held {
             h.abort();
         }
     }
@@ -474,13 +473,16 @@ impl Project {
 
     /// The watcher's events from now on; `tick` feeds them to the settle core.
     pub fn watch(&self, w: Arc<hrafn::ProjectWatch>) {
-        if let Ok(mut e) = self.inner.events.lock() {
+        {
+            let mut e = saman::lock(&self.inner.events);
             *e = Some(hrafn::Watch::events(&*w));
         }
-        if let Ok(mut h) = self.inner.watcher.lock() {
+        {
+            let mut h = saman::lock(&self.inner.watcher);
             *h = Some(w);
         }
-        if let Ok(mut b) = self.inner.watch_budget.lock() {
+        {
+            let mut b = saman::lock(&self.inner.watch_budget);
             *b = crate::fsio::read_to_string(MAX_USER_WATCHES)
                 .ok()
                 .and_then(|t| t.trim().parse::<usize>().ok())
@@ -491,7 +493,10 @@ impl Project {
     /// Another tree of this project (a worktree) joins the project's one watcher; its events are tagged with
     /// its key. Blocking: it walks the tree and runs git.
     pub fn add_tree(&self, spec: hrafn::TreeSpec) -> Result<(), hrafn::AddError> {
-        let w = self.inner.watcher.lock().ok().and_then(|h| h.clone());
+        let w = {
+            let h = saman::lock(&self.inner.watcher);
+            h.clone()
+        };
         match w {
             Some(w) => w.add_tree(spec),
             None => Err(hrafn::AddError::Other("the project has no watcher".into())),
@@ -502,7 +507,8 @@ impl Project {
     /// copied to it.  Dropping the receiver ends the tap.
     pub fn tap(&self) -> Receiver<WatchEvent> {
         let (tx, rx) = std::sync::mpsc::channel();
-        if let Ok(mut t) = self.inner.taps.lock() {
+        {
+            let mut t = saman::lock(&self.inner.taps);
             t.push(tx);
         }
         rx
@@ -533,21 +539,15 @@ impl Project {
         let mut hints: HashMap<String, BTreeSet<String>> = HashMap::new();
         let (mut gits, mut overflow) = (HashSet::new(), false);
         let due = {
-            let events: Vec<WatchEvent> = match self.inner.events.lock() {
-                Ok(g) => g
-                    .as_ref()
-                    .map_or_else(Vec::new, |rx| rx.try_iter().collect()),
-                Err(_) => vec![],
-            };
-            if let Ok(mut taps) = self.inner.taps.lock() {
+            let events: Vec<WatchEvent> = saman::lock(&self.inner.events)
+                .as_ref()
+                .map_or_else(Vec::new, |rx| rx.try_iter().collect());
+            {
+                let mut taps = saman::lock(&self.inner.taps);
                 taps.retain(|t| events.iter().all(|e| t.send(e.clone()).is_ok()));
             }
             let now = clock::now() - self.inner.opened;
-            let mut settle = self
-                .inner
-                .settle
-                .lock()
-                .map_err(|_| io::Error::other("settle"))?;
+            let mut settle = saman::lock(&self.inner.settle);
             for e in &events {
                 match e {
                     WatchEvent::File { tree, rel } if tree != hrafn::MAIN_TREE => {
@@ -571,16 +571,14 @@ impl Project {
         };
         // the worktrees' events go to their overlays; an overflow lost events of every tree
         self.inner.hints(hints, gits, overflow).await?;
-        let sweep = match self.inner.swept.lock() {
-            Ok(mut s) => {
-                let now = clock::now();
-                let due = s.is_none_or(|t| now - t >= TREE_SWEEP);
-                if due {
-                    *s = Some(now);
-                }
-                due
+        let sweep = {
+            let mut s = saman::lock(&self.inner.swept);
+            let now = clock::now();
+            let due = s.is_none_or(|t| now - t >= TREE_SWEEP);
+            if due {
+                *s = Some(now);
             }
-            Err(_) => false,
+            due
         };
         if sweep {
             let inner = self.inner.clone();
@@ -597,7 +595,8 @@ impl Project {
                     tracing::warn!("search: the vector cache sweep: {e}");
                 }
             });
-            if let Ok(mut j) = self.inner.jobs.lock() {
+            {
+                let mut j = saman::lock(&self.inner.jobs);
                 j.push(h);
             }
         }
@@ -618,7 +617,10 @@ impl Project {
     /// any differ. The listing reads and hashes only the files whose status moved since the last one
     /// (`hrafn::files::list_with`).
     pub async fn fresh_for_query(&self) -> Result<Option<Refresh>, ProjectError> {
-        let has_watch = self.inner.events.lock().is_ok_and(|e| e.is_some());
+        let has_watch = {
+            let e = saman::lock(&self.inner.events);
+            e.is_some()
+        };
         if has_watch {
             return self.tick().await;
         }
@@ -636,26 +638,24 @@ impl Project {
     /// Holds tier 2 for [`TYPING_HOLD`] from now (between requests, never inside one).
     pub fn note_typing(&self) {
         let until = clock::now() + TYPING_HOLD;
-        let start_timer = match self.inner.gate.lock() {
-            Ok(mut g) => {
-                g.hold_until = Some(until);
-                !std::mem::replace(&mut g.timer, true)
-            }
-            Err(_) => false,
+        let start_timer = {
+            let mut g = saman::lock(&self.inner.gate);
+            g.hold_until = Some(until);
+            !std::mem::replace(&mut g.timer, true)
         };
         if start_timer {
             let inner = self.inner.clone();
             clock::spawn("search:typing", async move {
                 loop {
-                    let wait = match inner.gate.lock() {
-                        Ok(mut g) => match g.hold_until {
+                    let wait = {
+                        let mut g = saman::lock(&inner.gate);
+                        match g.hold_until {
                             Some(t) if t > clock::now() => Some(t - clock::now()),
                             _ => {
                                 g.timer = false;
                                 None
                             }
-                        },
-                        Err(_) => None,
+                        }
                     };
                     match wait {
                         Some(d) => clock::sleep(d).await,
@@ -670,7 +670,8 @@ impl Project {
     /// `search/index` with `now`: tier 2 runs on battery and on a busy machine too (not below the disk floor), until
     /// nothing is missing.
     pub fn index_now(&self) {
-        if let Ok(mut g) = self.inner.gate.lock() {
+        {
+            let mut g = saman::lock(&self.inner.gate);
             g.overriding = true;
         }
         self.inner.wake.notify_one();
@@ -678,7 +679,8 @@ impl Project {
 
     /// More sources for tier 2 (a lookup source, an engine): before [`start_tier2`](Self::start_tier2).
     pub fn add_sources(&self, more: Vec<Arc<dyn Source>>) {
-        if let Ok(mut s) = self.inner.sources.lock() {
+        {
+            let mut s = saman::lock(&self.inner.sources);
             s.extend(more);
         }
     }
@@ -697,7 +699,8 @@ impl Project {
     /// The files open in the editor and the ones edited lately: tier 2 embeds their chunks first (MP-14); the rest
     /// follow by git recency. A history version of a file also makes it a recently edited one.
     pub fn order_hint(&self, open: &[String], recent: &[String]) {
-        if let Ok(mut o) = self.inner.open_paths.lock() {
+        {
+            let mut o = saman::lock(&self.inner.open_paths);
             *o = open.to_vec();
         }
         self.inner.note_recent(recent.iter().rev());
@@ -705,11 +708,7 @@ impl Project {
 
     /// Each fingerprint's (hex) chain of sources as the last pass left it.
     pub fn chains(&self) -> Vec<(String, Vec<ChainEntry>)> {
-        self.inner
-            .chains
-            .lock()
-            .map(|c| c.clone())
-            .unwrap_or_default()
+        saman::lock(&self.inner.chains).clone()
     }
 
     /// `search/pause`: the batch in flight finishes, then tier 2 holds until [`resume`](Self::resume); kept in the
@@ -732,7 +731,10 @@ impl Project {
     /// or `search/index` goes on from there.
     pub async fn stop(&self) -> Result<(), ProjectError> {
         self.inner.set_user(UserState::Stopped).await?;
-        let running = self.tier2.lock().ok().and_then(|mut t| t.take());
+        let running = {
+            let mut t = saman::lock(&self.tier2);
+            t.take()
+        };
         if let Some(h) = running {
             h.abort();
             crate::soft::done(h.await, "project");
@@ -758,12 +760,7 @@ impl Project {
             // server not there)
             Tier2::Idle | Tier2::Stopped
                 if self.inner.sources().is_empty()
-                    || self
-                        .inner
-                        .chains
-                        .lock()
-                        .map(|c| c.is_empty())
-                        .unwrap_or(true) =>
+                    || saman::lock(&self.inner.chains).is_empty() =>
             {
                 RootState::Paused(PauseWhy::NoEmbedder)
             }
@@ -776,7 +773,7 @@ impl Project {
         if self.inner.user() == UserState::Stopped {
             return;
         }
-        let Ok(mut t) = self.tier2.lock() else { return };
+        let mut t = saman::lock(&self.tier2);
         if t.as_ref().is_some_and(|h| !h.is_finished()) {
             return;
         }
@@ -923,10 +920,8 @@ impl Project {
     /// Waits until no seed, check, re-check or sweep of the trees runs.
     pub async fn settle_trees(&self) {
         loop {
-            let jobs: Vec<crate::clock::Spawned<()>> = match self.inner.jobs.lock() {
-                Ok(mut j) => j.drain(..).collect(),
-                Err(_) => return,
-            };
+            let jobs: Vec<crate::clock::Spawned<()>> =
+                saman::lock(&self.inner.jobs).drain(..).collect();
             if jobs.is_empty() {
                 return;
             }
@@ -1120,7 +1115,10 @@ impl Inner {
     }
 
     fn watcher(&self) -> Option<Arc<hrafn::ProjectWatch>> {
-        self.watcher.lock().ok().and_then(|h| h.clone())
+        {
+            let h = saman::lock(&self.watcher);
+            h.clone()
+        }
     }
 
     async fn state_of(&self, t: hrafn::TreeId) -> Result<hrafn::TreeState, ProjectError> {
@@ -1196,8 +1194,14 @@ impl Inner {
                 self.live(t, |l| l.watched = true);
                 let state = hrafn::Watch::shared_state(&*w);
                 let over = || {
-                    let budget = self.watch_budget.lock().ok().and_then(|b| *b);
-                    let used = state.lock().map(|s| s.watched).unwrap_or(0);
+                    let budget = {
+                        let b = saman::lock(&self.watch_budget);
+                        *b
+                    };
+                    let used = {
+                        let s = saman::lock(&state);
+                        s.watched
+                    };
                     budget.is_some_and(|b| used > b)
                 };
                 while over() && self.unwatch_lru(t).await {}
@@ -1226,7 +1230,9 @@ impl Inner {
                 clock::blocking(move || w2.remove_tree(&k)).await,
                 "clock::blocking",
             );
-            if let Ok(mut s) = hrafn::Watch::shared_state(&*w).lock() {
+            {
+                let state = hrafn::Watch::shared_state(&*w);
+                let mut s = saman::lock(&state);
                 s.unwatched.retain(|(k, _)| *k != lru.key);
                 s.unwatched.push((
                     lru.key.clone(),
@@ -1256,12 +1262,15 @@ impl Inner {
                 clock::blocking(move || w2.remove_tree(&k)).await,
                 "clock::blocking",
             );
-            if let Ok(mut s) = hrafn::Watch::shared_state(&*w).lock() {
+            {
+                let state = hrafn::Watch::shared_state(&*w);
+                let mut s = saman::lock(&state);
                 s.unwatched.retain(|(k, _)| *k != r.key);
             }
         }
         self.store.tree_drop(r.id).await?;
-        if let Ok(mut t) = self.trees.lock() {
+        {
+            let mut t = saman::lock(&self.trees);
             t.remove(&r.id);
         }
         Ok(())
@@ -1307,7 +1316,8 @@ impl Inner {
                 }
             }
         });
-        if let Ok(mut j) = self.jobs.lock() {
+        {
+            let mut j = saman::lock(&self.jobs);
             j.retain(|h| !h.is_finished());
             j.push(h);
         }
@@ -1418,7 +1428,10 @@ impl Inner {
 
     /// Tier 2's sources now.
     fn sources(&self) -> Vec<Arc<dyn Source>> {
-        self.sources.lock().map(|s| s.clone()).unwrap_or_default()
+        {
+            let s = saman::lock(&self.sources);
+            s.clone()
+        }
     }
 
     /// The caches of the fingerprints the sources have proved so far (a source not probed yet has none).
@@ -1436,7 +1449,8 @@ impl Inner {
     async fn refresh(&self) -> Result<Refresh, ProjectError> {
         let listed = self.list()?;
         // the files' git recency is read again for the next batch
-        if let Ok(mut r) = self.recency.lock() {
+        {
+            let mut r = saman::lock(&self.recency);
             *r = None;
         }
         let root = eitri::open_path(&self.base, eitri::Kind::Dir)
@@ -1454,7 +1468,8 @@ impl Inner {
                 .await?;
         }
         // the store's live key set, to each cache (MP-21); a fingerprint first proved later is held by tier 2
-        if let Ok(mut h) = self.held.lock() {
+        {
+            let mut h = saman::lock(&self.held);
             h.clear();
         }
         for c in &caches {
@@ -1467,7 +1482,8 @@ impl Inner {
     async fn hold(&self, cache: &VectorCache) -> Result<(), ProjectError> {
         let now_ms = (clock::wall_secs() * 1000.0) as i64;
         hrafn::hold(&self.store, cache, &self.base, now_ms).await?;
-        if let Ok(mut h) = self.held.lock() {
+        {
+            let mut h = saman::lock(&self.held);
             h.insert(cache.fp_hex().to_string());
         }
         Ok(())
@@ -1476,7 +1492,10 @@ impl Inner {
     /// ID's cache, holding the store's live key set (reported now when no refresh has since ID was first proved).
     async fn cache_held(&self, id: &Identity) -> Result<Arc<VectorCache>, ProjectError> {
         let cache = self.caches.get(id).await?;
-        let held = self.held.lock().is_ok_and(|h| h.contains(cache.fp_hex()));
+        let held = {
+            let h = saman::lock(&self.held);
+            h.contains(cache.fp_hex())
+        };
         if !held {
             self.hold(&cache).await?;
         }
@@ -1484,13 +1503,17 @@ impl Inner {
     }
 
     fn user(&self) -> UserState {
-        self.user.lock().map_or(UserState::On, |u| *u)
+        {
+            let u = saman::lock(&self.user);
+            *u
+        }
     }
 
     /// The user's state, kept in the store first.
     async fn set_user(&self, state: UserState) -> Result<(), ProjectError> {
         self.store.meta_set(META_STATE, state.as_str()).await?;
-        if let Ok(mut u) = self.user.lock() {
+        {
+            let mut u = saman::lock(&self.user);
             *u = state;
         }
         Ok(())
@@ -1515,9 +1538,9 @@ impl Inner {
                 self.wake.notified().await;
                 continue;
             }
-            let (typing, overriding) = match self.gate.lock() {
-                Ok(g) => (g.hold_until.is_some_and(|t| t > clock::now()), g.overriding),
-                Err(_) => (false, false),
+            let (typing, overriding) = {
+                let g = saman::lock(&self.gate);
+                (g.hold_until.is_some_and(|t| t > clock::now()), g.overriding)
             };
             if typing {
                 self.publish(Tier2::Typing);
@@ -1553,7 +1576,10 @@ impl Inner {
 
     /// The paths to embed first: open files, then recently edited ones, then the rest by git recency (MP-14).
     async fn order(&self) -> Vec<String> {
-        let cached = self.recency.lock().ok().and_then(|r| r.clone());
+        let cached = {
+            let r = saman::lock(&self.recency);
+            r.clone()
+        };
         let recency = match cached {
             Some(r) => r,
             None => {
@@ -1563,14 +1589,18 @@ impl Inner {
                     .ok()
                     .and_then(Result::ok)
                     .unwrap_or_default();
-                if let Ok(mut c) = self.recency.lock() {
+                {
+                    let mut c = saman::lock(&self.recency);
                     *c = Some(r.clone());
                 }
                 r
             }
         };
         let mut seen = HashSet::new();
-        let take = |v: &Mutex<Vec<String>>| v.lock().map(|v| v.clone()).unwrap_or_default();
+        let take = |v: &Mutex<Vec<String>>| {
+            let v = saman::lock(v);
+            v.clone()
+        };
         take(&self.open_paths)
             .into_iter()
             .chain(take(&self.recent_paths))
@@ -1582,7 +1612,8 @@ impl Inner {
 
     /// Remembers the paths a history version names as the most recently edited.
     fn note_recent<'a>(&self, paths: impl Iterator<Item = &'a String>) {
-        if let Ok(mut r) = self.recent_paths.lock() {
+        {
+            let mut r = saman::lock(&self.recent_paths);
             for p in paths {
                 r.retain(|o| o != p);
                 r.insert(0, p.clone());
@@ -1648,7 +1679,8 @@ impl Inner {
             loop {
                 let (overriding, hold) = self.gates().await;
                 slots = self.slots(slots, hold.is_some(), overriding).await;
-                if let Ok(mut v) = self.chains.lock() {
+                {
+                    let mut v = saman::lock(&self.chains);
                     *v = slots
                         .iter()
                         .map(|s| (s.chain.fingerprint().hex(), s.chain.status()))
@@ -1693,7 +1725,8 @@ impl Inner {
                 break;
             }
             if !sent {
-                if let Ok(mut g) = self.gate.lock() {
+                {
+                    let mut g = saman::lock(&self.gate);
                     g.overriding = false;
                 }
                 // (unreferenced vectors are the caches' to collect: their hourly sweep)
@@ -1731,7 +1764,8 @@ impl Inner {
                     return;
                 }
             }
-            if let Ok(mut g) = self.gate.lock() {
+            {
+                let mut g = saman::lock(&self.gate);
                 g.overriding = false;
             }
         }

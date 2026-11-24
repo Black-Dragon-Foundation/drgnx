@@ -383,7 +383,7 @@ fn sync(plan_path: &Path, out: Option<&Path>) -> i32 {
                 return 1;
             }
         }
-        None => print!("{text}"),
+        None => crate::soft::out_text(&text),
     }
     code
 }
@@ -466,7 +466,7 @@ fn sync_builtin(out: &Path, packs: &[String]) -> i32 {
             ),
         )
         .map_err(|e| villa::Error::io(e.to_string()))?;
-        std::fs::remove_dir_all(&staging).ok();
+        crate::soft::done(std::fs::remove_dir_all(&staging), "remove_dir_all");
         Ok(())
     };
     match run() {

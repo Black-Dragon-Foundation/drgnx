@@ -285,7 +285,6 @@ impl Connection {
         tcp: Option<[u16; 5]>,
     ) -> villa::Result<Connection> {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
         let key = Key::generate()?;
         let mut body = serde_json::json!({
             "transport": transport,
@@ -298,11 +297,8 @@ impl Connection {
             body[format!("{ch}_port")] = port.into();
         }
         let path = folder.join(format!("kernel-{id}.json"));
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
+        let mut f = eitri::create_exclusive(&path, 0o600)
+            .map_err(std::io::Error::from)
             .map_err(|e| villa::Error::io(format!("cannot create {}: {e}", path.display())))?;
         if let Err(e) = f.write_all(body.to_string().as_bytes()) {
             crate::soft::done(std::fs::remove_file(&path), "std::fs::remove_file");
@@ -448,12 +444,7 @@ fn trusted(m: &std::fs::Metadata) -> Result<(), String> {
 /// KERNEL.JSON opened without following a link and without blocking (a FIFO put there after a check would hold the open), then
 /// looked at: a regular file, small enough, trusted. The file and its metadata, or why not.
 pub(crate) fn open_spec_file(path: &Path) -> Result<std::fs::File, String> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|e| format!("cannot be opened: {e}"))?;
+    let f = eitri::open_read(path).map_err(|e| format!("cannot be opened: {e}"))?;
     let meta = f.metadata().map_err(|e| format!("cannot be read: {e}"))?;
     if !meta.is_file() {
         return Err("kernel.json is not a regular file".into());

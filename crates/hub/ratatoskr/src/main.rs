@@ -6,7 +6,6 @@
 use ratatoskr::cli::{self, Command, Supervisor};
 use ratatoskr::{Exit, doctor, idle, server, supervise, version};
 use runstav::paths::Env;
-use std::os::unix::process::CommandExt;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -55,10 +54,10 @@ fn main() -> ExitCode {
             ratatoskr::soft::out_line(&(version::text()).to_string())
         }
         Command::Methods { markdown: false } => {
-            print!("{}", runstav::registry::methods_json_text())
+            ratatoskr::soft::out_text(&runstav::registry::methods_json_text())
         }
         Command::Methods { markdown: true } => {
-            print!("{}", runstav::registry::markdown_table())
+            ratatoskr::soft::out_text(&runstav::registry::markdown_table())
         }
         Command::Ensure { timeout } => return code(supervise::ensure(&Env::process(), timeout)),
         Command::Stop { timeout } => return code(supervise::stop(&Env::process(), timeout)),
@@ -120,7 +119,7 @@ fn main() -> ExitCode {
                 &grammar,
                 &sha256,
                 &mut std::io::stdin().lock(),
-                &mut std::io::stdout().lock(),
+                &mut annall::raw_out(),
             ));
         }
         Command::EmbedWorker(args) => return code(ratatoskr::search::worker::run(args)),
@@ -141,14 +140,13 @@ fn main() -> ExitCode {
             // the fetched packs' grammars: workers under the sandbox, started on first use
             ratatoskr::parse_worker::install_hub(&Env::process());
             let supervisor = args.supervisor;
-            let mut builder = tokio::runtime::Builder::new_multi_thread();
-            builder.worker_threads(2).enable_all();
-            // the virtual clock's look at the workers: a parked worker holds no deferred wake
-            #[cfg(feature = "test-hooks")]
-            builder
-                .on_thread_park(ratatoskr::clock::worker_parks)
-                .on_thread_unpark(ratatoskr::clock::worker_unparks);
-            let runtime = match builder.build() {
+            let runtime = match saman::Executor::tuned(2, |_builder| {
+                // the virtual clock's look at the workers: a parked worker holds no deferred wake
+                #[cfg(feature = "test-hooks")]
+                _builder
+                    .on_thread_park(ratatoskr::clock::worker_parks)
+                    .on_thread_unpark(ratatoskr::clock::worker_unparks);
+            }) {
                 Ok(r) => r,
                 Err(e) => {
                     ratatoskr::soft::err_line(&format!(
@@ -184,10 +182,19 @@ fn reexec() -> ExitCode {
         ratatoskr::soft::err_line("ratatoskr: cannot restart: no resolved executable path");
         return ExitCode::from(Exit::CannotStart as u8);
     };
-    let err = std::process::Command::new(exe)
-        .args(std::env::args_os().skip(1))
-        .env(ratatoskr::lock::RESTARTED, "1")
-        .exec();
+    let mut env: Vec<_> = std::env::vars_os()
+        .filter(|(k, _)| k != ratatoskr::lock::RESTARTED)
+        .collect();
+    env.push((ratatoskr::lock::RESTARTED.into(), "1".into()));
+    let err = draugr::exec(&draugr::Spec {
+        program: exe.to_path_buf(),
+        args: std::env::args_os().skip(1).collect(),
+        env,
+        cwd: None,
+        stdin_null: false,
+        pass_fds: Vec::new(),
+        new_session: false,
+    });
     ratatoskr::soft::err_line(&format!(
         "ratatoskr: cannot execute {} again: {err}",
         exe.display()

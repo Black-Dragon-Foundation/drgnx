@@ -394,7 +394,7 @@ fn shown(map: &hrafn::map::RepoMap) -> Vec<(String, String)> {
 
 /// The three contexts' yields for every question at BUDGET tokens. ASK searches; TEXT gives a file as it is now.
 fn map_yields(
-    rt: &tokio::runtime::Runtime,
+    rt: &saman::Executor,
     store: &CodeStore,
     questions: &[EvalRow],
     budget: usize,
@@ -510,11 +510,8 @@ fn project_name(root: &Path) -> String {
         .unwrap_or_else(|| "project".into())
 }
 
-fn runtime() -> villa::Result<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| villa::Error::invalid(format!("no runtime: {e}")))
+fn runtime() -> villa::Result<saman::Executor> {
+    saman::Executor::new(1)
 }
 
 /// A tier-1 index of ROOT's files in STATE, with the caches that tier 2 will fill. The listed files come back.
@@ -634,7 +631,7 @@ impl DocSource for LocalSource {
 struct ServerSource<'a> {
     id: String,
     direct: Direct,
-    rt: &'a tokio::runtime::Runtime,
+    rt: &'a saman::Executor,
     dims: Option<usize>,
 }
 
@@ -684,7 +681,7 @@ fn open_source<'a>(
     spec: &'static ModelSpec,
     models: &Path,
     device: &Device,
-    rt: &'a tokio::runtime::Runtime,
+    rt: &'a saman::Executor,
 ) -> villa::Result<Box<dyn DocSource + 'a>> {
     let server = |api: Api, url: &str| -> villa::Result<Box<dyn DocSource + 'a>> {
         let base: Uri = url
@@ -1136,7 +1133,7 @@ fn compare_files(a: &Path, b: &Path, by: eval::Gate) -> villa::Result<(String, b
 pub fn run(env: &runstav::paths::Env, cmd: EvalCommand) -> i32 {
     let done = |r: villa::Result<String>| match r {
         Ok(text) => {
-            print!("{text}");
+            crate::soft::out_text(&text);
             if !text.ends_with('\n') {
                 crate::soft::out_line("");
             }
@@ -1187,7 +1184,7 @@ pub fn run(env: &runstav::paths::Env, cmd: EvalCommand) -> i32 {
         }
         EvalCommand::Compare { a, b, by } => match compare_files(&a, &b, by) {
             Ok((text, pass)) => {
-                print!("{text}");
+                crate::soft::out_text(&text);
                 i32::from(!pass)
             }
             Err(e) => {

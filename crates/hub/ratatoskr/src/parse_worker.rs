@@ -20,15 +20,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 /// The runtime the spawns and the reaping run on: the chunker calls the launcher from threads that have none of their own.
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+fn runtime() -> &'static saman::Executor {
+    static RT: OnceLock<saman::Executor> = OnceLock::new();
     RT.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("hrafn-parse-launch")
-            .enable_all()
-            .build()
-            .expect("the worker launcher's runtime")
+        saman::Executor::tuned(1, |b| {
+            b.thread_name("hrafn-parse-launch");
+        })
+        .expect("the worker launcher's runtime")
     })
 }
 

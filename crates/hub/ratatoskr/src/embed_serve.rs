@@ -512,14 +512,9 @@ fn sha256(b: &[u8]) -> [u8; 32] {
 /// BYTES written to DIR/NAME, 0600, replacing it whole (a new file renamed over the old).
 fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
     let tmp = dir.join(format!(".{name}.new"));
     crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)?;
+    let mut f = eitri::create_exclusive(&tmp, 0o600).map_err(std::io::Error::from)?;
     f.write_all(bytes)?;
     f.sync_all()?;
     crate::fsio::rename(&tmp, dir.join(name))

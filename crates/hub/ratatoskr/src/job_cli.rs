@@ -415,7 +415,7 @@ pub fn run(env: &Env, cmd: JobCommand) -> i32 {
         }
         Ok(a) => match render(&cmd.sub, &a) {
             Ok(text) => {
-                print!("{text}");
+                crate::soft::out_text(&text);
                 0
             }
             Err(e) => {

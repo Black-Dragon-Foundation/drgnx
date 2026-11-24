@@ -20,7 +20,7 @@ use std::fs::File;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use std::ops::Range;
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -97,14 +97,7 @@ fn lock_dir(dir: &Path) -> villa::Result<()> {
 /// PATH (created open to every account, never through a link), locked exclusively without waiting; none when another
 /// process holds it or the file is not ours to open (another account's, made private: that block is passed over).
 fn lock(path: &Path) -> Option<File> {
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .mode(0o666)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .ok()?;
+    let f = eitri::open_lock(path, 0o666).ok()?;
     // the umask narrowed the mode: widen it (only ours can be changed, and only ours needs it)
     crate::soft::done(
         f.set_permissions(std::fs::Permissions::from_mode(0o666)),
@@ -302,69 +295,27 @@ pub const LSOF_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// CMD's output (stdin closed), or an error once it has run WITHIN without exiting (it is killed then).
 pub fn output_within(
-    mut cmd: std::process::Command,
+    mut cmd: crate::proc::Command,
     within: std::time::Duration,
-) -> villa::Result<std::process::Output> {
-    use std::io::Read;
-    use std::process::Stdio;
-    let name = cmd.get_program().to_string_lossy().into_owned();
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| villa::Error::invalid(format!("{name}: {e}")))?;
-    // read both pipes as it runs: a full pipe would stop it before it exits
-    let drain = |p: Option<Box<dyn Read + Send>>| {
-        saman::spawn_thread("ratatoskr:ports", move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = p {
-                crate::soft::done(p.read_to_end(&mut buf), "ports");
-            }
-            buf
-        })
-    };
-    let out = drain(
-        child
-            .stdout
-            .take()
-            .map(|p| Box::new(p) as Box<dyn Read + Send>),
-    )?;
-    let err = drain(
-        child
-            .stderr
-            .take()
-            .map(|p| Box::new(p) as Box<dyn Read + Send>),
-    )?;
-    let start = crate::clock::real_now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) if start.elapsed() < within => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Ok(None) => {
-                crate::soft::done(child.kill(), "ports");
-                crate::soft::done(child.wait(), "ports");
-                return Err(villa::Error::invalid(format!(
-                    "{name} did not answer within {} ms (killed)",
-                    within.as_millis()
-                )));
-            }
-            Err(e) => return Err(villa::Error::invalid(format!("{name}: {e}"))),
+) -> villa::Result<crate::proc::Output> {
+    let name = cmd.program().to_string_lossy().into_owned();
+    // past WITHIN the child's group is killed (draugr's deadline)
+    cmd.deadline(within).output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::TimedOut {
+            villa::Error::invalid(format!(
+                "{name} did not answer within {} ms (killed)",
+                within.as_millis()
+            ))
+        } else {
+            villa::Error::invalid(format!("{name}: {e}"))
         }
-    };
-    Ok(std::process::Output {
-        status,
-        stdout: out.join().unwrap_or_default(),
-        stderr: err.join().unwrap_or_default(),
     })
 }
 
 /// The process of each listener on PORT; `None` where it cannot be seen.
 #[cfg(target_os = "macos")]
 fn listener_pids(port: u16) -> villa::Result<Vec<Option<i32>>> {
-    let mut cmd = std::process::Command::new("/usr/sbin/lsof");
+    let mut cmd = crate::proc::Command::new("/usr/sbin/lsof");
     // -b -w: no kernel call that can block (a stat of a hung mount); the deadline covers the rest
     cmd.args([
         "-b",

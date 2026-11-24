@@ -36,7 +36,7 @@ use crate::{Exit, log, runtime_db};
 use runstav::paths::{self, Env};
 use runstav::proof::Cap;
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -129,7 +129,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         0
     };
     let lock = match lock::acquire_retrying(&lock_path, &lock::System, tries, || {
-        std::thread::sleep(Duration::from_millis(50));
+        stund::real::sleep_blocking(Duration::from_millis(50));
     }) {
         Ok(l) => l,
         Err(LockError::LispHub { pid }) => {
@@ -1031,7 +1031,8 @@ fn embed_idle(front: &Arc<Front>) {
             tracing::info!(embedded, denied, "entity vectors made");
         }
         let chain = driver.chain();
-        if let Ok(mut view) = shared.view.lock() {
+        {
+            let mut view = saman::lock(&shared.view);
             *view = labels
                 .iter()
                 .filter_map(|l| {
@@ -1151,12 +1152,7 @@ fn write_private(file: &Path, text: &[u8]) -> std::io::Result<()> {
     let tmp = PathBuf::from(name);
     crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     let written = (|| {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)?;
+        let mut f = eitri::create_exclusive(&tmp, 0o600).map_err(std::io::Error::from)?;
         f.write_all(text)?;
         f.sync_all()?;
         crate::fsio::rename(&tmp, file)

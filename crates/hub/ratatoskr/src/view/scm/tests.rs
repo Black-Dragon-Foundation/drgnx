@@ -1,5 +1,4 @@
 use super::*;
-use std::process::Command;
 
 /// Run the shell SCRIPT in DIR (a fresh repository's git config names its author), panicking on failure.
 fn sh(dir: &Path, script: &str) {
@@ -316,14 +315,14 @@ fn commit_takes_the_message_on_stdin_and_runs_the_hooks() {
 #[test]
 fn deadline_and_cancel_stop_a_hung_git() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut c = Command::new("/bin/sh");
+    let mut c = crate::proc::Command::new("/bin/sh");
     c.args(["-c", "sleep 30"]);
     // the deadline stopped it: the command would run 30 s, and the error says it was cut at the deadline
     let e = run::run(c, tmp.path(), None, Some(Duration::from_millis(200)), None).unwrap_err();
     assert!(e.contains("longer than"), "{e}");
     // a cancel already set: the run stops at its first look instead of running the 30 s
     let cancel = Arc::new(AtomicBool::new(true));
-    let mut c = Command::new("/bin/sh");
+    let mut c = crate::proc::Command::new("/bin/sh");
     c.args(["-c", "sleep 30"]);
     assert_eq!(
         run::run(c, tmp.path(), None, None, Some(&cancel)).unwrap_err(),

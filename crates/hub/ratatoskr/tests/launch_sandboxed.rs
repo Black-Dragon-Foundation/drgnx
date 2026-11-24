@@ -93,11 +93,7 @@ impl Fx {
         let env = self.env();
         let launch = launch_on(&env, &sb, plan, shape).unwrap_or_else(|r| panic!("refused: {r}"));
         between();
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
+        saman::block_on_current(async {
             let mut child = draugr::spawn_pinned(launch.spec).await.expect("spawn");
             let deadline = std::time::Duration::from_secs(20);
             if let Some(fd) = launch.status {
@@ -195,11 +191,7 @@ fn an_agent_sessions_stdin_reaches_the_program_inside() {
     )
     .unwrap_or_else(|r| panic!("refused: {r}"));
     let launch = with_stdin(launch);
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let code = rt.block_on(async {
+    let code = saman::block_on_current(async {
         let mut child = draugr::spawn_pinned(launch.spec).await.expect("spawn");
         let mut stdin = child.take_stdin().expect("a pipe on the agent's stdin");
         if let Some(fd) = launch.status {
@@ -231,13 +223,16 @@ fn mock_llm(fx: &Fx) -> (std::process::Child, u16, PathBuf) {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../test/conformance/fixtures/llm-messages.json");
     let log = fx.p("llm.log");
-    let mut llm = std::process::Command::new(&mock)
+    let mut llm = ratatoskr::proc::Command::new(&mock)
         .args(["llm", "--script"])
         .arg(&script)
         .arg("--log")
         .arg(&log)
-        .stdout(std::process::Stdio::piped())
-        .spawn()
+        .spawn(
+            ratatoskr::proc::Io::Inherit,
+            ratatoskr::proc::Io::Pipe,
+            ratatoskr::proc::Io::Inherit,
+        )
         .expect("ratatoskr-mock llm");
     let mut line = String::new();
     std::io::BufReader::new(llm.stdout.take().unwrap())
@@ -270,7 +265,7 @@ fn a_gateway_session_reaches_the_hubs_gateway_through_its_relay() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(fx.p("run"), std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let mut hub = std::process::Command::new(RATATOSKR)
+    let mut hub = ratatoskr::proc::Command::new(RATATOSKR)
         .args(["serve", "--foreground", "--parent-pid", &me.to_string()])
         .env_clear()
         .envs([
@@ -281,10 +276,11 @@ fn a_gateway_session_reaches_the_hubs_gateway_through_its_relay() {
             ("RATATOSKR_SUPERVISOR", PathBuf::from("none")),
         ])
         .current_dir(fx.p(""))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::fs::File::create(fx.p("hub.err")).unwrap())
-        .spawn()
+        .spawn(
+            ratatoskr::proc::Io::Null,
+            ratatoskr::proc::Io::Null,
+            ratatoskr::proc::Io::file(eitri::create_exclusive(&fx.p("hub.err"), 0o666).unwrap()),
+        )
         .expect("the hub");
     let within = Duration::from_secs(10);
     // a look repeated: the hub says nothing when it is ready; 30 s only bounds a failure
@@ -330,11 +326,7 @@ fn a_gateway_session_reaches_the_hubs_gateway_through_its_relay() {
     let shape = fx.shape(NetCell::ProviderOnly);
     let launch = launch_on(&env, &sandbox(Tier::Full), &plan, &shape)
         .unwrap_or_else(|r| panic!("refused: {r}"));
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let (code, tail) = rt.block_on(async {
+    let (code, tail) = saman::block_on_current(async {
         let mut child = draugr::spawn_pinned(launch.spec).await.expect("spawn");
         if let Some(fd) = launch.status {
             gleipnir::read_status(fd, &|| child.stderr_tail(), Duration::from_secs(20))
@@ -392,7 +384,7 @@ fn hub_socket_identifies_its_session() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(fx.p("run"), std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let mut hub = std::process::Command::new(RATATOSKR)
+    let mut hub = ratatoskr::proc::Command::new(RATATOSKR)
         .args(["serve", "--foreground", "--parent-pid", &me.to_string()])
         .env_clear()
         .envs([
@@ -403,10 +395,11 @@ fn hub_socket_identifies_its_session() {
             ("RATATOSKR_SUPERVISOR", PathBuf::from("none")),
         ])
         .current_dir(fx.p(""))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::fs::File::create(fx.p("hub.err")).unwrap())
-        .spawn()
+        .spawn(
+            ratatoskr::proc::Io::Null,
+            ratatoskr::proc::Io::Null,
+            ratatoskr::proc::Io::file(eitri::create_exclusive(&fx.p("hub.err"), 0o666).unwrap()),
+        )
         .expect("the hub");
     let within = Duration::from_secs(10);
     // a look repeated: the hub says nothing when it is ready; 30 s only bounds a failure
@@ -441,11 +434,7 @@ fn hub_socket_identifies_its_session() {
         &fx.shape(NetCell::ProviderOnly),
     )
     .unwrap_or_else(|r| panic!("refused: {r}"));
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let (code, tail) = rt.block_on(async {
+    let (code, tail) = saman::block_on_current(async {
         let mut child = draugr::spawn_pinned(launch.spec).await.expect("spawn");
         if let Some(fd) = launch.status {
             gleipnir::read_status(fd, &|| child.stderr_tail(), Duration::from_secs(20))
@@ -499,12 +488,7 @@ fn a_session_reaches_its_provider_through_the_proxy() {
     let launch = launch_on(&env, &sandbox(Tier::Full), &plan, &shape)
         .unwrap_or_else(|r| panic!("refused: {r}"));
     let dir = paths::session_dir(&env, &paths::socket_path(&env), &shape.sid).unwrap();
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .unwrap();
-    let code = rt.block_on(async {
+    let code = saman::block_on_current(async {
         let allow = vec![gleipnir::net::host::parse_target(&format!("llm.test:{port}")).unwrap()];
         let pinned = vec![("llm.test".to_string(), std::net::Ipv4Addr::LOCALHOST.into())];
         let net = SessionNet::start(&dir, &shape.sid, allow, pinned, None).expect("the proxy");

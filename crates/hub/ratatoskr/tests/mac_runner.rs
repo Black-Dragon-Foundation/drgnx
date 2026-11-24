@@ -82,7 +82,8 @@ impl Drop for Report {
             ratatoskr::soft::err_line(&format!("-- {id}: {:?}", self.q.row(id)));
             ratatoskr::soft::err_line(&format!("-- {id}'s hub log: {}", log(&self.dir, id)));
         }
-        if let Ok(said) = self.said.lock() {
+        {
+            let said = saman::lock(&self.said);
             ratatoskr::soft::err_line("-- the last of what the links and the queue said:");
             for s in said.iter().rev().take(60).rev() {
                 ratatoskr::soft::err_line(&format!("   {s}"));
@@ -222,9 +223,7 @@ impl Hub {
             self.said.clone(),
         );
         let note = |s: String| {
-            if let Ok(mut v) = said.lock() {
-                v.push(s.chars().take(600).collect());
-            }
+            saman::lock(&said).push(s.chars().take(600).collect());
         };
         skuld::wait_until_async(what, WAIT, || {
             while let Ok(ev) = events.try_recv() {

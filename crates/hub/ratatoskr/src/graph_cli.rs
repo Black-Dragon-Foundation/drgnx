@@ -856,7 +856,7 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
                 let q = format!(
                     "Excise {target} for good (reason: {reason}); the text is blanked in every version and copy?"
                 );
-                if !ask(&q, &mut stdin.lock(), &mut std::io::stderr()) {
+                if !ask(&q, &mut stdin.lock(), &mut annall::raw_err()) {
                     crate::soft::err_line("nothing changed");
                     return 1;
                 }
@@ -876,7 +876,7 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
                 return 0;
             }
             let (text, ok) = render(&cmd.sub, &a);
-            print!("{text}");
+            crate::soft::out_text(&text);
             i32::from(!ok)
         }
         Err(e) => {

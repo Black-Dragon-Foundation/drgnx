@@ -74,8 +74,7 @@ pub fn main(mode: &str, arg: Option<&str>) -> i32 {
     };
     let stdin = std::io::stdin();
     let mut input = std::io::BufReader::new(stdin.lock());
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
+    let mut out = annall::raw_out();
     while let Some(msg) = read_frame(&mut input) {
         let method = msg["method"].as_str().unwrap_or_default().to_owned();
         let id = msg.get("id").cloned();
@@ -88,7 +87,7 @@ pub fn main(mode: &str, arg: Option<&str>) -> i32 {
                 if mode == "oversized" {
                     crate::soft::done(write!(out, "Content-Length: {}\r\n\r\n", 20 << 20), "write");
                     crate::soft::done(out.flush(), "lsp_mock");
-                    std::thread::sleep(std::time::Duration::from_secs(120));
+                    stund::real::sleep_blocking(std::time::Duration::from_secs(120));
                     return 0;
                 }
                 write_frame(

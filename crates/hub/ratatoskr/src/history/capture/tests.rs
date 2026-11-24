@@ -364,9 +364,8 @@ fn a_big_file_has_a_version_per_change() {
     let write = |fill: u8, len: usize, secs: u64| {
         crate::fsio::write(&path, vec![fill; len]).unwrap();
         let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + secs);
-        std::fs::File::options()
-            .write(true)
-            .open(&path)
+        eitri::open_existing(&path)
+            .map_err(std::io::Error::from)
             .unwrap()
             .set_modified(t)
             .unwrap();

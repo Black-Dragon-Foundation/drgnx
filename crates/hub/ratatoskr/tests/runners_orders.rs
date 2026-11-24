@@ -278,7 +278,7 @@ impl Core for ShellC {
 }
 
 /// The end of an order: the steps' notes, then at most one ending for attempt 1, and attempt 1 never open after one.
-fn check(s: &Shell) -> villa::Result<()> {
+fn check(s: &Shell) -> Result<(), String> {
     if let Some(b) = &s.broken {
         return Err(b.clone());
     }
@@ -291,16 +291,11 @@ fn check(s: &Shell) -> villa::Result<()> {
         })
         .count();
     if endings > 1 {
-        return Err(villa::Error::invalid(format!(
-            "attempt 1 ended {endings} times: {:?}",
-            s.seen
-        )));
+        return Err(format!("attempt 1 ended {endings} times: {:?}", s.seen));
     }
     let a1 = s.core.attempt("j1", 1).expect("attempt 1").state;
     if endings == 1 && a1.open() {
-        return Err(villa::Error::invalid(format!(
-            "attempt 1 ended, yet it is {a1:?}"
-        )));
+        return Err(format!("attempt 1 ended, yet it is {a1:?}"));
     }
     if s.ended.contains(&1) && a1 == AttemptState::Finished {
         // fine: a late result kept
@@ -309,9 +304,7 @@ fn check(s: &Shell) -> villa::Result<()> {
             .iter()
             .any(|(_, e)| matches!(e, Effect::KeepLate { attempt: 1, .. }))
         {
-            return Err(villa::Error::invalid(
-                "attempt 1 was requeued and is finished, but not as late",
-            ));
+            return Err("attempt 1 was requeued and is finished, but not as late".to_string());
         }
     }
     Ok(())

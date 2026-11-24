@@ -7,7 +7,6 @@ use norn::matrix::Role;
 use norn::tools::Hub as _;
 use runstav::methods::Params;
 use serde_json::{Value, json};
-use std::process::Command;
 
 fn git(dir: &Path, args: &[&str]) {
     let ok = crate::proc::Command::new("git")
@@ -123,10 +122,14 @@ impl World {
 
     /// A process working in DIR (a bridge's stand-in, killed with the world): its pid.
     fn bridge_in(&self, dir: &Path) -> i32 {
-        let kid = Command::new("sleep")
+        let kid = crate::proc::Command::new("sleep")
             .arg("600")
             .current_dir(dir)
-            .spawn()
+            .spawn(
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+            )
             .unwrap();
         self.keep(kid)
     }
@@ -992,7 +995,7 @@ fn a_bridge_that_changes_folder_is_refused_at_its_next_call() {
         let w = world();
         w.bind("claude", &w.root, "worker").await;
         // it moves when told, and says so once it has
-        let mut kid = Command::new("sh")
+        let mut kid = crate::proc::Command::new("sh")
             .args([
                 "-c",
                 r#"read go; cd "$1" && echo moved && exec sleep 600"#,
@@ -1000,9 +1003,11 @@ fn a_bridge_that_changes_folder_is_refused_at_its_next_call() {
             ])
             .arg(&w.other)
             .current_dir(&w.root)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
+            .spawn(
+                crate::proc::Io::Pipe,
+                crate::proc::Io::Pipe,
+                crate::proc::Io::Inherit,
+            )
             .unwrap();
         let (mut go, out) = (kid.stdin.take().unwrap(), kid.stdout.take().unwrap());
         let peer = w.keep(kid);

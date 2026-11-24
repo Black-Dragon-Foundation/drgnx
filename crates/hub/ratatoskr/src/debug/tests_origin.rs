@@ -4,7 +4,6 @@
 use super::BoxFut;
 use super::origin::{self, Link, Replay, Traced, trail};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const STOCK: &str = include_str!("../../tests/fixtures/origin/stock.py");
 
@@ -49,7 +48,7 @@ fn run_traced(dir: &Path, script: &str, watch: &[String]) -> Vec<origin::Rec> {
         "std::fs::remove_file",
     );
     crate::fsio::write(dir.join("stock.py"), script).unwrap();
-    let mut c = Command::new("python3");
+    let mut c = crate::proc::Command::new("python3");
     c.arg("stock.py").current_dir(dir).env_remove("PYTHONPATH");
     for (k, v) in origin::env(&tracer, dir, watch, None) {
         c.env(k, v);

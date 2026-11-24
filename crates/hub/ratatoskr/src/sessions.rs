@@ -1669,9 +1669,13 @@ mod tests {
         );
         assert!(!owner_alive(&row(0, start)));
         // a process that ended: a zombie until it is reaped, then nothing; gone either way
-        let mut child = std::process::Command::new("sleep")
+        let mut child = crate::proc::Command::new("sleep")
             .arg("60")
-            .spawn()
+            .spawn(
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+            )
             .unwrap();
         let pid = child.id();
         let start = draugr::start_time(pid as i32).unwrap();

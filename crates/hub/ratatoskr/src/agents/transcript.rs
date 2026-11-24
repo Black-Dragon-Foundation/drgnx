@@ -9,7 +9,7 @@ use runstav::methods::agents::Entry;
 use runstav::secrets::looks_like_secret;
 use serde_json::Value;
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 
 /// TEXT with every secret-looking part replaced by `[redacted: KIND]`.  A private key (it spans lines) takes the
@@ -98,11 +98,8 @@ impl Store {
             return Ok(());
         }
         self.ensure()?;
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .open(self.file(sid, "jsonl"))?;
+        let mut f = eitri::open_append(&self.file(sid, "jsonl"), Some(0o600))
+            .map_err(std::io::Error::from)?;
         let mut buf = String::new();
         for (n, e) in entries {
             let mut v = serde_json::json!({"n": n, "entry": e});
@@ -141,13 +138,12 @@ impl Store {
     pub fn save_meta(&self, sid: &str, meta: &Value) {
         let write = || -> std::io::Result<()> {
             self.ensure()?;
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(self.file(sid, "meta.json"))?;
-            f.write_all(meta.to_string().as_bytes())
+            eitri::replace_file_mode(
+                &self.file(sid, "meta.json"),
+                meta.to_string().as_bytes(),
+                0o600,
+            )
+            .map_err(std::io::Error::from)
         };
         if let Err(e) = write() {
             tracing::warn!(sid, "cannot keep the session's notes: {e}");
@@ -172,17 +168,14 @@ impl Store {
             };
         }
         self.ensure()?;
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        f.write_all(
+        eitri::replace_file_mode(
+            &path,
             serde_json::json!({"queue": q, "paused": paused})
                 .to_string()
                 .as_bytes(),
+            0o600,
         )
+        .map_err(std::io::Error::from)
     }
 
     pub fn load_queue(&self, sid: &str) -> (Queue, bool) {
@@ -208,17 +201,14 @@ impl Store {
             };
         }
         self.ensure()?;
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        f.write_all(
+        eitri::replace_file_mode(
+            &path,
             serde_json::json!({"held_by": "user", "base": base})
                 .to_string()
                 .as_bytes(),
+            0o600,
         )
+        .map_err(std::io::Error::from)
     }
 
     /// Whether the user held SID's wheel when the hub ended, and the snapshot tree it is measured from.

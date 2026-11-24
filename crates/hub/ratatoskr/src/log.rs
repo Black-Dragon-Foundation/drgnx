@@ -53,7 +53,7 @@ pub fn init(dir: &Path) -> io::Result<Guard> {
     let (file, guard) = tracing_appender::non_blocking(Daily::open(dir)?);
     let targets = targets(&std::env::var("DRGNX_RATATOSKR_LOG").unwrap_or_default())?;
     let journal = std::env::var_os("JOURNAL_STREAM").is_some();
-    let (stderr, stderr_flush) = to_stderr(io::stderr(), journal, STDERR_LINES);
+    let (stderr, stderr_flush) = to_stderr(annall::raw_err(), journal, STDERR_LINES);
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
@@ -262,13 +262,7 @@ impl Daily {
 }
 
 fn open_day(dir: &Path, day: &str) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(dir.join(format!("hub-{day}.jsonl")))
+    eitri::open_append(&dir.join(format!("hub-{day}.jsonl")), Some(0o600)).map_err(io::Error::from)
 }
 
 /// Keep the newest [`KEEP`] `hub-YYYY-MM-DD.jsonl` (their names sort by day).

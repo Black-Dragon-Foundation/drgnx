@@ -96,7 +96,7 @@ fn the_sweep_is_hourly_and_collects_unheld_vectors() {
             .map(|i| ([i; 32], vec![1.0; TEST_TINY.dims]))
             .collect();
         c.put(KeyKind::Chunk, dims, &rows).await.unwrap();
-        let t0 = tokio::time::Instant::now();
+        let t0 = tokio::time::Instant::from_std(stund::real::instant());
         assert_eq!(caches.sweep_if_due(t0, 1_000).await.unwrap(), Some(3));
         assert!(c.get(KeyKind::Chunk, &[[0; 32]]).await.unwrap().is_empty());
         c.put(KeyKind::Chunk, dims, &rows).await.unwrap();

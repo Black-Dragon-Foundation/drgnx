@@ -161,7 +161,7 @@ pub fn run(env: &Env, cmd: PluginsCommand) -> i32 {
                     0
                 }
                 Ok(a) => {
-                    print!("{}", format_list(&a));
+                    crate::soft::out_text(&format_list(&a));
                     0
                 }
                 Err(e) => {

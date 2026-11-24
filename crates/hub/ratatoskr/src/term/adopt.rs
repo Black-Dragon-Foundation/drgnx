@@ -76,7 +76,7 @@ pub async fn connect_started(
             match std::os::unix::net::UnixStream::connect(&path) {
                 Ok(s) => return Ok(s),
                 Err(e) if crate::clock::real_now() >= deadline => return Err(e),
-                Err(_) => std::thread::sleep(Duration::from_millis(20)),
+                Err(_) => stund::real::sleep_blocking(Duration::from_millis(20)),
             }
         }
     })

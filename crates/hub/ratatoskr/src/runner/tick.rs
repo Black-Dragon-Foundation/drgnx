@@ -638,15 +638,14 @@ pub struct BasicGit;
 
 pub(crate) async fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
     let what = format!("git {}", args.join(" "));
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = crate::proc::Command::new("git");
     cmd.arg("-C")
         .arg(dir)
         .args(["-c", "core.hooksPath=/dev/null"])
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true);
-    match crate::clock::timeout(GIT_TIMEOUT, cmd.output()).await {
+        .deadline(GIT_TIMEOUT);
+    match crate::clock::timeout(GIT_TIMEOUT, cmd.output_async()).await {
         Err(_) => Err(GitError {
             what,
             stderr: "timed out".into(),

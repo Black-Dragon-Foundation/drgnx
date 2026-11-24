@@ -709,16 +709,20 @@ fn stdio_serves_the_same_tools() {
         let root = Root::new();
         let (proj, _wt) = project(&root, "proj");
         let (_hub, _c) = ready(&root);
-        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_ratatoskr"))
+        let mut child = ratatoskr::proc::Command::new(env!("CARGO_BIN_EXE_ratatoskr"))
             .args(["search", "mcp"])
             .arg(&proj)
             .envs(root.vars())
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+            .spawn(
+                ratatoskr::proc::Io::Pipe,
+                ratatoskr::proc::Io::Pipe,
+                ratatoskr::proc::Io::Inherit,
+            )
             .unwrap();
-        let (out, inp) = (child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        let (out, inp) = (
+            tokio::process::ChildStdout::from_std(child.stdout.take().unwrap()).unwrap(),
+            tokio::process::ChildStdin::from_std(child.stdin.take().unwrap()).unwrap(),
+        );
         let client = mcp_on!(out, inp);
         let tools = client.list_all_tools().await.unwrap();
         assert_eq!(
@@ -738,5 +742,7 @@ fn stdio_serves_the_same_tools() {
             "{text}"
         );
         client.cancel().await.unwrap();
+        ratatoskr::soft::done(child.kill(), "search_tools");
+        ratatoskr::soft::done(child.wait(), "search_tools");
     })
 }

@@ -187,15 +187,12 @@ pub fn main(args: BridgeArgs) -> u8 {
             .with_ansi(false)
             .without_time()
             .with_target(false)
-            .with_writer(std::io::stderr)
+            .with_writer(annall::raw_err)
             .with_max_level(tracing::Level::WARN)
             .try_init(),
         "tracing_subscriber::fmt",
     );
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
+    let runtime = match saman::Executor::new(1) {
         Ok(r) => r,
         Err(e) => {
             crate::soft::err_line(&format!("ratatoskr mcp-bridge: no async runtime: {e}"));

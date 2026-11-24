@@ -15,7 +15,6 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
 
 /// How often the binary is looked at.
 pub const TICK: Duration = Duration::from_secs(2);
@@ -206,32 +205,13 @@ impl Watcher {
 
 /// `<path> version --json` against COMMIT, the running build's.
 pub async fn build_at(path: &Path, commit: &str, build_id: &str) -> Build {
-    let mut child = match tokio::process::Command::new(path)
-        .args(["version", "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("cannot run {} version: {e}", path.display());
-            return Build::Unknown;
-        }
-    };
-    let Some(mut out) = child.stdout.take() else {
-        return Build::Unknown;
-    };
+    let mut cmd = crate::proc::Command::new(path);
+    cmd.args(["version", "--json"]).deadline(VERSION_DEADLINE);
     let run = async {
-        let mut text = String::new();
-        (&mut out)
-            .take(1 << 16)
-            .read_to_string(&mut text)
-            .await
-            .ok()?;
-        let status = child.wait().await.ok()?;
-        status.success().then_some(text)
+        let out = cmd.output_async().await.ok()?;
+        let text =
+            String::from_utf8_lossy(&out.stdout[..out.stdout.len().min(1 << 16)]).into_owned();
+        out.status.success().then_some(text)
     };
     let text = match crate::clock::timeout(VERSION_DEADLINE, run).await {
         Ok(Some(t)) => t,
@@ -421,10 +401,7 @@ mod tests {
     }
 
     fn block<T>(f: impl std::future::Future<Output = T>) -> T {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .block_on(f)
+        saman::Executor::new(1).unwrap().block_on(f)
     }
 
     // `the_path_is_statted_not_proc_self_exe` runs a child process, which a fork inside this test binary would let

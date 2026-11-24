@@ -202,13 +202,8 @@ fn new_id() -> String {
 /// at most [`MAX_NOTEBOOK_BYTES`].
 pub(crate) fn read_notebook(path: &Path) -> villa::Result<String> {
     use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
     let shown = path.display();
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|e| villa::Error::io(format!("{shown}: {e}")))?;
+    let f = eitri::open_following(path).map_err(|e| villa::Error::io(format!("{shown}: {e}")))?;
     let meta = f
         .metadata()
         .map_err(|e| villa::Error::invalid(format!("{shown}: {e}")))?;

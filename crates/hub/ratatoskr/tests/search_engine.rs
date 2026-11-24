@@ -14,7 +14,7 @@ use ratatoskr::search::engine::{EngineSpec, LocalEngine, SelfCheck};
 use serde_json::Value;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -24,18 +24,16 @@ const IDLE: Duration = Duration::from_secs(300);
 
 /// The rows on the hub's runtime (its two workers and the clock's park hooks), one at a time: the clock is the process's.
 fn on_hub_runtime<F: std::future::Future>(f: F) -> F::Output {
-    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    static RT: OnceLock<saman::Executor> = OnceLock::new();
     static ONE: Mutex<()> = Mutex::new(());
-    let _one = ONE.lock().unwrap_or_else(PoisonError::into_inner);
+    let _one = saman::lock(&ONE);
     clock::install_virtual();
     RT.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .on_thread_park(clock::worker_parks)
-            .on_thread_unpark(clock::worker_unparks)
-            .build()
-            .unwrap()
+        saman::Executor::tuned(2, |b| {
+            b.on_thread_park(clock::worker_parks)
+                .on_thread_unpark(clock::worker_unparks);
+        })
+        .unwrap()
     })
     .block_on(f)
 }

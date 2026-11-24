@@ -279,7 +279,8 @@ pub mod secret {
             .map_err(failed)?;
         let r = in_session(&conn, &collection, &session, create).await;
         if let Ok(s) = proxy(&conn, session.as_str(), "org.freedesktop.Secret.Session").await {
-            let _: Result<(), _> = s.call("Close", &()).await;
+            let closed: Result<(), _> = s.call("Close", &()).await;
+            crate::soft::done(closed, "secret session close");
         }
         r
     }
@@ -332,7 +333,8 @@ pub mod secret {
         if item.as_str() == "/" {
             // the collection locked meanwhile: the prompt goes unshown
             if let Ok(p) = proxy(conn, prompt.as_str(), "org.freedesktop.Secret.Prompt").await {
-                let _: Result<(), _> = p.call("Dismiss", &()).await;
+                let dismissed: Result<(), _> = p.call("Dismiss", &()).await;
+                crate::soft::done(dismissed, "secret prompt dismiss");
             }
             return Err(Unavailable::Locked);
         }

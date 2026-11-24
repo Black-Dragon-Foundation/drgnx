@@ -420,7 +420,7 @@ fn watch(front: Weak<Front>, conn: u64, view: String, roots: &[PathBuf]) {
             return;
         }
         // a burst settles before it is read
-        std::thread::sleep(Duration::from_millis(80));
+        stund::real::sleep_blocking(Duration::from_millis(80));
         let mut changed: BTreeSet<PathBuf> = hrx.try_iter().collect();
         for h in rx.try_iter() {
             if matches!(h, Heard::Stop) {

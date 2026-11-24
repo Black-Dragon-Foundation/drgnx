@@ -212,7 +212,7 @@ mod tests {
         saman::block_on_current(async move {
             tokio::time::pause();
             let mut p = Pacer::default();
-            let t0 = Instant::now();
+            let t0 = Instant::from_std(crate::clock::real_now());
             for i in 0..SNAPSHOTS_PER_WINDOW {
                 let o = p.offer(t0, &format!("s{i:02}"), line("a"));
                 assert!(o.send.is_some() && o.arm.is_none());
@@ -252,7 +252,7 @@ mod tests {
         saman::block_on_current(async move {
             tokio::time::pause();
             let mut p = Pacer::default();
-            let t0 = Instant::now();
+            let t0 = Instant::from_std(crate::clock::real_now());
             for i in 0..SNAPSHOTS_PER_WINDOW {
                 p.offer(t0, &format!("s{i:02}"), line("a"));
             }

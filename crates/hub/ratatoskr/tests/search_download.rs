@@ -7,6 +7,7 @@ use crate::support::{self, FAILED_AFTER};
 use bifrost::Uri;
 use hrafn_embed::cache::{self, ModelState, model_dir};
 use hrafn_embed::{Arch, EngineAsset, ModelFile, ModelSpec, download_bytes};
+use ratatoskr::proc::{Command, Io};
 use ratatoskr::search::engine_install;
 use ratatoskr::search::{Consent, DownloadError, download, model_base};
 use ratatoskr::settings;
@@ -15,7 +16,7 @@ use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
@@ -100,8 +101,7 @@ fn rig(flags: &[&str]) -> Rig {
         .arg("--log")
         .arg(&log)
         .args(flags)
-        .stdout(Stdio::piped())
-        .spawn()
+        .spawn(Io::Inherit, Io::Pipe, Io::Inherit)
         .unwrap();
     let mut lines = BufReader::new(mock.stdout.take().unwrap()).lines();
     let first = lines.next().unwrap().unwrap();
@@ -187,7 +187,7 @@ fn download_verifies_and_renames() {
     saman::block_on_current(async move {
         let r = rig(&[]);
         let seen = Mutex::new(Vec::new());
-        let progress = |have, total| seen.lock().unwrap().push((have, total));
+        let progress = |have, total| saman::lock(&seen).push((have, total));
         let root = r.root.path();
         download(r.spec, root, &r.base, &r.consent(), &progress)
             .await
@@ -365,12 +365,13 @@ fn offline_is_reported_once() {
         let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
         static SEEN: AtomicUsize = AtomicUsize::new(0);
-        tokio::spawn(async move {
+        saman::spawn("hang-up-host", async move {
             while let Ok((mut s, _)) = l.accept().await {
                 SEEN.fetch_add(1, Ordering::SeqCst);
                 ratatoskr::soft::done(s.shutdown().await, "search_download");
             }
-        });
+        })
+        .detach("the host lives as long as the test");
         let hangs_up: Uri = format!("http://127.0.0.1:{port}").parse().unwrap();
         assert_eq!(r.run_from(&hangs_up).await, Err(DownloadError::Offline));
         assert_eq!(SEEN.load(Ordering::SeqCst), 1);

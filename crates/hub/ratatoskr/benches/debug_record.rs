@@ -5,7 +5,7 @@
 //! `cargo test --release -p ratatoskr --bench debug_record -- --ignored --nocapture --test-threads 1`.  It
 //! measures and prints; the pass judges.  The project and the stop are made here from fixed arithmetic.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ratatoskr::debug::record::capture;
 use ratatoskr::debug::runfile::{CAP, Frame, RunFile, RunStop};
@@ -33,24 +33,24 @@ fn debug_launch_snapshot() {
         let body: String = (0..40)
             .map(|l| format!("def f_{i}_{l}(x):\n    return x * {l} + {i}\n"))
             .collect();
-        std::fs::write(dir.join(format!("m{i}.py")), body).unwrap();
+        ratatoskr::fsio::write(dir.join(format!("m{i}.py")), body).unwrap();
     }
     let state = d.path().join("checkpoints");
-    let first = Instant::now();
+    let first = stund::real::instant();
     take_kept(&state, &project, "bench", "refs/drgnx/debug/r0").unwrap();
     let cold = first.elapsed();
     let runs: Vec<Duration> = (1..=20)
         .map(|n| {
-            let t = Instant::now();
+            let t = stund::real::instant();
             take_kept(&state, &project, "bench", &format!("refs/drgnx/debug/r{n}")).unwrap();
             t.elapsed()
         })
         .collect();
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "debug-launch-snapshot: 5000 files, first {:.1} ms, unchanged p95 {:.1} ms (budget 150)",
         ms(cold),
         ms(p95(runs))
-    );
+    ));
 }
 
 fn a_stop(epoch: u64) -> Stop {
@@ -94,7 +94,7 @@ fn debug_capture() {
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            let t = Instant::now();
+            let t = stund::real::instant();
             let c = capture(s);
             file.append(Frame::Stop {
                 stop: RunStop {
@@ -114,9 +114,9 @@ fn debug_capture() {
             t.elapsed()
         })
         .collect();
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "debug-capture: 200 stops (8 threads, 20 frames, 240 variables), p95 {:.3} ms (budget 1), file {} kB",
         ms(p95(runs)),
         file.size() / 1024
-    );
+    ));
 }

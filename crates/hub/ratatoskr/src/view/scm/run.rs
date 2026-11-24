@@ -13,7 +13,6 @@ use draugr::git::{GitCall, Place, command, git_program};
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -64,7 +63,7 @@ pub fn git(
     cancel: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, GitError> {
     let program = git_program().map_err(|e| e.to_string())?;
-    let mut cmd = Command::new(&program.path);
+    let mut cmd = crate::proc::Command::new(&program.path);
     match how {
         As::Reader => {
             let call = GitCall {
@@ -86,26 +85,21 @@ pub fn git(
 
 /// CMD in ROOT: see [`git`].
 pub fn run(
-    mut cmd: Command,
+    mut cmd: crate::proc::Command,
     root: &Path,
     stdin: Option<&[u8]>,
     deadline: Option<Duration>,
     cancel: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, GitError> {
-    use std::os::unix::process::CommandExt;
+    use crate::proc::Io;
     for v in LEAKS {
         cmd.env_remove(v);
     }
-    cmd.current_dir(root)
-        .stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    let mut child = cmd.spawn().map_err(|e| format!("git: {e}"))?;
+    cmd.current_dir(root);
+    let feed = if stdin.is_some() { Io::Pipe } else { Io::Null };
+    let mut child = cmd
+        .spawn(feed, Io::Pipe, Io::Pipe)
+        .map_err(|e| format!("git: {e}"))?;
     let pid = child.id();
     if let (Some(text), Some(mut w)) = (stdin, child.stdin.take()) {
         let text = text.to_vec();
@@ -157,7 +151,7 @@ pub fn run(
             let secs = deadline.unwrap_or_default().as_secs();
             return Err(format!("git took longer than {secs} s and was stopped"));
         }
-        std::thread::sleep(Duration::from_millis(5));
+        stund::real::sleep_blocking(Duration::from_millis(5));
     };
     let out = out.join().unwrap_or_default();
     let err = err.join().unwrap_or_default();

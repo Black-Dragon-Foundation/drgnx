@@ -339,10 +339,7 @@ pub fn check_blocking(tier: Tier, bwrap: Option<PathBuf>, timeout: Duration) -> 
         Ok(h) => h,
         Err(e) => return Check::failed(format!("the helper's own path: {e}"), None),
     };
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build();
+    let runtime = saman::Executor::new(1);
     match runtime {
         Ok(rt) => rt.block_on(gleipnir::check::check(
             helper, tier, bwrap, timeout, run_probe,
@@ -409,10 +406,7 @@ mod run {
     /// [`REFUSED`] when refused, else with the child's code. The child's stdout is passed through; its stderr tail is
     /// written to stderr once it has exited. Rows judge by the result file only: the child may exit 3 itself.
     pub fn run(args: SandboxRunArgs) -> i32 {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build();
+        let runtime = saman::Executor::new(1);
         let outcome = match runtime {
             Ok(rt) => rt.block_on(run_in(&args)),
             Err(e) => Outcome {
@@ -496,7 +490,7 @@ mod run {
             let Some(mut out) = stdout else { return };
             let mut buf = [0u8; 8192];
             while let Ok(n @ 1..) = out.read(&mut buf).await {
-                let mut o = io::stdout().lock();
+                let mut o = annall::raw_out();
                 if o.write_all(&buf[..n]).and_then(|()| o.flush()).is_err() {
                     return;
                 }
@@ -543,7 +537,7 @@ mod run {
             "crate::clock::timeout",
         );
         let tail = child.stderr_tail();
-        crate::soft::done(io::stderr().write_all(tail.as_bytes()), "io::stderr");
+        crate::soft::done(annall::raw_err().write_all(tail.as_bytes()), "io::stderr");
         out
     }
 
@@ -602,10 +596,13 @@ mod run {
 
     /// Say `opened` on `fifo`, then wait for one line back.
     fn pause(fifo: &Path) -> io::Result<()> {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(fifo)?
-            .write_all(b"opened\n")?;
+        // a FIFO is not a regular file: eitri refuses it
+        std::fs::File::from(rustix::fs::open(
+            fifo,
+            rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )?)
+        .write_all(b"opened\n")?;
         let mut line = String::new();
         io::BufReader::new(std::fs::File::open(fifo)?).read_line(&mut line)?;
         Ok(())
@@ -1317,23 +1314,14 @@ fn resume_grant(
 
 /// FROM copied to TO (made with mode 0600, never through a link).
 fn copy_private(from: &Path, to: &Path) -> villa::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut src = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(from)
+    use std::io::Read as _;
+    let mut src =
+        eitri::open_read(from).map_err(|e| villa::Error::io(format!("{}: {e}", from.display())))?;
+    let mut bytes = Vec::new();
+    src.read_to_end(&mut bytes)
         .map_err(|e| villa::Error::io(format!("{}: {e}", from.display())))?;
-    let mut dst = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(to)
-        .map_err(|e| villa::Error::io(format!("{}: {e}", to.display())))?;
-    std::io::copy(&mut src, &mut dst)
-        .map_err(|e| villa::Error::io(format!("{}: {e}", to.display())))?;
-    Ok(())
+    eitri::replace_file_mode(to, &bytes, 0o600)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", to.display())))
 }
 
 /// [`login_grants`] before a resumed session's file.

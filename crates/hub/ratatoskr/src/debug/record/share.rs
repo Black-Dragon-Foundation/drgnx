@@ -18,7 +18,6 @@ use super::{Frame, Imported, Records, RunMeta, RunSnapshot, lock, runkey};
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use zeroize::Zeroizing;
 
 const MAGIC: &[u8] = b"DRSHARE1\n";
@@ -216,7 +215,10 @@ fn export(meta: &RunMeta, frames: &[Frame], to: &Path) -> villa::Result<Exported
     let salt = runkey::new_salt();
     let cipher = runkey::FileKey::new(&key, &salt);
     let tmp = to.with_extension("drgnx-tmp");
-    let mut out = std::fs::File::create(&tmp)
+    // one a failed run left is gone first: the new one is made exclusively
+    crate::soft::done(std::fs::remove_file(&tmp), "remove_file");
+    let mut out = eitri::create_exclusive(&tmp, 0o666)
+        .map_err(std::io::Error::from)
         .map_err(|e| villa::Error::io(format!("{}: {e}", tmp.display())))?;
     let mut write = || -> std::io::Result<u64> {
         out.write_all(MAGIC)?;
@@ -361,7 +363,7 @@ fn unpack(
 
 /// GIT ARGS in REPO (the snapshots' environment: no user or system config), INPUT on its stdin: its output.
 fn git(repo: &Path, args: &[&str], input: Option<&[u8]>) -> villa::Result<Vec<u8>> {
-    let mut c = Command::new("git");
+    let mut c = crate::proc::Command::new("git");
     c.env("GIT_DIR", repo)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -369,16 +371,14 @@ fn git(repo: &Path, args: &[&str], input: Option<&[u8]>) -> villa::Result<Vec<u8
         .env_remove("GIT_INDEX_FILE")
         .env_remove("GIT_WORK_TREE")
         .current_dir(repo)
-        .args(args)
-        .stdin(if input.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .args(args);
+    let stdin = if input.is_some() {
+        crate::proc::Io::Pipe
+    } else {
+        crate::proc::Io::Null
+    };
     let mut child = c
-        .spawn()
+        .spawn(stdin, crate::proc::Io::Pipe, crate::proc::Io::Pipe)
         .map_err(|e| villa::Error::invalid(format!("git: {e}")))?;
     let feed = input.map(<[u8]>::to_vec);
     let stdin = child.stdin.take();

@@ -5,7 +5,7 @@
 //! `cargo test --release -p ratatoskr --bench budget_event -- --ignored --nocapture --test-threads 1`.
 
 use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ratatoskr::budget::Budgets;
 use runstav::methods::matrix::Unit;
@@ -38,7 +38,7 @@ fn budget_event() {
             }
             now += 0.1;
         }
-        let t = Instant::now();
+        let t = stund::real::instant();
         let changed = b.take_changed();
         let mut seen: BTreeMap<String, usize> = BTreeMap::new();
         for s in &changed {
@@ -52,11 +52,11 @@ fn budget_event() {
     }
     per_flush.sort();
     let p95 = per_flush[(per_flush.len() * 95).div_ceil(100) - 1];
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "budget-event: events-per-scope-per-sec {worst_per_scope}, flush p95 {:?} over {} scopes",
         p95,
         30 + 3 + 1
-    );
+    ));
     assert_eq!(worst_per_scope, 1, "coalescing: one event a scope a second");
     assert!(p95 < Duration::from_millis(4), "flush p95 {p95:?}");
 }
@@ -86,7 +86,7 @@ fn budget_tree() {
     assert_eq!(runs, 360);
     let mut times = Vec::new();
     for _ in 0..50 {
-        let t = Instant::now();
+        let t = stund::real::instant();
         let all = b.tree_scopes(None, None);
         let nodes: Vec<_> = all
             .iter()
@@ -98,9 +98,9 @@ fn budget_tree() {
     }
     times.sort();
     let p95 = times[(times.len() * 95).div_ceil(100) - 1];
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "budget-tree-open: first page p95 {p95:?} over {} scopes",
         1 + 9 + 90 + runs
-    );
+    ));
     assert!(p95 < Duration::from_millis(20), "first page p95 {p95:?}");
 }

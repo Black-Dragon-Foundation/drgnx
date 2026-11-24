@@ -1007,7 +1007,7 @@ fn sockets_of(groups: &[i32]) -> Vec<(u16, Option<u16>)> {
         .map(i32::to_string)
         .collect::<Vec<_>>()
         .join(",");
-    let mut cmd = std::process::Command::new("/usr/sbin/lsof");
+    let mut cmd = crate::proc::Command::new("/usr/sbin/lsof");
     cmd.args(["-b", "-w", "-nP", "-a", "-iTCP", "-g", &list, "-Fn"]);
     let out = match super::ports::output_within(cmd, super::ports::LSOF_WITHIN) {
         Ok(o) => o,
@@ -1038,7 +1038,7 @@ const FORK_WITHIN: Duration = Duration::from_secs(90);
 fn stuck(groups: &[i32]) {
     crate::soft::out_line(&format!("stuck fork: process groups {groups:?}"));
     let run = |name: &str, args: &[&str]| {
-        let mut cmd = std::process::Command::new(name);
+        let mut cmd = crate::proc::Command::new(name);
         cmd.args(args);
         match super::ports::output_within(cmd, Duration::from_secs(10)) {
             Ok(o) => {

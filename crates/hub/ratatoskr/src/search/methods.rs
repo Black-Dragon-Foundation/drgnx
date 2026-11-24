@@ -326,10 +326,11 @@ impl Hub {
     pub fn watch_status(&self) -> runstav::methods::hub::WatchStatus {
         use runstav::methods::hub::{ProjectWatch, WatchStatus};
         let mut projects = Vec::new();
-        if let Ok(mut rows) = self.watches.lock() {
+        {
+            let mut rows = saman::lock(&self.watches);
             rows.retain(|(_, w)| w.strong_count() > 0);
             for (root, w) in rows.iter() {
-                if let Some(s) = w.upgrade().and_then(|s| s.lock().ok().map(|s| s.clone())) {
+                if let Some(s) = w.upgrade().map(|s| saman::lock(&s).clone()) {
                     projects.push(ProjectWatch {
                         root: root.to_string_lossy().into_owned(),
                         watched: s.watched as u64,
@@ -391,11 +392,14 @@ impl Hub {
     async fn probed(&self, s: &ProviderEmbedder) -> Option<Identity> {
         let key = s.cache_key();
         let now = crate::clock::now();
-        let cached = self.probes.lock().ok().and_then(|p| {
-            p.get(&key)
-                .filter(|(at, _)| now.saturating_duration_since(*at) < PROBE_TTL)
-                .map(|(_, got)| got.clone())
-        });
+        let cached = {
+            let p = saman::lock(&self.probes);
+            {
+                p.get(&key)
+                    .filter(|(at, _)| now.saturating_duration_since(*at) < PROBE_TTL)
+                    .map(|(_, got)| got.clone())
+            }
+        };
         match cached {
             Some(got) => {
                 if let Some(i) = &got {
@@ -405,7 +409,8 @@ impl Hub {
             }
             None => {
                 let got = DocEmbedder::probe(s).await.ok();
-                if let Ok(mut p) = self.probes.lock() {
+                {
+                    let mut p = saman::lock(&self.probes);
                     p.insert(key, (now, got.clone()));
                 }
                 got
@@ -610,17 +615,19 @@ impl Hub {
             project.watch(watch.clone());
         }
         let state = hrafn::Watch::shared_state(&*watch);
-        if let Err(e) = added
-            && let Ok(mut s) = state.lock()
-            && s.error.is_none()
-        {
-            tracing::warn!("search: no file watch for {}: {e}", real.display());
-            s.error = Some(e.to_string());
+        if let Err(e) = added {
+            let mut s = saman::lock(&state);
+            if s.error.is_none() {
+                tracing::warn!("search: no file watch for {}: {e}", real.display());
+                s.error = Some(e.to_string());
+            }
         }
-        if let Some(e) = state.lock().ok().and_then(|s| s.error.clone()) {
+        let error = saman::lock(&state).error.clone();
+        if let Some(e) = error {
             tracing::warn!("search: {} runs unwatched: {e}", real.display());
         }
-        if let Ok(mut rows) = self.watches.lock() {
+        {
+            let mut rows = saman::lock(&self.watches);
             rows.retain(|(_, w)| w.strong_count() > 0);
             rows.push((real.clone(), Arc::downgrade(&state)));
         }
@@ -1230,17 +1237,11 @@ impl Hub {
                 watched: t.watched,
             })
             .collect();
-        let used = self
-            .watches
-            .lock()
-            .ok()
-            .and_then(|rows| {
-                rows.iter()
-                    .find(|(r, _)| r == p.root())
-                    .and_then(|(_, w)| w.upgrade())
-                    .and_then(|s| s.lock().ok().map(|s| s.watched as u64))
-            })
-            .unwrap_or(0);
+        let used = saman::lock(&self.watches)
+            .iter()
+            .find(|(r, _)| r == p.root())
+            .and_then(|(_, w)| w.upgrade())
+            .map_or(0, |s| saman::lock(&s).watched as u64);
         let limit: Option<u64> = crate::fsio::read_to_string(MAX_USER_WATCHES)
             .ok()
             .and_then(|t| t.trim().parse().ok());
@@ -1293,13 +1294,13 @@ impl Hub {
             ModelState::Ready => ("ready", download_bytes(spec)),
             ModelState::Corrupt { .. } => ("corrupt", 0),
         };
-        let mut failed = None;
-        if let Ok(d) = self.download.lock() {
+        let failed = {
+            let d = saman::lock(&self.download);
             if d.running {
                 (st, held) = ("downloading", d.have.min(d.total));
             }
-            failed = d.failed.clone();
-        }
+            d.failed.clone()
+        };
         let builtin = self.builtin();
         let mut servers = Vec::new();
         let mut preferred = None;
@@ -1352,9 +1353,7 @@ impl Hub {
     /// The entity embedder's chain as its last step left it, each entry's state; a wait as wall-clock seconds.
     fn chain_entries(&self) -> Vec<w::ChainEntry> {
         let (now, wall) = (crate::clock::now(), crate::clock::wall());
-        let Ok(view) = self.embed.view.lock() else {
-            return Vec::new();
-        };
+        let view = saman::lock(&self.embed.view);
         view.iter()
             .map(|(l, h)| {
                 let (state, until, why) = match h {
@@ -1422,10 +1421,7 @@ impl Hub {
         )
         .map_err(|m| error(ErrorCode::InvalidParams, m, None))?;
         {
-            let mut d = self
-                .download
-                .lock()
-                .map_err(|_| internal("download state"))?;
+            let mut d = saman::lock(&self.download);
             if d.running {
                 return Ok(w::Started { started: false });
             }
@@ -1443,13 +1439,13 @@ impl Hub {
             let progress = {
                 let state = progress_state.clone();
                 move |have: u64, total: u64| {
-                    if let Ok(mut d) = state.lock() {
-                        (d.have, d.total) = (have, total);
-                    }
+                    let mut d = saman::lock(&state);
+                    (d.have, d.total) = (have, total);
                 }
             };
             let result = download(spec, &root, &base, &consent, &progress).await;
-            if let Ok(mut d) = progress_state.lock() {
+            {
+                let mut d = saman::lock(&progress_state);
                 d.running = false;
                 d.failed = result.as_ref().err().map(|e| format!("{e:?}"));
             }
@@ -1499,10 +1495,7 @@ impl Hub {
         )
         .map_err(|m| error(ErrorCode::InvalidParams, m, None))?;
         {
-            let mut d = self
-                .download
-                .lock()
-                .map_err(|_| internal("download state"))?;
+            let mut d = saman::lock(&self.download);
             if d.running {
                 return Ok(w::Started { started: false });
             }
@@ -1524,9 +1517,8 @@ impl Hub {
         let engine_dir = super::engine_install::dir_for(&paths::cache_dir(&dirs.env), asset);
         clock::spawn("search:download", async move {
             let held = |have: u64| {
-                if let Ok(mut d) = state.lock() {
-                    d.have = have;
-                }
+                let mut d = saman::lock(&state);
+                d.have = have;
             };
             let asset_consent = super::Consent {
                 model: asset.id(),
@@ -1544,7 +1536,8 @@ impl Hub {
                 .map(|_| ()),
                 Err(e) => Err(e),
             };
-            if let Ok(mut d) = state.lock() {
+            {
+                let mut d = saman::lock(&state);
                 d.running = false;
                 d.failed = result.as_ref().err().map(|e| format!("{e:?}"));
             }

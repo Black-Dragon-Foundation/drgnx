@@ -12,15 +12,16 @@
 #![cfg(feature = "test-hooks")]
 
 use ratatoskr::clock;
+use ratatoskr::proc::{Command, Io};
 use ratatoskr::search::DocEmbedder;
 use ratatoskr::search::project::{Project, ProjectError, ProjectSpec, Status, Tier2, project_id};
 use ratatoskr::search::worker::{WorkerEmbedder, WorkerSpec};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, ExitStatus};
 use std::sync::mpsc::{Receiver, channel};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
@@ -89,14 +90,12 @@ impl Worker {
             .arg("--device-cache")
             .arg(cache.path().join("device.json"))
             .args(extra)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
+            .spawn(Io::Pipe, Io::Pipe, Io::Inherit)
             .unwrap();
         let stdin = child.stdin.take();
         let out = child.stdout.take().unwrap();
         let (tx, lines) = channel();
-        std::thread::spawn(move || {
+        saman::spawn_thread("search-index-lines", move || {
             for line in BufReader::new(out).lines() {
                 let Ok(line) = line else { break };
                 let v: Value =
@@ -106,7 +105,8 @@ impl Worker {
                 }
             }
             ratatoskr::soft::done(tx.send(None), "tx send");
-        });
+        })
+        .unwrap();
         Worker {
             child: Some(child),
             stdin,
@@ -131,9 +131,10 @@ impl Worker {
     fn exit(&mut self) -> ExitStatus {
         let mut child = self.child.take().unwrap();
         let (tx, rx) = channel();
-        std::thread::spawn(move || {
+        saman::spawn_thread("search-index-wait", move || {
             ratatoskr::soft::done(tx.send(child.wait()), "tx send");
-        });
+        })
+        .unwrap();
         rx.recv_timeout(BOUND)
             .expect("the worker never exited")
             .unwrap()
@@ -446,18 +447,16 @@ fn project_spec(f: &Fixture, embedders: Vec<Arc<WorkerEmbedder>>, power: &Path) 
 /// only a runtime with the hooks reports, and for every task the clock tracks, so the tests that start tier 2 run
 /// here, one after another.
 fn on_hub_runtime<F: std::future::Future>(f: F) -> F::Output {
-    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    static RT: OnceLock<saman::Executor> = OnceLock::new();
     static ONE: Mutex<()> = Mutex::new(());
-    let _one = ONE.lock().unwrap_or_else(PoisonError::into_inner);
+    let _one = saman::lock(&ONE);
     clock::install_virtual();
     RT.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .on_thread_park(clock::worker_parks)
-            .on_thread_unpark(clock::worker_unparks)
-            .build()
-            .unwrap()
+        saman::Executor::tuned(2, |b| {
+            b.on_thread_park(clock::worker_parks)
+                .on_thread_unpark(clock::worker_unparks);
+        })
+        .unwrap()
     })
     .block_on(f)
 }
@@ -923,7 +922,7 @@ impl hrafn::Watch for OneTree {
         channel().1
     }
     fn add_tree(&self, spec: hrafn::TreeSpec) -> Result<(), hrafn::AddError> {
-        let mut t = self.trees.lock().unwrap();
+        let mut t = saman::lock(&self.trees);
         if spec.key != hrafn::MAIN_TREE && t.iter().any(|k| k != hrafn::MAIN_TREE) {
             return Err(hrafn::AddError::NoSpace("the double's budget".into()));
         }
@@ -931,7 +930,7 @@ impl hrafn::Watch for OneTree {
         Ok(())
     }
     fn remove_tree(&self, key: &str) {
-        self.trees.lock().unwrap().retain(|k| k != key);
+        saman::lock(&self.trees).retain(|k| k != key);
     }
 }
 

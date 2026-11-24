@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use huginn::form::{Problem as FormProblem, parse_settings};
@@ -121,13 +121,9 @@ pub fn stamp(path: &Path) -> Stamp {
 /// PATH's bytes, or none when there is no file, or why it is refused.  The checks are made on the file opened (a
 /// link followed), so what is checked is what is read; a FIFO or device is opened without waiting and refused.
 pub fn read_checked(path: &Path) -> villa::Result<Option<Vec<u8>>> {
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
-    {
+    let file = match eitri::open_following(path) {
         Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(eitri::FsError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(villa::Error::io(format!("cannot be opened: {e}"))),
     };
     let meta = file

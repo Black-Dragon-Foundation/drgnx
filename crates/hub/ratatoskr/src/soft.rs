@@ -21,6 +21,16 @@ pub fn out_line(line: &str) {
     done(annall::cli_out(line), "a line to stdout");
 }
 
+/// TEXT on stdout as it is (no newline added), flushed; a stdout that is gone is logged and ignored.
+pub fn out_text(text: &str) {
+    use std::io::Write;
+    let mut out = annall::raw_out();
+    done(
+        out.write_all(text.as_bytes()).and_then(|()| out.flush()),
+        "text to stdout",
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

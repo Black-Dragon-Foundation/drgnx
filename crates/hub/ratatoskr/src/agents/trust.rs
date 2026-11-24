@@ -301,9 +301,8 @@ mod tests {
         .unwrap();
         // a write within the same clock tick keeps the stamp: move it on, as an editor's later write does
         let later = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(4_000_000_000);
-        std::fs::File::options()
-            .write(true)
-            .open(&f)
+        eitri::open_existing(&f)
+            .map_err(std::io::Error::from)
             .unwrap()
             .set_modified(later)
             .unwrap();

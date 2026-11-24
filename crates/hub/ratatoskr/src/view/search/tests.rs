@@ -1206,7 +1206,8 @@ fn the_run_records_each_files_snapshot() {
     assert_eq!(snap.mtime, meta.modified().ok());
     assert_eq!(snap.inode, std::os::unix::fs::MetadataExt::ino(&meta));
     let big = dir.path().join("big.log");
-    std::fs::File::create(&big)
+    eitri::create_exclusive(&big, 0o666)
+        .map_err(std::io::Error::from)
         .unwrap()
         .set_len(DIGEST_MAX + 1)
         .unwrap();
@@ -1594,7 +1595,7 @@ fn git_scope_lists_at_a_checkouts_size() {
         let files = scoped::find(root, &g).unwrap().files.len();
         let mut ms: Vec<f64> = (0..20)
             .map(|_| {
-                let t = std::time::Instant::now();
+                let t = crate::clock::real_now();
                 scoped::find(root, &g).unwrap();
                 t.elapsed().as_secs_f64() * 1000.0
             })
@@ -2107,7 +2108,7 @@ fn regroup_ten_thousand_time() {
         GrepGroup::File,
         GrepGroup::Tree,
     ] {
-        let t = std::time::Instant::now();
+        let t = crate::clock::real_now();
         greps
             .with(CONN, "s", id, |run| {
                 regroup_patches(&mut s, CONN, "s", run, g, None)

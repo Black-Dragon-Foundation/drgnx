@@ -3,10 +3,10 @@
 
 use crate::support;
 
+use ratatoskr::proc::{Command, Io};
 use runstav::paths;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
 use support::{BIN, Hub, Root, ping};
 #[cfg(feature = "test-hooks")]
 use {
@@ -151,7 +151,10 @@ fn the_stop_command_ends_a_hub_and_signals_nothing_for_a_stale_lock() {
             .unwrap()
     };
     // a stale lock file naming a live process nobody holds: not running, and the process lives
-    let mut sleeper = Command::new("sleep").arg("60").spawn().unwrap();
+    let mut sleeper = Command::new("sleep")
+        .arg("60")
+        .spawn(Io::Inherit, Io::Inherit, Io::Inherit)
+        .unwrap();
     std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
     // private, as a hub makes it (stop refuses a directory open to others)
     paths::private_dir(socket.parent().unwrap()).unwrap();
@@ -796,7 +799,7 @@ fn a_child_is_its_image_once_the_exec_handshake_ends() {
     // many spawns at once: `Command::spawn` can return before the exec, and the more threads fork, the likelier
     let threads: Vec<_> = (0..8)
         .map(|_| {
-            std::thread::spawn(|| {
+            saman::spawn_thread("exec-handshake", || {
                 let mut early = 0;
                 for _ in 0..100 {
                     let mut cmd = Command::new("/bin/sleep");
@@ -810,6 +813,7 @@ fn a_child_is_its_image_once_the_exec_handshake_ends() {
                 }
                 early
             })
+            .unwrap()
         })
         .collect();
     let early: usize = threads.into_iter().map(|t| t.join().unwrap()).sum();

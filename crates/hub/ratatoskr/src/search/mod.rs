@@ -170,7 +170,7 @@ impl Search {
         if state(spec, &dir) != ModelState::Ready {
             return None;
         }
-        let mut held = self.builtin.lock().ok()?;
+        let mut held = saman::lock(&self.builtin);
         Some(
             held.get_or_insert_with(|| {
                 Arc::new(worker::WorkerEmbedder::new(worker::WorkerSpec {

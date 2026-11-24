@@ -4,10 +4,10 @@
 
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
-fn base(git_dir: &Path, work_tree: &Path) -> Command {
-    let mut c = Command::new("git");
+fn base(git_dir: &Path, work_tree: &Path) -> crate::proc::Command {
+    let mut c = crate::proc::Command::new("git");
     c.arg("--git-dir")
         .arg(git_dir)
         .arg("--work-tree")
@@ -18,15 +18,12 @@ fn base(git_dir: &Path, work_tree: &Path) -> Command {
     c
 }
 
-fn run(mut c: Command, input: Option<&[u8]>) -> Result<Vec<u8>, String> {
-    c.stdin(if input.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    })
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
-    let mut child = c.spawn().map_err(|e| e.to_string())?;
+fn run(mut c: crate::proc::Command, input: Option<&[u8]>) -> Result<Vec<u8>, String> {
+    use crate::proc::Io;
+    let feed = if input.is_some() { Io::Pipe } else { Io::Null };
+    let mut child = c
+        .spawn(feed, Io::Pipe, Io::Pipe)
+        .map_err(|e| e.to_string())?;
     if let (Some(bytes), Some(mut stdin)) = (input, child.stdin.take()) {
         // a broken pipe is git's own error, reported by its exit status
         crate::soft::done(stdin.write_all(bytes), "blob");

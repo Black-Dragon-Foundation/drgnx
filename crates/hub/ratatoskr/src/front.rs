@@ -1753,9 +1753,13 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let f = front(dir.path());
             // the peer is a child of this process (a test runner may itself be pid 1's child, or pid 1)
-            let mut peer = std::process::Command::new("sleep")
+            let mut peer = crate::proc::Command::new("sleep")
                 .arg("60")
-                .spawn()
+                .spawn(
+                    crate::proc::Io::Inherit,
+                    crate::proc::Io::Inherit,
+                    crate::proc::Io::Inherit,
+                )
                 .unwrap();
             let attach = r#"{"id":1,"method":"mcp/attach","params":{"kind":"claude"}}"#;
             let mut s = Session::new(f.next_conn(), Socket::Main);

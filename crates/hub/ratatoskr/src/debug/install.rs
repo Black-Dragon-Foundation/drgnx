@@ -13,9 +13,8 @@ use crate::browser::install::{InstallError, Limits, fetch, unpack};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Read};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 
 /// What an `:install` entry asks for, on this platform.
@@ -288,13 +287,7 @@ async fn lock_target(tools: &Path, into: &str) -> villa::Result<Lock> {
     use std::os::fd::AsRawFd;
     let path = tools.join(format!(".{into}.lock"));
     crate::clock::blocking(move || {
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|e| io_err(&path, e))?;
+        let file = eitri::open_lock(&path, 0o600).map_err(|e| io_err(&path, e.into()))?;
         // SAFETY: flock(2) on a descriptor this function owns; it blocks until the other install is done.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
             return Err(io_err(&path, io::Error::last_os_error()));
@@ -433,11 +426,8 @@ fn rollback(s: &Staged) {
 /// FROM copied to the new file TO: its sha256.
 fn copy_hashed(from: &Path, to: &Path) -> villa::Result<String> {
     let mut src = File::open(from).map_err(|e| io_err(from, e))?;
-    let mut out = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(to)
+    let mut out = eitri::create_exclusive(to, 0o600)
+        .map_err(std::io::Error::from)
         .map_err(|e| io_err(to, e))?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
@@ -579,12 +569,10 @@ pub(crate) fn unpack_tgz(
                 .map_err(|e| InstallError::Io(format!("{}: {e}", parent.display())))?;
         }
         let mode = entry.header().mode().unwrap_or(0o644);
-        let mut out = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(if mode & 0o111 != 0 { 0o755 } else { 0o644 })
-            .open(&target)
-            .map_err(|e| InstallError::Io(format!("{}: {e}", target.display())))?;
+        let mut out =
+            eitri::create_exclusive(&target, if mode & 0o111 != 0 { 0o755 } else { 0o644 })
+                .map_err(std::io::Error::from)
+                .map_err(|e| InstallError::Io(format!("{}: {e}", target.display())))?;
         let allowed = limits.entry.min(limits.unpacked - total);
         let n = io::copy(&mut (&mut entry).take(allowed + 1), &mut out)
             .map_err(|e| InstallError::Archive(format!("{raw}: {e}")))?;

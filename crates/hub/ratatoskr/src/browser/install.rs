@@ -11,9 +11,9 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -395,11 +395,8 @@ async fn download(
     to: &Path,
     limits: Limits,
 ) -> Result<String, InstallError> {
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(to)
+    let file = eitri::create_exclusive(to, 0o600)
+        .map_err(std::io::Error::from)
         .map_err(|e| io_err(to, e))?;
     let mut sink = Sink {
         file,
@@ -437,11 +434,8 @@ async fn download(
 /// URL's body into the new file TO, over https only, hashed as it comes: its sha256 as lower-case hex.  Debug: Install
 /// Adapter's downloads (`debug/install.rs`) go through here too.
 pub(crate) async fn fetch(url: &str, to: &Path, limits: Limits) -> Result<String, InstallError> {
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(to)
+    let file = eitri::create_exclusive(to, 0o600)
+        .map_err(std::io::Error::from)
         .map_err(|e| io_err(to, e))?;
     let mut sink = Sink {
         file,
@@ -669,11 +663,8 @@ pub(crate) fn unpack(zip: &Path, dest: &Path, limits: Limits) -> Result<(), Inst
             fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
         }
         let perm = if mode & 0o111 != 0 { 0o755 } else { 0o644 };
-        let mut out = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(perm)
-            .open(&target)
+        let mut out = eitri::create_exclusive(&target, perm)
+            .map_err(std::io::Error::from)
             .map_err(|e| io_err(&target, e))?;
         let allowed = limits.entry.min(limits.unpacked - total);
         let n = io::copy(&mut (&mut entry).take(allowed + 1), &mut out)
@@ -1092,11 +1083,7 @@ mod tests {
             });
             let get = |path: &'static str| async move {
                 let dir = tempfile::tempdir().unwrap();
-                let file = OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(dir.path().join("d"))
-                    .unwrap();
+                let file = eitri::create_exclusive(&dir.path().join("d"), 0o600).unwrap();
                 let mut sink = Sink {
                     file,
                     hasher: Sha256::new(),
@@ -1129,11 +1116,7 @@ mod tests {
             assert!(matches!(get("/ftp").await, Err(InstallError::NotHttps(_))));
             // without the test's plain http an `http://` start is refused before any request
             let dir = tempfile::tempdir().unwrap();
-            let file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(dir.path().join("d"))
-                .unwrap();
+            let file = eitri::create_exclusive(&dir.path().join("d"), 0o600).unwrap();
             let mut sink = Sink {
                 file,
                 hasher: Sha256::new(),

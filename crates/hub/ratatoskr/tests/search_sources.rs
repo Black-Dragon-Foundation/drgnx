@@ -87,11 +87,11 @@ impl Fake {
     }
 
     fn embeds(&self) -> Vec<Vec<String>> {
-        self.embeds.lock().unwrap().clone()
+        saman::lock(&self.embeds).clone()
     }
 
     fn lookups(&self) -> Vec<(KeyKind, usize)> {
-        self.lookups.lock().unwrap().clone()
+        saman::lock(&self.lookups).clone()
     }
 }
 
@@ -116,7 +116,7 @@ impl Source for Fake {
         kind: KeyKind,
         keys: &'a [[u8; 32]],
     ) -> BoxFuture<'a, Result<Vec<Option<QuantRow>>, EmbedError>> {
-        self.lookups.lock().unwrap().push((kind, keys.len()));
+        saman::lock(&self.lookups).push((kind, keys.len()));
         Box::pin(async move {
             if !self.up.load(Ordering::SeqCst) {
                 return Err(EmbedError(format!("{} is down", self.id)));
@@ -139,10 +139,7 @@ impl Source for Fake {
         items: &'a [Item],
         _overriding: bool,
     ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
-        self.embeds
-            .lock()
-            .unwrap()
-            .push(items.iter().map(|(_, _, t)| t.clone()).collect());
+        saman::lock(&self.embeds).push(items.iter().map(|(_, _, t)| t.clone()).collect());
         let up = self.up.load(Ordering::SeqCst);
         Box::pin(async move {
             if !up {

@@ -4,7 +4,6 @@ use super::ports::{self, Blocks, MAC_EPHEMERAL, free};
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 // The blocks' tests probe with their own function: on Linux other tests' outgoing connections take ports anywhere in
 // 32768-60999, so a real probe of a fixed range would fail now and then. Each test has its own lock directory.
@@ -161,7 +160,7 @@ fn holder_of_a_block_for_another_test() {
 #[test]
 fn a_block_another_process_holds_is_passed_over() {
     let t = tempfile::tempdir().unwrap();
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    let mut child = crate::proc::Command::new(std::env::current_exe().unwrap())
         .args([
             "--ignored",
             "--exact",
@@ -170,10 +169,11 @@ fn a_block_another_process_holds_is_passed_over() {
             "--test-threads=1",
         ])
         .env("DRGNX_TEST_HOLD_DIR", locks(&t))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+        .spawn(
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Null,
+        )
         .unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let held: u16 = loop {
@@ -324,7 +324,7 @@ fn reserve() -> (std::os::fd::OwnedFd, u16) {
 #[test]
 fn a_command_that_does_not_answer_is_killed_at_its_deadline() {
     // unbounded, it would end after 30 s with Ok
-    let mut c = Command::new("sleep");
+    let mut c = crate::proc::Command::new("sleep");
     c.arg("30");
     let r = ports::output_within(c, std::time::Duration::from_millis(300));
     assert!(
@@ -332,7 +332,7 @@ fn a_command_that_does_not_answer_is_killed_at_its_deadline() {
             .is_err_and(|e| e.message().contains("did not answer")),
         "{r:?}"
     );
-    let mut c = Command::new("echo");
+    let mut c = crate::proc::Command::new("echo");
     c.arg("hi");
     let r = ports::output_within(c, std::time::Duration::from_secs(5)).unwrap();
     assert_eq!(r.stdout, b"hi\n");

@@ -9,7 +9,7 @@
 
 use super::RunnerCfg;
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// The forced options, in order: the first lines of every runner's file.
@@ -133,12 +133,7 @@ pub fn write_in(runtime_dir: &Path, name: &str, file: &str, text: &str) -> io::R
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&tmp)?;
+    let mut f = eitri::create_exclusive(&tmp, 0o600).map_err(std::io::Error::from)?;
     f.write_all(text.as_bytes())?;
     f.sync_all()?;
     drop(f);

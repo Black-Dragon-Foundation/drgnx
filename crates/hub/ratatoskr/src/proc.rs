@@ -23,6 +23,35 @@ pub struct Output {
     pub stderr: Vec<u8>,
 }
 
+/// Where one of a started child's streams goes ([`Command::spawn`]); `std`'s `Stdio` cannot be looked into.
+#[derive(Debug, Clone)]
+pub enum Io {
+    /// A pipe the caller holds the other end of.
+    Pipe,
+    /// `/dev/null`.
+    Null,
+    /// This process's own stream (for stdin: `/dev/null`).
+    Inherit,
+    /// The file behind this descriptor.
+    File(std::sync::Arc<std::os::fd::OwnedFd>),
+}
+
+impl Io {
+    /// A file as a stream.
+    pub fn file(f: impl Into<std::os::fd::OwnedFd>) -> Io {
+        Io::File(std::sync::Arc::new(f.into()))
+    }
+
+    fn redirect(&self) -> draugr::Redirect {
+        match self {
+            Io::Pipe => draugr::Redirect::Pipe,
+            Io::Null => draugr::Redirect::Null,
+            Io::Inherit => draugr::Redirect::Inherit,
+            Io::File(fd) => draugr::Redirect::To(fd.clone()),
+        }
+    }
+}
+
 /// A command to run to its end.
 #[derive(Debug, Clone)]
 pub struct Command {
@@ -32,6 +61,8 @@ pub struct Command {
     // None removes the variable
     env: BTreeMap<OsString, Option<OsString>>,
     cwd: Option<PathBuf>,
+    deadline: Duration,
+    new_session: bool,
 }
 
 impl Command {
@@ -42,7 +73,14 @@ impl Command {
             clear: false,
             env: BTreeMap::new(),
             cwd: None,
+            deadline: DEADLINE,
+            new_session: false,
         }
+    }
+
+    /// The program this command starts.
+    pub fn program(&self) -> &OsStr {
+        &self.program
     }
 
     pub fn arg(&mut self, a: impl AsRef<OsStr>) -> &mut Command {
@@ -104,6 +142,20 @@ impl Command {
         self
     }
 
+    /// How long the child may run before its process group is ended (default [`DEADLINE`]): for a call a caller gives
+    /// up on at that time, so what it started does not outlive it.
+    pub fn deadline(&mut self, d: Duration) -> &mut Command {
+        self.deadline = d;
+        self
+    }
+
+    /// The child leads a session of its own (`setsid`): it has no controlling terminal, so it cannot ask the user
+    /// anything through `/dev/tty`.
+    pub fn new_session(&mut self) -> &mut Command {
+        self.new_session = true;
+        self
+    }
+
     pub fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Command {
         self.cwd = Some(dir.as_ref().to_owned());
         self
@@ -138,10 +190,11 @@ impl Command {
             cwd: self.cwd.clone(),
             stdin_null: true,
             pass_fds: Vec::new(),
-            new_session: false,
+            new_session: self.new_session,
         };
         // on a thread of its own: `draugr::run` starts a runtime, which a caller already inside one cannot
-        let run = saman::spawn_thread("proc-run", move || draugr::run(spec, DEADLINE))
+        let deadline = self.deadline;
+        let run = saman::spawn_thread("proc-run", move || draugr::run(spec, deadline))
             .map_err(io::Error::other)?
             .join()
             .map_err(|_| io::Error::other("the thread running the child panicked"))??;
@@ -167,6 +220,31 @@ impl Command {
         .map_err(io::Error::other)?;
         rx.await
             .map_err(|_| io::Error::other("the thread running the child ended without an answer"))?
+    }
+
+    /// Start the child and give it back (a `std` child: its pipes are the std ones), in a process group of its own, for
+    /// a child the caller waits on, feeds or ends itself (`draugr::spawn_std`). STDIN, STDOUT and STDERR say where its
+    /// streams go. Nothing ends the child but the caller.
+    pub fn spawn(&mut self, stdin: Io, stdout: Io, stderr: Io) -> io::Result<std::process::Child> {
+        let mut spec = draugr::Spec {
+            program: self.program.clone().into(),
+            args: self.args.clone(),
+            env: self.environment(),
+            cwd: self.cwd.clone(),
+            stdin_null: matches!(stdin, Io::Null | Io::Inherit),
+            pass_fds: Vec::new(),
+            new_session: self.new_session,
+        };
+        let mut opts = draugr::Opts {
+            stdout: stdout.redirect(),
+            stderr: stderr.redirect(),
+            ..draugr::Opts::default()
+        };
+        if let Io::File(fd) = stdin {
+            spec.stdin_null = false;
+            opts.stdin = Some(fd);
+        }
+        draugr::spawn_std(&spec, &opts)
     }
 
     /// [`Command::status`] for an async caller.

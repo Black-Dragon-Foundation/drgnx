@@ -4,7 +4,7 @@
 //! `cargo test --release -p ratatoskr --bench debug_inline -- --ignored --nocapture --test-threads 1`.  It measures
 //! and prints; the pass judges.  The file and the variables are made here from fixed arithmetic.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ratatoskr::debug::inline::{Inline, Var};
 
@@ -53,21 +53,21 @@ fn debug_inline() {
         .collect();
     let stop = 900 + 190;
     let inline = Inline::new();
-    let first = Instant::now();
+    let first = stund::real::instant();
     let shown = inline.lines("bench.py", &text, stop, &vars, None);
     let first = first.elapsed();
     assert!(shown.len() >= 20, "{} lines shown", shown.len());
     let mut times = vec![];
     for i in 0..200u32 {
-        let t = Instant::now();
+        let t = stund::real::instant();
         let s = inline.lines("bench.py", &text, stop - (i % 20), &vars, None);
         times.push(t.elapsed());
         std::hint::black_box(s);
     }
     assert_eq!(inline.parses(), 1);
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "debug-inline first_ms {:.3} p95_ms {:.3} (budget 8)",
         ms(first),
         ms(p95(times))
-    );
+    ));
 }

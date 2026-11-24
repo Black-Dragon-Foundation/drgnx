@@ -11,7 +11,7 @@ use hrafn::{
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The first tier of a project the size of drgnx, in full, without vectors.
 const TIER1_FULL_INDEX: Duration = Duration::from_secs(60);
@@ -206,7 +206,7 @@ async fn ask(
                 dir_weight: hrafn::query::DIR_WEIGHT,
             };
             let v = vector(10_000 + i as u64);
-            let started = Instant::now();
+            let started = stund::real::instant();
             let a = search(
                 store,
                 &q,
@@ -229,7 +229,7 @@ async fn ask(
 
 async fn query_row(chunks: usize, budget: Duration) {
     let dir = tempfile::tempdir().unwrap();
-    let built = Instant::now();
+    let built = stund::real::instant();
     let (store, cache) = synthetic(dir.path(), chunks, false).await;
     ratatoskr::soft::out_line(&format!("{chunks} chunks built in {:?}", built.elapsed()));
     let keyword = ask((&store, &cache), hrafn::View::Base, false, 6).await;
@@ -286,7 +286,7 @@ where
     f(0).await;
     let mut t = Vec::with_capacity(rounds);
     for r in 1..=rounds {
-        let started = Instant::now();
+        let started = stund::real::instant();
         f(r).await;
         t.push(started.elapsed());
     }
@@ -301,7 +301,7 @@ fn agent_tools_at_50k_chunks() {
         use hrafn::map::{MapAsk, repo_map, usages};
         use hrafn::symbols::{Find, Match, find, outline};
         let dir = tempfile::tempdir().unwrap();
-        let built = Instant::now();
+        let built = stund::real::instant();
         let (store, _cache) = synthetic(dir.path(), 50_000, true).await;
         let files = 25_000;
         let refs: i64 = store
@@ -321,7 +321,7 @@ fn agent_tools_at_50k_chunks() {
             all: false,
         };
 
-        let started = Instant::now();
+        let started = stund::real::instant();
         let m = repo_map(&store, view, &ask(2_000, vec![])).await.unwrap();
         let cold = started.elapsed();
         assert!(m.built && !m.files.is_empty());
@@ -442,7 +442,7 @@ fn line_text(f: usize, line: usize) -> String {
 fn worktree_search_p95() {
     saman::Executor::new(2).unwrap().block_on(async move {
     let dir = tempfile::tempdir().unwrap();
-    let built = Instant::now();
+    let built = stund::real::instant();
     let (store, cache) = synthetic(dir.path(), 50_000, false).await;
     let files = 25_000;
     let mut trees = Vec::new();
@@ -610,7 +610,7 @@ fn tier1_of_a_checkout_and_one_saved_file() {
         list.sort_by(|a, b| a.path.cmp(&b.path));
         let dir = tempfile::tempdir().unwrap();
         let store = CodeStore::open(&dir.path().join("code.db")).unwrap();
-        let started = Instant::now();
+        let started = stund::real::instant();
         let read = |p: &str| {
             texts
                 .get(p)
@@ -648,7 +648,7 @@ fn tier1_of_a_checkout_and_one_saved_file() {
                 .cloned()
                 .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
         };
-        let started = Instant::now();
+        let started = stund::real::instant();
         refresh(&store, &list, &read, &[]).await.unwrap();
         let a = search(
             &store,
@@ -750,7 +750,7 @@ fn usages_steps_at_50k_chunks() {
         })
         .await
         .unwrap();
-        let built = Instant::now();
+        let built = stund::real::instant();
         let r = p.refresh_now().await.unwrap();
         ratatoskr::soft::out_line(&format!(
             "tier 1: {} chunks in {:?}",

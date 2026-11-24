@@ -495,7 +495,7 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
         ),
         RunnerCommand::Remove { name, yes } => {
             if !yes {
-                print!("{}", remove_note(&name));
+                crate::soft::out_text(&remove_note(&name));
                 return 0;
             }
             (
@@ -507,7 +507,7 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
         }
         RunnerCommand::CloudOff { yes } => {
             if !yes {
-                print!("{}", cloud_off_note());
+                crate::soft::out_text(&cloud_off_note());
                 return 0;
             }
             ("runners/cloud/off", json!({}), ADD, true)
@@ -527,7 +527,7 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
             project,
             member,
         } => {
-            print!("{}", setup_gcp_text(&hub, &project, member.as_deref()));
+            crate::soft::out_text(&setup_gcp_text(&hub, &project, member.as_deref()));
             return 0;
         }
     };
@@ -545,7 +545,7 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
             if json_out || method != "runners/list" {
                 crate::soft::out_line(&a.to_string());
             } else {
-                print!("{}", format_list(&a));
+                crate::soft::out_text(&format_list(&a));
             }
             0
         }

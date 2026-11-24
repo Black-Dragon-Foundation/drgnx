@@ -184,13 +184,13 @@ impl JobNetwork {
             a.abort();
         }
         crate::soft::done(
-            tokio::process::Command::new(&self.podman)
+            crate::proc::Command::new(&self.podman)
                 .args(["rm", "-f", "-t", "0", &self.job])
                 .envs(self.env.iter().map(|(k, v)| (k, v)))
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .status()
+                .status_async()
                 .await,
             "tokio::process::Command::new",
         );

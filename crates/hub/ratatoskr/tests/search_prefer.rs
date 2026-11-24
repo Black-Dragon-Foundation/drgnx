@@ -15,6 +15,7 @@ use norn::store::CoordDb;
 use ratatoskr::dispatch::Caller;
 use ratatoskr::embed::{self, Outcome};
 use ratatoskr::gateway::Gate;
+use ratatoskr::proc::{Command, Io};
 use ratatoskr::search::worker::{WorkerEmbedder, WorkerSpec};
 use ratatoskr::search::{DocEmbedder, builtin_identity, prefer};
 use ratatoskr::settings::providers::ChainStep;
@@ -22,7 +23,7 @@ use runstav::methods::gateway::{ProviderConfig, SpendParams};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use tempfile::TempDir;
 use urdr::graph::search::Embedder;
 
@@ -67,8 +68,7 @@ impl Server {
             .arg(&model_file)
             .arg("--parent")
             .arg(std::process::id().to_string())
-            .stdout(Stdio::piped())
-            .spawn()
+            .spawn(Io::Inherit, Io::Pipe, Io::Inherit)
             .unwrap();
         let mut line = String::new();
         BufReader::new(child.stdout.take().unwrap())

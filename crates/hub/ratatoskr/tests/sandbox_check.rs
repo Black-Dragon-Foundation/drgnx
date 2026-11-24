@@ -119,7 +119,7 @@ fn doctor_json_has_the_sandbox_section() {
 #[test]
 #[ignore = "timing: doctor answers within the editor's wait"]
 fn doctor_json_answers_within_the_editors_wait() {
-    let start = std::time::Instant::now();
+    let start = stund::real::instant();
     let out = run(&["doctor", "--json"]);
     assert!(
         start.elapsed() < std::time::Duration::from_millis(2500),

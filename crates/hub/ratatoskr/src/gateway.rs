@@ -1927,9 +1927,13 @@ mod tests {
             let g = &h.front.gate;
             let first = g.editor_token(Some(me())).await.unwrap();
             // another process's editor token is its own
-            let mut other = std::process::Command::new("sleep")
+            let mut other = crate::proc::Command::new("sleep")
                 .arg("60")
-                .spawn()
+                .spawn(
+                    crate::proc::Io::Inherit,
+                    crate::proc::Io::Inherit,
+                    crate::proc::Io::Inherit,
+                )
                 .unwrap();
             let theirs = g.editor_token(Some(other.id() as i32)).await.unwrap();
             let second = g.editor_token(Some(me())).await.unwrap();

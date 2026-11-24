@@ -25,7 +25,7 @@ use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use urdr::Connection;
@@ -310,10 +310,7 @@ fn mtime_of(m: &std::fs::Metadata) -> i64 {
 
 /// PATH opened read-only, never through a link.
 fn open_ro(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
+    eitri::open_read(path).map_err(std::io::Error::from)
 }
 
 const SCHEMA: &str = "
@@ -331,12 +328,7 @@ pub fn open_db(path: &Path) -> villa::Result<Connection> {
         std::fs::create_dir_all(dir)
             .map_err(|e| villa::Error::io(format!("{}: {e}", dir.display())))?;
     }
-    let f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
+    let f = eitri::open_append(path, Some(0o600))
         .map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
     f.set_permissions(std::fs::Permissions::from_mode(0o600))
         .map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;

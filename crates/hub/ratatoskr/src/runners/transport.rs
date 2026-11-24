@@ -658,13 +658,13 @@ mod openssh_impl {
                 "the host {host:?} reads as an option"
             )));
         }
-        let out = tokio::process::Command::new("ssh")
+        let out = crate::proc::Command::new("ssh")
             .arg("-G")
             .arg("-F")
             .arg(config)
             .arg(host)
             .stdin(std::process::Stdio::null())
-            .output()
+            .output_async()
             .await
             .map_err(|e| LinkError::Refused(format!("ssh -G: {e}")))?;
         if !out.status.success() {

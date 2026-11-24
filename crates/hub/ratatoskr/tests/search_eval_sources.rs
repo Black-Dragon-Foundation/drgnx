@@ -7,11 +7,12 @@
 #![cfg(feature = "test-hooks")]
 
 use hrafn::Scope;
+use ratatoskr::proc::{Command, Io};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 
 fn mock_bin() -> PathBuf {
     let bin = skuld::workspace_bin("ratatoskr-mock", None, Some("RATATOSKR_MOCK"));
@@ -46,8 +47,7 @@ impl Server {
             .arg(&log)
             .arg("--parent")
             .arg(std::process::id().to_string())
-            .stdout(Stdio::piped())
-            .spawn()
+            .spawn(Io::Inherit, Io::Pipe, Io::Inherit)
             .unwrap();
         let mut line = String::new();
         BufReader::new(child.stdout.take().unwrap())

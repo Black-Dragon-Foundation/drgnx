@@ -732,7 +732,8 @@ mod tests {
         assert_eq!(why(plan(&at("bin", b"ab\0\n"), w())), BINARY);
         assert_eq!(why(plan(&at("latin", b"ab \xe9\n"), w())), NOT_UTF8);
         let big = d.path().join("big");
-        std::fs::File::create(&big)
+        eitri::create_exclusive(&big, 0o666)
+            .map_err(std::io::Error::from)
             .unwrap()
             .set_len(WRITE_MAX + 1)
             .unwrap();

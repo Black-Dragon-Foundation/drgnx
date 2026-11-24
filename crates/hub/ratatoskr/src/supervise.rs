@@ -29,10 +29,9 @@ use runstav::paths::{self, Env};
 use serde_json::json;
 use std::ffi::OsString;
 use std::io::{self, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::os::unix::process::CommandExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 /// The names a supervisor passes on, each only when set (review I11): the directories (a long path would resolve
@@ -180,12 +179,7 @@ pub fn write_private(file: &Path, text: &str) -> io::Result<()> {
     let tmp = PathBuf::from(name);
     crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     let written = (|| {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)?;
+        let mut f = eitri::create_exclusive(&tmp, 0o600).map_err(std::io::Error::from)?;
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
         crate::fsio::rename(&tmp, file)
@@ -318,27 +312,29 @@ pub fn choose(env: &Env) -> Mode {
 /// --supervisor self`.  Nothing above stderr is inherited, a descriptor a caller left inheritable included
 /// ([`isolate`]).  The child is handed back so the caller can see it end early.
 pub fn detach(exe: &Path) -> io::Result<std::process::Child> {
-    let mut cmd = Command::new(exe);
-    cmd.args(["serve", "--supervisor", "self"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    isolate(&mut cmd);
-    cmd.spawn()
+    draugr::spawn_std(&detached(exe, ["serve", "--supervisor", "self"]), &quiet())
 }
 
-/// CMD's child is a session of its own (`setsid`).  What it inherits stops at stderr: every descriptor from 3 up is
-/// close-on-exec in the child, whatever the caller left inheritable.
-fn isolate(cmd: &mut Command) {
-    // SAFETY: `close_range(2)` or `fcntl(2)` and `setsid(2)`, all async-signal-safe and allocation-free, run between
-    // fork and exec.
-    unsafe {
-        cmd.pre_exec(|| {
-            draugr::spawn::cloexec_from(3);
-            rustix::process::setsid()
-                .map(|_| ())
-                .map_err(io::Error::from)
-        });
+/// The spec of EXE with ARGS as a session of its own (`setsid`), our environment. What it inherits stops at stderr:
+/// every descriptor from 3 up is close-on-exec in the child, whatever the caller left inheritable (draugr's start).
+fn detached<const N: usize>(exe: &Path, args: [&str; N]) -> draugr::Spec {
+    draugr::Spec {
+        program: exe.to_path_buf(),
+        args: args.iter().map(OsString::from).collect(),
+        env: std::env::vars_os().collect(),
+        cwd: None,
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: true,
+    }
+}
+
+/// A child whose stdout and stderr are `/dev/null`.
+fn quiet() -> draugr::Opts {
+    draugr::Opts {
+        stdout: draugr::Redirect::Null,
+        stderr: draugr::Redirect::Null,
+        ..draugr::Opts::default()
     }
 }
 
@@ -503,7 +499,7 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
         if crate::clock::real_now() >= deadline {
             break;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        stund::real::sleep_blocking(Duration::from_millis(50));
     }
     let why = match (log_reason(env), ended) {
         (Some((r, file)), _) => format!("{r} (log: {})", file.display()),
@@ -538,7 +534,7 @@ fn wait_stopped(path: &Path, within: Duration) -> bool {
         if crate::clock::real_now() >= deadline {
             return false;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        stund::real::sleep_blocking(Duration::from_millis(50));
     }
 }
 
@@ -555,7 +551,7 @@ fn ending(path: &Path, deadline: std::time::Instant) -> Option<Option<u32>> {
             Ok(Holder::Ratatoskr { stopping: true, .. }) => {}
             _ => return None,
         }
-        std::thread::sleep(Duration::from_millis(50));
+        stund::real::sleep_blocking(Duration::from_millis(50));
     }
 }
 
@@ -566,7 +562,7 @@ fn wait_gone(path: &Path, within: Duration) -> bool {
         if crate::clock::real_now() >= deadline {
             return false;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        stund::real::sleep_blocking(Duration::from_millis(50));
     }
     true
 }
@@ -734,13 +730,15 @@ mod tests {
             high
         };
         assert!(leaked >= 200);
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", "ls /proc/self/fd"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        isolate(&mut cmd);
-        let out = cmd.output().unwrap();
+        let spec = detached(Path::new("/bin/sh"), ["-c", "ls /proc/self/fd"]);
+        let opts = draugr::Opts {
+            stdout: draugr::Redirect::Pipe,
+            ..quiet()
+        };
+        let out = draugr::spawn_std(&spec, &opts)
+            .unwrap()
+            .wait_with_output()
+            .unwrap();
         // SAFETY: closing the descriptor made above.
         unsafe { libc::close(leaked) };
         let seen: Vec<i32> = String::from_utf8_lossy(&out.stdout)

@@ -25,7 +25,7 @@ impl Drop for Mock {
 impl Mock {
     pub fn start() -> Mock {
         use std::io::BufRead;
-        let mut child = std::process::Command::new(crate::embed::tests::mock_binary())
+        let mut child = crate::proc::Command::new(crate::embed::tests::mock_binary())
             .args([
                 "cloud",
                 "--listen",
@@ -36,9 +36,11 @@ impl Mock {
             .args(["--prefix", "t", "--run", "r1", "--hub", HUB])
             .arg("--parent")
             .arg(std::process::id().to_string())
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
+            .spawn(
+                crate::proc::Io::Null,
+                crate::proc::Io::Pipe,
+                crate::proc::Io::Inherit,
+            )
             .unwrap();
         let mut line = String::new();
         std::io::BufReader::new(child.stdout.take().unwrap())

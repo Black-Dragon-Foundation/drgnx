@@ -27,7 +27,7 @@ fn virtual_time_moves_only_on_advance() {
             saman::lock(&mine).push("woke");
         });
         // real time passes; the virtual clock stands still
-        tokio::time::sleep(ms(200)).await;
+        stund::real::sleep(ms(200)).await;
         assert!(seen(&l).is_empty(), "woke without an advance");
         let a = advance(ms(49)).await;
         assert_eq!((a.now_ms, a.woken), (49, 0));
@@ -144,7 +144,7 @@ fn a_task_idle_on_a_channel_after_its_wake_is_parked() {
 fn wall_follows_virtual_time() {
     on_virtual(async {
         let (w0, n0, s0) = (wall(), now(), wall_secs());
-        tokio::time::sleep(ms(50)).await;
+        stund::real::sleep(ms(50)).await;
         assert_eq!((wall(), now()), (w0, n0), "real time moved the clock");
         advance(ms(1500)).await;
         assert_eq!(wall().duration_since(w0).unwrap(), ms(1500));
@@ -472,7 +472,7 @@ fn a_barrier_waits_for_a_store_answer_that_takes_longer_than_busy_after() {
         spawn("session:steps", async move {
             crate::soft::done(
                 db.read(|_| {
-                    std::thread::sleep(BUSY_AFTER + Duration::from_secs(1));
+                    stund::real::sleep_blocking(BUSY_AFTER + Duration::from_secs(1));
                     Ok(())
                 })
                 .await,

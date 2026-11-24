@@ -337,15 +337,10 @@ impl Saved {
 
 /// BODY to PATH whole or not at all: a temporary file beside it with MODE, synced, then renamed over it.
 fn write_atomic(path: &Path, body: &[u8], mode: u32) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
     let result = (|| {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(mode)
-            .open(&tmp)?;
+        let mut f = eitri::create_exclusive(&tmp, mode).map_err(std::io::Error::from)?;
         f.write_all(body)?;
         f.sync_all()?;
         crate::fsio::rename(&tmp, path)

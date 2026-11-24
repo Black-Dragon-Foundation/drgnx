@@ -443,9 +443,8 @@ fn an_unchanged_scan_opens_no_file_and_writes_nothing() {
     // the index's mtime moved into the past, so a write would show without waiting for a clock tick
     let past =
         std::fs::metadata(&db).unwrap().modified().unwrap() - std::time::Duration::from_secs(3600);
-    std::fs::File::options()
-        .write(true)
-        .open(&db)
+    eitri::open_existing(&db)
+        .map_err(std::io::Error::from)
         .unwrap()
         .set_modified(past)
         .unwrap();
@@ -480,9 +479,8 @@ fn a_session_older_than_the_cap_is_neither_listed_nor_searchable() {
         // from the file's own mtime (just made), so no clock is read
         let t = std::fs::metadata(p).unwrap().modified().unwrap()
             - std::time::Duration::from_secs(days * 86_400);
-        std::fs::File::options()
-            .write(true)
-            .open(p)
+        eitri::open_existing(p)
+            .map_err(std::io::Error::from)
             .unwrap()
             .set_modified(t)
             .unwrap();
@@ -629,9 +627,8 @@ fn a_cold_folder_is_read_again_when_it_changes_or_on_the_31st_walk() {
         // from the file's own mtime (just made), so no clock is read
         let t = std::fs::metadata(p).unwrap().modified().unwrap()
             - std::time::Duration::from_secs(2 * 3600);
-        std::fs::File::options()
-            .write(true)
-            .open(p)
+        eitri::open_existing(p)
+            .map_err(std::io::Error::from)
             .unwrap()
             .set_modified(t)
             .unwrap();

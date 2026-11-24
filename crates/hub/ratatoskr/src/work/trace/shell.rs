@@ -106,15 +106,15 @@ impl Probe for FsProbe {
 /// The PATHS git ignores in ROOT's repository (none when ROOT is not in one, or git fails).
 fn check_ignore(root: &Path, paths: &[PathBuf]) -> BTreeSet<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
-    use std::process::{Command, Stdio};
-    let child = Command::new("git")
+    let child = crate::proc::Command::new("git")
         .arg("-C")
         .arg(root)
         .args(["check-ignore", "-z", "--stdin"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
+        .spawn(
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Null,
+        );
     let Ok(mut child) = child else {
         return BTreeSet::new();
     };

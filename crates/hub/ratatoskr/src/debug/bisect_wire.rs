@@ -139,17 +139,17 @@ fn modes_of(repo: &Path, base: &str) -> HashMap<String, String> {
 /// TEXT written into REPO as a blob: its id.
 fn hash_text(repo: &Path, text: &str) -> villa::Result<String> {
     use std::io::Write;
-    use std::process::{Command, Stdio};
-    let mut c = Command::new("git")
+    let mut c = crate::proc::Command::new("git")
         .env("GIT_DIR", repo)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .current_dir(repo)
         .args(["hash-object", "-w", "--stdin"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .spawn(
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Pipe,
+        )
         .map_err(|e| villa::Error::invalid(format!("git: {e}")))?;
     c.stdin
         .take()

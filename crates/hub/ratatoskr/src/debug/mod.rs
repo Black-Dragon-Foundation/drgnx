@@ -134,10 +134,7 @@ pub fn mock_main(script: &std::ffi::OsStr) -> std::process::ExitCode {
             return ExitCode::from(2);
         }
     };
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
+    let rt = match saman::Executor::new(1) {
         Ok(r) => r,
         Err(e) => {
             crate::soft::err_line(&format!("debug-mock: no runtime: {e}"));
@@ -1329,7 +1326,10 @@ impl Debug {
         }
         if matches!(op, Op::Stop { .. } | Op::Disconnect) {
             for child in self.children(id) {
-                Box::pin(self.control(&child, op.clone())).await.ok();
+                crate::soft::done(
+                    Box::pin(self.control(&child, op.clone())).await,
+                    "debug control",
+                );
             }
             match h.op(op).await {
                 // it ended while its children stopped (js-debug ends its root session once the program is gone)

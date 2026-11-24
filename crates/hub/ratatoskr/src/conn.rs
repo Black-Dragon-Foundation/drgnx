@@ -924,8 +924,10 @@ mod real_wait {
             match ms {
                 Some(ms) => {
                     crate::soft::done(
-                        clock::blocking(move || std::thread::sleep(Duration::from_millis(ms)))
-                            .await,
+                        clock::blocking(move || {
+                            stund::real::sleep_blocking(Duration::from_millis(ms))
+                        })
+                        .await,
                         "clock::blocking",
                     );
                 }

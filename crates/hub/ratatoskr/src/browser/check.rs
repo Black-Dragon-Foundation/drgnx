@@ -275,11 +275,11 @@ async fn session(
 async fn peak(unit: &str) -> Option<u64> {
     let out = clock::timeout(
         Duration::from_secs(2),
-        tokio::process::Command::new("systemctl")
+        crate::proc::Command::new("systemctl")
             .args(["--user", "show", "-P", "MemoryPeak", unit])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .output(),
+            .output_async(),
     )
     .await
     .ok()?

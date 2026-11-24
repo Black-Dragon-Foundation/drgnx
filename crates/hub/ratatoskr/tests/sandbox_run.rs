@@ -5,9 +5,9 @@
 // Linux only: the reduced tier is Linux's (Android: no backend; fails closed). The command exists only with test-hooks.
 #![cfg(all(target_os = "linux", feature = "test-hooks"))]
 
-use ratatoskr::proc::Output;
+use ratatoskr::proc::{Command, Io, Output};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 const RATATOSKR: &str = env!("CARGO_BIN_EXE_ratatoskr");
 
@@ -164,12 +164,13 @@ fn the_relay_carries_the_program_to_the_session_socket() {
     std::fs::create_dir_all(&s1).unwrap();
     let sock = s1.join("proxy.sock");
     let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
-    let server = std::thread::spawn(move || {
+    let server = saman::spawn_thread("sandbox-run-server", move || {
         let (mut c, _) = listener.accept().unwrap();
         let mut line = String::new();
         BufReader::new(&c).read_line(&mut line).unwrap();
         c.write_all(format!("pong {line}").as_bytes()).unwrap();
-    });
+    })
+    .unwrap();
     let port = gleipnir::backend::relay_ports(gleipnir::Tier::Reduced, &[3128]).unwrap()[0];
     let spec = serde_json::json!({
         "write": [fx.p("w")],
@@ -278,9 +279,7 @@ fn pause_before_spawn_waits_for_a_line() {
         .arg(format!("touch {}", marker.display()))
         .env_clear()
         .env(stig::HOME_VAR, fx.p("home"))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .spawn()
+        .spawn(Io::Null, Io::Null, Io::Inherit)
         .unwrap();
     // the open of a pipe waits for the child's writer: a plain read, not eitri's (which refuses what is no regular file)
     let said = {

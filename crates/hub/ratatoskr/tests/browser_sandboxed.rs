@@ -152,11 +152,7 @@ fn the_host_starts_under_its_layer() {
             gleipnir::TestHooks::default(),
         )
         .unwrap_or_else(|r| panic!("refused: {r}"));
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
+    saman::block_on_current(async {
         let mut child = draugr::spawn_pinned(sandbox::to_draugr(prepared.invocation))
             .await
             .expect("spawn");
@@ -169,7 +165,7 @@ fn the_host_starts_under_its_layer() {
         )
         .unwrap_or_else(|r| panic!("the sandbox did not start: {r}\n{}", child.stderr_tail()));
         assert!(layers.browser, "{layers:?}");
-        let talk = tokio::task::spawn_blocking(move || {
+        let talk = saman::spawn_blocking("browser_sandboxed", move || {
             let mut hub = Hub {
                 s: hub,
                 dec: FrameDecoder::new((1 << 20) + 64),
@@ -370,11 +366,7 @@ fn a_hub_restart_leaves_no_chromium() {
             new_session: false,
         },
     );
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
+    saman::block_on_current(async {
         let mut child = draugr::spawn_pinned(spec).await.expect("spawn");
         gleipnir::inner::read_status_for(
             status,
@@ -433,11 +425,7 @@ fn there_is_no_listening_cdp_port_inside() {
             new_session: false,
         },
     );
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
+    saman::block_on_current(async {
         let mut child = draugr::spawn_pinned(spec).await.expect("spawn");
         gleipnir::inner::read_status_for(
             status,
@@ -507,7 +495,7 @@ fn the_check_takes_a_screenshot() {
         rustix::process::geteuid().as_raw(),
     );
     let me = std::process::id();
-    let mut hub = std::process::Command::new(RATATOSKR)
+    let mut hub = ratatoskr::proc::Command::new(RATATOSKR)
         .args(["serve", "--foreground", "--parent-pid", &me.to_string()])
         .env_clear()
         .envs([
@@ -518,10 +506,11 @@ fn the_check_takes_a_screenshot() {
             ("RATATOSKR_SUPERVISOR", PathBuf::from("none")),
         ])
         .current_dir(&b)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::fs::File::create(b.join("hub.err")).unwrap())
-        .spawn()
+        .spawn(
+            ratatoskr::proc::Io::Null,
+            ratatoskr::proc::Io::Null,
+            ratatoskr::proc::Io::file(eitri::create_exclusive(&b.join("hub.err"), 0o666).unwrap()),
+        )
         .expect("the hub");
     // the hub's stderr says why when it never answers
     let mut c = skuld::wait_until(
@@ -607,13 +596,9 @@ fn a_browser_session_starts_and_reaches_its_dev_server() {
         true,
     );
     let wt = l.b.join("wt");
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
+    saman::block_on_current(async {
         let (mut child, mut hub) = spawn_and_start(&mut l).await;
-        let nav = tokio::task::spawn_blocking(move || {
+        let nav = saman::spawn_blocking("browser_sandboxed", move || {
             hub.send(
                 KIND_CDP,
                 r#"{"id":7,"method":"Page.navigate","params":{"url":"http://127.0.0.1:3000/app"}}"#,
@@ -652,11 +637,7 @@ fn a_browser_session_starts_and_reaches_its_dev_server() {
 fn everything_is_gone_after_the_session() {
     let mut l = launch_with_browser("while [ ! -e go ]; do sleep 0.05; done; exit 0");
     let wt = l.b.join("wt");
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
+    saman::block_on_current(async {
         let (mut child, hub) = spawn_and_start(&mut l).await;
         let pid = child.id();
         assert!(!chromiums_under(pid).is_empty(), "the stand-in runs");

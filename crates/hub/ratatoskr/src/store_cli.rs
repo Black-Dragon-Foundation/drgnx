@@ -17,7 +17,7 @@ use runstav::paths::{self, Env};
 use serde_json::Value;
 use std::fs;
 use std::io;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// The live work.db's three files, in the order they are moved aside.
@@ -30,7 +30,7 @@ pub fn migrate_check(env: &Env, db: &Path, scratch: &Path, json: bool) -> i32 {
             if json {
                 crate::soft::out_line(&report.to_string());
             } else {
-                print!("{}", text(&report));
+                crate::soft::out_text(&text(&report));
             }
             0
         }
@@ -110,7 +110,7 @@ fn text(report: &Value) -> String {
 pub fn restore_pre7(env: &Env, yes: bool) -> i32 {
     match restore(env, yes) {
         Ok(said) => {
-            print!("{said}");
+            crate::soft::out_text(&said);
             0
         }
         Err(e) => {
@@ -223,11 +223,8 @@ fn pre7_copies(dir: &Path) -> Result<Vec<PathBuf>, String> {
 /// deletes TO when it fails); FROM is only read.
 fn copy_checked(from: &Path, to: &Path) -> Result<(), String> {
     let mut src = fs::File::open(from).map_err(|e| e.to_string())?;
-    let mut dst = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(to)
+    let mut dst = eitri::create_exclusive(to, 0o600)
+        .map_err(std::io::Error::from)
         .map_err(|e| format!("{}: {e}", to.display()))?;
     let copied = io::copy(&mut src, &mut dst).and_then(|_| dst.sync_all());
     drop(dst);
@@ -451,9 +448,8 @@ mod tests {
         let broken = r.data.join("backup").join("work-pre7-9999999999.db");
         crate::fsio::write(&broken, b"not a database").unwrap();
         let later = skuld::host_now() + std::time::Duration::from_secs(60);
-        fs::File::options()
-            .write(true)
-            .open(&broken)
+        eitri::open_existing(&broken)
+            .map_err(std::io::Error::from)
             .unwrap()
             .set_modified(later)
             .unwrap();

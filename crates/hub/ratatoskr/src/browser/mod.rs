@@ -83,11 +83,11 @@ pub fn over_high(current: u64, cap: u64, high: u32) -> bool {
 pub async fn memory_watch(unit: String, cap: u64, high: u32, stop: impl Fn() -> bool) {
     let cg = crate::clock::timeout(
         std::time::Duration::from_secs(2),
-        tokio::process::Command::new("systemctl")
+        crate::proc::Command::new("systemctl")
             .args(["--user", "show", "-P", "ControlGroup", &unit])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .output(),
+            .output_async(),
     )
     .await;
     let cg = match cg {
@@ -212,10 +212,7 @@ pub fn run(env: &Env, cmd: BrowserCommand) -> i32 {
     let data = data_dir(env);
     match cmd.sub {
         Sub::Install { version } => {
-            let runtime = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
+            let runtime = match saman::Executor::new(1) {
                 Ok(r) => r,
                 Err(e) => {
                     crate::soft::err_line(&format!("drgnx browser install: no async runtime: {e}"));

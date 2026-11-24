@@ -12,9 +12,8 @@
 use hrafn::Lang;
 use hrafn::chunk::worker::{Init, Launch, Started, Worker, WorkerError, WorkerSpec};
 use hrafn::chunk::{BUDGET, chunk_file_refs};
-use std::os::unix::process::CommandExt;
+use ratatoskr::proc::{Command, Io};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -26,7 +25,7 @@ struct Plain {
 }
 
 impl Launch for Plain {
-    fn start(&self, spec: &WorkerSpec) -> villa::Result<Started> {
+    fn start(&self, spec: &WorkerSpec) -> Result<Started, String> {
         let mut c = Command::new(BIN)
             .arg("hrafn-parse")
             .arg("--lib")
@@ -35,35 +34,25 @@ impl Launch for Plain {
             .arg(&spec.grammar)
             .arg("--sha256")
             .arg(&spec.sha256)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .spawn()?;
+            .new_session()
+            .spawn(Io::Pipe, Io::Pipe, Io::Pipe)
+            .map_err(|e| e.to_string())?;
         let pid = c.id() as i32;
-        self.pids.lock().unwrap().push(pid);
-        let stdin = c
-            .stdin
-            .take()
-            .ok_or_else(|| villa::Error::invalid("no stdin"))?;
-        let mut stderr = c
-            .stderr
-            .take()
-            .ok_or_else(|| villa::Error::invalid("no stderr"))?;
+        saman::lock(&self.pids).push(pid);
+        let stdin = c.stdin.take().ok_or_else(|| "no stdin".to_string())?;
+        let mut stderr = c.stderr.take().ok_or_else(|| "no stderr".to_string())?;
         let tail = Arc::new(Mutex::new(String::new()));
         let t2 = tail.clone();
-        std::thread::spawn(move || {
+        saman::spawn_thread("hrafn-parse-stderr", move || {
             let mut s = String::new();
             ratatoskr::soft::done(
                 std::io::Read::read_to_string(&mut stderr, &mut s),
                 "std::io::Read::read_to_string",
             );
-            *t2.lock().unwrap() = s;
-        });
-        let stdout = c
-            .stdout
-            .take()
-            .ok_or_else(|| villa::Error::io("no stdout"))?;
+            *saman::lock(&t2) = s;
+        })
+        .map_err(|e| e.to_string())?;
+        let stdout = c.stdout.take().ok_or_else(|| "no stdout".to_string())?;
         Ok(Started {
             stdin: Box::new(stdin),
             stdout: Box::new(stdout),
@@ -73,7 +62,7 @@ impl Launch for Plain {
                 ratatoskr::soft::done(c.kill(), "hrafn_parse");
                 ratatoskr::soft::done(c.wait(), "hrafn_parse");
             }),
-            stderr: Box::new(move || tail.lock().unwrap().clone()),
+            stderr: Box::new(move || saman::lock(&tail).clone()),
         })
     }
 }
@@ -161,9 +150,9 @@ fn the_worker_chunks_a_file_exactly_as_the_in_process_chunker_does() {
     // a second file reuses the same process
     w.chunk("Other.cs", false, "class A { void F() {} }", BUDGET)
         .unwrap();
-    assert_eq!(pids.lock().unwrap().len(), 1);
+    assert_eq!(saman::lock(&pids).len(), 1);
     w.stop();
-    let pid = pids.lock().unwrap()[0];
+    let pid = saman::lock(&pids)[0];
     assert!(!alive(pid), "the worker is gone after stop");
 }
 
@@ -198,7 +187,7 @@ fn a_grammar_that_faults_costs_the_worker_never_the_caller() {
         w.chunk("a.json", false, "{}", BUDGET),
         Err(WorkerError::Dead(_))
     ));
-    let pids = pids.lock().unwrap().clone();
+    let pids = saman::lock(&pids).clone();
     assert_eq!(pids.len(), 3, "a new process for each of the three tries");
     assert!(
         pids.iter().all(|p| !alive(*p)),
@@ -218,7 +207,7 @@ fn a_grammar_that_spins_is_cut_at_the_deadline_and_killed() {
         matches!(&e, WorkerError::File(m) if m.contains("no answer")),
         "{e:?}"
     );
-    let pid = pids.lock().unwrap()[0];
+    let pid = saman::lock(&pids)[0];
     assert!(!alive(pid), "the spinning worker was killed");
 }
 
@@ -375,12 +364,12 @@ fn a_faulting_or_spinning_grammar_costs_the_worker_for_a_find_and_a_scan_too() {
         Err(WorkerError::File(_))
     ));
     assert!(matches!(w.scan("{\"a\": 1}", 0), Err(WorkerError::File(_))));
-    assert!(pids.lock().unwrap().iter().all(|p| !alive(*p)));
+    assert!(saman::lock(&pids).iter().all(|p| !alive(*p)));
     let (lib, sha) = lib_of("fixture:loopy");
     let (mut w, pids) = worker("loopy", "loopy", lib, sha, fixture_init());
     w.request_deadline = Duration::from_secs(2);
     assert!(
         matches!(w.scan("{\"a\": 1}", 0), Err(WorkerError::File(m)) if m.contains("no answer"))
     );
-    assert!(pids.lock().unwrap().iter().all(|p| !alive(*p)));
+    assert!(saman::lock(&pids).iter().all(|p| !alive(*p)));
 }

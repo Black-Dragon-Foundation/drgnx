@@ -131,9 +131,11 @@ impl Hub {
                 wait = SWEEP_EVERY;
                 let Some(hub) = weak.upgrade() else { return };
                 let now = crate::clock::wall_secs();
-                let _ =
+                crate::soft::done(
                     crate::clock::blocking(move || hub.sweep(now, verdandi::compact::DEFAULT_CAP))
-                        .await;
+                        .await,
+                    "history sweep",
+                );
             }
         });
     }

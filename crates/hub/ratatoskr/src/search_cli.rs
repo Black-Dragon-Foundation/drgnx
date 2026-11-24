@@ -580,10 +580,7 @@ impl Backend for ClientBackend {
 
 /// The MCP `search` tool on stdio, pinned to ROOT.
 fn serve_mcp(env: &Env, root: PathBuf) -> i32 {
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
+    let rt = match saman::Executor::new(1) {
         Ok(r) => r,
         Err(e) => {
             crate::soft::err_line(&format!("ratatoskr search: no runtime: {e}"));
@@ -791,7 +788,7 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
             use std::io::IsTerminal as _;
             let root = absolute(&cwd, root);
             let tty = std::io::stdin().is_terminal();
-            let (mut input, mut out) = (std::io::stdin().lock(), std::io::stderr());
+            let (mut input, mut out) = (std::io::stdin().lock(), annall::raw_err());
             if !confirm_delete(&root, *yes, tty, &mut input, &mut out) {
                 return 1;
             }
@@ -951,7 +948,7 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
         }
         Ok(a) => match text(method, &params, a) {
             Ok(t) => {
-                print!("{t}");
+                crate::soft::out_text(&t);
                 0
             }
             Err(e) => {
@@ -1213,10 +1210,7 @@ mod tests {
         ] {
             assert!(mcp_may_call(ok), "{ok}");
         }
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = saman::Executor::new(1).unwrap();
         let client = ClientBackend {
             env: Env::new(&[(stig::HOME_VAR, "/nonexistent")], 1),
         };

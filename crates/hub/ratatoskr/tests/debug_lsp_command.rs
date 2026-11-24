@@ -137,7 +137,7 @@ async fn failure(rig: &Rig) -> String {
         .expect("the start must end with an answer, not hang");
     match started {
         Ok(_) => panic!("the start was meant to fail"),
-        Err(e) => e,
+        Err(e) => e.to_string(),
     }
 }
 
@@ -271,7 +271,8 @@ fn a_hostile_answer_is_refused_whether_nested_objects_a_list_in_a_list_or_a_vari
             .launcher
             .fill(json!({"request": "launch"}))
             .await
-            .unwrap_err();
+            .unwrap_err()
+            .to_string();
         assert!(
             e.contains("mainClass") && e.contains("not a string or a list of strings"),
             "{e}"
@@ -281,7 +282,8 @@ fn a_hostile_answer_is_refused_whether_nested_objects_a_list_in_a_list_or_a_vari
             .launcher
             .fill(json!({"mainClass": "app.Main", "projectName": "app"}))
             .await
-            .unwrap_err();
+            .unwrap_err()
+            .to_string();
         assert!(
             e.contains("classPaths") && e.contains("not a string or a list of strings"),
             "{e}"
@@ -298,7 +300,8 @@ fn a_hostile_answer_is_refused_whether_nested_objects_a_list_in_a_list_or_a_vari
             .launcher
             .fill(json!({"mainClass": "app.Main"}))
             .await
-            .unwrap_err();
+            .unwrap_err()
+            .to_string();
         assert!(
             e.contains("javaExec") && e.contains("holding a variable"),
             "{e}"
@@ -341,7 +344,7 @@ fn an_optional_key_the_answer_lacks_is_left_out_and_its_config_word_reads_null()
 #[test]
 fn a_key_that_is_not_optional_still_errors_when_the_answer_lacks_it() {
     saman::block_on_current(async move {
-        let e = fill_without_project(false).await.unwrap_err();
+        let e = fill_without_project(false).await.unwrap_err().to_string();
         assert!(e.contains("the answer has no projectName"), "{e}");
     })
 }
@@ -363,7 +366,8 @@ fn an_optional_config_word_errors_on_a_key_of_the_wrong_type_and_reads_null_when
                 .fill(json!({"mainClass": "app.Main", "projectName": 123})),
         )
         .await
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(e.contains("projectName"), "{e}");
         for fine in [
             json!({"mainClass": "app.Main"}),

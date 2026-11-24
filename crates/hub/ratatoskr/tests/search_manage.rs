@@ -52,7 +52,7 @@ impl Gated {
         })
     }
     fn texts(&self) -> Vec<String> {
-        self.texts.lock().unwrap().clone()
+        saman::lock(&self.texts).clone()
     }
     fn calls(&self) -> usize {
         *self.calls.borrow()
@@ -92,10 +92,7 @@ impl Source for Gated {
             if let Some(h) = &self.hold {
                 h.acquire().await.unwrap().forget();
             }
-            self.texts
-                .lock()
-                .unwrap()
-                .extend(items.iter().map(|(_, _, t)| t.clone()));
+            saman::lock(&self.texts).extend(items.iter().map(|(_, _, t)| t.clone()));
             Ok(vec![vec![0.5; DIMS]; items.len()])
         })
     }

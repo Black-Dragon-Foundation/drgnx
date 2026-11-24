@@ -29,18 +29,17 @@ fn a_late_beat_or_a_held_poll_is_a_stall() {
 
 #[test]
 fn a_worker_held_in_sync_work_is_named_with_its_task() {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = saman::Executor::new(2).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     let (free, freed) = std::sync::mpsc::channel::<()>();
-    rt.spawn(Named::new(Cow::Borrowed("test:holder"), async move {
-        tx.send(()).unwrap();
-        // sync work on the worker, until the test frees it: what the watchdog is for
-        crate::soft::done(freed.recv(), "tests");
-    }));
+    let _holder = rt.spawn(
+        "test:holder",
+        Named::new(Cow::Borrowed("test:holder"), async move {
+            tx.send(()).unwrap();
+            // sync work on the worker, until the test frees it: what the watchdog is for
+            crate::soft::done(freed.recv(), "tests");
+        }),
+    );
     rx.recv().unwrap();
     // the kernel's view of the held thread once it waits: asleep in the wait's syscall (Linux reads /proc)
     skuld::wait_until("the holder asleep in its wait", 30, || {
@@ -59,10 +58,7 @@ fn a_worker_held_in_sync_work_is_named_with_its_task() {
 
 #[test]
 fn a_poll_that_ends_frees_its_slot() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = saman::Executor::new(1).unwrap();
     rt.block_on(Named::new(Cow::Borrowed("test:quick"), async {
         tokio::task::yield_now().await;
     }));
@@ -73,11 +69,7 @@ fn a_poll_that_ends_frees_its_slot() {
 /// then reported a stall that was the hub's exit (one a perf run, "no named task", never ended).
 #[test]
 fn a_stopped_watchdog_reports_no_stall_when_the_runtime_ends() {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = saman::Executor::new(2).unwrap();
     let seen: Arc<Mutex<Vec<String>>> = Arc::default();
     let dog = rt.block_on(async { start_to(Duration::from_millis(100), Some(seen.clone())) });
     // the heartbeat has ticked: the watchdog is watching a live runtime

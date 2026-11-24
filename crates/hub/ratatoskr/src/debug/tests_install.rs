@@ -477,7 +477,9 @@ fn an_install_waits_while_another_install_of_the_same_adapter_holds_its_lock() {
         crate::fsio::write(src.path().join("js.tgz"), &bytes).unwrap();
         let plan = archive("js.tgz", &sha(&bytes), "js-debug", Some("js-debug"));
         // the other install: the lock file of the target, held
-        let lock = std::fs::File::create(tools.path().join(".js-debug.lock")).unwrap();
+        let lock = eitri::create_exclusive(&tools.path().join(".js-debug.lock"), 0o666)
+            .map_err(std::io::Error::from)
+            .unwrap();
         // SAFETY: flock(2) on a file descriptor this test owns.
         assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
         let (t, s) = (tools.path().to_owned(), src.path().to_owned());

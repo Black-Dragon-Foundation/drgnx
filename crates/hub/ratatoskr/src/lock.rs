@@ -10,9 +10,8 @@
 //! not read is a Lisp hub between its `mkdir` and its pid write while it is younger than [`LISP_LOCK_GRACE`].
 //! Anything else (the pid gone, another program, an unreadable pid in an older directory) is taken over.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -160,18 +159,11 @@ pub fn acquire(path: &Path, procs: &impl Procs) -> Result<Lock, LockError> {
             }
         }
     }
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|e| match e.raw_os_error() {
-            // a Lisp hub made its directory since the check above
-            Some(libc::EISDIR) => LockError::LispHub { pid: None },
-            _ => LockError::Io(e),
-        })?;
+    let mut file = eitri::open_lock(path, 0o600).map_err(|e| match e {
+        // a Lisp hub made its directory since the check above
+        eitri::FsError::NotRegular => LockError::LispHub { pid: None },
+        e => LockError::Io(e.into()),
+    })?;
     match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
         Ok(()) => {}
         Err(rustix::io::Errno::WOULDBLOCK) => return Err(LockError::Held),
@@ -509,7 +501,6 @@ mod tests {
         // A child forked by any thread of this process shares the lock's open file until its exec closes it (macOS
         // CI: another test's `pre_exec` child kept a dropped lock held, and `restore-pre7` saw a running hub). The
         // child here stops between its fork and its exec until the test lets it go.
-        use std::os::unix::process::CommandExt;
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let path = dir.path().join("hub-x.sock.lock");
@@ -520,21 +511,18 @@ mod tests {
         assert_eq!(unsafe { libc::pipe(ready.as_mut_ptr()) }, 0);
         assert_eq!(unsafe { libc::pipe(go.as_mut_ptr()) }, 0);
         let (ready_w, go_r) = (ready[1], go[0]);
-        let mut cmd = std::process::Command::new("true");
-        // SAFETY: only write(2) and read(2) on two descriptors, both async-signal-safe
-        unsafe {
-            cmd.pre_exec(move || {
+        // SAFETY: fork(2); the child calls only write(2), read(2) and _exit(2), all async-signal-safe, and never returns
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0);
+        if child == 0 {
+            // SAFETY: only write(2), read(2) and _exit(2) on descriptors this process holds
+            unsafe {
                 let mut b = [0u8; 1];
                 libc::write(ready_w, b.as_ptr().cast(), 1);
                 libc::read(go_r, b.as_mut_ptr().cast(), 1);
-                Ok(())
-            });
+                libc::_exit(0);
+            }
         }
-        // spawn returns only after the child's exec, so it runs beside the test
-        let child = saman::spawn_thread("ratatoskr:lock", move || {
-            cmd.spawn().unwrap().wait().unwrap()
-        })
-        .unwrap();
         let mut b = [0u8; 1];
         // SAFETY: a read of one byte into B from the pipe made above
         assert_eq!(unsafe { libc::read(ready[0], b.as_mut_ptr().cast(), 1) }, 1);
@@ -545,7 +533,10 @@ mod tests {
         unsafe {
             assert_eq!(libc::write(go[1], b.as_ptr().cast(), 1), 1);
         }
-        assert!(child.join().unwrap().success());
+        let mut status = 0;
+        // SAFETY: waitpid(2) on the child forked above, once
+        assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+        assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0);
         for fd in ready.into_iter().chain(go) {
             // SAFETY: each descriptor is one of the pipes' ends, closed once
             unsafe { libc::close(fd) };

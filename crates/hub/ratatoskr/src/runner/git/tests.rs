@@ -290,10 +290,7 @@ fn a_fifo_at_a_ref_file_never_blocks_the_hub() {
     saman::spawn_thread("ratatoskr:tests", move || {
         let e = env();
         let (h, _) = shared(&e, TreeMode::Snapshot, Policy::default(), None);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = saman::Executor::new(1).unwrap();
         let a = rt
             .block_on(h.task_worktree(&e.repo, "r1", "a", &base(&e)))
             .unwrap();

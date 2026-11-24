@@ -121,7 +121,7 @@ fn newest_copy(dir: &Path) -> Option<u64> {
 static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
 pub fn seed(dir: &Path) {
-    STARTED.get_or_init(std::time::Instant::now);
+    STARTED.get_or_init(crate::clock::real_now);
     if let Some(at) = newest_copy(dir) {
         let mut l = saman::lock(&LAST);
         if l.attempt.is_none() {
@@ -184,7 +184,7 @@ pub fn due_at(now: u64) -> bool {
 /// counts a hub settled after N seconds instead of [`SETTLE`] (a live row does not wait five minutes for its copy).
 fn up_secs() -> u64 {
     let up = STARTED
-        .get_or_init(std::time::Instant::now)
+        .get_or_init(crate::clock::real_now)
         .elapsed()
         .as_secs();
     #[cfg(feature = "test-hooks")]
@@ -243,9 +243,7 @@ mod tests {
     /// Pattern D (pure): no clock, no order; one task whose copy panics.
     #[test]
     fn a_panicking_copy_does_not_stop_the_next_nightly() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
+        let rt = saman::Executor::new(1).unwrap();
         rt.block_on(async {
             assert!(begin(), "the first nightly starts");
             let panicked = crate::clock::spawn_untracked(

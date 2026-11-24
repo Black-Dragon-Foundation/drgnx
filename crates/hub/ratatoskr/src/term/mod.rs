@@ -239,15 +239,15 @@ impl Terms {
         ];
         worker.extend(command.iter().cloned());
         let (program, args) = scope::command(&id, &worker, systemd, &s.limits);
-        let log = std::fs::File::create(dir.join(format!("{id}.log")))
+        let log = eitri::create_exclusive(&dir.join(format!("{id}.log")), 0o666)
+            .map_err(std::io::Error::from)
             .map_err(|e| villa::Error::io(e.to_string()))?;
-        let mut cmd = std::process::Command::new(&program);
+        let mut cmd = crate::proc::Command::new(&program);
         cmd.args(&args)
             .env_clear()
             .envs(s.env.iter().map(|(k, v)| (k, v)))
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(log);
+            // its own session: the hub's signals and its process group never reach it
+            .new_session();
         if systemd {
             // systemd-run reaches the user manager through these
             for k in [stig::SYSTEM_RUNTIME_VAR, "DBUS_SESSION_BUS_ADDRESS"] {
@@ -258,13 +258,12 @@ impl Terms {
                 }
             }
         }
-        {
-            use std::os::unix::process::CommandExt;
-            // its own session: the hub's signals and its process group never reach it
-            cmd.process_group(0);
-        }
         let mut child = cmd
-            .spawn()
+            .spawn(
+                crate::proc::Io::Null,
+                crate::proc::Io::Null,
+                crate::proc::Io::file(log),
+            )
             .map_err(|e| villa::Error::invalid(format!("{program}: {e}")))?;
         let pid = child.id() as i32;
         // reaped by a thread of its own while this hub lives; after a restart, by init
@@ -664,8 +663,10 @@ impl Terms {
             if let Some(t) = st.terms.get(id)
                 && !t.old
             {
-                let _ =
-                    t.tx.send(serde_json::to_string(&In::Detach).unwrap_or_default() + "\n");
+                crate::soft::done(
+                    t.tx.send(serde_json::to_string(&In::Detach).unwrap_or_default() + "\n"),
+                    "tx send",
+                );
             }
         }
         if let Some(s) = session

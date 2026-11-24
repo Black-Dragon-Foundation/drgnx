@@ -73,9 +73,10 @@ impl Ignore {
         let mut search = Search::default();
         let text = lines.join("\n");
         // an in-memory buffer cannot fail to read
-        search
-            .add_patterns_buffer(text.as_bytes(), RECORDS_TOML, None, Parse::default())
-            .ok();
+        crate::soft::done(
+            search.add_patterns_buffer(text.as_bytes(), RECORDS_TOML, None, Parse::default()),
+            "ignore patterns",
+        );
         Ignore { search }
     }
 

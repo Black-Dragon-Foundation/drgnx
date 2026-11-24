@@ -355,10 +355,11 @@ impl Agent {
             .arg("-D")
             .arg("-a")
             .arg(&sock)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()?;
+            .spawn(
+                crate::proc::Io::Null,
+                crate::proc::Io::Pipe,
+                crate::proc::Io::Null,
+            )?;
         let out = child.stdout.take().expect("piped");
         let mut first = String::new();
         let mut r = io::BufReader::new(out);
@@ -386,10 +387,11 @@ impl Agent {
             .arg("-t")
             .arg(lifetime.as_secs().max(1).to_string())
             .arg("-")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
+            .spawn(
+                crate::proc::Io::Pipe,
+                crate::proc::Io::Null,
+                crate::proc::Io::Pipe,
+            )?;
         {
             let pem = key.key.openssh_private("drgnx");
             let mut stdin = child.stdin.take().expect("piped");
@@ -415,8 +417,8 @@ impl Drop for Agent {
 }
 
 /// PROG with nothing of the hub's environment but `PATH`, and SOCK as `SSH_AUTH_SOCK` when given.
-fn clean(prog: &str, sock: Option<&Path>) -> std::process::Command {
-    let mut c = std::process::Command::new(prog);
+fn clean(prog: &str, sock: Option<&Path>) -> crate::proc::Command {
+    let mut c = crate::proc::Command::new(prog);
     c.env_clear();
     if let Some(path) = std::env::var_os("PATH") {
         c.env("PATH", path);

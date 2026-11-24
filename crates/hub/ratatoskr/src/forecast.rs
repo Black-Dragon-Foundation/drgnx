@@ -2080,12 +2080,12 @@ mod tests {
             let plans: Vec<PlanIn> = (0..12)
                 .map(|i| plan_in(&format!("plan:perf-{i}"), "1", 20))
                 .collect();
-            let t = std::time::Instant::now();
+            let t = crate::clock::real_now();
             plan_forecast(&f, plans.clone()).await.unwrap();
             let miss = t.elapsed();
             let mut hits = Vec::new();
             for _ in 0..50 {
-                let t = std::time::Instant::now();
+                let t = crate::clock::real_now();
                 plan_forecast(&f, plans.clone()).await.unwrap();
                 hits.push(t.elapsed());
             }
@@ -2223,7 +2223,7 @@ mod tests {
             let f = front(dir.path());
             let now = 1_000_000.0;
             half_done_job(&f, 40, &(1..=20).collect::<Vec<_>>(), now).await;
-            let t = std::time::Instant::now();
+            let t = crate::clock::real_now();
             remaining_forecast(&f, "J", now).await.unwrap();
             let took = t.elapsed();
             crate::soft::out_line(&format!("forecast-remaining: {took:?}"));

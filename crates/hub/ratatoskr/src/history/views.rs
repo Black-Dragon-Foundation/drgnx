@@ -209,7 +209,10 @@ impl Hub {
             }
             h.finalize().to_vec()
         };
-        let cached = self.blame_cache.lock().ok().and_then(|c| c.get(&key));
+        let cached = {
+            let c = saman::lock(&self.blame_cache);
+            c.get(&key)
+        };
         if let Some(b) = cached {
             return Ok(b);
         }
@@ -248,7 +251,8 @@ impl Hub {
             lines: blamed.1,
             agents,
         };
-        if let Ok(mut c) = self.blame_cache.lock() {
+        {
+            let mut c = saman::lock(&self.blame_cache);
             c.put(key, out.clone());
         }
         Ok(out)
@@ -1440,7 +1444,6 @@ mod tests {
     #[test]
     #[ignore = "timing: measures blame's ways on a large file"]
     fn large_file_blame_times() {
-        use std::time::Instant;
         let f = fx("x\n");
         let lines = 50_000;
         let mut text: Vec<String> = (0..lines).map(|i| format!("line {i}")).collect();
@@ -1457,7 +1460,7 @@ mod tests {
                 &format!("change {c}"),
             );
         }
-        let t0 = Instant::now();
+        let t0 = crate::clock::real_now();
         let n = 8;
         for k in 0..n {
             let line = 1 + (k * 6151) % lines;
@@ -1466,10 +1469,10 @@ mod tests {
             let _only_when_used_elsewhere = (&out, &line);
         }
         let whole_git = t0.elapsed() / n as u32;
-        let t1 = Instant::now();
+        let t1 = crate::clock::real_now();
         for k in 0..n {
             let line = 1 + (k * 6151) % lines;
-            let mut c = std::process::Command::new("git");
+            let mut c = crate::proc::Command::new("git");
             c.args([
                 "blame",
                 "--porcelain",
@@ -1482,10 +1485,10 @@ mod tests {
             assert!(c.output().unwrap().status.success());
         }
         let per_line = t1.elapsed() / n as u32;
-        let t2 = Instant::now();
+        let t2 = crate::clock::real_now();
         let b = f.hub.git_blame(&f.tree, "a.txt").unwrap();
         let cold = t2.elapsed();
-        let t3 = Instant::now();
+        let t3 = crate::clock::real_now();
         f.hub.git_blame(&f.tree, "a.txt").unwrap();
         let cached = t3.elapsed();
         assert_eq!(b.lines.len(), lines);

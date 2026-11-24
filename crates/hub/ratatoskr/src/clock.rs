@@ -75,7 +75,7 @@ impl<T> Future for Spawned<T> {
     type Output = villa::Result<T>;
 
     fn poll(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         let mut slot = saman::lock(&self.task);

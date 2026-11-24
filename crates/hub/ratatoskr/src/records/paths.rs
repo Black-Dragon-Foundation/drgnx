@@ -90,10 +90,8 @@ pub(crate) fn create_new_file(root: &Path, path: &Path, text: &str) -> Result<()
         (Ok(d), Ok(r)) if d.starts_with(&r) => {}
         _ => return Err(format!("{} is not under {}", dir.display(), root.display())),
     }
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
+    let mut f = eitri::create_exclusive(path, 0o666)
+        .map_err(std::io::Error::from)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     f.write_all(text.as_bytes())
         .and_then(|()| f.sync_all())

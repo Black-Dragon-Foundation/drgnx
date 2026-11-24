@@ -1132,7 +1132,9 @@ mod tests {
         std::fs::create_dir_all(home.join("org")).unwrap();
         std::fs::create_dir_all(&config).unwrap();
         crate::fsio::write(data.join("work.db"), b"x").unwrap();
-        let wal = std::fs::File::create(data.join("work.db-wal")).unwrap();
+        let wal = eitri::create_exclusive(&data.join("work.db-wal"), 0o666)
+            .map_err(std::io::Error::from)
+            .unwrap();
         wal.set_len(WAL_WARN + (1 << 20)).unwrap();
         crate::fsio::write(data.join("work.db.schema5"), b"x").unwrap();
         crate::fsio::write(data.join("backup/work-pre7-1.db"), b"x").unwrap();

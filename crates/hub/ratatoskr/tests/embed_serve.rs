@@ -56,14 +56,14 @@ impl Ledger for Spent {
     }
 
     fn record(&self, row: SpendRow) -> bifrost::engine::BoxFuture<'_, ()> {
-        self.0.lock().unwrap().push(row);
+        saman::lock(&self.0).push(row);
         Box::pin(async {})
     }
 }
 
 impl Spent {
     fn rows(&self) -> Vec<SpendRow> {
-        self.0.lock().unwrap().clone()
+        saman::lock(&self.0).clone()
     }
 }
 
@@ -308,7 +308,7 @@ struct Captured(Arc<Mutex<Vec<u8>>>);
 
 impl std::io::Write for Captured {
     fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(b);
+        saman::lock(&self.0).extend_from_slice(b);
         Ok(b.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -338,7 +338,7 @@ fn token_never_in_logs() {
             .call("POST", "/v1/embed", Some(&m.token), Some(body))
             .await;
         assert_eq!(status, 200);
-        let text = String::from_utf8_lossy(&logs.0.lock().unwrap()).into_owned();
+        let text = String::from_utf8_lossy(&saman::lock(&logs.0)).into_owned();
         assert!(
             text.contains("embed serve"),
             "the requests are logged: {text}"
@@ -390,7 +390,7 @@ fn plain_http_refused_on_a_public_address() {
         )
         .await;
         let err = refused.err().expect("plain on 0.0.0.0 is refused");
-        assert!(err.contains("plain"), "{err}");
+        assert!(err.to_string().contains("plain"), "{err}");
         assert!(
             !state.path().join("embed-serve/token.sha256").exists(),
             "refused before a token"
@@ -573,7 +573,7 @@ fn pin_on_first_use_then_refuse_a_changed_cert() {
         let remote = client(&first, false, pins.clone());
         remote.probe().await.unwrap();
         assert_eq!(
-            pins.0.lock().unwrap().as_deref(),
+            saman::lock(&pins.0).as_deref(),
             first.running().cert_sha256(),
             "pinned on first use"
         );
@@ -591,7 +591,7 @@ fn pin_on_first_use_then_refuse_a_changed_cert() {
             .expect_err("a changed certificate is refused");
         assert!(err.0.contains(CHANGED_CERT), "{}", err.0);
         assert_eq!(
-            pins.0.lock().unwrap().as_deref(),
+            saman::lock(&pins.0).as_deref(),
             first.running().cert_sha256(),
             "the pin stays"
         );

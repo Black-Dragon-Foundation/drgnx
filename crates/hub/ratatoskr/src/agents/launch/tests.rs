@@ -429,10 +429,12 @@ fn a_chat_is_not_a_worker_and_a_bad_session_id_is_refused() {
         net: NetCell::ProviderOnly,
         role: Role::Chat,
     };
-    let refused = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap()
-        .block_on(spawn(&fx.env(), &fx.plan(".claude"), &req, None));
+    let refused = saman::Executor::new(1).unwrap().block_on(spawn(
+        &fx.env(),
+        &fx.plan(".claude"),
+        &req,
+        None,
+    ));
     assert!(refused.is_err());
     assert!(scratch_dir(&fx.env(), "../x").is_err());
 }
@@ -1024,8 +1026,7 @@ fn the_launch_takes_the_tier_whose_check_passes() {
         )
     };
     let block = |f: &dyn Fn(Tier) -> Check| {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
+        saman::Executor::new(1)
             .unwrap()
             .block_on(pick(|t| std::future::ready(f(t))))
     };

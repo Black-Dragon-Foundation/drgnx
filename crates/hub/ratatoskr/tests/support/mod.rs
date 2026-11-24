@@ -3,13 +3,14 @@
 //! line client.  Each test file uses part of it.
 #![allow(dead_code)]
 
+use ratatoskr::proc::{Command, Io};
 use runstav::paths::{self, Env};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -102,16 +103,18 @@ impl Hub {
             .env_clear()
             .envs(root.vars())
             .current_dir(root.dir.path())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(std::fs::File::create(&stderr).unwrap())
-            .spawn()
+            .spawn(
+                Io::Null,
+                Io::Null,
+                Io::file(eitri::open_append(&stderr, Some(0o666)).unwrap()),
+            )
             .unwrap();
         let pid = child.id();
         let (tx, ended) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
+        saman::spawn_thread("hub-wait", move || {
             ratatoskr::soft::done(tx.send(child.wait().unwrap()), "tx send");
-        });
+        })
+        .unwrap();
         Hub {
             pid,
             ended,
@@ -298,7 +301,7 @@ impl ExecHandshake {
     /// Spawn CMD; the handshake ends when the child has exec'd.
     pub fn spawn(cmd: &mut Command) -> std::io::Result<(std::process::Child, ExecHandshake)> {
         let (reader, writer) = std::io::pipe()?;
-        let child = cmd.spawn()?;
+        let child = cmd.spawn(Io::Inherit, Io::Inherit, Io::Inherit)?;
         drop(writer);
         let pid = child.id();
         Ok((child, ExecHandshake(reader, pid)))

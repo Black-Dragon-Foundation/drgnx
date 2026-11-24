@@ -472,7 +472,8 @@ fn plant_engine(root: &Root) -> PathBuf {
     let gguf = hrafn_embed::default_gguf();
     let file = engine_install::gguf_path(&cache.join("models"), gguf);
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    std::fs::File::create(&file)
+    eitri::create_exclusive(&file, 0o666)
+        .map_err(std::io::Error::from)
         .unwrap()
         .set_len(gguf.bytes)
         .unwrap();

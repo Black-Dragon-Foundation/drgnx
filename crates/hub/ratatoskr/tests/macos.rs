@@ -18,6 +18,7 @@ use forseti::{
     WaitReason, Weight,
 };
 use mimir::BoxFuture;
+use ratatoskr::proc::Io;
 use ratatoskr::runners::local::{Admission, LocalRunner};
 use ratatoskr::runners::queue::{Placement, Queue, QueueCfg, Submit};
 use ratatoskr::runners::registry::{Cfg, MemStore, RegError, Registry};
@@ -26,7 +27,6 @@ use ratatoskr::runners::{Remote, RunnerCfg, ssh_config};
 use runstav::methods::runners::AddParams;
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -359,24 +359,28 @@ mod macos {
                     self.bin.display(),
                     std::env::var("PATH").unwrap_or_default()
                 );
-                let mut child = tokio::process::Command::new(&r.remote.control[0])
+                let mut child = ratatoskr::proc::Command::new(&r.remote.control[0])
                     .args(&r.remote.control[1..])
                     .env("PATH", path)
                     .env(stig::HOME_VAR, &self.home)
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .kill_on_drop(true)
-                    .spawn()
+                    .spawn(Io::Pipe, Io::Pipe, Io::Pipe)
                     .map_err(|e| LinkError::Refused(e.to_string()))?;
-                let mut control = Channel::new(
-                    Box::new(child.stdin.take().unwrap()),
-                    Box::new(child.stdout.take().unwrap()),
+                let (stdin, stdout, stderr) = (
+                    child.stdin.take().unwrap(),
+                    child.stdout.take().unwrap(),
+                    child.stderr.take().unwrap(),
                 );
-                control.err = Some(Box::new(child.stderr.take().unwrap()));
-                tokio::spawn(async move {
-                    ratatoskr::soft::done(child.wait().await, "macos");
-                });
+                let mut control = Channel::new(
+                    Box::new(tokio::process::ChildStdin::from_std(stdin).unwrap()),
+                    Box::new(tokio::process::ChildStdout::from_std(stdout).unwrap()),
+                );
+                control.err = Some(Box::new(
+                    tokio::process::ChildStderr::from_std(stderr).unwrap(),
+                ));
+                saman::spawn_blocking("macos-wait", move || {
+                    ratatoskr::soft::done(child.wait(), "macos");
+                })
+                .detach("the child's wait ends with the child");
                 let idle =
                     || Channel::new(Box::new(tokio::io::sink()), Box::new(tokio::io::empty()));
                 Ok(Channels {

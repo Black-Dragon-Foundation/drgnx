@@ -261,7 +261,7 @@ fn replayer(dir: &Path, env: &Env) -> Result<(u16, PathBuf, PathBuf), String> {
         "std::fs::remove_dir_all",
     );
     let speed = var(env, "DRGNX_REPLAY_SPEED").unwrap_or("0");
-    let mut child = std::process::Command::new(&mock)
+    let mut child = crate::proc::Command::new(&mock)
         .arg("llm")
         .arg("--replay")
         .arg(dir)
@@ -271,9 +271,11 @@ fn replayer(dir: &Path, env: &Env) -> Result<(u16, PathBuf, PathBuf), String> {
         .arg(scratch.join("misses.jsonl"))
         .arg("--parent")
         .arg(std::process::id().to_string())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
+        .spawn(
+            crate::proc::Io::Null,
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Inherit,
+        )
         .map_err(|e| format!("cannot run {}: {e}", mock.display()))?;
     let mut line = String::new();
     let out = child.stdout.take().ok_or("the replayer has no stdout")?;

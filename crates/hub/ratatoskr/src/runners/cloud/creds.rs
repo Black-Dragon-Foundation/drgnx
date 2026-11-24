@@ -108,39 +108,14 @@ pub async fn run_command(
     let Some((prog, args)) = argv.split_first() else {
         return Err(CredError::Failed("the credential command is empty".into()));
     };
-    let mut cmd = tokio::process::Command::new(prog);
-    cmd.args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-    // SAFETY: only `setsid(2)`, which is async-signal-safe, runs between fork and exec. A session of its own has no
-    // controlling terminal, so the command cannot open `/dev/tty` to ask the user anything.
-    unsafe {
-        cmd.pre_exec(|| {
-            rustix::process::setsid()
-                .map(|_| ())
-                .map_err(std::io::Error::from)
-        });
-    }
-    let child = cmd
-        .spawn()
-        .map_err(|e| CredError::Failed(format!("{prog} did not start: {e}")))?;
-    let group = child
-        .id()
-        .and_then(|p| rustix::process::Pid::from_raw(p as i32));
-    let out = match crate::clock::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => return Err(CredError::Failed(format!("{prog}: {e}"))),
-        Err(_) => {
-            if let Some(g) = group {
-                crate::soft::done(
-                    rustix::process::kill_process_group(g, rustix::process::Signal::KILL),
-                    "rustix::process::kill_process_group",
-                );
-            }
-            return Err(CredError::TimedOut);
-        }
+    let mut cmd = crate::proc::Command::new(prog);
+    // a session of its own has no controlling terminal, so the command cannot open `/dev/tty` to ask the user anything;
+    // past the deadline its whole group is ended
+    cmd.args(args).new_session().deadline(timeout);
+    let out = match cmd.output_async().await {
+        Ok(out) => out,
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => return Err(CredError::TimedOut),
+        Err(e) => return Err(CredError::Failed(format!("{prog} did not run: {e}"))),
     };
     let stdout = Zeroizing::new(out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);

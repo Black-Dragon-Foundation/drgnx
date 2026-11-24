@@ -1091,7 +1091,7 @@ pub(crate) mod tests {
     use runstav::methods::gateway::ProviderConfig;
     use std::io::{BufRead, BufReader};
     use std::path::{Path, PathBuf};
-    use std::process::{Child, Command, Stdio};
+    use std::process::Child;
 
     /// `ratatoskr-mock`, in the test build's profile folder ([`skuld::profile_dir`]); built once when it is not there,
     /// into the run's own target dir and profile, so a run with `--target-dir` or `--release` finds it.
@@ -1118,15 +1118,18 @@ pub(crate) mod tests {
             let file = dir.join("script.json");
             crate::fsio::write(&file, script.to_string()).unwrap();
             let log = dir.join("mock.log");
-            let mut child = Command::new(mock_binary())
+            let mut child = crate::proc::Command::new(mock_binary())
                 .args(["llm", "--script"])
                 .arg(&file)
                 .arg("--log")
                 .arg(&log)
                 .arg("--parent")
                 .arg(std::process::id().to_string())
-                .stdout(Stdio::piped())
-                .spawn()
+                .spawn(
+                    crate::proc::Io::Inherit,
+                    crate::proc::Io::Pipe,
+                    crate::proc::Io::Inherit,
+                )
                 .unwrap();
             let mut line = String::new();
             BufReader::new(child.stdout.take().unwrap())

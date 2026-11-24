@@ -181,8 +181,7 @@ fn bait(fx: &Fx) -> Bait {
 #[test]
 #[ignore = "the sandbox lane: a real Gleipnir child"]
 fn the_probe_started_plainly_reaches_what_it_tries_so_its_silence_in_the_sandbox_means_something() {
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use ratatoskr::proc::Command;
     let fx = Fx::new();
     let b = bait(&fx);
     let w = spec("probe", "probe", "fixture:probe");
@@ -195,10 +194,7 @@ fn the_probe_started_plainly_reaches_what_it_tries_so_its_silence_in_the_sandbox
         .arg("--sha256")
         .arg(&w.sha256)
         .envs(b.env.iter().cloned())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .process_group(0)
+        .new_session()
         .output()
         .unwrap();
     let said = String::from_utf8_lossy(&out.stderr);

@@ -2,7 +2,6 @@
 //! test`; docs/develop/hub.md, "The buffer view").
 
 use ratatoskr::editor::project::{Pos, project};
-use std::time::Instant;
 
 /// Five agents in other worktrees projected three-way onto one 5,000-line buffer the user has edited in 2 ms at the
 /// 95th percentile (the budget of design §13: "hub projection of 5 agents onto 5,000 lines ≤ 2 ms").
@@ -42,7 +41,7 @@ fn project_5_agents_5000_lines_within_2_ms() {
     round();
     let mut times = Vec::new();
     for _ in 0..60 {
-        let t = Instant::now();
+        let t = stund::real::instant();
         round();
         times.push(t.elapsed().as_micros());
     }
@@ -84,7 +83,7 @@ fn range_update_per_op_within_100_us() {
                 inserted: "x",
             }
         };
-        let t = Instant::now();
+        let t = stund::real::instant();
         assert!(std::hint::black_box(g.apply_op(op)));
         times.push(t.elapsed().as_nanos());
     }
@@ -159,7 +158,7 @@ fn blame_rebuild_5000_lines() {
     }
     let text = h.text(doc, br).unwrap();
     let n = text.chars().count();
-    let t = Instant::now();
+    let t = stund::real::instant();
     let blame: Vec<(std::ops::Range<usize>, String)> = h
         .blame(doc, br, 0..n)
         .unwrap()

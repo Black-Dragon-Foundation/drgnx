@@ -1825,14 +1825,15 @@ async fn commits_reachable(db: &CoordDb, tasks: &[Piece]) -> Result<(), Error> {
 /// The shas of SHAS that REPO does not have (`git cat-file --batch-check`).
 fn git_batch_missing(repo: &Path, shas: &[&str]) -> Vec<String> {
     use std::io::Write;
-    let Ok(mut child) = std::process::Command::new("git")
+    let Ok(mut child) = crate::proc::Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(["cat-file", "--batch-check"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+        .spawn(
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Null,
+        )
     else {
         return Vec::new();
     };
@@ -3949,9 +3950,8 @@ pub(crate) mod tests {
             f.import(None, false).await;
             let before = std::fs::metadata(&p).unwrap().modified().unwrap();
             crate::fsio::write(&p, "# Tick\n\n### Task 1: b\n\n- [ ] x\n").unwrap();
-            std::fs::File::options()
-                .write(true)
-                .open(&p)
+            eitri::open_existing(&p)
+                .map_err(std::io::Error::from)
                 .unwrap()
                 .set_modified(before)
                 .unwrap();

@@ -151,13 +151,14 @@ impl Terminals for Procs {
                 .split_first()
                 .ok_or("no command")
                 .map_err(|e| villa::Error::invalid(e.to_string()))?;
-            let mut cmd = std::process::Command::new(program);
+            let mut cmd = crate::proc::Command::new(program);
             cmd.args(rest).envs(env);
             if !cwd.is_empty() {
                 cmd.current_dir(cwd);
             }
+            let io = crate::proc::Io::Inherit;
             let c = cmd
-                .spawn()
+                .spawn(io.clone(), io.clone(), io)
                 .map_err(|e| format!("{program}: {e}"))
                 .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let pid = i64::from(c.id());
@@ -641,14 +642,16 @@ async fn scenario(s: Scn) -> Value {
             .iter()
             .any(|(n, _)| n == "debug-terminal")
     );
-    d.control(
-        &root_sid,
-        Op::Stop {
-            kill_debuggee: None,
-        },
-    )
-    .await
-    .ok();
+    crate::soft::done(
+        d.control(
+            &root_sid,
+            Op::Stop {
+                kill_debuggee: None,
+            },
+        )
+        .await,
+        "stop",
+    );
     d.shutdown().await;
     for _ in 0..1500 {
         if d.list().is_empty() {
@@ -800,10 +803,10 @@ fn debugpy_attaches_to_a_pid_and_stop_leaves_it_running() {
     let Found::Python(py) = python() else {
         unreachable!()
     };
-    let prog = std::process::Command::new(&py)
+    let prog = crate::proc::Command::new(&py)
         .arg(&file)
         .current_dir(&dir)
-        .spawn()
+        .spawn(crate::proc::Io::Inherit, crate::proc::Io::Inherit, crate::proc::Io::Inherit)
         .unwrap();
     crate::clock::sleep(Duration::from_millis(500)).await;
     let config = json!({"type": "debugpy", "request": "attach", "name": "pya", "processId": prog.id(),
@@ -959,9 +962,9 @@ fn lldb_dap_attaches_to_a_pid_and_stop_leaves_it_running() {
         "#include <unistd.h>\nint main(void) {\n  volatile int n = 0;\n  for (;;) {\n    n++;\n    usleep(50000);\n  }\n}\n",
     );
     run(&dir, "clang", &["-g", "-O0", "-o", "loop", "loop.c"]);
-    let prog = std::process::Command::new(dir.join("loop"))
+    let prog = crate::proc::Command::new(dir.join("loop"))
         .current_dir(&dir)
-        .spawn()
+        .spawn(crate::proc::Io::Inherit, crate::proc::Io::Inherit, crate::proc::Io::Inherit)
         .unwrap();
     crate::clock::sleep(Duration::from_millis(300)).await;
     let config = json!({"type": "lldb-dap", "request": "attach", "name": "ca", "pid": prog.id(),
@@ -1567,12 +1570,12 @@ fn js_debug_detach_leaves_no_hidden_map() {
         "const fs = require('fs');\nconst out = process.argv[2];\nclass Node { constructor(v) { this.v = v; this.next = null; } }\nlet n = 0;\nfunction tick() {\n  const a = new Node(1), b = new Node(2);\n  a.next = b; b.next = a;\n  n += 1;\n  fs.writeFileSync(out, n + ' ' + Object.getOwnPropertySymbols(globalThis).map(String).join(','));\n}\nsetInterval(tick, 50);\n",
     );
     let port = adapters::free_port().unwrap();
-    let mut prog = std::process::Command::new("node")
+    let mut prog = crate::proc::Command::new("node")
         .arg(format!("--inspect=127.0.0.1:{port}"))
         .arg(&file)
         .arg(&out)
         .current_dir(&dir)
-        .spawn()
+        .spawn(crate::proc::Io::Inherit, crate::proc::Io::Inherit, crate::proc::Io::Inherit)
         .unwrap();
     crate::clock::sleep(Duration::from_millis(800)).await;
     let ev = Arc::new(Events::default());
@@ -1972,14 +1975,16 @@ fn java_breaks_steps_and_inspects_through_jdtls() {
         }
         crate::clock::sleep(Duration::from_millis(20)).await;
     }
-    d.control(
-        &sid_root,
-        Op::Stop {
-            kill_debuggee: None,
-        },
-    )
-    .await
-    .ok();
+    crate::soft::done(
+        d.control(
+            &sid_root,
+            Op::Stop {
+                kill_debuggee: None,
+            },
+        )
+        .await,
+        "stop",
+    );
     d.shutdown().await;
     assert!(d.list().is_empty(), "sessions left: {:?}", d.list());
 })
@@ -2148,14 +2153,16 @@ fn csharp_breaks_steps_and_inspects_through_netcoredbg() {
         "the session did not end when the program did: {:?}",
         d.list()
     );
-    d.control(
-        &sid_root,
-        Op::Stop {
-            kill_debuggee: None,
-        },
-    )
-    .await
-    .ok();
+    crate::soft::done(
+        d.control(
+            &sid_root,
+            Op::Stop {
+                kill_debuggee: None,
+            },
+        )
+        .await,
+        "stop",
+    );
     d.shutdown().await;
     assert!(d.list().is_empty(), "sessions left: {:?}", d.list());
 })

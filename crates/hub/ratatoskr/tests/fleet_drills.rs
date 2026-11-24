@@ -275,7 +275,7 @@ impl Drill {
         let told = Arc::new(Mutex::new(vec![]));
         let to = told.clone();
         q.keys()
-            .set_tell(move |e, d| to.lock().unwrap().push((e.to_string(), d)));
+            .set_tell(move |e, d| saman::lock(&to).push((e.to_string(), d)));
         Drill {
             runner: runner.into(),
             root,
@@ -1004,7 +1004,7 @@ mod drill {
         let (q, events) = Drill::queue(d.dir.path(), &d.hub, db.clone());
         let to = d.told.clone();
         q.keys()
-            .set_tell(move |e, data| to.lock().unwrap().push((e.to_string(), data)));
+            .set_tell(move |e, data| saman::lock(&to).push((e.to_string(), data)));
         q.restore(jobs, attempts, d.now());
         (d.q, d.events, d.store, d.db) = (q, events, Some(store), db);
         if editor {
@@ -1022,8 +1022,7 @@ mod drill {
             // the job's log and result wait for its keys, and the user is asked for them
             let told = d.told.clone();
             d.drive("the hub asks for the keys", |_, _, _| {
-                told.lock()
-                    .unwrap()
+                saman::lock(&told)
                     .iter()
                     .any(|(e, data)| e == "runners/need-keys" && data == &json!({"names": [KEY]}))
                     .then_some(())

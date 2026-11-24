@@ -490,10 +490,14 @@ mod tests {
     #[test]
     fn cwd_of_a_child_is_the_folder_it_started_in() {
         let dir = tempfile::tempdir().unwrap();
-        let mut kid = std::process::Command::new("sleep")
+        let mut kid = crate::proc::Command::new("sleep")
             .arg("60")
             .current_dir(dir.path())
-            .spawn()
+            .spawn(
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+            )
             .unwrap();
         let got = cwd_of(kid.id() as i32);
         kid.kill().unwrap();
