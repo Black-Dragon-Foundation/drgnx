@@ -241,14 +241,7 @@ impl Refusals {
     }
 }
 
-/// Who calls a method: the connection's class, and for an agent socket its session and job.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Caller {
-    pub class: Class,
-    pub sid: Option<String>,
-    pub job: Option<String>,
-    pub conn_id: u64,
-}
+pub use stofn::caller::Caller;
 
 #[cfg(test)]
 pub(crate) mod tests {

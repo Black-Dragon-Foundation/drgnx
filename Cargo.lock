@@ -5808,6 +5808,7 @@ dependencies = [
  "skuld",
  "sleipnir",
  "stig",
+ "stofn",
  "stund",
  "subtle",
  "tar",
@@ -7167,6 +7168,28 @@ dependencies = [
  "rustix",
  "tempfile",
  "villa",
+]
+
+[[package]]
+name = "stofn"
+version = "0.1.0"
+dependencies = [
+ "annall",
+ "draugr",
+ "eitri",
+ "flate2",
+ "libc",
+ "runstav",
+ "rustix",
+ "saman",
+ "serde",
+ "stig",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "villa",
+ "zip",
 ]
 
 [[package]]

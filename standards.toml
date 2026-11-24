@@ -56,6 +56,7 @@ stund = { clean = true }
 eitri = { clean = true }
 draugr = { clean = true }
 ratatoskr = { clean = true }
+stofn = { clean = true }
 vegvisir = { clean = true }
 hrafn-embed = { clean = true }
 hermod = { clean = true }
@@ -233,3 +234,11 @@ may_not_depend = ["huginn"]
 [[layer]]
 crate = "ritari"
 may_not_depend = ["huginn"]
+
+# The ratatoskr split (docs/plans/drgnx/2026-11-24-ratatoskr-split.md, section 3): the base crates depend on nothing above
+# them in the table, so a crate that is cut out never calls back into ratatoskr or a later crate. `dev = true`: a
+# dev-dependency back-edge is one too. Each wave adds its crate's row.
+[[layer]]
+crate = "stofn"
+may_not_depend = ["ratatoskr", "eykt", "vitni", "hattr", "kall", "spegill", "las", "kanna", "dromi", "safn", "muninn", "skyggna", "bok", "leidangr", "stjorn", "starf", "fylgja", "einherjar"]
+dev = true

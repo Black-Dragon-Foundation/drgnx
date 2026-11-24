@@ -1,0 +1,37 @@
+[package]
+name = "stofn"
+description = "Stofn, the foundation of the hub: the standards shims (fsio, proc, soft), the shell environment and the helpers that need no clock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# What the hub's own tests reach into: the slow-disk gate of `fsio::disk` and `exe::pin_exe_for_test`. Never on in a release build.
+test-support = []
+
+[dependencies]
+annall.workspace = true
+draugr.workspace = true
+eitri.workspace = true
+villa.workspace = true
+saman.workspace = true
+stig.workspace = true
+runstav = { path = "../runstav", version = "0.1.0" }
+serde.workspace = true
+tracing.workspace = true
+rustix.workspace = true
+libc.workspace = true
+tokio.workspace = true
+zip.workspace = true      # unpack: an archive's entries, checked as they are written
+tar.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+saman = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

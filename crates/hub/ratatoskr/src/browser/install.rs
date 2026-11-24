@@ -9,12 +9,11 @@
 //! failure of any kind removes it.  `V/` appears only by a rename of a complete `V.partial/` that holds
 //! `installed.json`.
 
-use std::collections::{BTreeMap, HashSet};
-use std::fmt;
+use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use bifrost::upstream::{Upstream, UpstreamOpts};
@@ -71,30 +70,6 @@ pub fn platform_key() -> Option<&'static str> {
     }
 }
 
-/// What an install does not go past.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Limits {
-    /// Bytes of the download.
-    pub download: u64,
-    /// Bytes of one unpacked file.
-    pub entry: u64,
-    /// Bytes of everything unpacked.
-    pub unpacked: u64,
-    pub entries: usize,
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        const MIB: u64 = 1 << 20;
-        Limits {
-            download: 512 * MIB,
-            entry: 1024 * MIB,
-            unpacked: 2048 * MIB,
-            entries: 4096,
-        }
-    }
-}
-
 /// Where the archive comes from.
 #[derive(Clone, Debug)]
 pub(crate) enum Base {
@@ -120,60 +95,7 @@ pub struct Installed {
     pub already: bool,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum InstallError {
-    /// V is not in the table.
-    NotPinned {
-        asked: String,
-        pinned: Vec<String>,
-    },
-    /// The platform has no digest yet (or drgnx has no key for this machine).
-    PlatformNotPinned(String),
-    NotHttps(String),
-    Network(String),
-    TooLarge(String),
-    DigestMismatch {
-        expected: String,
-        got: String,
-    },
-    /// An archive entry that is absolute, climbs, links, or is neither a file nor a folder.
-    Unsafe(String),
-    Archive(String),
-    Io(String),
-}
-
-impl fmt::Display for InstallError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotPinned { asked, pinned } => write!(
-                f,
-                "version {asked} is not one drgnx knows a digest for (pinned: {})",
-                pinned.join(", ")
-            ),
-            Self::PlatformNotPinned(p) => write!(
-                f,
-                "this platform ({p}) has no pinned download yet; install a distro package or set \
-`drgnx-agents-browser-program`"
-            ),
-            Self::NotHttps(u) => write!(f, "refusing a download that is not https: {u}"),
-            Self::Network(m) => write!(f, "download failed: {m}"),
-            Self::TooLarge(m) => write!(f, "too large: {m}"),
-            Self::DigestMismatch { expected, got } => write!(
-                f,
-                "the download's sha256 is {got}, the pin says {expected}; nothing was installed"
-            ),
-            Self::Unsafe(m) => write!(f, "unsafe archive, nothing was installed: {m}"),
-            Self::Archive(m) => write!(f, "bad archive: {m}"),
-            Self::Io(m) => write!(f, "{m}"),
-        }
-    }
-}
-
-impl std::error::Error for InstallError {}
-
-fn io_err(what: &Path, e: io::Error) -> InstallError {
-    InstallError::Io(format!("{}: {e}", what.display()))
-}
+pub(crate) use stofn::unpack::{InstallError, Limits, io_err, unpack};
 
 /// Removes a folder when dropped, unless [`Partial::keep`] was called.
 struct Partial {
@@ -608,77 +530,6 @@ async fn over_http(
     }
 }
 
-/// ZIP into DEST.  Only regular files and folders are made; an entry that is absolute, climbs out, links, or repeats a
-/// name fails the whole unpack.  Files are created new (never over anything), and sizes are counted as they are
-/// written, not as the archive declares them.
-pub(crate) fn unpack(zip: &Path, dest: &Path, limits: Limits) -> Result<(), InstallError> {
-    let file = File::open(zip).map_err(|e| io_err(zip, e))?;
-    let mut archive =
-        zip::ZipArchive::new(file).map_err(|e| InstallError::Archive(e.to_string()))?;
-    if archive.len() > limits.entries {
-        return Err(InstallError::TooLarge(format!(
-            "the archive has {} entries",
-            archive.len()
-        )));
-    }
-    let mut seen = HashSet::new();
-    let mut total = 0u64;
-    for i in 0..archive.len() {
-        let mut entry = archive
-            .by_index(i)
-            .map_err(|e| InstallError::Archive(e.to_string()))?;
-        let raw = String::from_utf8_lossy(entry.name_raw()).into_owned();
-        let unsafe_name = || InstallError::Unsafe(format!("entry {raw:?}"));
-        // judged on the name as written: the library may normalise an absolute name into a relative one
-        if raw.starts_with('/') || raw.split('/').any(|c| c == "..") {
-            return Err(unsafe_name());
-        }
-        let name = entry.enclosed_name().ok_or_else(unsafe_name)?;
-        if name.as_os_str().is_empty()
-            || name
-                .components()
-                .any(|c| !matches!(c, Component::Normal(_)))
-        {
-            return Err(unsafe_name());
-        }
-        let mode = entry.unix_mode().unwrap_or(0);
-        match mode & 0o170000 {
-            0 | 0o100000 | 0o040000 => {}
-            0o120000 => return Err(InstallError::Unsafe(format!("entry {raw:?} is a link"))),
-            _ => {
-                return Err(InstallError::Unsafe(format!(
-                    "entry {raw:?} is not a file or a folder"
-                )));
-            }
-        }
-        let target = dest.join(&name);
-        if entry.is_dir() {
-            fs::create_dir_all(&target).map_err(|e| io_err(&target, e))?;
-            continue;
-        }
-        if !seen.insert(name.clone()) {
-            return Err(InstallError::Unsafe(format!("entry {raw:?} appears twice")));
-        }
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
-        }
-        let perm = if mode & 0o111 != 0 { 0o755 } else { 0o644 };
-        let mut out = eitri::create_exclusive(&target, perm)
-            .map_err(std::io::Error::from)
-            .map_err(|e| io_err(&target, e))?;
-        let allowed = limits.entry.min(limits.unpacked - total);
-        let n = io::copy(&mut (&mut entry).take(allowed + 1), &mut out)
-            .map_err(|e| InstallError::Archive(format!("{raw}: {e}")))?;
-        if n > allowed {
-            return Err(InstallError::TooLarge(format!(
-                "entry {raw:?} passes the unpack limits"
-            )));
-        }
-        total += n;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -701,6 +552,7 @@ mod tests {
     }
 
     use super::*;
+    use std::io;
 
     /// A zip of the entries (name, bytes, unix mode).
     fn zip_of(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {

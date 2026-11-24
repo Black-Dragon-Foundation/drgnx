@@ -126,9 +126,7 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 lexopt.workspace = true
 sha2.workspace = true  # the merge gate's diff hashes
-zip.workspace = true  # `browser install` and Debug: Install Adapter unpack pinned archives
-flate2.workspace = true  # Debug: Install Adapter, tar.gz
-tar.workspace = true
+stofn = { path = "../stofn", version = "0.1.0" }  # the shims (fsio, proc, soft), the shell environment, the unpacker and the helpers that need no clock
 http-body-util.workspace = true  # the download's body
 http = "1"                # the download's request (already in the tree through hyper)
 # a plugin's HTTPS to the address the hub judged (plugins::hub_io); all three already in the tree through bifrost
@@ -168,6 +166,10 @@ security-framework = "3.7"
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service", "p2p"] }
 
 [dev-dependencies]
+stofn = { path = "../stofn", version = "0.1.0", features = ["test-support"] }  # fsio::disk (a slow disk) and exe::pin_exe_for_test
+zip.workspace = true  # tests build archives for the installs
+flate2.workspace = true
+tar.workspace = true
 # `test-hooks`: `urdr::graph::Tx::for_test` for the manager's unit tests (a `-p ratatoskr` test build alone has no
 # other crate turning it on)
 urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }

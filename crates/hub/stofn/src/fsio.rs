@@ -40,35 +40,35 @@ fn io_of(e: eitri::FsError) -> io::Error {
 /// BYTES as the whole content of the file at PATH (a link there is replaced, never followed; a reader sees the old bytes
 /// or the new ones).
 pub fn write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     disk::gate(path.as_ref());
     eitri::replace_file(&absolute(path.as_ref())?, bytes.as_ref()).map_err(io_of)
 }
 
 /// [`write`] for a file others must not read: the new file has exactly MODE (less the umask).
 pub fn write_mode(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>, mode: u32) -> io::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     disk::gate(path.as_ref());
     eitri::replace_file_mode(&absolute(path.as_ref())?, bytes.as_ref(), mode).map_err(io_of)
 }
 
 /// The file at PATH as text (at most [`MAX_TEXT`]; not UTF-8 is `InvalidData`).
 pub fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     disk::gate(path.as_ref());
     eitri::read_string(&absolute(path.as_ref())?, MAX_TEXT).map_err(io_of)
 }
 
 /// The file at PATH as bytes (at most [`MAX_TEXT`]).
 pub fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     disk::gate(path.as_ref());
     eitri::read_file(&absolute(path.as_ref())?, MAX_TEXT).map_err(io_of)
 }
 
 /// FROM renamed to TO: a folder, a socket or a regular file; a link is refused (`eitri` follows none).
 pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     disk::gate(to.as_ref());
     use std::os::unix::fs::FileTypeExt;
     let (from, to) = (absolute(from.as_ref())?, absolute(to.as_ref())?);
@@ -86,7 +86,7 @@ pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
 /// BYTES as the whole content of the existing file at PATH, written where it stands (its inode, and a lock held on it,
 /// stay).
 pub fn write_in_place(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     disk::gate(path.as_ref());
     eitri::write_in_place(&absolute(path.as_ref())?, bytes.as_ref()).map_err(io_of)
 }
@@ -116,7 +116,7 @@ pub fn write_via(
     dest: impl AsRef<Path>,
     bytes: impl AsRef<[u8]>,
 ) -> io::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     disk::gate(dest.as_ref());
     eitri::replace_via(
         &std::path::absolute(tmp.as_ref())?,
@@ -126,10 +126,18 @@ pub fn write_via(
     .map_err(io_of)
 }
 
+/// TEXT to PATH: a temporary file beside it, synced, then a rename (the old file is never truncated, so an editor's
+/// own atomic save cannot interleave with half of ours).
+pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".drgnx-tmp");
+    write_via(PathBuf::from(tmp), path, text)
+}
+
 /// The log at PATH opened for appending, made first (mode 0o644, less the umask) when CREATE and absent; a link at
 /// PATH is refused.
 pub fn append(path: impl AsRef<Path>, create: bool) -> io::Result<std::fs::File> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     disk::gate(path.as_ref());
     let abs = std::path::absolute(path.as_ref())?;
     eitri::open_append(&abs, create.then_some(0o644)).map_err(io::Error::from)
@@ -137,7 +145,7 @@ pub fn append(path: impl AsRef<Path>, create: bool) -> io::Result<std::fs::File>
 
 /// A slow disk for a test: while a [`disk::slow`] gate holds a path, every call of this module on it waits, so a test can
 /// prove that nothing the hub needs runs on the thread that waits (no FIFO standing in for the disk: the files stay plain).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod disk {
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Condvar, Mutex};
