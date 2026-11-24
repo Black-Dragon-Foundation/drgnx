@@ -357,6 +357,23 @@ fn nvidia_smi() -> Vec<SmiRow> {
         .collect()
 }
 
+/// The compute capability (`8.9` as `(8, 9)`) of each NVIDIA card, in `nvidia-smi` order; none when `nvidia-smi` is
+/// missing or too old to say (TEI's support table needs it, [`super::tei_support`]).
+pub fn nvidia_compute_caps() -> Vec<(u32, u32)> {
+    let out = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=compute_cap", "--format=csv,noheader,nounits"])
+        .stdin(std::process::Stdio::null())
+        .output();
+    let Ok(out) = out else { return Vec::new() };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let (a, b) = l.trim().split_once('.')?;
+            Some((a.parse().ok()?, b.parse().ok()?))
+        })
+        .collect()
+}
+
 /// The gfx name of each GPU node of `/sys/class/kfd/kfd/topology/nodes`, in node order (a CPU node says 0).
 fn kfd_gfx() -> Vec<String> {
     let mut nodes: Vec<_> = std::fs::read_dir("/sys/class/kfd/kfd/topology/nodes")

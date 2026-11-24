@@ -199,6 +199,10 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         "exe_mode": hlaup::mode().name(),
         "sandbox": sandbox_section(sandbox),
         "engine": engine_section(env),
+        "tei": crate::search::tei_support::section(
+            &crate::search::engine_pick::Machine::read(),
+            &crate::search::engine_pick::nvidia_compute_caps(),
+        ),
         "packs": packs_section(env),
         "debug_adapters": debug_adapters_section(env),
     });
@@ -943,6 +947,9 @@ fn text(v: &Value, sandbox: &Check) -> String {
     ));
     if v["engine"].is_object() {
         out.push_str(&crate::search::engine_doctor::section_lines(&v["engine"]));
+    }
+    if v["tei"].is_object() {
+        out.push_str(&crate::search::tei_support::section_lines(&v["tei"]));
     }
     out.push_str(&watch_lines(&v["watch"]));
     out.push_str(&pack_lines(&v["packs"]));

@@ -25,6 +25,7 @@ pub mod remote;
 pub mod saved;
 pub mod scope;
 pub mod sources;
+pub mod tei_support;
 pub mod worker;
 
 pub use download::{Consent, DownloadError, download, download_gguf};

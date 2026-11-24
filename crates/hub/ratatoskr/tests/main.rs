@@ -24,6 +24,7 @@ mod search_packs;
 mod search_prefer;
 mod search_query;
 mod search_sources;
+mod search_tei_support;
 mod search_tools;
 mod server;
 mod support;

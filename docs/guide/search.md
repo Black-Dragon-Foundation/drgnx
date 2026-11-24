@@ -71,3 +71,30 @@ our own engines that uses at least 10 percent of the GPU (NVIDIA: `nvidia-smi pm
 
 The CPU and memory limits are held by a systemd user scope where your user manager runs; without one, `doctor` says the
 limit rests on the engine's thread count alone.
+
+## TEI, an optional provider
+
+llama.cpp is the built-in engine and the only one drgnx installs. TEI (Hugging Face's text-embeddings-inference) is an
+optional provider you run yourself: add a `tei` provider that points at it. drgnx never downloads, installs or starts
+TEI; it only tells you whether your hardware can run it and prints the command. `ratatoskr doctor` has the verdict per
+device, as `TEI on <device>: supported | experimental | unsupported | CPU only: <reason>`, and, where it runs, the
+container command (a `podman run` line; on macOS, `brew install text-embeddings-inference`).
+
+The table is TEI's README at release 1.9, read on 2026-11-24
+(<https://github.com/huggingface/text-embeddings-inference>):
+
+| Hardware | Verdict | Image |
+|---|---|---|
+| NVIDIA 7.5 (Turing) | experimental | `turing-1.9` |
+| NVIDIA 8.0, 8.6, 8.9, 9.0 (Hopper) | supported | `1.9`, `86-1.9`, `89-1.9`, `hopper-1.9` |
+| NVIDIA Blackwell 10.0, 12.0, 12.1 (DGX Spark GB10) | experimental | `100-1.9`, `120-1.9`, `121-1.9` |
+| NVIDIA below 7.5 (Volta, Pascal), or a driver older than CUDA 12.2 (535) | unsupported | none |
+| AMD Instinct MI200, MI300 | experimental | `rocm-latest` |
+| AMD consumer Radeon (the RX 7900 included) | unsupported | none |
+| Apple Silicon M1 to M4 | supported, on Metal | `brew install text-embeddings-inference` |
+| Intel GPUs | unsupported (not in the README) | none |
+| Linux CPU, x86_64 and aarch64 | supported, but slow and not for indexing | `cpu-1.9`, `cpu-arm64-1.9` |
+| Windows | no official native build | none |
+
+Vectors from TEI and from llama.cpp are never mixed: another model or provider is another fingerprint, and the project
+is indexed again for it.
