@@ -66,7 +66,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   waits on anything that can hang. Last, it stops its store
   threads (runtime.db's and work.db's writer). Each writes what is queued to it first: no queued write is dropped,
   and that wait has no limit. Every 5 s while a thread is still stopping, the log names it as an error, with how many
-  requests it still has queued. A second SIGTERM or SIGINT during that wait ends the hub at once, and the log says
+  requests it still has queued, and for runtime.db's the request it runs now (where it was asked from, how long it has
+  run). A second SIGTERM or SIGINT during that wait ends the hub at once, and the log says
   which thread's queued writes were abandoned at the user's request; one that came before the wait began (while the
   hub ended its sessions or closed its connections) does not. Then the hub exits 0. The log is tracing JSON, one object per line, in `<state>/hub/log/hub-YYYY-MM-DD.jsonl` (UTC days, 0600,
   the newest 7 kept, written by tracing-appender's non-blocking worker). Warnings and errors also go to stderr, behind
@@ -656,7 +657,8 @@ last, events: [{id, at, agent, job, task, kind, summary, data?}]}`, after `since
 1000), `data` the parsed JSON object. `last` is the newest id answered, or `since` when there is none. `status` also
 says `gateway: {port?, registrations, requests,
 errors, fallbacks, bytes_in, bytes_out, providers, keys_held, keys_refused?, warnings}`, the front's own gateway
-([Registrations](#registrations)): `providers` is how many the table has, `keys_held` the providers whose key the hub
+([Registrations](#registrations)): `registrations` counts the agents' and editors' (the token the hub's own embedders
+use is not one), `providers` is how many the table has, `keys_held` the providers whose key the hub
 holds (never a key), `keys_refused` why it takes none (only when it could not be hardened), `errors` the requests answered with no status or one of 400 and up. The front also serves the
 gateway's methods, `gateway/{register,unregister,keys,set-budget}` and `spend`, the settings' (`config/settings`,
 `config/changed`) and `env/set`; the rest, next section.
