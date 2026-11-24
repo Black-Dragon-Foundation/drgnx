@@ -135,6 +135,166 @@ pub fn lines_of(v: &Value) -> String {
     out
 }
 
+/// The library path an engine runs with: its own folder and every folder beside that one which holds shared libraries
+/// (a CUDA build's runtime archive unpacks next to the release's folder).
+pub fn lib_path(server: &Path) -> std::ffi::OsString {
+    let own = server.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut dirs = vec![own.clone()];
+    if let Some(bin) = own.parent() {
+        let mut siblings: Vec<PathBuf> = std::fs::read_dir(bin)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p != &own)
+            .filter(|p| {
+                std::fs::read_dir(p)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .any(|f| f.file_name().to_string_lossy().contains(".so"))
+            })
+            .collect();
+        siblings.sort();
+        dirs.extend(siblings);
+    }
+    std::env::join_paths(dirs).unwrap_or_else(|_| own.into_os_string())
+}
+
+/// The text of `SERVER --list-devices` (stdout and stderr), empty when it did not run.
+pub fn list_devices(server: &Path) -> String {
+    ask(Command::new(server)
+        .arg("--list-devices")
+        .env("LD_LIBRARY_PATH", lib_path(server)))
+    .map(|(o, e)| format!("{o}\n{e}"))
+    .unwrap_or_default()
+}
+
+/// What the vendor's runtime needs on the machine, named when its libraries are missing (upstream's ROCm build bundles
+/// none; its CUDA build needs a driver new enough, [`hrafn_embed::EngineAsset::min_driver`]).
+fn runtime_hint(backend: &str, missing: &[String]) -> Option<String> {
+    let rocm = |n: &String| {
+        [
+            "libamdhip64",
+            "libhipblas",
+            "librocblas",
+            "libhsa-runtime64",
+            "librocsolver",
+            "libhipblaslt",
+            "libamd_comgr",
+        ]
+        .iter()
+        .any(|p| n.starts_with(p))
+    };
+    match backend {
+        "rocm" if missing.iter().any(rocm) => Some(
+            "the ROCm build needs the ROCm 7.x libraries on this machine (upstream's asset bundles none): install your distribution's rocm-hip, hipblas, rocblas, rocsolver and rocm-runtime packages, or AMD's ROCm"
+                .into(),
+        ),
+        "cuda" if missing.iter().any(|n| n.starts_with("libcuda.")) => Some(
+            "libcuda.so is the NVIDIA driver's own: install or update the NVIDIA driver (the CUDA build needs the driver named in its row)"
+                .into(),
+        ),
+        "cuda" if missing.iter().any(|n| n.starts_with("libcudart") || n.starts_with("libcublas")) => Some(
+            "the CUDA runtime libraries are missing: the engine's runtime archive was not unpacked beside it (install the engine again)"
+                .into(),
+        ),
+        _ => None,
+    }
+}
+
+/// The doctor's lines of the engine section ([`crate::doctor`]): the first installed asset's check as [`lines_of`], then the
+/// vendor builds that are not installed, the plan (devices, or why none runs and the user's options), the limits.
+pub fn section_lines(v: &Value) -> String {
+    let strings = |x: &Value| -> Vec<String> {
+        x.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s.as_str().map(str::to_owned))
+            .collect()
+    };
+    let mut out = if v["installed"] == true {
+        lines_of(v)
+    } else {
+        String::new()
+    };
+    for p in v["vendors"].as_array().into_iter().flatten() {
+        let fb = p["fallback"]
+            .as_str()
+            .map(|f| format!(" (Vulkan, not the vendor build: {f})"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "\nengine: {} GPU x{}: {}{fb}",
+            p["vendor"].as_str().unwrap_or("?"),
+            p["gpus"],
+            p["asset"].as_str().unwrap_or("?")
+        ));
+    }
+    for a in v["assets"].as_array().into_iter().flatten() {
+        if a["installed"] == false {
+            out.push_str(&format!(
+                "\nengine: {} is not installed ({} bytes to download: `ratatoskr search download MODEL` lists it)",
+                a["asset"].as_str().unwrap_or("?"),
+                a["bytes"]
+            ));
+        }
+    }
+    let plan = &v["plan"];
+    match plan["mode"].as_str() {
+        Some("gpu") => {
+            for m in plan["members"].as_array().into_iter().flatten() {
+                out.push_str(&format!(
+                    "\nengine: pinned to {} ({}, {} MiB) with --split-mode none",
+                    m["device"].as_str().unwrap_or("?"),
+                    m["name"].as_str().unwrap_or("?"),
+                    m["vram_mib"]
+                ));
+            }
+            for g in strings(&plan["ask_more"]) {
+                out.push_str(&format!(
+                    "\nengine: also usable, not used: {g} (drgnx-search-gpus \"all\" or \"top:N\" adds GPUs)"
+                ));
+            }
+        }
+        Some(m @ ("cpu" | "cpu-idle")) => {
+            out.push_str(&format!(
+                "\nengine: running on the CPU, by your choice ({m})"
+            ));
+        }
+        Some("wait") => {
+            out.push_str(&format!(
+                "\nengine: waiting: {}",
+                plan["why"].as_str().unwrap_or("?")
+            ));
+            for o in strings(&plan["options"]) {
+                out.push_str(&format!("\nengine: option: {o}"));
+            }
+        }
+        _ => {}
+    }
+    for n in strings(&plan["notes"]) {
+        out.push_str(&format!("\nengine: {n}"));
+    }
+    let l = &v["limits"];
+    let set: Vec<String> = [
+        ("cpu", "cpu_percent", "%"),
+        ("memory", "memory_mib", " MiB"),
+        ("vram", "vram_mib", " MiB"),
+        ("gpu busy", "gpu_busy", "%"),
+    ]
+    .iter()
+    .filter(|(_, k, _)| !l[*k].is_null())
+    .map(|(n, k, u)| format!("{n} {}{u}", l[*k]))
+    .collect();
+    if !set.is_empty() {
+        out.push_str(&format!("\nengine: limits: {}", set.join(", ")));
+    }
+    for e in strings(&v["settings_errors"]) {
+        out.push_str(&format!("\nengine: setting refused: {e}"));
+    }
+    out
+}
+
 /// Runs CMD with a limit of [`ASK_WAIT`]: its stdout and stderr, or none when it could not start or did not finish.
 fn ask(cmd: &mut Command) -> Option<(String, String)> {
     let child = cmd
@@ -181,7 +341,6 @@ fn software(line: &str) -> bool {
 /// Checks SERVER (a `llama-server`) built for BACKEND (`vulkan`, `rocm`, `cuda`, `metal`) against HOST. LDD is the
 /// program that lists libraries.
 pub fn check(server: &Path, backend: &str, ldd: &Path, host: &Host) -> Report {
-    let lib_dir = server.parent().unwrap_or(Path::new("."));
     let mut r = Report::default();
     let missing = |name: &str, r: &mut Report| {
         if !r.missing_libs.iter().any(|m| m == name) {
@@ -190,7 +349,7 @@ pub fn check(server: &Path, backend: &str, ldd: &Path, host: &Host) -> Report {
     };
     if let Some((out, _)) = ask(Command::new(ldd)
         .arg(server)
-        .env("LD_LIBRARY_PATH", lib_dir))
+        .env("LD_LIBRARY_PATH", lib_path(server)))
     {
         for l in out.lines().filter(|l| l.contains("=> not found")) {
             if let Some(name) = l.split_whitespace().next() {
@@ -198,11 +357,7 @@ pub fn check(server: &Path, backend: &str, ldd: &Path, host: &Host) -> Report {
             }
         }
     }
-    let (out, err) = ask(Command::new(server)
-        .arg("--list-devices")
-        .env("LD_LIBRARY_PATH", lib_dir))
-    .unwrap_or_default();
-    let text = format!("{out}\n{err}");
+    let text = list_devices(server);
     for l in text.lines() {
         if let Some(rest) = l.split_once("error while loading shared libraries: ")
             && let Some((name, _)) = rest.1.split_once(':')
@@ -230,6 +385,9 @@ pub fn check(server: &Path, backend: &str, ldd: &Path, host: &Host) -> Report {
             "the engine cannot load {}",
             r.missing_libs.join(", ")
         ));
+        if let Some(h) = runtime_hint(backend, &r.missing_libs) {
+            r.why_not.push(h);
+        }
     }
     if backend == "rocm" && !host.kfd {
         r.why_not.push(

@@ -125,6 +125,42 @@ server) are never held by battery. The hub reads it at every search call, so a c
 (drgnx-search-battery-engine t)   ; embed on battery too
 ```
 
+
+## `drgnx-search-gpus`, `-battery-gpu`, `-no-gpu`
+
+Which GPUs the local engine pool uses and what it does without one (runtime.md, "The local engine"). Global.
+
+- `drgnx-search-gpus`: `nil` (the default: the fastest GPU only; `doctor` lists the others), `"all"`, `"top:N"` (the N
+  fastest) or `"ids:CUDA0,ROCm1"`.
+- `drgnx-search-battery-gpu`: on battery, `"pause"` (the default: bulk indexing waits for AC), `"igpu"` (only the
+  integrated GPU) or `"dgpu"` (the chosen GPUs).
+- `drgnx-search-no-gpu`: with no usable GPU, `"cpu"`, `"cpu-idle"` (the CPU only while idle) or `"pack"` (vectors from a
+  pack or a remote GPU). `nil`: bulk indexing waits for the choice and `doctor` lists the options.
+
+A value outside these is named in `doctor` and the default holds.
+
+```elisp
+(drgnx-search-gpus "top:2")
+(drgnx-search-no-gpu "cpu-idle")
+```
+
+## `drgnx-search-cpu-limit`, `-memory-limit`, `-vram-limit`, `-gpu-busy`
+
+The user's limits on the local engine, `nil` for none. All enforced; hitting one slows indexing (runtime.md, "The local
+engine").
+
+- `drgnx-search-cpu-limit`: percent (1 to 100) of the machine's CPUs: the engine's `-t` threads, and `cpu.max` through a
+  systemd user scope.
+- `drgnx-search-memory-limit`: MiB of RAM, `memory.max` (no swap).
+- `drgnx-search-vram-limit`: MiB of video memory. A start whose model, context and ubatch need more is refused, and one
+  that took more is stopped.
+- `drgnx-search-gpu-busy`: percent (1 to 100) the GPU may be busy: after each batch the engine rests for busy x (100 - P) / P.
+
+```elisp
+(drgnx-search-cpu-limit 50)
+(drgnx-search-gpu-busy 60)
+```
+
 ## Conformance
 
 The two readers are held to each other by four things, all under `test/fixtures/huginn/` and `crates/core/huginn`:

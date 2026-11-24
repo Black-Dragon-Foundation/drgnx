@@ -14,6 +14,7 @@ mod runners_orders;
 mod sandbox_check;
 mod search_cache;
 mod search_download;
+mod search_engine_pick;
 mod search_eval_sources;
 mod search_fingerprint;
 mod search_manage;

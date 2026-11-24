@@ -21,5 +21,6 @@ pub use gpu::{AdapterFacts, AdapterKind, adapters};
 pub use local::{Device, EmbedFail, Forward, LocalEmbedder, TOKEN_CAP, Tuning};
 pub use models::{
     Arch, ENGINES, EngineAsset, GGUF_MODELS, GgufSpec, LoadError, MODELS, ModelConfig, ModelFile,
-    ModelSpec, default_gguf, default_model, download_bytes, engine_for, engine_here,
+    ModelSpec, RuntimeFile, default_gguf, default_model, download_bytes, engine_for, engine_here,
+    engine_of, engines_for,
 };

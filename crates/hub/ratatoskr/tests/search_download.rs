@@ -428,6 +428,9 @@ fn asset(r: &Rig, archive: &[u8]) -> &'static EngineAsset {
         os: "linux",
         arch: "x86_64",
         backend: "vulkan",
+        variant: "",
+        min_driver: 0,
+        runtime: None,
         url: Box::leak(url.into_boxed_str()),
         sha256: Box::leak(sum.into_boxed_str()),
         bytes: archive.len() as u64,
@@ -438,7 +441,7 @@ fn asset(r: &Rig, archive: &[u8]) -> &'static EngineAsset {
 fn engine_consent(a: &EngineAsset) -> Consent {
     Consent {
         model: a.id(),
-        bytes: a.bytes,
+        bytes: a.total_bytes(),
         at: 1.0,
     }
 }

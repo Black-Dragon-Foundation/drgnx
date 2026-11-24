@@ -52,7 +52,8 @@
 //!   answers `GET /health`, `GET /props`, `POST /tokenize` (one token per byte; logged `{"tokenize": N}`) and `POST
 //!   /v1/embeddings` (logged `{"embed": INPUTS}`; vectors as `embed` makes them). `--perturb` gives other vectors (a GGUF
 //!   whose vectors are off); `--crash-once FILE` exits inside the first embeddings request when FILE does not exist
-//!   yet, and makes it.
+//!   yet, and makes it. `--list-devices` (with `--devices FILE`) prints `Available devices:` and FILE's lines, as llama.cpp
+//!   does, logs `{"list": true}` and ends: no server starts.
 //!
 //! `llm` and `embed` end when `--parent` is gone.
 
@@ -1127,6 +1128,14 @@ fn llama_server(args: &[String]) {
     let perturb = args.iter().any(|a| a == "--perturb");
     let crash_once = Arc::new(value(&["--crash-once"]));
     let log = Arc::new(open_log(args));
+    if args.iter().any(|a| a == "--list-devices") {
+        log_line(&log, &json!({"list": true}));
+        println!("Available devices:");
+        if let Some(f) = value(&["--devices"]) {
+            print!("{}", std::fs::read_to_string(f).unwrap_or_default());
+        }
+        return;
+    }
     log_line(&log, &json!({"start": args}));
     let listener = TcpListener::bind(("127.0.0.1", port))
         .unwrap_or_else(|e| die(&format!("cannot listen: {e}")));

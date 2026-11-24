@@ -186,6 +186,13 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-search-base" => values.search_base = de(v)?,
         "drgnx-search-cache-cap" => values.search_cache_cap = de(v)?,
         "drgnx-search-battery-engine" => values.search_battery_engine = de(v)?,
+        "drgnx-search-gpus" => values.search_gpus = de(v)?,
+        "drgnx-search-battery-gpu" => values.search_battery_gpu = de(v)?,
+        "drgnx-search-no-gpu" => values.search_no_gpu = de(v)?,
+        "drgnx-search-cpu-limit" => values.search_cpu_limit = de(v)?,
+        "drgnx-search-memory-limit" => values.search_memory_limit = de(v)?,
+        "drgnx-search-vram-limit" => values.search_vram_limit = de(v)?,
+        "drgnx-search-gpu-busy" => values.search_gpu_busy = de(v)?,
         "drgnx-search-ignore-rules" => {
             let s: String = de(v)?;
             if !["index", "real"].contains(&s.as_str()) {
@@ -346,6 +353,13 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-search-base" => json!(values.search_base),
         "drgnx-search-cache-cap" => json!(values.search_cache_cap),
         "drgnx-search-battery-engine" => json!(values.search_battery_engine),
+        "drgnx-search-gpus" => json!(values.search_gpus),
+        "drgnx-search-battery-gpu" => json!(values.search_battery_gpu),
+        "drgnx-search-no-gpu" => json!(values.search_no_gpu),
+        "drgnx-search-cpu-limit" => json!(values.search_cpu_limit),
+        "drgnx-search-memory-limit" => json!(values.search_memory_limit),
+        "drgnx-search-vram-limit" => json!(values.search_vram_limit),
+        "drgnx-search-gpu-busy" => json!(values.search_gpu_busy),
         "drgnx-search-ignore-rules" => json!(values.search_ignore_rules),
         "drgnx-agents-plugins" => json!(values.agents_plugins),
         "drgnx-agents-hook-rules" => match &values.agents_hook_rules {

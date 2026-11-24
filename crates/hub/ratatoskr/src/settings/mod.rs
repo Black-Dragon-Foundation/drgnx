@@ -179,6 +179,17 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-search-base", "Option<String>", OnError::Strict),
     setting("drgnx-search-cache-cap", "Option<u64>", OnError::Strict),
     setting("drgnx-search-battery-engine", "bool", OnError::Strict),
+    setting("drgnx-search-gpus", "Option<String>", OnError::Strict),
+    setting(
+        "drgnx-search-battery-gpu",
+        "Option<String>",
+        OnError::Strict,
+    ),
+    setting("drgnx-search-no-gpu", "Option<String>", OnError::Strict),
+    setting("drgnx-search-cpu-limit", "Option<u32>", OnError::Strict),
+    setting("drgnx-search-memory-limit", "Option<u64>", OnError::Strict),
+    setting("drgnx-search-vram-limit", "Option<u64>", OnError::Strict),
+    setting("drgnx-search-gpu-busy", "Option<u32>", OnError::Strict),
     setting("drgnx-search-ignore-rules", "String", OnError::Strict),
     setting("drgnx-agents-plugins", "Vec<String>", OnError::Strict),
     setting("drgnx-agents-hook-rules", "Vec<HookRule>", OnError::Strict),
@@ -308,6 +319,20 @@ pub struct RuntimeValues {
     pub search_cache_cap: Option<u64>,
     /// Whether the local sources (the built-in model, the local engine) embed on battery (default: they wait for AC).
     pub search_battery_engine: bool,
+    /// `drgnx-search-gpus`: Which GPUs the local engine pool uses: `all`, `top:N` or `ids:DEVICE,...` (none: the fastest only, and `doctor` offers the others).
+    pub search_gpus: Option<String>,
+    /// `drgnx-search-battery-gpu`: What the local engine does on battery: `pause` (default), `igpu` (the integrated GPU) or `dgpu` (the chosen GPUs).
+    pub search_battery_gpu: Option<String>,
+    /// `drgnx-search-no-gpu`: What a machine with no usable GPU does: `cpu`, `cpu-idle` or `pack` (none: bulk indexing waits for the choice).
+    pub search_no_gpu: Option<String>,
+    /// `drgnx-search-cpu-limit`: The share of the machine's CPUs the engine may use, in percent (threads and `cpu.max`).
+    pub search_cpu_limit: Option<u32>,
+    /// `drgnx-search-memory-limit`: The RAM the engine may use, in MiB (`memory.max`).
+    pub search_memory_limit: Option<u64>,
+    /// `drgnx-search-vram-limit`: The video memory the engine may take, in MiB (sizing and a check before a start).
+    pub search_vram_limit: Option<u64>,
+    /// `drgnx-search-gpu-busy`: How busy the GPU may be while the engine embeds, in percent (batches are paced).
+    pub search_gpu_busy: Option<u32>,
     /// Which files Quick Open, Find and the text search list: `index` (the index's filters) or `real`
     /// ([`crate::view::files::ignore_of`]).
     pub search_ignore_rules: String,
@@ -592,6 +617,13 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-search-base" => values.search_base = de(node)?,
         "drgnx-search-cache-cap" => values.search_cache_cap = de(node)?,
         "drgnx-search-battery-engine" => values.search_battery_engine = de(node)?,
+        "drgnx-search-gpus" => values.search_gpus = de(node)?,
+        "drgnx-search-battery-gpu" => values.search_battery_gpu = de(node)?,
+        "drgnx-search-no-gpu" => values.search_no_gpu = de(node)?,
+        "drgnx-search-cpu-limit" => values.search_cpu_limit = de(node)?,
+        "drgnx-search-memory-limit" => values.search_memory_limit = de(node)?,
+        "drgnx-search-vram-limit" => values.search_vram_limit = de(node)?,
+        "drgnx-search-gpu-busy" => values.search_gpu_busy = de(node)?,
         "drgnx-search-ignore-rules" => {
             let v: String = de(node)?;
             if !["index", "real"].contains(&v.as_str()) {

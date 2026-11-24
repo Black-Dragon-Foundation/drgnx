@@ -120,7 +120,8 @@ pub enum SearchCommand {
         all: bool,
     },
     /// `download MODEL --consent-bytes N`: the consent to a model's (or the local engine's) download and the download
-    /// itself (`search/model-download`); N must be the bytes the hub names.
+    /// itself (`search/model-download`); N must be the bytes the hub names. Without N (sent as 0) the hub refuses and
+    /// lists each file, its bytes, the total and the command to run.
     Download {
         model: String,
         bytes: u64,
@@ -384,8 +385,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
         }
         "download" => {
             let model = words.next().ok_or("search download needs a model id")?;
-            let bytes =
-                consent.ok_or("search download needs --consent-bytes N (the download's size)")?;
+            // without --consent-bytes the hub answers with what the download fetches, its total and the command
+            let bytes = consent.unwrap_or(0);
             if let Some(extra) = words.next() {
                 return Err(format!("search download: unexpected argument {extra:?}"));
             }
@@ -1059,7 +1060,14 @@ mod tests {
                 bytes: 7
             }
         );
-        assert!(p(&["download", "m"]).is_err());
+        assert_eq!(
+            p(&["download", "m"]).unwrap(),
+            SearchCommand::Download {
+                model: "m".into(),
+                bytes: 0
+            },
+            "no consent asks the hub for the list"
+        );
         assert!(p(&["download", "--consent-bytes", "7"]).is_err());
         assert!(p(&["download", "m", "--consent-bytes", "x"]).is_err());
         assert!(p(&["download", "m", "n", "--consent-bytes", "7"]).is_err());

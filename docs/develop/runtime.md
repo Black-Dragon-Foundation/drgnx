@@ -1663,19 +1663,45 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   is a model of no weights for the flows that need no inference. The download's stall limit runs on the hub's clock.
 - **The engine's download (`engine_install.rs`, MP-20).** The local engine is two pinned downloads: the GGUF of
   `GGUF_MODELS` (Qwen3-Embedding-0.6B in Q8_0, from `Qwen/Qwen3-Embedding-0.6B-GGUF` at a pinned revision, into
-  `<cache>/models/<id>/<file>`) and this machine's llama.cpp release asset of `ENGINES` (upstream's own build at one tag:
-  Linux x64 Vulkan and Windows x64 Vulkan, both from their `.tar.gz` and `.zip`, and macOS arm64 Metal; no CUDA or ROCm
-  row), each by its sha256 and size. `search/model-download` with `{model: "qwen3-embedding-0.6b-q8_0"}` takes one
-  consent whose bytes are the two sizes' sum, keeps it in `kv` (`search.consent.engine`) and fetches both: the GGUF from the
-  model host (or the mirror) like a model's files, the asset from its pinned URL by the same redirect rules. A wrong sum
-  of the asset keeps its `.part` and says where (the next install fetches it over); the GGUF's is removed as a model
-  file's is. The archive is unpacked into `<cache>/engines/<asset id>/bin.new` by the hub's own unpackers (zip, or tar with
-  flate2), which refuse an entry that is absolute or climbs out of the folder, a link that leaves it, a name twice and
-  sizes past their limits. `llama-server` is made executable, the folder becomes `bin/`, the archive goes, and only then
-  is `.installed` written (the asset's sum), so a half install is never taken for one. Nothing is fetched on an idle path:
-  the engine with no download is a source that is not there, and the chain goes on without it.
-  From a terminal: `ratatoskr search download qwen3-embedding-0.6b-q8_0 --consent-bytes N` sends that call (N is the sum;
-  a wrong N is refused with the right one named).
+  `<cache>/models/<id>/<file>`) and the llama.cpp release assets of `ENGINES` the machine's GPUs name (upstream's own
+  build at one tag, by sha256 and size): CUDA for NVIDIA on Linux x64 (12.8 and 13.5, by the driver) and arm64 (13.5),
+  each with its `cudart` archive; ROCm 10.0 for AMD on x64; Metal on macOS; Vulkan for Intel and for any GPU the vendor
+  build cannot drive (its reason is kept). `search/engine_pick.rs` chooses (`vendor_picks`), `engine_setup::resolve`
+  lists the installed assets' devices and plans the pool. `search/model-download` with `{model:
+  "qwen3-embedding-0.6b-q8_0"}` takes one consent whose bytes are the sum of the GGUF and every asset's archive and runtime
+  archive, keeps it in `kv` (`search.consent.engine`) and fetches them: the GGUF from the model host (or the mirror),
+  the assets from their pinned URLs by the same redirect rules. A consent with another number is refused with each
+  file's bytes, the total and the exact command (`ratatoskr search download MODEL --consent-bytes N`); the CLI without
+  `--consent-bytes` asks for that list. A wrong sum of an asset keeps its `.part` and says where (the next install
+  fetches it over); the GGUF's is removed as a model file's is. The archives are unpacked into `<cache>/engines/<asset
+  id>/bin.new` by the hub's own unpackers (zip, or tar with flate2; a CUDA runtime is a second folder beside the
+  release's own, and both are on the engine's library path), which refuse an entry that is absolute or climbs out of the
+  folder, a link that leaves it, a name twice and sizes past their limits. `llama-server` is made executable, the folder
+  becomes `bin/`, the archives go, and only then is `.installed` written (the asset's sum), so a half install is never
+  taken for one. Nothing is fetched on an idle path: the engine with no download is a source that is not there, and the
+  chain goes on without it.
+
+### The engine per GPU (MP-20, revised)
+
+- **Vendor build.** NVIDIA runs CUDA (the newest build the driver runs: `EngineAsset::min_driver`), AMD runs ROCm on
+  x64 when `/dev/kfd` exists and the card's gfx target (`/sys/class/kfd`) is on `ROCM_TARGETS`, macOS runs Metal, and
+  Intel and every card the vendor build cannot drive run Vulkan, with the reason in `doctor`. Upstream's ROCm asset
+  bundles no ROCm libraries: the machine needs ROCm 7.x (`doctor` names each missing library).
+- **Device.** The engine is started with `--device ID --split-mode none` (`ID` from its own `--list-devices`).
+  `CUDA_VISIBLE_DEVICES`, `ROCR_VISIBLE_DEVICES` and `HIP_VISIBLE_DEVICES` are passed to it and also read by the
+  vendor choice (`visible`). The default is the fastest GPU (memory, discrete over integrated, until rates are
+  measured); `drgnx-search-gpus` adds more. The rates are kept in `<cache>/engines/pin.json` with a key of the device
+  list, the driver and the engine tag: another key measures again.
+- **Never the CPU, silently.** No usable GPU (a software rasteriser is none) gives `Plan::Wait`: the engine does not
+  start, bulk indexing waits and `doctor` offers a pack or remote GPU, the CPU within a limit, or the CPU when idle
+  (`drgnx-search-no-gpu`). On battery `drgnx-search-battery-gpu` decides.
+- **Pool.** `engine_pool::EnginePool` holds one `LocalEngine` per member, hands each a share of a batch by its rate
+  (`split_weighted`, a moving average of vectors per second), and moves a dead member's share to the others; one member
+  failing alone is an error. Its `max_batch` is one engine's batch per member.
+- **Limits.** `engine_limits`: CPU is `-t` and `cpu.max`, memory is `memory.max`, both through `systemd-run --user
+  --scope` where the user manager runs (else the thread count alone, noted in `doctor`); VRAM is checked against the
+  device's free memory and the ceiling before a start (`vram_check`, from the device's `--list-devices` line) and after
+  it (`vram_over`); the GPU busy cap rests the engine after each batch (`hrafn_embed::pace::rest_after`).
 
 ### The local engine
 

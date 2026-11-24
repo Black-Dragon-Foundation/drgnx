@@ -57,11 +57,11 @@ pub async fn install_with(
     dir: &Path,
     progress: &(dyn Fn(u64) + Sync),
 ) -> Result<PathBuf, DownloadError> {
-    if consent.model != asset.id() || consent.bytes != asset.bytes {
+    if consent.model != asset.id() || consent.bytes != asset.total_bytes() {
         return Err(DownloadError::NoConsent);
     }
     if let Some(exe) = installed(asset, dir) {
-        progress(asset.bytes);
+        progress(asset.total_bytes());
         return Ok(exe);
     }
     let url = asset.url.parse().map_err(|_| DownloadError::Http(400))?;
@@ -71,6 +71,16 @@ pub async fn install_with(
         bytes: asset.bytes,
     };
     fetch_one(url, dir, &file, true, progress).await?;
+    if let Some(rt) = asset.runtime {
+        let url = rt.url.parse().map_err(|_| DownloadError::Http(400))?;
+        let file = ModelFile {
+            name: rt.file_name(),
+            sha256: rt.sha256,
+            bytes: rt.bytes,
+        };
+        let base = asset.bytes;
+        fetch_one(url, dir, &file, true, &|have| progress(base + have)).await?;
+    }
     let (asset, dir) = (*asset, dir.to_path_buf());
     crate::clock::blocking(move || unpack(&asset, &dir))
         .await
@@ -90,17 +100,30 @@ fn unpack(asset: &EngineAsset, dir: &Path) -> Result<PathBuf, DownloadError> {
         std::fs::remove_dir_all(&staging).map_err(disk)?;
     }
     std::fs::create_dir_all(&staging).map_err(disk)?;
-    let unpacked = if asset.file_name().ends_with(".zip") {
-        crate::browser::install::unpack(&archive, &staging, Limits::default())
-    } else {
-        crate::debug::install::unpack_tgz(&archive, &staging, Limits::default(), None)
+    // a CUDA runtime unpacks to a few GiB (cuBLAS alone is over one)
+    let limits = Limits {
+        entry: 2 << 30,
+        unpacked: 6 << 30,
+        ..Limits::default()
     };
+    let unpack_one = |file: &str| {
+        let path = dir.join(file);
+        if file.ends_with(".zip") {
+            crate::browser::install::unpack(&path, &staging, limits)
+        } else {
+            crate::debug::install::unpack_tgz(&path, &staging, limits, None)
+        }
+        .map_err(|e| format!("{file}: {e}"))
+    };
+    let mut unpacked = unpack_one(asset.file_name());
+    if unpacked.is_ok()
+        && let Some(rt) = asset.runtime
+    {
+        unpacked = unpack_one(rt.file_name());
+    }
     if let Err(e) = unpacked {
         let _ = std::fs::remove_dir_all(&staging);
-        return Err(DownloadError::Archive(format!(
-            "{}: {e}",
-            asset.file_name()
-        )));
+        return Err(DownloadError::Archive(e));
     }
     let exe = staging.join(asset.binary);
     if !std::fs::symlink_metadata(&exe).is_ok_and(|m| m.is_file()) {
@@ -118,6 +141,9 @@ fn unpack(asset: &EngineAsset, dir: &Path) -> Result<PathBuf, DownloadError> {
     }
     std::fs::rename(&staging, &bin).map_err(disk)?;
     std::fs::remove_file(&archive).map_err(disk)?;
+    if let Some(rt) = asset.runtime {
+        std::fs::remove_file(dir.join(rt.file_name())).map_err(disk)?;
+    }
     std::fs::write(dir.join(MARKER), asset.sha256).map_err(disk)?;
     Ok(bin.join(asset.binary))
 }

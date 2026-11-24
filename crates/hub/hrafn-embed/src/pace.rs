@@ -83,6 +83,16 @@ impl Pacer {
     }
 }
 
+/// How long the GPU rests after a batch it was busy with for BUSY, to hold its utilisation to CAP percent
+/// (`drgnx-search-gpu-busy`): busy over busy plus rest is CAP. No rest at 100 percent or over.
+pub fn rest_after(busy: Duration, cap_percent: u32) -> Duration {
+    if cap_percent >= 100 {
+        return Duration::ZERO;
+    }
+    let cap = cap_percent.max(1);
+    busy.mul_f64(f64::from(100 - cap) / f64::from(cap))
+}
+
 /// The order to batch texts of LENGTHS in: shortest first, equal lengths in their given order. Each batch then holds
 /// texts of about one length, so a batch's padding and context are sized to its own longest.
 pub fn by_length(lengths: &[usize]) -> Vec<usize> {

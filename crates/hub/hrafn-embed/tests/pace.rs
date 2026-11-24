@@ -64,3 +64,13 @@ fn never_below_the_next_chunk() {
     let mut fresh = Pacer::new();
     assert_eq!(fresh.take(&[1000, 1000, 48, 1]), 3);
 }
+
+/// Pattern D. A cap holds busy over busy plus rest to the percent.
+#[test]
+fn the_gpu_busy_cap_rests_the_rest() {
+    use hrafn_embed::pace::rest_after;
+    assert_eq!(rest_after(ms(100), 50), ms(100));
+    assert_eq!(rest_after(ms(100), 25), ms(300));
+    assert_eq!(rest_after(ms(100), 100), Duration::ZERO);
+    assert_eq!(rest_after(ms(100), 0), ms(9900), "0 counts as 1 percent");
+}

@@ -18,6 +18,7 @@
 //!   own default (the dedicated GPUs, else the first integrated one); a `GGML_VK_VISIBLE_DEVICES` of the user's is
 //!   passed on.
 
+use super::engine_limits::{self, Limits};
 use super::sources::SourceKind;
 use hrafn_embed::fingerprint::{FingerprintRecord, Identity};
 use hrafn_embed::pace::{Pacer, by_length};
@@ -51,7 +52,9 @@ const REQUEST_WAIT: Duration = Duration::from_secs(600);
 const REAP_WAIT: Duration = Duration::from_secs(2);
 /// The hub's variables the engine gets: the loader's, and the GPU drivers' (Vulkan, Mesa, NVIDIA) and ggml's by prefix.
 const ENV: &[&str] = &["PATH", "HOME", "XDG_RUNTIME_DIR", "LANG", "LC_ALL"];
-const ENV_PREFIXES: &[&str] = &["VK_", "MESA_", "GGML_", "RADV_", "__NV_", "__GLX_"];
+const ENV_PREFIXES: &[&str] = &[
+    "VK_", "MESA_", "GGML_", "RADV_", "__NV_", "__GLX_", "CUDA_", "HIP_", "HSA_", "ROCR_", "ROCM_",
+];
 
 /// The text and the reference vector of the engine's self-check (`hrafn-embed/data/*.selfcheck.json`).
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -76,6 +79,13 @@ pub struct EngineSpec {
     pub idle: Duration,
     /// None: no check (a test's engine).
     pub selfcheck: Option<SelfCheck>,
+    /// The device it is pinned to (`--device X --split-mode none`), `none` for the CPU engine; none: ggml's own choice
+    /// (a test's engine).
+    pub device: Option<String>,
+    /// The user's limits ([`super::engine_limits`]).
+    pub limits: Limits,
+    /// `systemd-run`, when the user's manager is there to hold the CPU and memory limits.
+    pub systemd: Option<PathBuf>,
 }
 
 /// A running engine.
@@ -315,7 +325,19 @@ impl LocalEngine {
     async fn start(&self, ctx: u32) -> Result<Running, EmbedError> {
         let s = &self.spec;
         let ctx_arg = ctx.to_string();
-        let args: Vec<OsString> = [
+        // the video memory is checked before the start: the device's free memory against what this context needs
+        let gpu = s.device.as_deref().filter(|d| *d != "none");
+        let before = match gpu {
+            Some(d) => self.device_free(d).await,
+            None => None,
+        };
+        if gpu.is_some() {
+            let need = engine_limits::vram_need_mib(self.gguf_bytes(), ctx);
+            engine_limits::vram_check(need, before, s.limits.vram_mib).map_err(EmbedError)?;
+        }
+        let ncpu = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
+        let threads = s.limits.threads(ncpu).map(|t| t.to_string());
+        let mut args: Vec<OsString> = [
             OsStr::new("-m"),
             s.gguf.as_os_str(),
             OsStr::new("--embedding"),
@@ -327,8 +349,6 @@ impl LocalEngine {
             OsStr::new(&ctx_arg),
             OsStr::new("-ub"),
             OsStr::new(&ctx_arg),
-            OsStr::new("-ngl"),
-            OsStr::new("999"),
             OsStr::new("--host"),
             OsStr::new("127.0.0.1"),
             OsStr::new("--port"),
@@ -338,15 +358,32 @@ impl LocalEngine {
         .iter()
         .map(|a| a.to_os_string())
         .collect();
+        match s.device.as_deref() {
+            Some("none") => args.extend(["--device", "none", "-ngl", "0"].map(OsString::from)),
+            Some(d) => args
+                .extend(["--device", d, "--split-mode", "none", "-ngl", "999"].map(OsString::from)),
+            None => args.extend(["-ngl", "999"].map(OsString::from)),
+        }
+        if let Some(t) = &threads {
+            args.extend(["-t", t.as_str()].map(OsString::from));
+        }
+        let (program, args, enforced) =
+            engine_limits::wrap(&s.limits, ncpu, s.systemd.clone(), s.exe.clone(), args);
+        for n in &enforced.notes {
+            tracing::warn!("search: {n}");
+        }
         let folder = s.exe.parent().map(PathBuf::from).unwrap_or_default();
         let spec = draugr::Spec {
-            program: s.exe.clone(),
+            program,
             args,
-            // the release's libraries sit beside its server
+            // the release's libraries sit beside its server, and its runtime archive's in a folder next to its own
             env: draugr::env::build(
                 ENV,
                 ENV_PREFIXES,
-                &[("LD_LIBRARY_PATH", folder.as_os_str())],
+                &[(
+                    "LD_LIBRARY_PATH",
+                    super::engine_doctor::lib_path(&s.exe).as_os_str(),
+                )],
             ),
             cwd: Some(folder),
             stdin_null: true,
@@ -412,10 +449,37 @@ impl LocalEngine {
                 return Err(EmbedError(why));
             }
         };
-        tracing::info!("search: the engine started (pid {pid}, port {port}, context {ctx})");
+        if let Some(d) = gpu
+            && let Some(why) =
+                engine_limits::vram_over(before, self.device_free(d).await, s.limits.vram_mib)
+        {
+            end(&self.shared, Running { port, ..r }).await;
+            return Err(EmbedError(why));
+        }
+        tracing::info!(
+            "search: the engine started (pid {pid}, port {port}, context {ctx}, device {})",
+            s.device.as_deref().unwrap_or("default")
+        );
         self.shared.touch();
         self.idle_timer(pid);
         Ok(Running { port, ..r })
+    }
+
+    /// The model's size in bytes (0 when the file is not there: a test's engine).
+    fn gguf_bytes(&self) -> u64 {
+        std::fs::metadata(&self.spec.gguf).map_or(0, |m| m.len())
+    }
+
+    /// DEVICE's free memory in MiB, as the engine lists it (`--list-devices`); none when it does not say.
+    async fn device_free(&self, device: &str) -> Option<u64> {
+        let exe = self.spec.exe.clone();
+        let text = crate::clock::blocking(move || super::engine_doctor::list_devices(&exe))
+            .await
+            .ok()?;
+        super::engine_pick::parse_devices(&text)
+            .into_iter()
+            .find(|d| d.id == device)
+            .and_then(|d| d.free_mib)
     }
 
     /// Ends process PID once it has had no request for the spec's idle time, on the hub's clock.
@@ -591,8 +655,13 @@ impl LocalEngine {
             let lengths: Vec<usize> = order[at..].iter().map(|&i| tokens[i]).collect();
             let ids = &order[at..at + pacer.take(&lengths)];
             let batch: Vec<String> = ids.iter().map(|&i| texts[i].clone()).collect();
+            let begun = crate::clock::real_now();
             for (&i, v) in ids.iter().zip(self.batch(ctx, &batch).await?) {
                 out[i] = v;
+            }
+            // the GPU busy cap: the engine rests so that busy over busy plus rest is the user's percent
+            if let Some(cap) = self.spec.limits.gpu_busy {
+                crate::clock::sleep(hrafn_embed::pace::rest_after(begun.elapsed(), cap)).await;
             }
             at += ids.len();
         }
@@ -678,6 +747,23 @@ impl super::DocEmbedder for LocalEngine {
         _overriding: bool,
     ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
         Box::pin(LocalEngine::embed_docs(self, texts))
+    }
+}
+
+impl super::engine_pool::Lane for LocalEngine {
+    fn embed<'a>(
+        &'a self,
+        texts: &'a [String],
+    ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
+        Box::pin(LocalEngine::embed_docs(self, texts))
+    }
+
+    fn query<'a>(
+        &'a self,
+        q: &'a str,
+        instruction: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<Vec<f32>, EmbedError>> {
+        Box::pin(LocalEngine::embed_query(self, q, instruction))
     }
 }
 

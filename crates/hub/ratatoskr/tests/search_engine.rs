@@ -105,6 +105,9 @@ impl Rig {
             ubatch: MAX_TOKENS,
             idle: IDLE,
             selfcheck: None,
+            device: None,
+            limits: ratatoskr::search::engine_limits::Limits::default(),
+            systemd: None,
         }
     }
 
@@ -316,4 +319,264 @@ fn the_engine_takes_a_wide_batch() {
     let batch = ratatoskr::search::DocEmbedder::max_batch(&rig.engine());
     assert_eq!(batch, ratatoskr::search::engine::ENGINE_BATCH);
     assert!(batch >= 32, "{batch}");
+}
+
+/// The args of the start that ran the server (the mock logs `{"start": ARGS}` only for a server, not for `--list-devices`).
+fn flag_after(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1).cloned())
+}
+
+const ROCM_ONE: &str = "  ROCm0: AMD Radeon RX 7900 XTX (24560 MiB, 22212 MiB free)\n";
+
+/// The rig with a device list the mock prints for `--list-devices`.
+fn rig_with_devices(text: &str) -> Rig {
+    let r = Rig::new(&["--devices", "{dir}/devices.txt"]);
+    std::fs::write(r.dir.path().join("devices.txt"), text).unwrap();
+    r
+}
+
+#[test]
+fn the_engine_is_pinned_to_its_device_with_no_split() {
+    on_hub_runtime(async {
+        let r = rig_with_devices(ROCM_ONE);
+        let mut spec = r.spec();
+        spec.device = Some("ROCm0".into());
+        let e = LocalEngine::new(spec);
+        e.embed_docs(&texts(&["a"])).await.unwrap();
+        let starts = r.starts();
+        assert_eq!(
+            starts.len(),
+            1,
+            "the device list is asked, not started: {starts:?}"
+        );
+        let args = &starts[0];
+        assert_eq!(flag_after(args, "--device").as_deref(), Some("ROCm0"));
+        assert_eq!(flag_after(args, "--split-mode").as_deref(), Some("none"));
+        assert_eq!(
+            flag_after(args, "-ngl").as_deref(),
+            Some("999"),
+            "every layer on the GPU"
+        );
+        e.close().await;
+    });
+}
+
+#[test]
+fn a_cpu_engine_says_so_in_its_args() {
+    on_hub_runtime(async {
+        let r = Rig::new(&[]);
+        let mut spec = r.spec();
+        spec.device = Some("none".into());
+        let e = LocalEngine::new(spec);
+        e.embed_docs(&texts(&["a"])).await.unwrap();
+        let args = &r.starts()[0];
+        assert_eq!(flag_after(args, "--device").as_deref(), Some("none"));
+        assert_eq!(flag_after(args, "-ngl").as_deref(), Some("0"));
+        e.close().await;
+    });
+}
+
+#[test]
+fn the_cpu_limit_sets_the_engines_threads() {
+    on_hub_runtime(async {
+        let r = Rig::new(&[]);
+        let mut spec = r.spec();
+        spec.limits.cpu_percent = Some(1);
+        let e = LocalEngine::new(spec);
+        e.embed_docs(&texts(&["a"])).await.unwrap();
+        assert_eq!(
+            flag_after(&r.starts()[0], "-t").as_deref(),
+            Some("1"),
+            "1 percent is one thread"
+        );
+        e.close().await;
+    });
+}
+
+#[test]
+fn a_start_over_the_video_memory_limit_is_refused_and_not_started() {
+    on_hub_runtime(async {
+        let r = rig_with_devices(ROCM_ONE);
+        let mut spec = r.spec();
+        spec.device = Some("ROCm0".into());
+        spec.limits.vram_mib = Some(100);
+        let e = LocalEngine::new(spec);
+        let err = e.embed_docs(&texts(&["a"])).await.unwrap_err();
+        assert!(err.0.contains("drgnx-search-vram-limit"), "{}", err.0);
+        assert!(r.starts().is_empty(), "never started over the ceiling");
+        assert_eq!(e.pid(), None);
+    });
+}
+
+#[test]
+fn a_start_without_the_free_video_memory_is_refused_with_the_numbers() {
+    on_hub_runtime(async {
+        let r = rig_with_devices("  ROCm0: AMD Radeon RX 7900 XTX (24560 MiB, 50 MiB free)\n");
+        let mut spec = r.spec();
+        spec.device = Some("ROCm0".into());
+        let e = LocalEngine::new(spec);
+        let err = e.embed_docs(&texts(&["a"])).await.unwrap_err();
+        assert!(err.0.contains("50 MiB free"), "{}", err.0);
+        assert!(r.starts().is_empty());
+    });
+}
+
+/// A pool member that records what it was given and fails when told to.
+struct Fake {
+    got: Mutex<Vec<String>>,
+    fail: std::sync::atomic::AtomicBool,
+}
+
+impl Fake {
+    fn new(fail: bool) -> std::sync::Arc<Fake> {
+        std::sync::Arc::new(Fake {
+            got: Mutex::new(Vec::new()),
+            fail: fail.into(),
+        })
+    }
+
+    fn count(&self) -> usize {
+        self.got.lock().unwrap().len()
+    }
+}
+
+impl ratatoskr::search::engine_pool::Lane for Fake {
+    fn embed<'a>(
+        &'a self,
+        t: &'a [String],
+    ) -> urdr::graph::search::BoxFuture<'a, Result<Vec<Vec<f32>>, urdr::graph::search::EmbedError>>
+    {
+        Box::pin(async move {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(urdr::graph::search::EmbedError("this engine died".into()));
+            }
+            self.got.lock().unwrap().extend(t.iter().cloned());
+            // the vector says which text it is: the order of the answer is checkable
+            Ok(t.iter()
+                .map(|x| vec![x[1..].parse::<f32>().unwrap()])
+                .collect())
+        })
+    }
+
+    fn query<'a>(
+        &'a self,
+        _: &'a str,
+        _: Option<&'a str>,
+    ) -> urdr::graph::search::BoxFuture<'a, Result<Vec<f32>, urdr::graph::search::EmbedError>> {
+        Box::pin(async { Ok(vec![0.0]) })
+    }
+}
+
+fn pool_of(
+    lanes: &[(&str, &std::sync::Arc<Fake>, f64)],
+) -> ratatoskr::search::engine_pool::EnginePool {
+    let identity = Rig::new(&[]).engine().identity();
+    ratatoskr::search::engine_pool::EnginePool::new(
+        lanes
+            .iter()
+            .map(|(id, f, rate)| {
+                (
+                    id.to_string(),
+                    f.clone() as std::sync::Arc<dyn ratatoskr::search::engine_pool::Lane>,
+                    *rate,
+                )
+            })
+            .collect(),
+        identity,
+        None,
+    )
+}
+
+fn numbered(n: usize) -> Vec<String> {
+    (0..n).map(|i| format!("t{i}")).collect()
+}
+
+fn in_order(v: &[Vec<f32>]) -> bool {
+    v.iter().enumerate().all(|(i, x)| x[0] == i as f32)
+}
+
+#[test]
+fn weighted_splits_sum_to_the_whole_and_follow_the_weights() {
+    use ratatoskr::search::engine_pool::split_weighted;
+    assert_eq!(split_weighted(8, &[3.0, 1.0]), [6, 2]);
+    assert_eq!(
+        split_weighted(10, &[1.0, 1.0, 1.0]),
+        [4, 3, 3],
+        "the remainder goes to the first of equals"
+    );
+    assert_eq!(split_weighted(5, &[1.0]), [5]);
+    assert_eq!(split_weighted(0, &[2.0, 1.0]), [0, 0]);
+    assert_eq!(
+        split_weighted(7, &[0.0, 0.0]),
+        [4, 3],
+        "no rates: an even split"
+    );
+    let eight = split_weighted(64, &[8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]);
+    assert_eq!(eight.iter().sum::<usize>(), 64);
+    assert!(eight.windows(2).all(|w| w[0] >= w[1]), "{eight:?}");
+}
+
+#[test]
+fn a_pool_gives_each_engine_batches_by_its_rate_and_keeps_the_order() {
+    on_hub_runtime(async {
+        let (fast, slow) = (Fake::new(false), Fake::new(false));
+        let p = pool_of(&[("CUDA0", &fast, 3.0), ("CUDA1", &slow, 1.0)]);
+        let v = p.embed_docs(&numbered(8)).await.unwrap();
+        assert!(in_order(&v), "{v:?}");
+        assert_eq!((fast.count(), slow.count()), (6, 2));
+    });
+}
+
+#[test]
+fn eight_engines_share_a_batch_by_their_rates() {
+    on_hub_runtime(async {
+        let fakes: Vec<_> = (0..8).map(|_| Fake::new(false)).collect();
+        let ids: Vec<String> = (0..8).map(|i| format!("CUDA{i}")).collect();
+        let lanes: Vec<(&str, &std::sync::Arc<Fake>, f64)> = fakes
+            .iter()
+            .zip(&ids)
+            .enumerate()
+            .map(|(i, (f, id))| (id.as_str(), f, (8 - i) as f64))
+            .collect();
+        let p = pool_of(&lanes);
+        let v = p.embed_docs(&numbered(72)).await.unwrap();
+        assert!(in_order(&v));
+        let counts: Vec<usize> = fakes.iter().map(|f| f.count()).collect();
+        assert_eq!(counts, [16, 14, 12, 10, 8, 6, 4, 2]);
+    });
+}
+
+#[test]
+fn a_dead_engines_batch_moves_to_the_others() {
+    on_hub_runtime(async {
+        let (a, b) = (Fake::new(true), Fake::new(false));
+        let p = pool_of(&[("ROCm0", &a, 5.0), ("ROCm1", &b, 5.0)]);
+        let v = p.embed_docs(&numbered(10)).await.unwrap();
+        assert!(in_order(&v), "every text has its own vector");
+        assert_eq!((a.count(), b.count()), (0, 10));
+        // the dead one gets nothing the next time
+        b.got.lock().unwrap().clear();
+        a.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+        let v = p.embed_docs(&numbered(4)).await.unwrap();
+        assert!(in_order(&v));
+        assert_eq!((a.count(), b.count()), (0, 4));
+    });
+}
+
+#[test]
+fn the_only_engine_failing_is_an_error_not_a_silent_loss() {
+    on_hub_runtime(async {
+        let a = Fake::new(true);
+        let p = pool_of(&[("CUDA0", &a, 1.0)]);
+        let err = p.embed_docs(&numbered(3)).await.unwrap_err();
+        assert!(err.0.contains("died"), "{}", err.0);
+        let (x, y) = (Fake::new(true), Fake::new(true));
+        let p = pool_of(&[("A", &x, 1.0), ("B", &y, 1.0)]);
+        assert!(
+            p.embed_docs(&numbered(3)).await.is_err(),
+            "all dead is an error"
+        );
+    });
 }

@@ -4,7 +4,8 @@
 //! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
 //! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, watch: {max_user_watches?, projects: [{root, watched, error?}]}?,
 //! socket_dir: {path, mode, ok}, sqlite,
-//! engine (`null` without an installed engine; else {asset, missing_libs, devices, backend, gpu, why_not}),
+//! engine ({installed, asset, missing_libs, devices, backend, gpu, why_not} of the first installed build, `asset` null with none; and
+//! assets: [{asset, backend, installed, bytes, ...its check}], vendors, plan, more_gpus, on_battery, limits, settings_errors}),
 //! job_agents, exe_mode (`private-table`, `lock` or `direct`: how a file written and run is kept from ETXTBSY), sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}}`.  `store` is the running hub's
 //! work.db: a failed move to schema 7, and the copies that still hold what its deny-list kept out; and from files
 //! (also with no hub, when work.db exists) `wal_bytes`, `last_backup`, `backup_ok`, `backup_age_s`, `deny_list:
@@ -72,24 +73,67 @@ fn socket_dir(socket: &Path, uid: u32) -> Value {
     }
 }
 
-/// The local engine section: where it is installed and what the check found (libraries, device, why no GPU); `null`
-/// when no engine is installed for this machine.
+/// The local engine section: the check of the first installed asset (libraries, device, why no GPU; `asset` null and
+/// `installed` false when none is installed), and for the pool the vendor builds (`assets`, each with its own check and
+/// the bytes its download costs), the plan (the pinned devices, or why none runs and the user's options), the limits
+/// and any setting that is refused.
 fn engine_section(env: &Env) -> Value {
-    let Some(asset) = hrafn_embed::engine_here() else {
-        return Value::Null;
-    };
-    let dir = crate::search::engine_install::dir_for(&paths::cache_dir(env), asset);
-    let Some(exe) = crate::search::engine_install::installed(asset, &dir) else {
-        return Value::Null;
-    };
-    let mut v = crate::search::engine_doctor::check(
-        &exe,
-        asset.backend,
-        Path::new("ldd"),
-        &crate::search::engine_doctor::Host::read(),
-    )
-    .json();
-    v["asset"] = json!(asset.id());
+    use crate::search::{engine_doctor, engine_pick, engine_setup};
+    let values =
+        crate::settings::Settings::load(&paths::config_dir(env), &crate::settings::Kv::default())
+            .values;
+    let st = engine_setup::EngineSettings::from_values(&values);
+    let machine = engine_pick::Machine::read();
+    let on_battery = crate::search::power::on_battery(Path::new(crate::search::power::SYS));
+    let r = engine_setup::resolve(
+        &paths::cache_dir(env),
+        &machine,
+        &engine_pick::Visible::from_env(),
+        &st,
+        on_battery,
+    );
+    let host = engine_doctor::Host::read();
+    let mut assets = Vec::new();
+    let mut first: Option<Value> = None;
+    for s in &r.assets {
+        let mut a = json!({
+            "asset": s.asset.id(),
+            "backend": s.asset.backend,
+            "installed": s.exe.is_some(),
+            "bytes": s.asset.total_bytes(),
+        });
+        if let Some(exe) = &s.exe {
+            let mut c = engine_doctor::check(exe, s.asset.backend, Path::new("ldd"), &host).json();
+            c["asset"] = json!(s.asset.id());
+            for (k, v) in c.as_object().cloned().unwrap_or_default() {
+                a[k.as_str()] = v;
+            }
+            first.get_or_insert(c);
+        }
+        assets.push(a);
+    }
+    let mut v = first.unwrap_or_else(|| {
+        json!({"asset": null, "missing_libs": [], "devices": [], "backend": null, "gpu": false, "why_not": []})
+    });
+    v["installed"] = json!(!assets.is_empty() && v["asset"].is_string());
+    v["assets"] = json!(assets);
+    v["vendors"] = json!(r.picks.iter().map(|p| json!({
+        "vendor": p.vendor.name(), "gpus": p.gpus, "asset": p.asset.id(), "fallback": p.fallback,
+    })).collect::<Vec<_>>());
+    v["plan"] = r.plan.json();
+    v["more_gpus"] = json!(
+        engine_setup::more_gpus(&r.plan, &st.cfg)
+            .iter()
+            .map(|d| format!("{}: {}", d.id, d.name))
+            .collect::<Vec<_>>()
+    );
+    v["on_battery"] = json!(on_battery);
+    v["limits"] = json!({
+        "cpu_percent": st.limits.cpu_percent, "memory_mib": st.limits.memory_mib,
+        "vram_mib": st.limits.vram_mib, "gpu_busy": st.limits.gpu_busy,
+        "cgroup": st.limits.cpu_percent.is_some() || st.limits.memory_mib.is_some(),
+    });
+    v["settings_errors"] = json!(st.errors);
     v
 }
 
@@ -898,7 +942,7 @@ fn text(v: &Value, sandbox: &Check) -> String {
         t(&v["container_net"])
     ));
     if v["engine"].is_object() {
-        out.push_str(&crate::search::engine_doctor::lines_of(&v["engine"]));
+        out.push_str(&crate::search::engine_doctor::section_lines(&v["engine"]));
     }
     out.push_str(&watch_lines(&v["watch"]));
     out.push_str(&pack_lines(&v["packs"]));

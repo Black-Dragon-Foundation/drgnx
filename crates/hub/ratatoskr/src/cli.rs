@@ -36,7 +36,7 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr plugins install PATH [--replace] | list [--json] | remove NAME   (plugins; approve them in drgnx)\n\
     \x20      ratatoskr search index ROOT [--rebuild] [--now]   (build or rebuild a project's code index)\n\
     \x20      ratatoskr search query ROOT QUESTION... [-k N] [--scope code|tests|docs|all] [--json]\n\
-    \x20      ratatoskr search download MODEL --consent-bytes N   (consent to a model's or the local engine's download, and start it)\n\
+    \x20      ratatoskr search download MODEL [--consent-bytes N]   (without N: lists every file, the total and the command; with N: consent, and start it)\n\
     \x20      ratatoskr search mcp [ROOT]   (the MCP search tool on stdio, for an agent outside drgnx)\n\
     \x20      ratatoskr search list [--json] | status [ROOT] [--json] | pause|resume|stop ROOT|--all | delete ROOT [--yes]\n\
     \x20          (every root's index; pause, resume, stop or delete one)\n\

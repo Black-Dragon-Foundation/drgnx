@@ -14,7 +14,7 @@
 //!   consented and is in place), the servers the gateway has, and the built-in model's worker (when
 //!   `drgnx-search-builtin` is on and the model is `Ready`). A change in that set opens the project again.
 
-use super::engine::LocalEngine;
+use super::engine_pool::EnginePool;
 use super::manage::{PauseWhy, RootState};
 use super::project::{Project, ProjectError, ProjectSpec, Tier2, ViewOf, project_id};
 use super::saved::Saved;
@@ -307,7 +307,7 @@ impl Hub {
     /// The local engine and the provider id its step goes by, when the `embed` role names a provider of kind `llama`
     /// and the engine may run: its download was consented and its files are in the cache. None otherwise, so a chain
     /// that names it falls through.
-    pub async fn engine(&self, front: &Front) -> Option<(String, Arc<LocalEngine>)> {
+    pub async fn engine(&self, front: &Front) -> Option<(String, Arc<EnginePool>)> {
         let id = {
             let current = front.settings.current();
             let values = &current.loaded.values;
@@ -328,7 +328,16 @@ impl Hub {
         let consented = super::stored_engine_consent(&dirs.runtime)
             .await
             .is_some_and(|c| c.model == gguf.id);
-        match self.search.get()?.engine(consented) {
+        let settings = super::engine_setup::EngineSettings::from_values(
+            &front.settings.current().loaded.values,
+        );
+        let on_battery = super::power::on_battery(std::path::Path::new(super::power::SYS));
+        match self
+            .search
+            .get()?
+            .engine(consented, &settings, on_battery)
+            .await
+        {
             Ok(e) => Some((id, e)),
             Err(why) => {
                 tracing::debug!("search: no local engine: {}", why.0);
@@ -1415,15 +1424,13 @@ impl Hub {
             at: clock::wall_secs(),
         };
         if p.consent.bytes != download_bytes(spec) {
-            return Err(error(
-                ErrorCode::InvalidParams,
-                format!(
-                    "the consent names {} bytes; the model is {} bytes",
-                    p.consent.bytes,
-                    download_bytes(spec)
-                ),
-                Some("consent.bytes"),
-            ));
+            let items: Vec<(String, u64)> = spec
+                .files
+                .iter()
+                .map(|f| (f.name.to_string(), f.bytes))
+                .collect();
+            let (_, text) = super::engine_setup::consent_text(spec.id, p.consent.bytes, &items);
+            return Err(error(ErrorCode::InvalidParams, text, Some("consent.bytes")));
         }
         let base = super::model_base(
             front
@@ -1485,23 +1492,52 @@ impl Hub {
     ) -> Result<w::Started, Error> {
         let dirs = self.dirs()?;
         let gguf = hrafn_embed::default_gguf();
-        let asset = hrafn_embed::engine_here().ok_or_else(|| {
-            error(
-                ErrorCode::NotAllowed,
-                "drgnx pins no llama.cpp build for this machine",
-                Some("model"),
-            )
-        })?;
-        let total = gguf.bytes + asset.bytes;
-        if p.consent.bytes != total {
+        // the assets the settings and this machine's GPUs name: the vendor's build per GPU (CUDA, ROCm, Metal, else Vulkan)
+        let settings = super::engine_setup::EngineSettings::from_values(
+            &front.settings.current().loaded.values,
+        );
+        let machine = self
+            .search
+            .get()
+            .ok_or_else(|| internal("search"))?
+            .machine();
+        let cache = paths::cache_dir(&dirs.env);
+        let resolved = {
+            let (cache, st) = (cache.clone(), settings.clone());
+            clock::blocking(move || {
+                super::engine_setup::resolve(
+                    &cache,
+                    &machine,
+                    &super::engine_pick::Visible::from_env(),
+                    &st,
+                    false,
+                )
+            })
+            .await
+            .map_err(internal)?
+        };
+        let assets: Vec<&'static hrafn_embed::EngineAsset> =
+            resolved.assets.iter().map(|s| s.asset).collect();
+        if assets.is_empty() {
             return Err(error(
-                ErrorCode::InvalidParams,
+                ErrorCode::NotAllowed,
                 format!(
-                    "the consent names {} bytes; the engine and its model are {total} bytes",
-                    p.consent.bytes
+                    "no GPU engine to download for this machine (no usable GPU, or no build pinned for it). Options:\n  {}",
+                    super::engine_pick::no_gpu_options().join("\n  ")
                 ),
-                Some("consent.bytes"),
+                Some("model"),
             ));
+        }
+        let mut items: Vec<(String, u64)> = vec![(gguf.id.to_string(), gguf.bytes)];
+        for a in &assets {
+            items.push((a.id(), a.bytes));
+            if let Some(rt) = a.runtime {
+                items.push((rt.dir_name().to_string(), rt.bytes));
+            }
+        }
+        let (total, text) = super::engine_setup::consent_text(gguf.id, p.consent.bytes, &items);
+        if p.consent.bytes != total {
+            return Err(error(ErrorCode::InvalidParams, text, Some("consent.bytes")));
         }
         let base = super::model_base(
             front
@@ -1537,29 +1573,34 @@ impl Hub {
         let (state, projects) = (self.download.clone(), self.projects.clone());
         let front_weak = self.front.get().cloned();
         let models = super::models_root(&dirs.env);
-        let engine_dir = super::engine_install::dir_for(&paths::cache_dir(&dirs.env), asset);
+        let engine_dirs: Vec<PathBuf> = assets
+            .iter()
+            .map(|a| super::engine_install::dir_for(&cache, a))
+            .collect();
         clock::spawn("search:download", async move {
             let held = |have: u64| {
                 if let Ok(mut d) = state.lock() {
                     d.have = have;
                 }
             };
-            let asset_consent = super::Consent {
-                model: asset.id(),
-                bytes: asset.bytes,
-                at: consent.at,
-            };
-            let result = match super::download_gguf(gguf, &models, &base, &held).await {
-                Ok(()) => super::engine_install::install_with(
-                    asset,
-                    &asset_consent,
-                    &engine_dir,
-                    &|have| held(gguf.bytes + have),
-                )
+            let mut result = super::download_gguf(gguf, &models, &base, &held).await;
+            let mut before = gguf.bytes;
+            for (asset, dir) in assets.iter().zip(&engine_dirs) {
+                if result.is_err() {
+                    break;
+                }
+                let asset_consent = super::Consent {
+                    model: asset.id(),
+                    bytes: asset.total_bytes(),
+                    at: consent.at,
+                };
+                result = super::engine_install::install_with(asset, &asset_consent, dir, &|have| {
+                    held(before + have)
+                })
                 .await
-                .map(|_| ()),
-                Err(e) => Err(e),
-            };
+                .map(|_| ());
+                before += asset.total_bytes();
+            }
             if let Ok(mut d) = state.lock() {
                 d.running = false;
                 d.failed = result.as_ref().err().map(|e| format!("{e:?}"));
