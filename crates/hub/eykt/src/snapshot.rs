@@ -1020,7 +1020,7 @@ mod tests {
         let out = crate::proc::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "timeline::snapshot::tests::head_of_in_a_child_without_path",
+                "snapshot::tests::head_of_in_a_child_without_path",
                 "--nocapture",
                 "--test-threads=1",
             ])
