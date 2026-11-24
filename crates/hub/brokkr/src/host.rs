@@ -340,7 +340,7 @@ impl Host {
         left: Duration,
         out: Arc<Mutex<Output>>,
     ) -> Result<Store<State>, CallError> {
-        let hub = tokio::runtime::Handle::try_current()
+        let hub = saman::Handle::current()
             .map_err(|_| CallError::Refused("no runtime to run the call's I/O on".into()))?;
         let limits = StoreLimitsBuilder::new()
             .memory_size(self.limits.memory_bytes)
@@ -371,9 +371,9 @@ impl Host {
         F: FnOnce(Store<State>, Arc<Compiled>) -> Fut,
         Fut: std::future::Future<Output = Result<T, CallError>> + Send + 'static,
     {
-        let until = tokio::time::Instant::now() + deadline;
+        let until = stund::Instant::now() + deadline;
         let permits = self.guest.admit(&p.name, until).await?;
-        let left = until.saturating_duration_since(tokio::time::Instant::now());
+        let left = until.saturating_duration_since(stund::Instant::now());
         if left.is_zero() {
             return Err(CallError::Busy);
         }

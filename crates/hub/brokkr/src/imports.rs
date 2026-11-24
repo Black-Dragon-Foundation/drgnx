@@ -23,7 +23,6 @@ use wasmtime_wasi::filesystem::WasiFilesystemView as _;
 use wasmtime_wasi::p2::bindings::{cli, clocks, filesystem, random};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
-use crate::guest::AbortOnDrop;
 use crate::limits::{
     MAX_BODY_BYTES, MAX_HEADER_VALUE_BYTES, MAX_HEADERS, MAX_KV_KEY_BYTES, MAX_KV_WRITES,
     MAX_LOG_BYTES, MAX_URL_BYTES,
@@ -291,7 +290,7 @@ pub(crate) struct State {
     hosts: Arc<[HostName]>,
     io: Arc<dyn HostIo>,
     /// The caller's runtime, where the hub's HTTP futures run.
-    hub: tokio::runtime::Handle,
+    hub: saman::Handle,
     kv_writes: u32,
     out: Arc<Mutex<Output>>,
 }
@@ -302,7 +301,7 @@ impl State {
         plugin: Arc<str>,
         hosts: Arc<[HostName]>,
         io: Arc<dyn HostIo>,
-        hub: tokio::runtime::Handle,
+        hub: saman::Handle,
         out: Arc<Mutex<Output>>,
     ) -> State {
         // no args, no environment, stdin closed, no preopened directory; only stdout and stderr, into the log
@@ -425,11 +424,15 @@ impl State {
             let why = format!("{target} is not a host this plugin declared");
             // the hub records the denial before the plugin hears of it, on its own runtime like a request
             let (io, plugin, w) = (self.io.clone(), self.plugin.clone(), why.clone());
-            let _ = AbortOnDrop(
+            // a denial cancelled with its call has nothing to report
+            drop(
                 self.hub
-                    .spawn(async move { io.denied(&plugin, &target, &w).await }),
-            )
-            .await;
+                    .spawn(
+                        "denied",
+                        async move { io.denied(&plugin, &target, &w).await },
+                    )
+                    .await,
+            );
             return Err(why);
         }
         let headers = check_headers(headers)?;
@@ -449,7 +452,9 @@ impl State {
         };
         let io = self.io.clone();
         let plugin = self.plugin.clone();
-        let task = AbortOnDrop(self.hub.spawn(async move { io.http(&plugin, req).await }));
+        let task = self
+            .hub
+            .spawn("http", async move { io.http(&plugin, req).await });
         let resp = task
             .await
             .map_err(|e| format!("the request ended: {e}"))??;

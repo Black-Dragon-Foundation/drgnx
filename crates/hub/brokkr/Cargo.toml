@@ -9,19 +9,22 @@ publish = false
 
 [features]
 # `test_support`: the fixture plugins, built at test time (docs/develop/plugins.md); for other crates' tests
-test-support = ["dep:rustix"]
+test-support = ["dep:rustix", "dep:draugr"]
 
 [dependencies]
 eitri = { path = "../eitri", version = "0.1.0" }
 # NAME_NEVER, so a manifest can never name a host the web policy refuses by name
 gleipnir = { path = "../gleipnir", version = "0.1.0" }
+saman.workspace = true
+stund.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true
 sha2.workspace = true
 rustix = { workspace = true, optional = true }
+draugr = { path = "../draugr", version = "0.1.0", optional = true }
 # the host: guests run on a runtime of its own, behind two semaphores
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["sync"] }
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 wasmtime-wasi-io.workspace = true
@@ -36,7 +39,6 @@ required-features = ["test-support"]
 [dev-dependencies]
 rustix.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros"] }
 wat.workspace = true
 skuld = { path = "../skuld", version = "0.1.0" }
 # a_fault_outside_wasm_still_reaches_the_hubs_handler: a handler of the test's own, installed before wasmtime's

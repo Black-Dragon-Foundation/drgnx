@@ -11,15 +11,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio::task::JoinHandle;
-use tokio::time::Instant;
+
+use stund::Instant;
 
 use crate::host::CallError;
 use crate::limits::{CALLER_GRACE, EPOCH_TICK, Limits};
 
 /// The guest runtime, the semaphores and the epoch ticker.
 pub(crate) struct Guest {
-    rt: Option<tokio::runtime::Runtime>,
+    rt: Option<saman::Executor>,
     global: Arc<Semaphore>,
     guest_calls: usize,
     per_plugin: Mutex<HashMap<String, Arc<Semaphore>>>,
@@ -32,34 +32,24 @@ pub(crate) struct Permits {
     _global: OwnedSemaphorePermit,
 }
 
-/// Aborts the task when dropped: a call whose caller went away does not run on.
-pub(crate) struct AbortOnDrop<T>(pub(crate) JoinHandle<T>);
-
-impl<T> Drop for AbortOnDrop<T> {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 impl Guest {
     pub(crate) fn new(limits: &Limits, engine: &wasmtime::Engine) -> std::io::Result<Guest> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(limits.guest_calls.max(1))
-            .thread_name("brokkr-guest")
-            .enable_time()
-            .build()?;
+        let rt = saman::Executor::tuned(limits.guest_calls, |b| {
+            b.thread_name("brokkr-guest");
+        })
+        .map_err(std::io::Error::other)?;
         let weak = engine.weak();
         // Ends once the host and every store are gone, so a guest still running after its host was dropped is still
         // stopped at its deadline.
-        std::thread::Builder::new()
-            .name("brokkr-epoch".into())
-            .spawn(move || {
-                while let Some(engine) = weak.upgrade() {
-                    engine.increment_epoch();
-                    drop(engine);
-                    std::thread::sleep(EPOCH_TICK);
-                }
-            })?;
+        // the ticker keeps real time whatever clock a test installs: a guest's epoch deadline is a real one
+        saman::spawn_thread("brokkr-epoch", move || {
+            while let Some(engine) = weak.upgrade() {
+                engine.increment_epoch();
+                drop(engine);
+                stund::real::sleep_blocking(EPOCH_TICK);
+            }
+        })
+        .map_err(std::io::Error::other)?;
         Ok(Guest {
             rt: Some(rt),
             global: Arc::new(Semaphore::new(limits.guest_calls)),
@@ -85,14 +75,20 @@ impl Guest {
     /// plugin's comes first, so a plugin's queued calls never hold global permits that other plugins could use.
     pub(crate) async fn admit(&self, plugin: &str, until: Instant) -> Result<Permits, CallError> {
         let one = self.plugin_semaphore(plugin);
-        let plugin = tokio::time::timeout_at(until, one.acquire_owned())
-            .await
-            .map_err(|_| CallError::Busy)?
-            .map_err(|_| CallError::Busy)?;
-        let global = tokio::time::timeout_at(until, self.global.clone().acquire_owned())
-            .await
-            .map_err(|_| CallError::Busy)?
-            .map_err(|_| CallError::Busy)?;
+        let plugin = stund::timeout(
+            until.saturating_duration_since(Instant::now()),
+            one.acquire_owned(),
+        )
+        .await
+        .map_err(|_| CallError::Busy)?
+        .map_err(|_| CallError::Busy)?;
+        let global = stund::timeout(
+            until.saturating_duration_since(Instant::now()),
+            self.global.clone().acquire_owned(),
+        )
+        .await
+        .map_err(|_| CallError::Busy)?
+        .map_err(|_| CallError::Busy)?;
         Ok(Permits {
             _plugin: plugin,
             _global: global,
@@ -117,28 +113,18 @@ impl Guest {
                 "the plugin host is shutting down".into(),
             ));
         };
-        let task = AbortOnDrop(rt.spawn(async move {
+        let task = rt.spawn("guest-call", async move {
             let _permits = permits;
-            match tokio::time::timeout(left, work).await {
+            match stund::timeout(left, work).await {
                 Ok(r) => r,
                 Err(_) => Err(CallError::Timeout),
             }
-        }));
-        match tokio::time::timeout(left + CALLER_GRACE, task).await {
+        });
+        match stund::timeout(left + CALLER_GRACE, task).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => Err(CallError::Trap(format!("the guest's task ended: {e}"))),
             Err(_) => Err(CallError::Timeout),
         }
-    }
-}
-
-impl<T> Future for AbortOnDrop<T> {
-    type Output = Result<T, tokio::task::JoinError>;
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        std::pin::Pin::new(&mut self.0).poll(cx)
     }
 }
 
