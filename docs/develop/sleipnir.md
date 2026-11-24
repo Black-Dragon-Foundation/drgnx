@@ -767,6 +767,9 @@ does not parse.
 | `finished` | runner → hub | the attempt's `result.json`: the only source of a verdict |
 | `cancel`, `fetch`, `attach`, `done` | hub → runner | stop the attempt; send a file of it; after a reconnect, stream its log from the hub's offset and its end; the hub has the result, so the attempt's folder may go |
 | `preempting`, `draining`, `idle` | runner → hub | when, since when |
+| `disk` | runner → hub | `forseti::disk::DiskReport`: free and total bytes, what drgnx keeps, the owner's quota, btrfs's unallocated bytes, the use per kind, the items changed since the last report and the ids gone; after `hello-ok` (all items) and after every guard pass |
+| `pins` | hub → runner | `forseti::disk::Pins`: what is in use (active) and what queued jobs and the user keep (pinned); the runner keeps the last in `pins.json` and plans with it while no hub speaks to it |
+| `evict` / `evicted` | hub → runner / back | an eviction order: its number, the item ids, why; each outcome (`Evicted`), with the order's number, or none for the runner's own pass |
 | `ping` / `pong` | both | every 10 s |
 | `bye` | both | a clean end: an EOF without it is `link-lost` |
 
@@ -800,6 +803,31 @@ after 45 s without a frame (the hub pings every 10 s, and so does `serve`). Noth
 connections the runner has its folder and, with linger, the attempts still running in their own units. It is blocking
 and threaded (one thread reads frames, the main loop handles them and ticks every 100 ms); no async runtime.
 
+### The disk guard in serve (`serve::disk`)
+
+`serve` runs the guard (above) on its own register:
+
+- **Before admission.** Below the evict floor an offer starts a pass and is refused with `WaitReason::DiskLow` ("the
+  disk guard is freeing space"); the hub offers again.
+- **Every ten minutes.** `reconcile` (an unknown folder is reported, kept), `measure` for at most 5 s, a pass, then a
+  `disk` report of what changed.
+- **On an order.** `evict` from the hub is planned again on the runner: each item goes through `apply`, which
+  re-checks it (in use, not in the register, unknown) and answers in `evicted` with the order's number.
+- **Alone.** A pass reads the pins the hub sent last (`pins.json`, with when they were learned); a runner the hub
+  hasn't spoken to still meets the floor with them.
+
+A pass runs on a thread of its own (`sleipnir-disk-guard`), so pings go on; orders that arrive meanwhile wait for it.
+An admitted attempt joins the register as a job folder; a checkout as its slot and build dir. `finish` adds
+`disk_gib` (the folder and its build dir, measured) to the result. Admission counts the running jobs' declared need
+they have not used yet (`Offer.disk_unused_gib`).
+
+The owner caps what drgnx keeps on a machine in its `runner.conf`: `[disk] quota_gb = N`
+(`platform::disk_quota_gb`); the hub's quota for the machine, when it sets one, is capped by it
+(`forseti::disk::owners_quota`, the smaller). On a btrfs, `statvfs` can report room the file system cannot allocate,
+so the report carries btrfs's unallocated bytes too: the device sizes under `/sys/fs/btrfs/<uuid>/devices/` less the
+`disk_total` of `allocation/{data,metadata,system}`, for the file system that holds the runner root
+(`/proc/self/mountinfo`, the longest mount point).
+
 ### Platforms (`serve::platform`)
 
 `serve`'s protocol loop never calls the machine itself: everything it asks of it goes through a `Platform`, so one
@@ -813,6 +841,7 @@ cgroups and PSI); `DarwinPlatform` is a Mac's ("A Mac runner", above). What a pl
 | attempts | `launch`, `active`, `kill` | `job.json`, `sleipnir job-exec` in a transient unit; `podman kill` |
 | caps | `current_mib`, `pause`, `unpause`, `grow_candidate`, `resize`, `weight_unit`, `set_weight` | the job slice's cgroup, `linux::resize` |
 | cleanup | `cleanup` | containers, units, attempt folders, bundles (`serve::cleanup`) |
+| disk | `df`, `btrfs_unallocated`, `disk_quota_gb` | `statvfs` of the root (with `test-hooks`, the facts file's disk); `/sys/fs/btrfs`; `runner.conf`'s `[disk] quota_gb` |
 
 A platform that has no pause, grow or CPU weights says so (`grow_candidate` and `weight_unit` answer none), and the
 loop skips them. The rows in `serve/platform_tests.rs` run the loop on a fake platform: hello and probe answer from

@@ -333,6 +333,35 @@ pub fn classes(items: &[DiskItem], now: u64, pins: &Pins, r: &DiskRules) -> Vec<
         .collect()
 }
 
+/// The owner's cap on a machine, GB: the smaller of the machine's own (`runner.conf` `[disk] quota_gb`) and the hub's,
+/// so the hub's value can lower it but never raise it; none when neither is set.
+pub fn owners_quota(machine_gb: Option<u64>, hub_gb: Option<u64>) -> Option<u64> {
+    match (machine_gb, hub_gb) {
+        (Some(m), Some(h)) => Some(m.min(h)),
+        (m, h) => m.or(h),
+    }
+}
+
+/// A runner's disk report (`Frame::Disk`; the laptop's local runner builds it in-process): free and total bytes of its
+/// folder's filesystem, the bytes drgnx keeps there, the owner's quota (bytes), btrfs's unallocated bytes where the
+/// filesystem is btrfs, the use per kind, and the items changed or gone since its last report.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DiskReport {
+    pub free: u64,
+    pub total: u64,
+    pub ours: u64,
+    #[serde(default)]
+    pub quota: Option<u64>,
+    #[serde(default)]
+    pub btrfs_unallocated: Option<u64>,
+    #[serde(default)]
+    pub classes: Vec<ClassUse>,
+    #[serde(default)]
+    pub changed: Vec<DiskItem>,
+    #[serde(default)]
+    pub gone: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

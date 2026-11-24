@@ -36,6 +36,8 @@ pub struct LinuxPlatform {
     features: Vec<(String, podman::Feature)>,
     /// The projects its own `runner.conf` lets use `/dev/kvm`.
     kvm_projects: Vec<String>,
+    /// The owner's disk cap its own `runner.conf` sets, GB (`[disk] quota_gb`).
+    disk_quota_gb: Option<u64>,
     /// The timing slice's partition fallback was said (once per runner).
     partition_said: AtomicBool,
 }
@@ -50,6 +52,7 @@ impl LinuxPlatform {
             cfg.profile,
         )
         .map_err(|e| villa::Error::unavailable(format!("the probe: {e}")))?;
+        let conf = crate::fsio::read_to_string(cfg.root.join("runner.conf")).unwrap_or_default();
         Ok(LinuxPlatform {
             probe,
             prefix: cfg.prefix.clone(),
@@ -65,9 +68,8 @@ impl LinuxPlatform {
                     Some((p.to_string(), podman::Feature::parse(f)?))
                 })
                 .collect(),
-            kvm_projects: crate::fsio::read_to_string(cfg.root.join("runner.conf"))
-                .map(|t| podman::kvm_projects(&t))
-                .unwrap_or_default(),
+            kvm_projects: podman::kvm_projects(&conf),
+            disk_quota_gb: super::disk_quota_gb(&conf),
             exe: exe.to_path_buf(),
             partition_said: AtomicBool::new(false),
         })
@@ -85,6 +87,7 @@ impl LinuxPlatform {
             hub_id: "hubA".into(),
             exe: PathBuf::from("/nonexistent/sleipnir"),
             kvm_projects: vec![],
+            disk_quota_gb: None,
             features: vec![],
             partition_said: AtomicBool::new(false),
         }
@@ -510,6 +513,92 @@ impl Platform for LinuxPlatform {
         };
         cleanup::apply(root, &cleanup::plan(owner, &seen));
     }
+
+    fn df(&self, root: &Path) -> io::Result<crate::sync::guard::Df> {
+        // a test build's facts file sets the disk the guard sees, as it does the machine's
+        #[cfg(feature = "test-hooks")]
+        if self.probe.folder.join(probe::TEST_MACHINE).exists() {
+            let d = self.probe.disk_seen()?;
+            let gb = crate::sync::guard::GB;
+            return Ok(crate::sync::guard::Df {
+                total: d.size_gb.saturating_mul(gb),
+                avail: d.free_gb.saturating_mul(gb),
+            });
+        }
+        crate::sync::guard::df(root)
+    }
+
+    fn btrfs_unallocated(&self, root: &Path) -> Option<u64> {
+        let mountinfo = crate::fsio::read_to_string("/proc/self/mountinfo").ok()?;
+        let (fstype, source) = mount_of(&mountinfo, root)?;
+        if fstype != "btrfs" {
+            return None;
+        }
+        // a mapper name (`/dev/mapper/luks-…`) is a link to its `dm-N`, which sysfs lists
+        let dev = fs::canonicalize(&source).unwrap_or_else(|_| PathBuf::from(&source));
+        let name = dev.file_name()?.to_str()?;
+        unallocated(Path::new("/sys/fs/btrfs"), name)
+    }
+
+    fn disk_quota_gb(&self) -> Option<u64> {
+        self.disk_quota_gb
+    }
+}
+
+/// The file system type and source of the mount FOLDER is on, from MOUNTINFO (`/proc/self/mountinfo`): the longest
+/// mount point that holds it.
+pub(in crate::serve) fn mount_of(mountinfo: &str, folder: &Path) -> Option<(String, String)> {
+    let mut best: Option<(usize, String, String)> = None;
+    for line in mountinfo.lines() {
+        let Some((left, right)) = line.split_once(" - ") else {
+            continue;
+        };
+        let mut r = right.split(' ');
+        let (Some(point), Some(fstype), Some(source)) =
+            (left.split(' ').nth(4), r.next(), r.next())
+        else {
+            continue;
+        };
+        // mountinfo escapes a space and the like as octal
+        let point = point.replace("\\040", " ");
+        if folder.starts_with(&point) && best.as_ref().is_none_or(|(n, _, _)| point.len() > *n) {
+            best = Some((point.len(), fstype.to_string(), source.to_string()));
+        }
+    }
+    best.map(|(_, t, s)| (t, s))
+}
+
+/// The bytes no chunk holds yet on the btrfs whose device is DEV (a name under `/sys/class/block`), from sysfs at
+/// BTRFS (`/sys/fs/btrfs`): the devices' sizes less what each allocation class takes on disk (`disk_total`).
+pub(in crate::serve) fn unallocated(btrfs: &Path, dev: &str) -> Option<u64> {
+    let read =
+        |p: PathBuf| -> Option<u64> { crate::fsio::read_to_string(p).ok()?.trim().parse().ok() };
+    for fs_dir in fs::read_dir(btrfs).ok()?.flatten() {
+        let devices = fs_dir.path().join("devices");
+        if !devices.join(dev).exists() {
+            continue;
+        }
+        let mut size = 0u64;
+        for d in fs::read_dir(&devices).ok()?.flatten() {
+            // a block device's size is in 512-byte sectors
+            size = size.saturating_add(read(d.path().join("size"))?.saturating_mul(512));
+        }
+        let mut taken = 0u64;
+        for class in ["data", "metadata", "system"] {
+            taken = taken.saturating_add(
+                read(
+                    fs_dir
+                        .path()
+                        .join("allocation")
+                        .join(class)
+                        .join("disk_total"),
+                )
+                .unwrap_or(0),
+            );
+        }
+        return Some(size.saturating_sub(taken));
+    }
+    None
 }
 
 /// A networked job's relay as its `job.json` names it: the sidecar ([`podman::JobNet`]) and the sidecar's `podman`

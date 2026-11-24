@@ -90,6 +90,37 @@ mod tests {
         })
     }
 
+    /// A disk report with every field filled.
+    fn disk_report() -> forseti::disk::DiskReport {
+        use forseti::disk::{ClassUse, DiskItem, DiskReport, ItemKind};
+        DiskReport {
+            free: 90 << 30,
+            total: 1 << 40,
+            ours: 30 << 30,
+            quota: Some(200_000_000_000),
+            btrfs_unallocated: Some(7 << 30),
+            classes: vec![ClassUse {
+                kind: ItemKind::BuildDir,
+                items: 1,
+                bytes: 5 << 30,
+                evictable_bytes: 5 << 30,
+            }],
+            changed: vec![DiskItem {
+                id: "build:s1".into(),
+                kind: ItemKind::BuildDir,
+                owner: "p".into(),
+                machine: String::new(),
+                bytes: 5 << 30,
+                last_used: 100,
+                created: 50,
+                name: None,
+                budget_bytes: Some(1 << 30),
+                trust: forseti::JobTrust::Private,
+            }],
+            gone: vec!["slot:old".into()],
+        }
+    }
+
     /// One of every frame, with its fields filled.
     fn every_frame() -> Vec<Frame> {
         let grant = Grant {
@@ -267,6 +298,40 @@ mod tests {
             Frame::Preempting { at: 5 },
             Frame::Draining,
             Frame::Idle { since: 6 },
+            Frame::Disk(disk_report()),
+            Frame::Pins {
+                pins: forseti::disk::Pins {
+                    active: ["slot:s1".to_string()].into(),
+                    pinned: ["artifacts/a".to_string()].into(),
+                    learned_at: Some(9),
+                },
+            },
+            Frame::Evict {
+                order: 3,
+                ids: vec!["build:s1".into(), "image:ab12".into()],
+                why: "reclaim".into(),
+            },
+            Frame::Evicted {
+                order: Some(3),
+                done: vec![
+                    forseti::disk::Evicted {
+                        id: "build:s1".into(),
+                        kind: forseti::disk::ItemKind::BuildDir,
+                        bytes: 5 << 30,
+                        why: forseti::disk::Why::Ordered("reclaim".into()),
+                        at: 10,
+                        refused: None,
+                    },
+                    forseti::disk::Evicted {
+                        id: "image:ab12".into(),
+                        kind: forseti::disk::ItemKind::Image,
+                        bytes: 1 << 30,
+                        why: forseti::disk::Why::Floor,
+                        at: 11,
+                        refused: Some("in use".into()),
+                    },
+                ],
+            },
             Frame::Ping { at: 7 },
             Frame::Pong { at: 8 },
             Frame::Bye { why: "done".into() },

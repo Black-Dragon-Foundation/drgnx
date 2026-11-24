@@ -168,4 +168,52 @@ mod tests {
         crate::fsio::write(jobs.join("b2.1").join(DISK_START), "4999").unwrap();
         assert_eq!(grew_most(t.path()), Some(a));
     }
+
+    /// [D] §4.8: below the stop floor (20 GB free; the runner folder's facts file sets the disk) the job that grew most
+    /// is stopped with `infra: disk`, the others are not; at 21 GB free nothing is stopped.
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    fn below_the_stop_floor_the_job_that_grew_most_is_stopped_as_infra_disk() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        let probe = Probe {
+            name: "runner".into(),
+            proc_root: root.join("proc"),
+            sys_root: root.join("sys"),
+            manager: root.join("manager"),
+            runtime_dir: root.join("run"),
+            folder: root.to_path_buf(),
+            slice_root: "t".into(),
+            scheduler: "drgnx-hubA".into(),
+            profile: forseti::Profile::Dedicated,
+        };
+        let mk = |n: &str, add: usize| {
+            let d = root.join("jobs").join(n);
+            fs::create_dir_all(&d).unwrap();
+            crate::fsio::write(d.join(DISK_START), "0").unwrap();
+            crate::fsio::write(d.join("out"), vec![1u8; add]).unwrap();
+            d
+        };
+        let small = mk("a1.1", 10);
+        let big = mk("b2.1", 9000);
+        let free = |gb: u64| {
+            crate::fsio::write(
+                root.join(crate::linux::probe::TEST_MACHINE),
+                format!(r#"{{"disk_free_gb": {gb}, "disk_total_gb": 1000}}"#),
+            )
+            .unwrap()
+        };
+        free(21);
+        assert!(!check(&probe, root, &big, None), "above the floor");
+        assert!(!big.join(KILL_REASON).exists());
+        free(19);
+        assert!(
+            !check(&probe, root, &small, None),
+            "not the one that grew most"
+        );
+        assert!(check(&probe, root, &big, None));
+        let reason = crate::fsio::read_to_string(big.join(KILL_REASON)).unwrap();
+        assert_eq!(reason.trim(), format!("infra: {}", infra::DISK));
+        assert!(!small.join(KILL_REASON).exists());
+    }
 }

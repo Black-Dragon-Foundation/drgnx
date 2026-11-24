@@ -24,7 +24,27 @@ pub use darwin::DarwinPlatform;
 #[cfg(target_os = "linux")]
 pub use linux::LinuxPlatform;
 #[cfg(all(test, target_os = "linux"))]
-pub(in crate::serve) use linux::{job_caps, net_helper};
+pub(in crate::serve) use linux::{job_caps, mount_of, net_helper, unallocated};
+
+/// The owner's disk cap a runner's own config sets, GB: the `quota_gb = N` line under `[disk]` of its `runner.conf`.
+/// Only that one shape is read (a TOML subset); anything else is ignored. The hub's value can lower it, never raise it
+/// ([`forseti::disk::owners_quota`]).
+pub fn disk_quota_gb(text: &str) -> Option<u64> {
+    let mut in_disk = false;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_disk = line == "[disk]";
+        } else if in_disk
+            && let Some(v) = line
+                .strip_prefix("quota_gb")
+                .map(str::trim_start)
+                .and_then(|r| r.strip_prefix('='))
+        {
+            return v.trim().parse().ok();
+        }
+    }
+    None
+}
 
 /// An attempt to start, as `serve` hands it to [`Platform::launch`]: its folder and record, the source it runs on,
 /// and what the hub's `start` said.
@@ -100,5 +120,17 @@ pub trait Platform {
     /// The island on (its CPU list: timing jobs there, work on the rest) or off (work on every CPU again).
     fn island(&self, _on: Option<&str>) -> villa::Result<()> {
         Ok(())
+    }
+    /// The runner folder ROOT's filesystem, as the disk guard reads it (`statvfs`).
+    fn df(&self, root: &Path) -> io::Result<crate::sync::guard::Df> {
+        crate::sync::guard::df(root)
+    }
+    /// The unallocated bytes of ROOT's filesystem when it is btrfs (sysfs, no root); none otherwise.
+    fn btrfs_unallocated(&self, _root: &Path) -> Option<u64> {
+        None
+    }
+    /// The machine owner's cap on what drgnx keeps here, GB (`runner.conf` `[disk] quota_gb`); none: no cap of its own.
+    fn disk_quota_gb(&self) -> Option<u64> {
+        None
     }
 }

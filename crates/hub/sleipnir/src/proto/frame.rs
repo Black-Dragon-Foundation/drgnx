@@ -528,6 +528,34 @@ pub enum Frame {
         since: u64,
     },
 
+    // ---- the disk (editing-model design §4.8; `docs/develop/sleipnir.md`, "The disk guard")
+    /// runner → hub: its disk and the register's items changed or gone since its last report (at hello, every 10 min,
+    /// after a guard pass).
+    Disk(forseti::disk::DiskReport),
+    /// hub → runner: what to keep (in use, and pinned), on hello and at every change; the runner keeps the last ones
+    /// it had while the hub is away.
+    Pins {
+        #[serde(default)]
+        pins: forseti::disk::Pins,
+    },
+    /// hub → runner: remove these items of the register (order ORDER, for WHY); each is re-checked first.
+    Evict {
+        #[serde(default)]
+        order: u64,
+        #[serde(default)]
+        ids: Vec<String>,
+        #[serde(default)]
+        why: String,
+    },
+    /// runner → hub: what a guard pass removed or kept, each with its reason (ORDER: the hub's order it answers; none:
+    /// the runner's own pass).
+    Evicted {
+        #[serde(default)]
+        order: Option<u64>,
+        #[serde(default)]
+        done: Vec<forseti::disk::Evicted>,
+    },
+
     // ---- keep-alive and end
     Ping {
         #[serde(default)]

@@ -6,6 +6,9 @@ use super::*;
 use crate::linux::reserve::Reservations;
 use crate::linux::resize;
 use crate::proto::{Facts, Missing};
+use crate::sync::guard::{Df, GB, Why};
+use crate::sync::register::Register;
+use forseti::disk::{DiskItem, ItemKind};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -19,6 +22,11 @@ struct Calls {
     islands: Vec<Option<String>>,
     /// Each launched attempt's environment.
     envs: Vec<Vec<(String, String)>>,
+    /// The runner folder's free bytes the fake's `df` says, of 1000 GB: one reading each, the last for good (none:
+    /// 500 GB).
+    disk_free: std::collections::VecDeque<u64>,
+    /// Its `runner.conf`'s disk cap, GB.
+    quota_gb: Option<u64>,
 }
 
 struct Fake {
@@ -149,6 +157,24 @@ impl Platform for Fake {
     }
     fn pressure(&self) -> Option<Level> {
         self.pressure.get()
+    }
+    fn df(&self, _root: &Path) -> io::Result<Df> {
+        let mut c = self.calls.borrow_mut();
+        let avail = if c.disk_free.len() > 1 {
+            c.disk_free.pop_front()
+        } else {
+            c.disk_free.front().copied()
+        };
+        Ok(Df {
+            total: 1000 * GB,
+            avail: avail.unwrap_or(500 * GB),
+        })
+    }
+    fn btrfs_unallocated(&self, _root: &Path) -> Option<u64> {
+        Some(3 * GB)
+    }
+    fn disk_quota_gb(&self) -> Option<u64> {
+        self.calls.borrow().quota_gb
     }
 }
 
@@ -572,4 +598,258 @@ fn a_restart_restores_the_work_slices_cpus() {
     up.borrow_mut().clear();
     let (_s2, _, calls2, _) = serve_island(d.path(), "0-5,12-17");
     assert_eq!(calls2.borrow().islands, vec![None]);
+}
+
+/// Item REL of KIND, last used at LAST_USED (epoch seconds), made under the runner folder of D and registered.
+fn put(d: &Path, rel: &str, kind: ItemKind, last_used: u64) {
+    let root = d.join("root");
+    fs::create_dir_all(root.join(rel)).unwrap();
+    crate::fsio::write(root.join(rel).join("f"), b"bytes").unwrap();
+    let item = DiskItem {
+        id: rel.into(),
+        kind,
+        owner: "p".into(),
+        machine: String::new(),
+        bytes: GB,
+        last_used,
+        created: last_used,
+        name: None,
+        budget_bytes: None,
+        trust: forseti::JobTrust::Private,
+    };
+    Register::open(&root)
+        .unwrap()
+        .add(item, Path::new(rel))
+        .unwrap();
+}
+
+fn hello(s: &mut Serve<Out>) {
+    s.handle(Frame::Hello {
+        version: PROTO_VERSION,
+        hub_id: "hubA".into(),
+    });
+}
+
+/// [D] §4.8: below the evict floor the guard runs before an admission (the old artifact goes, then the job is
+/// admitted), and from the loop's tick every ten minutes; the admitted job's folder is in use and stays.
+#[test]
+fn serve_runs_the_guard_before_admission_and_every_ten_minutes() {
+    let clock = stund::Manual::default();
+    clock.advance(Duration::from_secs(3600));
+    let _clock = clock.on_this_thread();
+    let d = tempfile::tempdir().unwrap();
+    let (mut s, out, calls, _) = serve(d.path());
+    hello(&mut s);
+    out.take();
+    let root = d.path().join("root");
+    put(d.path(), "artifacts/old", ItemKind::Artifact, 0);
+    calls.borrow_mut().disk_free = [50 * GB].into();
+    offer(&mut s);
+    let frames = out.take();
+    assert!(!root.join("artifacts/old").exists(), "the pass ran first");
+    assert!(
+        frames
+            .iter()
+            .any(|f| matches!(f, Frame::Evicted { order: None, done }
+            if done.iter().any(|e| e.id == "artifacts/old" && e.refused.is_none()))),
+        "{frames:?}"
+    );
+    assert!(
+        matches!(frames.last(), Some(Frame::Admit { .. })),
+        "{frames:?}"
+    );
+    // the timer: not before ten minutes, then a pass
+    put(d.path(), "artifacts/older", ItemKind::Artifact, 0);
+    assert!(s.tick() == Next::Go);
+    assert!(
+        root.join("artifacts/older").exists(),
+        "not before ten minutes"
+    );
+    let base = s.disk.last_pass;
+    s.disk.last_pass = base - CLEANUP_EVERY;
+    assert!(s.tick() == Next::Go);
+    assert!(!root.join("artifacts/older").exists(), "the timer's pass");
+    // the admitted attempt's folder is the hub's until it is collected
+    assert!(attempts::dir(&root, "j1", 1).exists());
+    let reg = Register::open(&root).unwrap();
+    assert!(reg.get("jobs/j1.1").is_some(), "registered at admission");
+}
+
+/// [D] RF2: a `serve` the hub hasn't spoken to keeps the pins the hub sent last (written down), and its pass stops
+/// once the floor is met: the oldest unpinned item goes, the pinned one and the rest stay.
+#[test]
+fn without_the_hub_the_guard_keeps_the_last_pins_and_meets_the_floor() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut a, _, _, _) = serve(d.path());
+    hello(&mut a);
+    a.handle(Frame::Pins {
+        pins: forseti::disk::Pins {
+            active: Default::default(),
+            pinned: ["artifacts/keep".to_string()].into(),
+            learned_at: None,
+        },
+    });
+    drop(a);
+    put(d.path(), "artifacts/keep", ItemKind::Artifact, 0);
+    put(d.path(), "artifacts/a", ItemKind::Artifact, 1);
+    put(d.path(), "artifacts/b", ItemKind::Artifact, 2);
+    let (mut b, _, calls, _) = serve(d.path());
+    assert!(b.disk.pins.pinned.contains("artifacts/keep"));
+    assert!(b.disk.pins.learned_at.is_some());
+    // the plan's reading, the first eviction's, then the floor is met
+    calls.borrow_mut().disk_free = [50 * GB, 50 * GB, 90 * GB].into();
+    assert!(b.guard_pass(None) == Next::Go);
+    let root = d.path().join("root");
+    assert!(!root.join("artifacts/a").exists());
+    assert!(root.join("artifacts/b").exists(), "the floor was met");
+    assert!(root.join("artifacts/keep").exists(), "pinned");
+}
+
+/// [D] The `disk` frame at hello carries the disk (free, total, the quota, btrfs's unallocated), the use per kind and
+/// every item; the next carries only what changed or went.
+#[test]
+fn the_disk_report_carries_classes_and_changed_items() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut s, out, calls, _) = serve(d.path());
+    calls.borrow_mut().quota_gb = Some(100);
+    put(d.path(), "artifacts/x", ItemKind::Artifact, 0);
+    put(d.path(), "outputs/y", ItemKind::Output, 0);
+    hello(&mut s);
+    let report = |frames: Vec<Frame>| {
+        frames
+            .into_iter()
+            .find_map(|f| match f {
+                Frame::Disk(r) => Some(r),
+                _ => None,
+            })
+            .expect("a disk frame")
+    };
+    let r = report(out.take());
+    assert_eq!((r.free, r.total), (500 * GB, 1000 * GB));
+    assert_eq!(r.quota, Some(100 * GB));
+    assert_eq!(r.btrfs_unallocated, Some(3 * GB));
+    assert_eq!(r.ours, 2 * GB);
+    let kinds: Vec<(ItemKind, u32, u64)> = r
+        .classes
+        .iter()
+        .map(|c| (c.kind, c.items, c.evictable_bytes))
+        .collect();
+    assert_eq!(
+        kinds,
+        [(ItemKind::Output, 1, GB), (ItemKind::Artifact, 1, GB)]
+    );
+    let mut ids: Vec<&str> = r.changed.iter().map(|i| i.id.as_str()).collect();
+    ids.sort();
+    assert_eq!(ids, ["artifacts/x", "outputs/y"]);
+    assert!(r.gone.is_empty());
+    // one gone, one new: the next report names those only
+    let root = d.path().join("root");
+    Register::open(&root)
+        .unwrap()
+        .remove("artifacts/x")
+        .unwrap();
+    put(d.path(), "artifacts/z", ItemKind::Artifact, 0);
+    assert!(s.disk_report() == Next::Go);
+    let r = report(out.take());
+    let ids: Vec<&str> = r.changed.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(ids, ["artifacts/z"]);
+    assert_eq!(r.gone, ["artifacts/x"]);
+}
+
+/// [D] The owner's cap: `runner.conf`'s `[disk] quota_gb`, which the hub's value can lower and never raise.
+#[test]
+fn the_runner_conf_quota_caps_the_hubs() {
+    use forseti::disk::owners_quota;
+    let conf = "[features]\nkvm = [\"p\"]\n\n[disk]\nquota_gb = 200\n";
+    assert_eq!(super::platform::disk_quota_gb(conf), Some(200));
+    assert_eq!(
+        super::platform::disk_quota_gb("[features]\nquota_gb = 5\n"),
+        None
+    );
+    assert_eq!(
+        super::platform::disk_quota_gb("[disk]\nquota_gb = lots\n"),
+        None
+    );
+    assert_eq!(owners_quota(Some(200), Some(500)), Some(200));
+    assert_eq!(owners_quota(Some(200), Some(100)), Some(100));
+    assert_eq!(owners_quota(None, Some(100)), Some(100));
+    assert_eq!(owners_quota(Some(200), None), Some(200));
+    assert_eq!(owners_quota(None, None), None);
+    // the runner's own passes keep its cap
+    let d = tempfile::tempdir().unwrap();
+    let (s, _, calls, _) = serve(d.path());
+    calls.borrow_mut().quota_gb = Some(200);
+    assert_eq!(s.disk_rules().quota_gb, Some(200));
+}
+
+/// [D] The hub's order: each item re-checked before it goes; a live attempt's folder and an item the register doesn't
+/// hold are kept, and the answer names the order and every refusal.
+#[test]
+fn an_order_from_the_hub_is_rechecked_and_answered() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut s, out, _, _) = serve(d.path());
+    hello(&mut s);
+    offer(&mut s);
+    out.take();
+    put(d.path(), "artifacts/a", ItemKind::Artifact, 0);
+    s.handle(Frame::Evict {
+        order: 7,
+        ids: vec!["artifacts/a".into(), "jobs/j1.1".into(), "nope".into()],
+        why: "reclaim".into(),
+    });
+    let frames = out.take();
+    let Some(Frame::Evicted { order, done }) =
+        frames.iter().find(|f| matches!(f, Frame::Evicted { .. }))
+    else {
+        panic!("no answer: {frames:?}");
+    };
+    assert_eq!(*order, Some(7));
+    let got: Vec<(&str, Option<&str>)> = done
+        .iter()
+        .map(|e| (e.id.as_str(), e.refused.as_deref()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("artifacts/a", None),
+            ("jobs/j1.1", Some("in use")),
+            ("nope", Some("not in the disk register")),
+        ]
+    );
+    assert!(done.iter().all(|e| e.why == Why::Ordered("reclaim".into())));
+    let root = d.path().join("root");
+    assert!(!root.join("artifacts/a").exists());
+    assert!(attempts::dir(&root, "j1", 1).exists());
+}
+
+/// [D] btrfs's unallocated bytes from sysfs: the devices' sizes (512-byte sectors) less each class's `disk_total`, for
+/// the file system the runner folder's mount names (the longest mount point that holds it).
+#[cfg(target_os = "linux")]
+#[test]
+fn btrfs_unallocated_is_read_from_sysfs() {
+    use super::platform::{mount_of, unallocated};
+    let mountinfo = "22 1 0:21 / / rw - ext4 /dev/sda1 rw\n\
+                     40 22 0:35 / /srv rw,relatime shared:1 - btrfs /dev/mapper/luks-1 rw\n";
+    assert_eq!(
+        mount_of(mountinfo, Path::new("/srv/runner")),
+        Some(("btrfs".into(), "/dev/mapper/luks-1".into()))
+    );
+    assert_eq!(
+        mount_of(mountinfo, Path::new("/var/x")),
+        Some(("ext4".into(), "/dev/sda1".into()))
+    );
+    let t = tempfile::tempdir().unwrap();
+    let fsd = t.path().join("0f1e-uuid");
+    fs::create_dir_all(fsd.join("devices/dm-0")).unwrap();
+    crate::fsio::write(fsd.join("devices/dm-0/size"), "2000\n").unwrap();
+    for (class, n) in [("data", 500_000), ("metadata", 20_000), ("system", 4000)] {
+        fs::create_dir_all(fsd.join("allocation").join(class)).unwrap();
+        crate::fsio::write(
+            fsd.join("allocation").join(class).join("disk_total"),
+            format!("{n}\n"),
+        )
+        .unwrap();
+    }
+    assert_eq!(unallocated(t.path(), "dm-0"), Some(2000 * 512 - 524_000));
+    assert_eq!(unallocated(t.path(), "sdb"), None);
 }

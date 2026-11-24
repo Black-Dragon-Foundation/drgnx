@@ -60,6 +60,8 @@ pub struct Offer<'a> {
     pub expected: Option<Expected>,
     /// The machine's timing island and the timing job on it (`serve --island`); none: no timing lane.
     pub island: Option<forseti::Island>,
+    /// The running jobs' declared disk need they have not used yet, GiB: admission counts it as taken (§4.8).
+    pub disk_unused_gib: u64,
 }
 
 /// Admits OFFER on the machine of PLATFORM at NOW under LIMITS for SCHEDULER, whose running jobs are OURS and whose
@@ -84,6 +86,7 @@ pub fn admit(
         m.last_start = last.at;
         m.last_start_small = last.small;
         m.island = offer.island.clone();
+        m.disk_unused_gib = offer.disk_unused_gib;
         let budget = forseti::budget(&m, limits);
         let job = Job {
             id: JobId(offer.id.to_string()),
@@ -337,6 +340,7 @@ mod tests {
                     priority: Priority::P3,
                     expected: None,
                     island: None,
+                    disk_unused_gib: 0,
                 };
                 tx.send(admit(
                     &lp(&p2),
@@ -380,6 +384,7 @@ mod tests {
             priority: Priority::P3,
             expected: None,
             island: None,
+            disk_unused_gib: 0,
         };
         let refused = admit(
             &lp(&other),
@@ -434,6 +439,7 @@ mod tests {
             priority: Priority::P3,
             expected: None,
             island: None,
+            disk_unused_gib: 0,
         };
         let grant = admit(
             &lp(&p),
@@ -515,6 +521,7 @@ mod tests {
             priority: Priority::P3,
             expected: None,
             island: None,
+            disk_unused_gib: 0,
         };
         admit(
             &lp(&p),
@@ -596,6 +603,7 @@ mod tests {
             priority: Priority::P3,
             expected: None,
             island: None,
+            disk_unused_gib: 0,
         };
         let facts =
             |json: &str| crate::fsio::write(d.path().join("test-machine.json"), json).unwrap();
