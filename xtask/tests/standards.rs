@@ -155,6 +155,64 @@ fn layer_violation_fails() {
     );
 }
 
+/// A layer row for `reactive` (which depends on nothing) and a dev-dependency of `reactive` on `glitnir`.
+fn reactive_with_dev_dep_on_glitnir(ws: &Path, row: &str) {
+    let manifest = ws.join("crates/reactive/Cargo.toml");
+    let mut text = std::fs::read_to_string(&manifest).unwrap();
+    text.push_str("\n[dev-dependencies]\nglitnir = { path = \"../glitnir\" }\n");
+    std::fs::write(&manifest, text).unwrap();
+    let table = ws.join("standards.toml");
+    let mut text = std::fs::read_to_string(&table).unwrap();
+    text.push_str(row);
+    std::fs::write(&table, text).unwrap();
+}
+
+#[test]
+fn layer_dev_dependency_back_edge_fails_with_dev_true() {
+    let ws = fixture();
+    reactive_with_dev_dep_on_glitnir(
+        ws.path(),
+        "\n[[layer]]\ncrate = \"reactive\"\nmay_not_depend = [\"glitnir\"]\ndev = true\n",
+    );
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    let found = lines(&out, "crates/reactive/Cargo.toml", "[standards/layer]");
+    assert_eq!(found.len(), 1, "{out}");
+    assert!(
+        found[0].contains("`reactive` may not depend on `glitnir`"),
+        "{out}"
+    );
+}
+
+#[test]
+fn layer_ignores_dev_dependencies_without_dev_true() {
+    let ws = fixture();
+    reactive_with_dev_dep_on_glitnir(
+        ws.path(),
+        "\n[[layer]]\ncrate = \"reactive\"\nmay_not_depend = [\"glitnir\"]\n",
+    );
+    let (_, out) = run(ws.path(), &[]);
+    assert!(
+        lines(&out, "crates/reactive/Cargo.toml", "[standards/layer]").is_empty(),
+        "{out}"
+    );
+}
+
+#[test]
+fn layer_row_naming_a_missing_crate_fails() {
+    let ws = fixture();
+    let table = ws.path().join("standards.toml");
+    let mut text = std::fs::read_to_string(&table).unwrap();
+    text.push_str("\n[[layer]]\ncrate = \"ghost\"\nmay_not_depend = [\"glitnir\"]\n");
+    std::fs::write(&table, text).unwrap();
+    let (code, out) = run(ws.path(), &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("[standards/table] [[layer]] `ghost` is not a workspace crate"),
+        "{out}"
+    );
+}
+
 #[test]
 fn cli_out_is_the_only_printer() {
     let ws = fixture();
