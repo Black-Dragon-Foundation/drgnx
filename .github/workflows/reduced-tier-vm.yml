@@ -30,6 +30,10 @@ concurrency:
   group: reduced-tier-vm-${{ github.ref }}
   cancel-in-progress: true
 
+# No incremental data: CI never reuses it, and it adds memory and disk to ratatoskr's build.
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   launch-rows:
     name: Launch rows on the reduced tier (Fedora 45 VM, KVM)
