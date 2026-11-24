@@ -42177,6 +42177,68 @@
       "classes": [
         "user"
       ],
+      "doc": "answer the one-time notice about GPUs beyond the chosen one: use turns drgnx-search-gpus to all, dismiss leaves it; either is stored (drgnx-search-gpus-noticed) so the notice is not shown again for that set; the user's, never an MCP tool's",
+      "name": "search/extra-gpus",
+      "params": {
+        "$defs": {
+          "ExtraGpusChoice": {
+            "description": "What the user answered to the notice about GPUs beyond the chosen one.",
+            "oneOf": [
+              {
+                "const": "use",
+                "description": "Turn `drgnx-search-gpus` to `\"all\"`.",
+                "type": "string"
+              },
+              {
+                "const": "dismiss",
+                "description": "Leave it; the notice is not shown again for this set of GPUs.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/extra-gpus`: the answer to the one-time notice.",
+        "properties": {
+          "answer": {
+            "$ref": "#/$defs/ExtraGpusChoice"
+          }
+        },
+        "required": [
+          "answer"
+        ],
+        "title": "ExtraGpusParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The GPUs the answer was for (none: there was nothing to answer, and nothing changed).",
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          },
+          "gpus": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "gpus",
+          "changed"
+        ],
+        "title": "ExtraGpusAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "rank a folder's file names for a query and send a hub-fed view the best as rows (view-patch); git's list in a repository, a walk that follows no link elsewhere; a newer query of the view stops the old one",
       "name": "search/files",
       "params": {

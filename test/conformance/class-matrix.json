@@ -340,6 +340,7 @@
   "search/typing": ["user"],
   "search/list": ["user"],
   "search/pause": ["user"],
+  "search/extra-gpus": ["user"],
   "search/resume": ["user"],
   "search/stop": ["user"],
   "search/delete": ["user"],

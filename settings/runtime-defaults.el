@@ -134,6 +134,7 @@
  (drgnx-search-gpus nil)
  (drgnx-search-battery-gpu nil)
  (drgnx-search-no-gpu nil)
+ (drgnx-search-gpus-noticed nil)
  (drgnx-search-cpu-limit nil)
  (drgnx-search-memory-limit nil)
  (drgnx-search-vram-limit nil)

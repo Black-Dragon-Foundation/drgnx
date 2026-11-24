@@ -418,6 +418,7 @@ mod tests {
             "search/delete",
             "search/forget-pin",
             "search/pause",
+            "search/extra-gpus",
             "search/resume",
             "search/stop",
         ]);

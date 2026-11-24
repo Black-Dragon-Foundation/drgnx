@@ -16,6 +16,7 @@ mod search_cache;
 mod search_download;
 mod search_engine_pick;
 mod search_eval_sources;
+mod search_extra_gpus;
 mod search_fingerprint;
 mod search_manage;
 mod search_modes_rows;

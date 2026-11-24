@@ -28,6 +28,13 @@ impl Root {
         }
         std::fs::set_permissions(dir.path().join("r"), std::fs::Permissions::from_mode(0o700))
             .unwrap();
+        // the stand-in machine the hub reads for the battery, the load and the disk floor (`search::power::root`): on AC,
+        // quiet, and a disk with room, whatever the build machine's own state (a full desktop disk paused tier 2)
+        let q = dir.path().join("q");
+        std::fs::create_dir_all(q.join("devices/system/cpu")).unwrap();
+        std::fs::write(q.join("devices/system/cpu/online"), "0-3\n").unwrap();
+        std::fs::write(q.join("loadavg"), "0.00 0.00 0.00 1/100 1\n").unwrap();
+        std::fs::write(q.join("statvfs"), "1099511627776 2199023255552\n").unwrap();
         Root { dir }
     }
 
@@ -44,6 +51,7 @@ impl Root {
             ("DRGNX_CONFIG_DIR".into(), p("h/c")),
             ("TMPDIR".into(), p("t")),
             ("RATATOSKR_SUPERVISOR".into(), "none".into()),
+            ("DRGNX_TEST_POWER_ROOT".into(), p("q")),
         ];
         if let Ok(path) = std::env::var("PATH") {
             v.push(("PATH".into(), path));

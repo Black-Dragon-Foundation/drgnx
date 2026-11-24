@@ -1192,6 +1192,7 @@ impl Front {
             | Params::SearchImport(_)
             | Params::SearchList(_)
             | Params::SearchPause(_)
+            | Params::SearchExtraGpus(_)
             | Params::SearchResume(_)
             | Params::SearchStop(_)
             | Params::SearchDelete(_)

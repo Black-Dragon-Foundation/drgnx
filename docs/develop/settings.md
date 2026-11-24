@@ -134,6 +134,7 @@ Which GPUs the local engine pool uses and what it does without one (runtime.md, 
   fastest) or `"ids:CUDA0,ROCm1"`.
 - `drgnx-search-battery-gpu`: on battery, `"pause"` (the default: bulk indexing waits for AC), `"igpu"` (only the
   integrated GPU) or `"dgpu"` (the chosen GPUs).
+- `drgnx-search-gpus-noticed`: the set of extra GPUs the one-time notice was answered for (the hub writes it; see `search/extra-gpus` in hub.md). Not for the user to set.
 - `drgnx-search-no-gpu`: with no usable GPU, `"cpu"`, `"cpu-idle"` (the CPU only while idle) or `"pack"` (vectors from a
   pack or a remote GPU). `nil`: bulk indexing waits for the choice and `doctor` lists the options.
 

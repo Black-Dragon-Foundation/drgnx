@@ -10,6 +10,17 @@ use std::path::Path;
 /// The sysfs root the hub reads.
 pub const SYS: &str = "/sys";
 
+/// The root the hub reads for the battery, the load and the disk floor: [`SYS`], and with `test-hooks` the stand-in
+/// `DRGNX_TEST_POWER_ROOT` names, so a test hub never depends on the build machine (its disk filling past the floor
+/// paused tier 2 in five tests, 2026-11-24).
+pub fn root() -> std::path::PathBuf {
+    #[cfg(feature = "test-hooks")]
+    if let Some(r) = std::env::var_os("DRGNX_TEST_POWER_ROOT") {
+        return std::path::PathBuf::from(r);
+    }
+    std::path::PathBuf::from(SYS)
+}
+
 /// On battery, by this platform's rule. ROOT is the sysfs root. On macOS only [`SYS`] means the machine (`pmset`):
 /// any other ROOT is a test's stand-in sysfs (`--test-power-root`), read by the sysfs rule there too, so the battery
 /// rows hold on a Mac as on Linux.

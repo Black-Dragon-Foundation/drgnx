@@ -430,6 +430,33 @@ fn typing_method_holds_tier2() {
     }
 }
 
+/// Pattern C. The hub tests run on a stand-in machine (`DRGNX_TEST_POWER_ROOT`, `support::Root`), never on the build
+/// machine's own disk, battery or load: a stand-in disk with 1 GB free of 2 TB is under the disk floor, and tier 2 says so.
+/// (A full desktop disk paused tier 2 in five tests at once, 2026-11-24, because the hub read the real one.)
+#[test]
+fn a_full_stand_in_disk_holds_tier2_at_the_disk_floor() {
+    let root = Root::new();
+    std::fs::write(
+        root.dir.path().join("q/statvfs"),
+        "1000000000 2199023255552\n",
+    )
+    .unwrap();
+    let proj = project(&root, "proj");
+    let (_hub, mut c) = ready(&root, 1);
+    let started = call(&mut c, 1, "search/index", json!({"root": proj}));
+    assert_eq!(started["result"]["started"], true, "{started}");
+    let mut id = 1;
+    skuld::wait_until(
+        "tier 2 waits for disk space",
+        FAILED_AFTER.as_secs() * 6,
+        || {
+            id += 1;
+            let s = call(&mut c, id, "search/status", json!({"root": proj}));
+            (s["result"]["tier2"] == "disk-floor").then_some(())
+        },
+    );
+}
+
 /// Pattern C. With the default settings, whose `embed` role names the TEI server at 127.0.0.1:8080 (nothing serves it
 /// in the test's container), tier 2 ends `idle` once the built-in model has every chunk's vector: a server that does
 /// not answer is not one of its embedders, so it neither gets a request nor marks tier 2 failed.

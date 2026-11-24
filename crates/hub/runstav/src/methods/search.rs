@@ -285,6 +285,31 @@ pub struct ManageAnswer {
     pub roots: Vec<RootInfo>,
 }
 
+/// What the user answered to the notice about GPUs beyond the chosen one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ExtraGpusChoice {
+    /// Turn `drgnx-search-gpus` to `"all"`.
+    Use,
+    /// Leave it; the notice is not shown again for this set of GPUs.
+    Dismiss,
+}
+
+/// `search/extra-gpus`: the answer to the one-time notice.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExtraGpusParams {
+    pub answer: ExtraGpusChoice,
+}
+
+/// The GPUs the answer was for (none: there was nothing to answer, and nothing changed).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExtraGpusAnswer {
+    pub gpus: Vec<String>,
+    pub changed: bool,
+}
+
 /// `search/delete`: ROOT's index, once the user CONFIRMed (the CLI asks).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1913,6 +1938,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/pause", SearchPause(ManageParams) -> ManageAnswer,
             classes: [User], writes: true,
             doc: "pause a root's index (or every root's with all): the batch in flight finishes, then tier 2 holds until resume; kept across restarts and changes; the user's, never an MCP tool's",
+        ),
+        method!(
+            "search/extra-gpus", SearchExtraGpus(ExtraGpusParams) -> ExtraGpusAnswer,
+            classes: [User], writes: true,
+            doc: "answer the one-time notice about GPUs beyond the chosen one: use turns drgnx-search-gpus to all, dismiss leaves it; either is stored (drgnx-search-gpus-noticed) so the notice is not shown again for that set; the user's, never an MCP tool's",
         ),
         method!(
             "search/resume", SearchResume(ManageParams) -> ManageAnswer,

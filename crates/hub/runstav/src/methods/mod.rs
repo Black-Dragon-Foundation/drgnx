@@ -478,6 +478,7 @@ params! {
     SearchImport(search::ImportParams),
     SearchList(Empty),
     SearchPause(search::ManageParams),
+    SearchExtraGpus(search::ExtraGpusParams),
     SearchResume(search::ManageParams),
     SearchStop(search::ManageParams),
     SearchDelete(search::DeleteParams),

@@ -186,6 +186,11 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         OnError::Strict,
     ),
     setting("drgnx-search-no-gpu", "Option<String>", OnError::Strict),
+    setting(
+        "drgnx-search-gpus-noticed",
+        "Option<String>",
+        OnError::Strict,
+    ),
     setting("drgnx-search-cpu-limit", "Option<u32>", OnError::Strict),
     setting("drgnx-search-memory-limit", "Option<u64>", OnError::Strict),
     setting("drgnx-search-vram-limit", "Option<u64>", OnError::Strict),
@@ -325,6 +330,8 @@ pub struct RuntimeValues {
     pub search_battery_gpu: Option<String>,
     /// `drgnx-search-no-gpu`: What a machine with no usable GPU does: `cpu`, `cpu-idle` or `pack` (none: bulk indexing waits for the choice).
     pub search_no_gpu: Option<String>,
+    /// `drgnx-search-gpus-noticed`: The set of extra GPUs the one-time notice was answered for (written by the hub when the user uses or dismisses the notice; a different set shows it once more).
+    pub search_gpus_noticed: Option<String>,
     /// `drgnx-search-cpu-limit`: The share of the machine's CPUs the engine may use, in percent (threads and `cpu.max`).
     pub search_cpu_limit: Option<u32>,
     /// `drgnx-search-memory-limit`: The RAM the engine may use, in MiB (`memory.max`).
@@ -620,6 +627,7 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-search-gpus" => values.search_gpus = de(node)?,
         "drgnx-search-battery-gpu" => values.search_battery_gpu = de(node)?,
         "drgnx-search-no-gpu" => values.search_no_gpu = de(node)?,
+        "drgnx-search-gpus-noticed" => values.search_gpus_noticed = de(node)?,
         "drgnx-search-cpu-limit" => values.search_cpu_limit = de(node)?,
         "drgnx-search-memory-limit" => values.search_memory_limit = de(node)?,
         "drgnx-search-vram-limit" => values.search_vram_limit = de(node)?,
@@ -932,6 +940,16 @@ impl Settings {
             .into_iter()
             .chain(projects.iter().filter_map(|p| self.project_value(name, p)))
             .collect()
+    }
+
+    /// The global set of overrides now (empty when the editor never sent one).
+    pub fn global_overrides(&self) -> Vec<overrides::Override> {
+        self.overrides
+            .lock()
+            .expect("settings")
+            .scope(None)
+            .map(<[_]>::to_vec)
+            .unwrap_or_default()
     }
 
     /// `config/settings`: LIST is the whole set of PROJECT (none: global), kept as the last good one.  A name that

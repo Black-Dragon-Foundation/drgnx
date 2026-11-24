@@ -331,19 +331,75 @@ impl Hub {
         let settings = super::engine_setup::EngineSettings::from_values(
             &front.settings.current().loaded.values,
         );
-        let on_battery = super::power::on_battery(std::path::Path::new(super::power::SYS));
+        let on_battery = super::power::on_battery(&super::power::root());
         match self
             .search
             .get()?
             .engine(consented, &settings, on_battery)
             .await
         {
-            Ok(e) => Some((id, e)),
+            Ok(e) => {
+                self.offer_extra_gpus(front);
+                Some((id, e))
+            }
             Err(why) => {
                 tracing::debug!("search: no local engine: {}", why.0);
                 None
             }
         }
+    }
+
+    /// The one-time notice for GPUs beyond the chosen one: sent once per set, never when it was answered.
+    fn offer_extra_gpus(&self, front: &Front) {
+        let Some(search) = self.search.get() else {
+            return;
+        };
+        let answered = front
+            .settings
+            .effective(super::engine_notice::NOTICED, None)
+            .and_then(|(v, _)| v.as_str().map(str::to_owned));
+        if let Some(n) = search
+            .offer()
+            .notice(&search.extra_gpus(), answered.as_deref())
+        {
+            front.broadcast("notice", n);
+        }
+    }
+
+    /// `search/extra-gpus`: the answer to that notice. It is stored in the settings (the global overrides, as the editor's
+    /// own sets are), and the notice is taken away.
+    async fn extra_gpus(
+        &self,
+        front: &Front,
+        p: w::ExtraGpusParams,
+    ) -> Result<w::ExtraGpusAnswer, Error> {
+        use super::engine_notice::{Answer, answer_overrides, clear_notice, gpu_set_key};
+        let extra = self
+            .search
+            .get()
+            .map(|s| s.extra_gpus())
+            .unwrap_or_default();
+        if extra.is_empty() {
+            return Ok(w::ExtraGpusAnswer {
+                gpus: Vec::new(),
+                changed: false,
+            });
+        }
+        let answer = match p.answer {
+            w::ExtraGpusChoice::Use => Answer::Use,
+            w::ExtraGpusChoice::Dismiss => Answer::Dismiss,
+        };
+        let list = answer_overrides(
+            front.settings.global_overrides(),
+            answer,
+            &gpu_set_key(&extra),
+        );
+        front.settings.set_overrides(None, list).await?;
+        front.broadcast("notice", clear_notice());
+        Ok(w::ExtraGpusAnswer {
+            gpus: extra.iter().map(|d| d.id.clone()).collect(),
+            changed: true,
+        })
     }
 
     /// `status.watch`: the inotify budget and each open project's watches.
@@ -578,7 +634,7 @@ impl Hub {
                 config_dir: dirs.config.clone(),
                 config,
                 embedders,
-                power_root: PathBuf::from(power::SYS),
+                power_root: power::root(),
                 base,
                 #[cfg(feature = "test-hooks")]
                 test_permits: None,
@@ -2223,6 +2279,7 @@ pub async fn serve(
         }
         Params::SearchList(_) => hub.list().await.map(|a| json!(a)),
         Params::SearchPause(p) => hub.manage(front, "pause", p).await.map(|a| json!(a)),
+        Params::SearchExtraGpus(p) => hub.extra_gpus(front, p).await.map(|a| json!(a)),
         Params::SearchResume(p) => hub.manage(front, "resume", p).await.map(|a| json!(a)),
         Params::SearchStop(p) => hub.manage(front, "stop", p).await.map(|a| json!(a)),
         Params::SearchDelete(p) => hub.delete(front, p).await.map(|a| json!(a)),

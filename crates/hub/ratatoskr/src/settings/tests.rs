@@ -219,7 +219,7 @@ fn only_runtime_names_decode() {
     // checkout and ignore rules; and a Mac runner's Homebrew packages and toolchains; and the past sessions' switch
     // and their CLIs)
     // (search's include and exclude globs became one setting, the rules: 56 less one; then the vector caches' cap; then the battery rule for the local sources; then the engine's seven: GPUs, battery GPU, no-GPU choice, CPU, memory, VRAM and GPU-busy limits)
-    assert_eq!(RUNTIME_NAMES.len(), 64);
+    assert_eq!(RUNTIME_NAMES.len(), 65);
     assert!(RUNTIME_NAMES.iter().all(|n| {
         n.starts_with("drgnx-agents-")
             || n.starts_with("drgnx-ai-")

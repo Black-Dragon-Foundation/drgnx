@@ -38,6 +38,12 @@ By default the fastest GPU runs. When more usable GPUs exist, `doctor` lists the
 `"all"`, `"top:2"` or `"ids:CUDA0,CUDA1"`. Each runs its own engine on its own device, and batches go to each by its
 measured speed. `CUDA_VISIBLE_DEVICES`, `ROCR_VISIBLE_DEVICES` and `HIP_VISIBLE_DEVICES` are respected.
 
+### The notice for more GPUs
+
+When Hrafn finds usable GPUs beyond the fastest, the editor shows one notice, once for that set of GPUs. It names them and offers
+"use them" (sets `drgnx-search-gpus` to `"all"`) or dismiss. Nothing waits on it, and indexing goes on with the fastest GPU either way.
+Either answer is remembered (`drgnx-search-gpus-noticed`), so it is not shown again; a different set of GPUs (a new card) shows it once more.
+
 ## No GPU, and battery
 
 A machine with no usable GPU waits for your choice (`drgnx-search-no-gpu`): `"pack"` (vectors from a pack or a remote

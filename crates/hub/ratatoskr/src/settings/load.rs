@@ -418,6 +418,9 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
             values.search_battery_gpu = default.search_battery_gpu.clone()
         }
         "drgnx-search-no-gpu" => values.search_no_gpu = default.search_no_gpu.clone(),
+        "drgnx-search-gpus-noticed" => {
+            values.search_gpus_noticed = default.search_gpus_noticed.clone()
+        }
         "drgnx-search-cpu-limit" => values.search_cpu_limit = default.search_cpu_limit,
         "drgnx-search-memory-limit" => values.search_memory_limit = default.search_memory_limit,
         "drgnx-search-vram-limit" => values.search_vram_limit = default.search_vram_limit,

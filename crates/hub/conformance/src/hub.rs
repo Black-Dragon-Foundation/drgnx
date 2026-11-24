@@ -141,8 +141,20 @@ impl Root {
             ("DRGNX_CONFIG_DIR", dir("config")),
             ("TMPDIR", dir("tmp")),
             ("RATATOSKR_SUPERVISOR", "none".to_string()),
+            ("DRGNX_TEST_POWER_ROOT", dir("q")),
         ] {
             vars.insert(k.into(), v);
+        }
+        // the stand-in machine the hub reads for the battery, the load and the disk floor: on AC, quiet, with room,
+        // whatever the build machine's state (a full desktop disk paused tier 2 in the hub tests, 2026-11-24)
+        let q = self.path().join("q");
+        let _ = std::fs::create_dir_all(q.join("devices/system/cpu"));
+        for (f, text) in [
+            ("devices/system/cpu/online", "0-3\n"),
+            ("loadavg", "0.00 0.00 0.00 1/100 1\n"),
+            ("statvfs", "1099511627776 2199023255552\n"),
+        ] {
+            let _ = std::fs::write(q.join(f), text);
         }
         vars.extend(extra);
         vars

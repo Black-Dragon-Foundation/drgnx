@@ -1626,6 +1626,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/embed-retry` | user | `{}` | `boolean` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, chain?: [ChainEntry], prefer?: string, servers: [ServerInfo]}` | no |
 | `search/export` | user | `{all_trees?: boolean, branch?: string, out?: AbsPath, root: AbsPath}` | `{keys: natnum, path: AbsPath, sha256: string, warning: string}` | yes |
+| `search/extra-gpus` | user | `{answer: "use" \| "dismiss"}` | `{changed: boolean, gpus: [string]}` | yes |
 | `search/files` | user | `{exclude?: [string], ignore?: "index" \| "real", n?: natnum, name?: boolean, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/fold` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
 | `search/forget-pin` | user | `{provider: string}` | `boolean` | yes |
@@ -3189,6 +3190,12 @@ Every root's index has a state the user controls, kept in its store's `meta` (`i
   indexed. **Resume**: tier 2 goes on with the keys still missing, nothing done is sent again. **Stop**: tier 2 is
   cancelled now (a request in flight is dropped) and what it wrote stays; the watcher stays on, and the next change
   (tier 1 with files changed) or `search/index` goes on. A root that is not open gets the state written to its store.
+- `search/extra-gpus {answer: "use"|"dismiss"}` → `{gpus, changed}`: the answer to the one-time **extra-GPU notice**. When the engine
+  is resolved and usable GPUs exist beyond the fastest, the hub sends one `notice` event (`id: "search-extra-gpus"`, `life: "condition"`,
+  `severity: "info"`, `command: "search-use-extra-gpus"`, `actions: ["search-dismiss-extra-gpus"]`, the text naming the GPUs) once per run per set of
+  GPUs, unless `drgnx-search-gpus-noticed` already holds that set's key. The two editor commands call this method. Either answer writes
+  `drgnx-search-gpus-noticed` (the set's key) into the global overrides, "use" also writes `drgnx-search-gpus` `"all"`, and the notice is cleared (`clear: true`).
+  A different set of GPUs shows it once more. It is a notice, never a prompt: nothing waits on it. With no extra GPUs known the answer is `{gpus: [], changed: false}` and nothing is written.
 - `search/delete {root, confirm: true}` → `{root, bytes, vectors, packs}`: the project is closed, then its store files,
   its `.drgnx/packs/` and the vectors only it held (`VectorCache::drop_holder`: a key another store holds stays) go;
   `runtime.db`'s `kv` records it (`search.deleted.<id>`: the root, the reason, when, what was freed). `confirm` must be

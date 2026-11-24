@@ -10,6 +10,7 @@ pub mod engine_doctor;
 pub mod engine_hold;
 pub mod engine_install;
 pub mod engine_limits;
+pub mod engine_notice;
 pub mod engine_pick;
 pub mod engine_pool;
 pub mod engine_setup;
@@ -137,6 +138,9 @@ pub struct Search {
     /// The pool and the key of the settings it was built for.
     engine: Mutex<Option<(String, Arc<engine_pool::EnginePool>)>>,
     machine: std::sync::OnceLock<engine_pick::Machine>,
+    /// The usable GPUs beyond the chosen one at the last resolve (the one-time notice offers them).
+    extra: Mutex<Vec<engine_pick::EngineDevice>>,
+    offer: engine_notice::Offer,
 }
 
 impl Search {
@@ -147,7 +151,22 @@ impl Search {
             builtin: Mutex::new(None),
             engine: Mutex::new(None),
             machine: std::sync::OnceLock::new(),
+            extra: Mutex::new(Vec::new()),
+            offer: engine_notice::Offer::new(),
         }
+    }
+
+    /// The usable GPUs beyond the chosen one, as the last resolve found them.
+    pub fn extra_gpus(&self) -> Vec<engine_pick::EngineDevice> {
+        self.extra
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The one-time notice's state for this run.
+    pub fn offer(&self) -> &engine_notice::Offer {
+        &self.offer
     }
 
     /// This machine's GPUs and drivers, read once.
@@ -205,6 +224,11 @@ impl Search {
         for e in &settings.errors {
             tracing::warn!("search: {e}");
         }
+        *self
+            .extra
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            engine_setup::more_gpus(&resolved.plan, &settings.cfg);
         let (members, notes): (
             Vec<(&'static hrafn_embed::EngineAsset, String)>,
             Vec<String>,
@@ -296,7 +320,7 @@ impl Search {
                     device_cache: self.models.join("device.json"),
                     threads: worker::threads(),
                     idle_ms: None,
-                    power_root: PathBuf::from(power::SYS),
+                    power_root: power::root(),
                     test_args: Vec::new(),
                 }))
             })
