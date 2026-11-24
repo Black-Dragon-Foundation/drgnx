@@ -29,12 +29,12 @@ use tokio::sync::mpsc::UnboundedReceiver;
 const WAIT: u64 = 180;
 
 fn ssh_config() -> String {
-    format!("{}/.ssh/config", std::env::var("HOME").unwrap())
+    format!("{}/.ssh/config", std::env::var(stig::HOME_VAR).unwrap())
 }
 
 /// SCRIPT's stdout on RUNNER; panics when it fails.
 fn sh(runner: &str, script: &str) -> String {
-    let out = Command::new("ssh")
+    let out = ratatoskr::proc::Command::new("ssh")
         .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
         .arg(script)
         .output()
@@ -49,7 +49,7 @@ fn sh(runner: &str, script: &str) -> String {
 
 /// Whether SCRIPT succeeds on RUNNER.
 fn ok(runner: &str, script: &str) -> bool {
-    Command::new("ssh")
+    ratatoskr::proc::Command::new("ssh")
         .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
         .arg(script)
         .status()

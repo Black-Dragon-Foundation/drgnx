@@ -167,7 +167,7 @@ impl RunFile {
         let salt = super::runkey::new_salt();
         let mut head = MAGIC.to_vec();
         head.extend_from_slice(&salt);
-        std::fs::write(path, &head)?;
+        crate::fsio::write(path, &head)?;
         let f = RunFile {
             path: path.to_owned(),
             cap,
@@ -229,7 +229,7 @@ impl RunFile {
         }
         let mut meta = meta;
         meta.off = self.size;
-        match std::fs::OpenOptions::new().append(true).open(&self.path) {
+        match crate::fsio::append(&self.path, false) {
             Ok(mut f) => {
                 if let Err(e) = f.write_all(&bytes) {
                     tracing::warn!(target: "drgnx::debug", "run file {}: {e}", self.path.display());
@@ -298,8 +298,8 @@ impl RunFile {
             metas.push(meta);
         }
         let tmp = self.path.with_extension("drun.tmp");
-        if std::fs::write(&tmp, &out)
-            .and_then(|()| std::fs::rename(&tmp, &self.path))
+        if crate::fsio::write(&tmp, &out)
+            .and_then(|()| crate::fsio::rename(&tmp, &self.path))
             .is_err()
         {
             return;
@@ -333,9 +333,7 @@ impl RunFile {
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".drgnx-tmp");
-    let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)
+    crate::fsio::write_via(PathBuf::from(tmp), path, bytes)
 }
 
 /// FRAMES as one block sealed under KEY: its meta (offset OFF) and its bytes (the header and the sealed, compressed

@@ -48,8 +48,8 @@ impl Fx {
         let s = |rel: &str| self.p(rel).to_str().unwrap().to_owned();
         Env::new(
             &[
-                ("HOME", &s("home")),
-                ("XDG_RUNTIME_DIR", &s("run")),
+                (stig::HOME_VAR, &s("home")),
+                (stig::SYSTEM_RUNTIME_VAR, &s("run")),
                 ("TMPDIR", &s("t")),
                 ("PATH", "/usr/bin:/bin"),
             ],
@@ -92,8 +92,8 @@ fn csharp_init() -> Init {
     let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packs/csharp/queries");
     Init::from_manifest(
         m,
-        std::fs::read_to_string(pack.join("chunks.scm")).unwrap(),
-        Some(std::fs::read_to_string(pack.join("tags.scm")).unwrap()),
+        ratatoskr::fsio::read_to_string(pack.join("chunks.scm")).unwrap(),
+        Some(ratatoskr::fsio::read_to_string(pack.join("tags.scm")).unwrap()),
     )
 }
 
@@ -111,7 +111,7 @@ fn spec(pack: &str, grammar: &str, name: &str) -> WorkerSpec {
 #[ignore = "the sandbox lane: a real Gleipnir child"]
 fn the_worker_chunks_inside_the_sandbox_exactly_as_the_in_process_chunker_does() {
     let fx = Fx::new();
-    let text = std::fs::read_to_string(
+    let text = ratatoskr::fsio::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../hrafn/tests/fixtures/langs/Cache.cs"),
     )
     .unwrap();
@@ -154,7 +154,7 @@ struct Bait {
 
 fn bait(fx: &Fx) -> Bait {
     let secret = fx.p("home/secret.txt");
-    std::fs::write(&secret, "do not read me").unwrap();
+    ratatoskr::fsio::write(&secret, "do not read me").unwrap();
     let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let sock = fx.p("run/bait.sock");
     let unix = std::os::unix::net::UnixListener::bind(&sock).unwrap();
@@ -245,7 +245,7 @@ fn leftovers(lib: &Path) -> Vec<PathBuf> {
 
 fn clean(lib: &Path) {
     for p in leftovers(lib) {
-        let _ = std::fs::remove_file(p);
+        ratatoskr::soft::done(std::fs::remove_file(p), "std::fs::remove_file");
     }
 }
 
@@ -282,7 +282,7 @@ fn the_reduced_tier_starts_nothing_and_says_why() {
     let fx = Fx::new();
     let bin = PathBuf::from(BIN);
     let Ok(sb) = Sandbox::detect(Tier::Reduced, ratatoskr::sandbox::helper_at(&bin), None) else {
-        eprintln!("SKIP: no reduced tier here");
+        ratatoskr::soft::err_line("SKIP: no reduced tier here");
         return;
     };
     let l = Sandboxed::new(sb, ratatoskr::sandbox::context(&fx.env()), bin);

@@ -172,8 +172,8 @@ impl Terminals for Procs {
 impl Drop for Procs {
     fn drop(&mut self) {
         for c in self.0.lock().unwrap().iter_mut() {
-            let _ = c.kill();
-            let _ = c.wait();
+            crate::soft::done(c.kill(), "tests_live_adapters");
+            crate::soft::done(c.wait(), "tests_live_adapters");
         }
     }
 }
@@ -231,20 +231,20 @@ fn js_debug() -> Found {
 
 fn live_dir(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("drgnx-live-adapters-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
+    crate::soft::done(std::fs::remove_dir_all(&d), "std::fs::remove_dir_all");
     std::fs::create_dir_all(&d).unwrap();
     std::fs::canonicalize(&d).unwrap()
 }
 
 fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
     let p = dir.join(name);
-    std::fs::write(&p, text).unwrap();
+    crate::fsio::write(&p, text).unwrap();
     p
 }
 
 /// Runs PROGRAM with ARGS in DIR; panics with its output when it fails.
 fn run(dir: &Path, program: &str, args: &[&str]) {
-    let o = std::process::Command::new(program)
+    let o = crate::proc::Command::new(program)
         .args(args)
         .current_dir(dir)
         .output()
@@ -287,7 +287,7 @@ fn int_of(value: &str) -> i64 {
 
 /// Whether PID runs (not gone, a zombie or stopped by a tracer).
 fn running(pid: u32) -> bool {
-    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+    let Ok(stat) = crate::fsio::read_to_string(format!("/proc/{pid}/stat")) else {
         return false;
     };
     let state = stat
@@ -669,7 +669,7 @@ async fn scenario(s: Scn) -> Value {
         }
         assert!(!running(pid), "the debuggee {pid} runs on after Stop");
     }
-    eprintln!("T10-REPORT {report}");
+    crate::soft::err_line(&format!("T10-REPORT {report}"));
     report
 }
 
@@ -718,16 +718,16 @@ async fn attach(
     // it runs on, untraced, for a while
     crate::clock::sleep(Duration::from_millis(500)).await;
     let alive = prog.try_wait().unwrap().is_none() && running(pid);
-    let _ = prog.kill();
-    let _ = prog.wait();
+    crate::soft::done(prog.kill(), "tests_live_adapters");
+    crate::soft::done(prog.wait(), "tests_live_adapters");
     assert!(
         alive,
         "the attached program {pid} did not run on after Stop"
     );
-    eprintln!(
+    crate::soft::err_line(&format!(
         "T10-REPORT {}",
         json!({"adapter": id, "attach": true, "caps": caps})
-    );
+    ));
 }
 
 const PY: &str = r#"import subprocess, sys, os
@@ -1082,13 +1082,13 @@ async fn probes(
     }
     assert!(hits > 0, "{id}: no probe output");
     let per_hit_ms = (times[0].as_secs_f64() - times[1].as_secs_f64()) * 1000.0 / hits as f64;
-    eprintln!(
+    crate::soft::err_line(&format!(
         "T10-PROBES {}",
         json!({"adapter": id, "iterations": PROBES, "hits": hits, "with_ms": times[0].as_millis(),
                "without_ms": times[1].as_millis(), "per_hit_ms": (per_hit_ms * 1000.0).round() / 1000.0,
                "per_s": if per_hit_ms > 0.0 { (1000.0 / per_hit_ms).round() } else { 0.0 },
                "value_text": sample})
-    );
+    ));
 }
 
 const PROBES: u32 = 500;
@@ -1249,11 +1249,11 @@ async fn breaks_on_value_change(id: &'static str, found: Found, ty: &str) {
     let stop = d.stop_of(&sid).unwrap();
     let (count, _, _) = local(&stop, "count");
     assert_eq!(int_of(&count), 1, "the stop after the change: {f}");
-    println!(
+    crate::soft::out_line(&format!(
         "T10-REPORT {}",
         json!({"adapter": id, "data_breakpoint": {"reason": stop.reason, "line": line_of(&f),
                                                   "description": list[0]["description"]}})
-    );
+    ));
     d.control(
         &sid,
         Op::Stop {
@@ -1317,7 +1317,7 @@ async fn debugpy_hot_reloads_a_saved_function() {
     let (c, _) = ev.stop(c).await;
     let x = local(&d.stop_of(&sid).unwrap(), "x").0;
     assert_eq!(int_of(&x), 1);
-    std::fs::write(&lib, "def val():\n    return 2\n").unwrap();
+    crate::fsio::write(&lib, "def val():\n    return 2\n").unwrap();
     let out = super::hot_reload::hot_reload(&d, &sid, &lib.display().to_string())
         .await
         .unwrap();
@@ -1327,7 +1327,7 @@ async fn debugpy_hot_reloads_a_saved_function() {
     let (_, f) = ev.stop(c).await;
     let x = local(&d.stop_of(&sid).unwrap(), "x").0;
     assert_eq!(int_of(&x), 2, "the call after the reload: {f}");
-    println!("T-HOT-RELOAD-REPORT {out}");
+    crate::soft::out_line(&format!("T-HOT-RELOAD-REPORT {out}"));
     d.control(
         &sid,
         Op::Stop {
@@ -1391,11 +1391,11 @@ async fn heap_graph(
     let ident = super::heap::Ident::of(&ty);
     let t0 = crate::clock::now();
     let g = super::heap::walk(&probe, ident, roots, super::heap::Limits::default()).await;
-    eprintln!(
+    crate::soft::err_line(&format!(
         "HEAP-GRAPH {}",
         json!({"adapter": id, "ident": format!("{ident:?}"), "nodes": g.nodes.len(), "cut": g.cut,
                "ms": t0.elapsed().as_millis(), "roots": g.roots})
-    );
+    ));
     // `debug/heap`'s read: the root by expression, evaluated in the frame
     let from_a = super::heap::read(&d, &sid, None, Some("a"), super::heap::Limits::default())
         .await
@@ -1589,7 +1589,7 @@ async fn js_debug_detach_leaves_no_hidden_map() {
             .contains("drgnx.ids"),
         "the map is there while attached: {seen}"
     );
-    let at_stop = std::fs::read_to_string(&out).unwrap_or_default();
+    let at_stop = crate::fsio::read_to_string(&out).unwrap_or_default();
     remove(&d, &root, bp).await;
     d.control(
         &sid,
@@ -1601,9 +1601,9 @@ async fn js_debug_detach_leaves_no_hidden_map() {
     .unwrap();
     d.shutdown().await;
     crate::clock::sleep(Duration::from_millis(600)).await;
-    let after = std::fs::read_to_string(&out).unwrap_or_default();
-    let _ = prog.kill();
-    let _ = prog.wait();
+    let after = crate::fsio::read_to_string(&out).unwrap_or_default();
+    crate::soft::done(prog.kill(), "tests_live_adapters");
+    crate::soft::done(prog.wait(), "tests_live_adapters");
     let n = |s: &str| {
         s.split(' ')
             .next()
@@ -1832,7 +1832,7 @@ async fn java_tools() -> PathBuf {
         let said = super::install::install(&plan, &tools, &super::install::Source::Https, &env)
             .await
             .unwrap_or_else(|e| panic!("the Java adapter's install: {e}"));
-        eprintln!("T10-JAVA {said}");
+        crate::soft::err_line(&format!("T10-JAVA {said}"));
     }
     tools
 }
@@ -1884,7 +1884,10 @@ async fn java_breaks_steps_and_inspects_through_jdtls() {
         .unwrap_or_else(|e| panic!("the start: {e}"));
     // break at `total = add(total, i)` the first time round the loop
     let (c, f) = ev.stop(0).await;
-    eprintln!("T10-JAVA first stop after {} ms", t0.elapsed().as_millis());
+    crate::soft::err_line(&format!(
+        "T10-JAVA first stop after {} ms",
+        t0.elapsed().as_millis()
+    ));
     assert!(path_is(&f, &file) && line_of(&f) == 9, "break: {f}");
     let sid = f["session"].as_str().unwrap().to_owned();
     let stop = d.stop_of(&sid).unwrap();
@@ -1993,7 +1996,7 @@ async fn csharp_tools() -> PathBuf {
         let said = super::install::install(&plan, &tools, &super::install::Source::Https, &env)
             .await
             .unwrap_or_else(|e| panic!("the C# adapter's install: {e}"));
-        eprintln!("T10-CSHARP {said}");
+        crate::soft::err_line(&format!("T10-CSHARP {said}"));
     }
     tools
 }
@@ -2049,10 +2052,10 @@ async fn csharp_breaks_steps_and_inspects_through_netcoredbg() {
         .unwrap_or_else(|e| panic!("the start: {e}"));
     // break at `total = Add(total, i)` the first time round the loop
     let (c, f) = ev.stop(0).await;
-    eprintln!(
+    crate::soft::err_line(&format!(
         "T10-CSHARP first stop after {} ms",
         t0.elapsed().as_millis()
-    );
+    ));
     assert!(path_is(&f, &file) && line_of(&f) == 16, "break: {f}");
     let sid = f["session"].as_str().unwrap().to_owned();
     let stop = d.stop_of(&sid).unwrap();

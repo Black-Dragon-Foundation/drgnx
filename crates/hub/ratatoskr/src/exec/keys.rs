@@ -119,19 +119,21 @@ impl JobKeys {
     fn not_delivered(&self, name: &str) {
         let why = self.dir.join("why");
         if !why.exists() {
-            let _ = std::fs::write(&why, not_delivered());
+            crate::soft::done(
+                crate::fsio::write(&why, not_delivered()),
+                "crate::fsio::write",
+            );
         }
         use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.dir.join("log"))
-        {
-            let _ = writeln!(
-                f,
-                "drgnx: {}: {name} (the hub didn't hold it within {} s)",
-                not_delivered(),
-                self.wait.as_secs()
+        if let Ok(mut f) = crate::fsio::append(self.dir.join("log"), true) {
+            crate::soft::done(
+                writeln!(
+                    f,
+                    "drgnx: {}: {name} (the hub didn't hold it within {} s)",
+                    not_delivered(),
+                    self.wait.as_secs()
+                ),
+                "writeln",
             );
         }
     }
@@ -183,7 +185,7 @@ impl Socket {
 impl Drop for Socket {
     fn drop(&mut self) {
         self.task.abort();
-        let _ = std::fs::remove_file(&self.path);
+        crate::soft::done(std::fs::remove_file(&self.path), "std::fs::remove_file");
     }
 }
 
@@ -196,10 +198,10 @@ pub fn serve(path: &Path, keys: Arc<JobKeys>) -> io::Result<Socket> {
     tmp_name.push(path.file_name().unwrap_or_default());
     tmp_name.push(".tmp");
     let tmp = dir.join(tmp_name);
-    let _ = std::fs::remove_file(&tmp);
+    crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     let l = std::os::unix::net::UnixListener::bind(&tmp)?;
     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-    std::fs::rename(&tmp, path)?;
+    crate::fsio::rename(&tmp, path)?;
     l.set_nonblocking(true)?;
     let l = tokio::net::UnixListener::from_std(l)?;
     let task = crate::clock::spawn("exec:key-socket", async move {
@@ -232,8 +234,8 @@ async fn one(s: tokio::net::UnixStream, keys: &JobKeys) {
         return;
     }
     let answer = keys.answer(line.trim_end_matches('\n')).await;
-    let _ = w.write_all(&answer).await;
-    let _ = w.shutdown().await;
+    crate::soft::done(w.write_all(&answer).await, "keys");
+    crate::soft::done(w.shutdown().await, "keys");
 }
 
 /// Copies a keyed job's output OUT into its LOG (appended: a relay's lines may be there already), each chunk through
@@ -244,12 +246,7 @@ pub async fn pump(
     redact: Arc<Mutex<Redactor>>,
 ) {
     use zeroize::Zeroize;
-    let Ok(mut f) = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log)
-        .await
-    else {
+    let Ok(mut f) = crate::fsio::append(&log, true).map(tokio::fs::File::from_std) else {
         return;
     };
     let mut buf = vec![0u8; 16 << 10];
@@ -265,8 +262,8 @@ pub async fn pump(
         }
     }
     let rest = lock(&redact).finish();
-    let _ = f.write_all(&rest).await;
-    let _ = f.flush().await;
+    crate::soft::done(f.write_all(&rest).await, "keys");
+    crate::soft::done(f.flush().await, "keys");
 }
 
 /// The argv that runs ARGV with each of KEYS in the variable of its name, through `drgnx-key` at BIN.
@@ -384,7 +381,7 @@ mod tests {
         let keys = Arc::new(Keys::default());
         let (tx, mut asked) = tokio::sync::mpsc::unbounded_channel();
         keys.set_tell(move |ev, data| {
-            let _ = tx.send(format!("{ev} {data}"));
+            crate::soft::done(tx.send(format!("{ev} {data}")), "tx send");
         });
         let jk = JobKeys::new(
             "x2",
@@ -404,10 +401,10 @@ mod tests {
         assert!(!d.path().join("why").exists());
         assert_eq!(&jk.answer("get NEVER").await[..], keyline::TIMEOUT);
         assert_eq!(
-            std::fs::read_to_string(d.path().join("why")).unwrap(),
+            crate::fsio::read_to_string(d.path().join("why")).unwrap(),
             "infra: key not delivered"
         );
-        let log = std::fs::read_to_string(d.path().join("log")).unwrap();
+        let log = crate::fsio::read_to_string(d.path().join("log")).unwrap();
         assert!(log.contains("NEVER"), "{log}");
     }
 }

@@ -68,7 +68,7 @@ pub fn stage_repo(root: &Path, source: &Path, objects: &[PathBuf]) -> Result<Pat
         text.push_str(&o.to_string_lossy());
         text.push('\n');
     }
-    std::fs::write(info.join("alternates"), text).map_err(|e| e.to_string())?;
+    crate::fsio::write(info.join("alternates"), text).map_err(|e| e.to_string())?;
     Ok(repo)
 }
 
@@ -83,7 +83,7 @@ pub fn materialise(repo: &Path, pending: Vec<Pending>) -> Result<Vec<Candidate>,
         let tree = match p.make {
             Make::Tree(t) => t,
             Make::Texts { base, texts } => {
-                let _ = std::fs::remove_file(&index);
+                crate::soft::done(std::fs::remove_file(&index), "std::fs::remove_file");
                 let modes = match &base {
                     Some(b) => {
                         git(&["read-tree", b])?;
@@ -111,7 +111,7 @@ pub fn materialise(repo: &Path, pending: Vec<Pending>) -> Result<Vec<Candidate>,
         }
         out.push(Candidate { tree, ..p.cand });
     }
-    let _ = std::fs::remove_file(&index);
+    crate::soft::done(std::fs::remove_file(&index), "std::fs::remove_file");
     Ok(out)
 }
 
@@ -274,7 +274,7 @@ struct Live {
 
 impl Bisects {
     pub fn bind(&self, front: &Arc<Front>) {
-        let _ = self.front.set(Arc::downgrade(front));
+        crate::soft::done(self.front.set(Arc::downgrade(front)), "bisect_wire");
     }
 
     fn front(&self) -> Option<Arc<Front>> {
@@ -438,7 +438,7 @@ impl Prober for Jobs {
         };
         crate::clock::spawn("debug:bisect-stop", async move {
             for id in ids {
-                let _ = front.core.exec.stop(&id).await;
+                crate::soft::done(front.core.exec.stop(&id).await, "bisect_wire");
             }
         });
     }
@@ -616,7 +616,7 @@ async fn gather(
         }
         objects.sort();
         objects.dedup();
-        let _ = root;
+        let _only_when_used_elsewhere = &root;
         Ok(Gathered {
             states,
             objects,
@@ -697,13 +697,19 @@ async fn start(front: &Front, p: DebugBisect) -> Result<DebugBisectStarted, Erro
     let cp = checkpoints(front);
     for (_, l) in old {
         let (work, cp, root) = (l.stage.work.clone(), cp.clone(), PathBuf::from(&p.root));
-        let _ = crate::clock::blocking(move || {
-            if let Some(r) = l.now_ref {
-                let _ = crate::timeline::snapshot::drop_kept(&cp, &root, &r);
-            }
-            std::fs::remove_dir_all(work)
-        })
-        .await;
+        crate::soft::done(
+            crate::clock::blocking(move || {
+                if let Some(r) = l.now_ref {
+                    crate::soft::done(
+                        crate::timeline::snapshot::drop_kept(&cp, &root, &r),
+                        "crate::timeline::snapshot::drop_kept",
+                    );
+                }
+                std::fs::remove_dir_all(work)
+            })
+            .await,
+            "crate::clock::blocking",
+        );
     }
     let id = new_id();
     let g = gather(front, &p.root, Some(&p.good), Some(&id)).await?;
@@ -766,7 +772,10 @@ async fn start(front: &Front, p: DebugBisect) -> Result<DebugBisectStarted, Erro
             l.stage.clone()
         };
         // the slots go; the stage's repository stays for narrowing
-        let _ = crate::clock::blocking(move || stage.drop_slots()).await;
+        crate::soft::done(
+            crate::clock::blocking(move || stage.drop_slots()).await,
+            "crate::clock::blocking",
+        );
     });
     Ok(DebugBisectStarted {
         bisect: id,

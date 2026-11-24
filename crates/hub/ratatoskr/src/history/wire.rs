@@ -292,11 +292,14 @@ async fn start_watch(f: &Front, hub: Arc<Hub>, tree: Tree, root: PathBuf) {
             let Some(hub) = weak.upgrade() else { return };
             let (t, r, k) = (tree.clone(), rx.clone(), key.clone());
             let now = crate::clock::wall_secs();
-            let _ = crate::clock::blocking(move || {
-                let rx = lock(&r);
-                watch::pump(&hub, &t, &k, &rx, now);
-            })
-            .await;
+            crate::soft::done(
+                crate::clock::blocking(move || {
+                    let rx = lock(&r);
+                    watch::pump(&hub, &t, &k, &rx, now);
+                })
+                .await,
+                "crate::clock::blocking",
+            );
             crate::clock::sleep(std::time::Duration::from_secs(1)).await;
         }
     });
@@ -382,7 +385,7 @@ mod tests {
         let (main, linked) = (root.join("main"), root.join("main/.claude/wt"));
         std::fs::create_dir_all(&main).unwrap();
         let git = |args: &[&str]| {
-            let ok = std::process::Command::new("git")
+            let ok = crate::proc::Command::new("git")
                 .args(["-c", "user.name=t", "-c", "user.email=t@t"])
                 .args(args)
                 .current_dir(&main)

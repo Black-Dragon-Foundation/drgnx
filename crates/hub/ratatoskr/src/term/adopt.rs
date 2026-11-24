@@ -31,7 +31,7 @@ impl Hello {
 pub fn alive(rec: &Record) -> bool {
     if let Some(unit) = &rec.unit
         && crate::exec::unit::systemd_user()
-        && let Ok(s) = std::process::Command::new("systemctl")
+        && let Ok(s) = crate::proc::Command::new("systemctl")
             .args(["--user", "is-active", "--quiet", &scope_unit(unit)])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

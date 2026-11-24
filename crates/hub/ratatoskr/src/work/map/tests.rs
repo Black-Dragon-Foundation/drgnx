@@ -812,10 +812,10 @@ fn chain_golden_matches_vegvisir() {
         .join("../../../test/fixtures/work-space/model-thirty.json");
     let text = serde_json::to_string_pretty(&golden).expect("json") + "\n";
     if std::env::var_os("UPDATE_VEGVISIR_GOLDEN").is_some() {
-        std::fs::write(&path, &text).expect("write the golden");
+        crate::fsio::write(&path, &text).expect("write the golden");
     }
-    let have =
-        std::fs::read_to_string(&path).expect("the golden (UPDATE_VEGVISIR_GOLDEN=1 writes it)");
+    let have = crate::fsio::read_to_string(&path)
+        .expect("the golden (UPDATE_VEGVISIR_GOLDEN=1 writes it)");
     assert!(
         have == text,
         "the map model or a chain moved: UPDATE_VEGVISIR_GOLDEN=1 writes the golden again"

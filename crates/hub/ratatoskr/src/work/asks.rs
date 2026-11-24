@@ -365,32 +365,41 @@ pub struct AskTx {
 
 impl AskTx {
     pub fn send(&self, ev: AskEv) {
-        let _ = self.tx.send(Input::Ev(ev));
+        crate::soft::done(self.tx.send(Input::Ev(ev)), "tx send");
     }
 
     /// Session NEW started, by PARENT, or within JOB.
     pub fn started(&self, new: &str, parent: Option<&str>, job: Option<&str>) {
-        let _ = self.tx.send(Input::Start {
-            new: new.to_string(),
-            parent: parent.map(str::to_string),
-            job: job.map(str::to_string),
-        });
+        crate::soft::done(
+            self.tx.send(Input::Start {
+                new: new.to_string(),
+                parent: parent.map(str::to_string),
+                job: job.map(str::to_string),
+            }),
+            "tx send",
+        );
     }
 
     /// Session SESSION is being resumed after a restart: what it writes waits for [`AskTx::restore`].
     pub fn restoring(&self, session: &str) {
-        let _ = self.tx.send(Input::Restoring {
-            session: session.to_string(),
-        });
+        crate::soft::done(
+            self.tx.send(Input::Restoring {
+                session: session.to_string(),
+            }),
+            "tx send",
+        );
     }
 
     /// Session SESSION's last user message (none: it has none, or its transcript cannot be read) is its current ask
     /// again; the ask entity an earlier hub made for it is adopted.
     pub fn restore(&self, session: &str, last: Option<LastMessage>) {
-        let _ = self.tx.send(Input::Restore {
-            session: session.to_string(),
-            last,
-        });
+        crate::soft::done(
+            self.tx.send(Input::Restore {
+                session: session.to_string(),
+                last,
+            }),
+            "tx send",
+        );
     }
 
     /// Wait until the sessions' graph writes committed so far are linked: a session's tool call answers after its own
@@ -401,7 +410,7 @@ impl AskTx {
         }
         let (tx, rx) = tokio::sync::oneshot::channel();
         if self.tx.send(Input::Flush(tx)).is_ok() {
-            let _ = rx.await;
+            crate::soft::done(rx.await, "asks");
         }
     }
 }
@@ -660,7 +669,7 @@ impl Shell {
         let live: BTreeSet<u64> = self.core.live().collect();
         self.ids.retain(|k, _| live.contains(k));
         if let Some(tx) = reply {
-            let _ = tx.send(());
+            crate::soft::done(tx.send(()), "tx send");
         }
     }
 

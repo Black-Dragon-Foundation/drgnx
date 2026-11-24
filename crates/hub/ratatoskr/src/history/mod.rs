@@ -344,7 +344,7 @@ impl Hub {
 
     pub(crate) fn publish(&self, v: &[FileVersion]) {
         for e in v {
-            let _ = self.events.send(e.clone());
+            crate::soft::done(self.events.send(e.clone()), "events send");
         }
     }
 

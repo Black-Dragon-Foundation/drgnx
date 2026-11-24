@@ -348,10 +348,10 @@ fn write_atomic(path: &Path, body: &[u8], mode: u32) -> std::io::Result<()> {
             .open(&tmp)?;
         f.write_all(body)?;
         f.sync_all()?;
-        std::fs::rename(&tmp, path)
+        crate::fsio::rename(&tmp, path)
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     }
     result
 }

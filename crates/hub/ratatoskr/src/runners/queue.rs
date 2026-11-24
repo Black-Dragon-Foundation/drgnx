@@ -964,11 +964,7 @@ pub fn returned_file(dir: &std::path::Path, what: &str, ext: &str) -> PathBuf {
 /// Appends BYTES at the end of the file at PATH.
 fn append_end(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?
-        .write_all(bytes)
+    crate::fsio::append(path, true)?.write_all(bytes)
 }
 
 fn nonce() -> Nonce {
@@ -1061,7 +1057,7 @@ impl Queue {
                             }
                         }
                         Db::Flush(done) => {
-                            let _ = done.send(());
+                            crate::soft::done(done.send(()), "done send");
                         }
                     }
                 }
@@ -1227,7 +1223,7 @@ impl Queue {
 
     fn persist(&self, op: DbOp) {
         if let Some(db) = &self.db {
-            let _ = db.send(Db::Op(op));
+            crate::soft::done(db.send(Db::Op(op)), "db send");
         }
     }
 
@@ -1236,7 +1232,7 @@ impl Queue {
         if let Some(db) = &self.db {
             let (tx, rx) = tokio::sync::oneshot::channel();
             if db.send(Db::Flush(tx)).is_ok() {
-                let _ = rx.await;
+                crate::soft::done(rx.await, "queue");
             }
         }
     }
@@ -3257,7 +3253,7 @@ impl Queue {
                         .exec_root
                         .join(&job)
                         .join(format!("result.{}.json", r.attempt));
-                    if let Err(e) = std::fs::write(&path, result.to_string()) {
+                    if let Err(e) = crate::fsio::write(&path, result.to_string()) {
                         tracing::warn!("runners: {}: {e}", path.display());
                     }
                     out.push(Outcome::Late {
@@ -3392,7 +3388,7 @@ impl Queue {
             // the job's folder holds its log once a line came; a job that printed nothing has none yet
             std::fs::create_dir_all(&dir)?;
             for ext in ["", ".part", ".left", ".kept"] {
-                let _ = std::fs::remove_file(file(ext));
+                crate::soft::done(std::fs::remove_file(file(ext)), "std::fs::remove_file");
             }
             if !p.left.is_empty() {
                 let lines: String = p
@@ -3400,10 +3396,10 @@ impl Queue {
                     .iter()
                     .map(|(path, why)| format!("{path}: {why}\n"))
                     .collect();
-                std::fs::write(file(".left"), lines)?;
+                crate::fsio::write(file(".left"), lines)?;
             }
             if p.kept {
-                return std::fs::write(file(".kept"), format!("{}\n", p.total));
+                return crate::fsio::write(file(".kept"), format!("{}\n", p.total));
             }
         }
         let part = file(".part");
@@ -3423,13 +3419,13 @@ impl Queue {
         }
         let whole = std::fs::read(&part)?;
         if whole.len() as u64 != p.total || sha2::Sha256::digest(&whole)[..] != p.sha256.0[..] {
-            let _ = std::fs::remove_file(&part);
+            crate::soft::done(std::fs::remove_file(&part), "std::fs::remove_file");
             return Err(Error::new(
                 ErrorKind::InvalidData,
                 "its size or sha256 isn't what the runner announced",
             ));
         }
-        std::fs::rename(&part, file(""))
+        crate::fsio::rename(&part, file(""))
     }
 
     /// Attempt R on RUNNER sent its result: its log's redactor gives back what it held, and the heuristic's notices
@@ -3812,7 +3808,10 @@ impl Queue {
                     // the next attempt's log starts afresh; this one's is kept as its own
                     let (dir, n) = (self.exec_root.join(&job), j.attempt);
                     let kept = dir.join(format!("log.{n}"));
-                    let _ = std::fs::rename(dir.join("log"), &kept);
+                    crate::soft::done(
+                        crate::fsio::rename(dir.join("log"), &kept),
+                        "crate::fsio::rename",
+                    );
                     j.state = QState::Queued;
                     j.machine = None;
                     j.placed_why = None;
@@ -4359,7 +4358,7 @@ mod tests {
         // every listed row reached the hub's copy before the link was lost
         std::fs::create_dir_all(dir.path().join("x1")).unwrap();
         let rows = "(:name \"t1\" :verdict pass)\n(:name \"t2\" :verdict skip)\n(:name \"t3\" :verdict pass)\n";
-        std::fs::write(dir.path().join("x1/log"), rows).unwrap();
+        crate::fsio::write(dir.path().join("x1/log"), rows).unwrap();
         let out = q.on_link(
             LinkEvent::Lost {
                 runner: "r1".into(),
@@ -4481,8 +4480,8 @@ mod tests {
         let slice = crate::exec::unit::job_slice_name("x1");
         let at = manager.join(sleipnir::linux::probe::slice_path(&slice));
         std::fs::create_dir_all(&at).unwrap();
-        std::fs::write(at.join("memory.current"), format!("{}\n", 3u64 << 30)).unwrap();
-        std::fs::write(
+        crate::fsio::write(at.join("memory.current"), format!("{}\n", 3u64 << 30)).unwrap();
+        crate::fsio::write(
             at.join("memory.stat"),
             format!("anon 1\nfile {}\n", 512u64 << 20),
         )

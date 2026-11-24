@@ -134,7 +134,10 @@ pub async fn run_command(
         Ok(Err(e)) => return Err(CredError::Failed(format!("{prog}: {e}"))),
         Err(_) => {
             if let Some(g) = group {
-                let _ = rustix::process::kill_process_group(g, rustix::process::Signal::KILL);
+                crate::soft::done(
+                    rustix::process::kill_process_group(g, rustix::process::Signal::KILL),
+                    "rustix::process::kill_process_group",
+                );
             }
             return Err(CredError::TimedOut);
         }

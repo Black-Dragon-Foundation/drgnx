@@ -222,14 +222,17 @@ pub fn format_job(job: &JobSummary) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     let text = |o: &Option<String>| o.clone().unwrap_or_default();
-    let _ = writeln!(
-        out,
-        "{}  {}  [{}]",
-        job.id,
-        text(&job.title),
-        text(&job.status)
+    crate::soft::done(
+        writeln!(
+            out,
+            "{}  {}  [{}]",
+            job.id,
+            text(&job.title),
+            text(&job.status)
+        ),
+        "writeln",
     );
-    let _ = writeln!(out, "  repository {}", text(&job.repo));
+    crate::soft::done(writeln!(out, "  repository {}", text(&job.repo)), "writeln");
     for t in &job.tasks {
         let deps: Vec<String> = list(t, "deps")
             .iter()
@@ -240,14 +243,17 @@ pub fn format_job(job: &JobSummary) -> String {
         } else {
             format!(", after {}", deps.join(", "))
         };
-        let _ = writeln!(
-            out,
-            "  Task {}: {}  — {} on {}, {}{after}",
-            col(t, "n"),
-            col(t, "title"),
-            col(t, "role"),
-            col(t, "profile"),
-            col(t, "status"),
+        crate::soft::done(
+            writeln!(
+                out,
+                "  Task {}: {}  — {} on {}, {}{after}",
+                col(t, "n"),
+                col(t, "title"),
+                col(t, "role"),
+                col(t, "profile"),
+                col(t, "status"),
+            ),
+            "writeln",
         );
     }
     let est = job.estimate.clone().unwrap_or(Value::Null);
@@ -261,10 +267,13 @@ pub fn format_job(job: &JobSummary) -> String {
     } else {
         format!(" (unpriced: {})", unpriced.join(", "))
     };
-    let _ = writeln!(
-        out,
-        "  estimate ~{usd:.2} USD, {} tokens{unpriced}",
-        col(&est, "tokens")
+    crate::soft::done(
+        writeln!(
+            out,
+            "  estimate ~{usd:.2} USD, {} tokens{unpriced}",
+            col(&est, "tokens")
+        ),
+        "writeln",
     );
     let budget = if job.limits.is_empty() {
         "none".to_string()
@@ -285,47 +294,62 @@ pub fn format_job(job: &JobSummary) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let _ = writeln!(
-        out,
-        "  budget {budget}, spent {:.2} USD",
-        job.spent.unwrap_or(0.0)
+    crate::soft::done(
+        writeln!(
+            out,
+            "  budget {budget}, spent {:.2} USD",
+            job.spent.unwrap_or(0.0)
+        ),
+        "writeln",
     );
     for w in &job.warnings {
-        let _ = writeln!(out, "  warning: {}", plain(Some(w)));
+        crate::soft::done(writeln!(out, "  warning: {}", plain(Some(w))), "writeln");
     }
     for a in &job.agents {
-        let _ = writeln!(
-            out,
-            "  agent {} ({}) {} on {}",
-            col(a, "id"),
-            col(a, "profile"),
-            col(a, "status"),
-            col(a, "task"),
+        crate::soft::done(
+            writeln!(
+                out,
+                "  agent {} ({}) {} on {}",
+                col(a, "id"),
+                col(a, "profile"),
+                col(a, "status"),
+                col(a, "task"),
+            ),
+            "writeln",
         );
     }
     for p in &job.permissions {
-        let _ = writeln!(out, "  asks: {} ({})", col(p, "title"), col(p, "agent"));
+        crate::soft::done(
+            writeln!(out, "  asks: {} ({})", col(p, "title"), col(p, "agent")),
+            "writeln",
+        );
     }
     for c in &job.cards {
         let task = match col(c, "task") {
             t if t.is_empty() => t,
             t => format!("{t}: "),
         };
-        let _ = writeln!(
-            out,
-            "  card #{} [{}] {task}{}",
-            col(c, "id"),
-            col(c, "kind"),
-            col(c, "title"),
+        crate::soft::done(
+            writeln!(
+                out,
+                "  card #{} [{}] {task}{}",
+                col(c, "id"),
+                col(c, "kind"),
+                col(c, "title"),
+            ),
+            "writeln",
         );
     }
     for m in &job.messages {
-        let _ = writeln!(
-            out,
-            "  message #{} from {}: {}",
-            col(m, "id"),
-            col(m, "sender"),
-            col(m, "text"),
+        crate::soft::done(
+            writeln!(
+                out,
+                "  message #{} from {}: {}",
+                col(m, "id"),
+                col(m, "sender"),
+                col(m, "text"),
+            ),
+            "writeln",
         );
     }
     out
@@ -355,7 +379,7 @@ pub fn run(env: &Env, cmd: JobCommand) -> i32 {
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("ratatoskr job: no working directory: {e}");
+            crate::soft::err_line(&format!("ratatoskr job: no working directory: {e}"));
             return 1;
         }
     };
@@ -368,7 +392,7 @@ pub fn run(env: &Env, cmd: JobCommand) -> i32 {
         Client::user(env, Duration::from_secs(5)).and_then(|mut c| c.call(method, params, CALL));
     match answer {
         Ok(a) if cmd.json => {
-            println!("{a}");
+            crate::soft::out_line(&a.to_string());
             0
         }
         Ok(a) => match render(&cmd.sub, &a) {
@@ -377,12 +401,12 @@ pub fn run(env: &Env, cmd: JobCommand) -> i32 {
                 0
             }
             Err(e) => {
-                eprintln!("ratatoskr job: {e}");
+                crate::soft::err_line(&format!("ratatoskr job: {e}"));
                 1
             }
         },
         Err(e) => {
-            eprintln!("ratatoskr job: {e}");
+            crate::soft::err_line(&format!("ratatoskr job: {e}"));
             1
         }
     }

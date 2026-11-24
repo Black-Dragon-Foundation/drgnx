@@ -157,18 +157,18 @@ pub fn run(cmd: PacksCommand) -> i32 {
         PacksCommand::Pin { repo, commit, src } => {
             return match skald::job::pin(&repo, &commit, &src) {
                 Ok((tree, abi)) => {
-                    println!(
+                    crate::soft::out_line(&format!(
                         "(:repo {} :commit {} :tree-sha256 {} :src {})  ; ABI {}",
                         lisp_string(&repo),
                         lisp_string(&commit),
                         lisp_string(&tree),
                         lisp_string(&src),
                         abi.map_or("?".to_string(), |a| a.to_string())
-                    );
+                    ));
                     0
                 }
                 Err(e) => {
-                    eprintln!("{e}");
+                    crate::soft::err_line(&e.to_string());
                     1
                 }
             };
@@ -191,18 +191,18 @@ pub fn run(cmd: PacksCommand) -> i32 {
         match r.manifest {
             Some(m) => claims.add_pack(&m),
             None => {
-                eprintln!("{}: not a readable pack", o.display());
+                crate::soft::err_line(&format!("{}: not a readable pack", o.display()));
                 return 1;
             }
         }
     }
     let report = check_dir(&dir, source, &claims);
     for q in &report.problems {
-        eprintln!("{}: {:?}: {}", q.path, q.kind, q.message);
+        crate::soft::err_line(&format!("{}: {:?}: {}", q.path, q.kind, q.message));
     }
     if report.problems.is_empty() {
         let name = report.manifest.map(|m| m.pack).unwrap_or_default();
-        println!("{name}: ok");
+        crate::soft::out_line(&format!("{name}: ok"));
         0
     } else {
         1
@@ -213,16 +213,16 @@ pub fn run(cmd: PacksCommand) -> i32 {
 fn load_check(lib: &Path, name: &str, min_abi: u32, queries: &[(String, PathBuf)]) -> i32 {
     let mut texts = Vec::new();
     for (file, path) in queries {
-        match std::fs::read_to_string(path) {
+        match crate::fsio::read_to_string(path) {
             Ok(t) => texts.push((file.clone(), t)),
             Err(e) => {
-                println!("load {file}: {e}");
+                crate::soft::out_line(&format!("load {file}: {e}"));
                 return 4;
             }
         }
     }
     let r = skald::job::check_library(lib, name, min_abi, &texts);
-    println!("{}", skald::job::check_answer(&r));
+    crate::soft::out_line(&(skald::job::check_answer(&r)).to_string());
     match r {
         Ok(_) => 0,
         Err(skald::job::JobError::Abi { .. }) => 2,
@@ -310,7 +310,7 @@ fn sync(plan_path: &Path, out: Option<&Path>) -> i32 {
             .collect();
         let mut queries = Vec::new();
         for q in plan.queries {
-            let text = std::fs::read_to_string(&q.path)
+            let text = crate::fsio::read_to_string(&q.path)
                 .map_err(|e| format!("{}: {e}", q.path.display()))?;
             queries.push(skald::job::Query {
                 grammar: q.grammar,
@@ -343,8 +343,8 @@ fn sync(plan_path: &Path, out: Option<&Path>) -> i32 {
     };
     match out {
         Some(p) => {
-            if let Err(e) = std::fs::write(p, &text) {
-                eprintln!("{}: {e}", p.display());
+            if let Err(e) = crate::fsio::write(p, &text) {
+                crate::soft::err_line(&format!("{}: {e}", p.display()));
                 return 1;
             }
         }
@@ -417,7 +417,7 @@ fn sync_builtin(out: &Path, packs: &[String]) -> i32 {
                 lisp_string(&s.lib_sha256)
             ));
         }
-        std::fs::write(
+        crate::fsio::write(
             out.join("drgnx.lock.eld"),
             format!(
                 "(:version 1 :packages nil :grammars ({}))\n",
@@ -431,7 +431,7 @@ fn sync_builtin(out: &Path, packs: &[String]) -> i32 {
     match run() {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("packs sync --builtin: {e}");
+            crate::soft::err_line(&format!("packs sync --builtin: {e}"));
             1
         }
     }
@@ -494,7 +494,7 @@ mod tests {
             others: vec![],
         };
         assert_eq!(run(cmd(&d)), 1);
-        std::fs::write(
+        crate::fsio::write(
             d.join("pack.eld"),
             r#"(:pack "scala" :schema 1 :version "1" :name "Scala" :summary "s" :license "MIT")"#,
         )

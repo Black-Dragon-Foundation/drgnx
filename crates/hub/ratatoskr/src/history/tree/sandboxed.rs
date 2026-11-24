@@ -33,8 +33,8 @@ impl Fx {
         let s = |rel: &str| self.p(rel).to_str().unwrap().to_owned();
         Env::new(
             &[
-                ("HOME", &s("home")),
-                ("XDG_RUNTIME_DIR", &s("run")),
+                (stig::HOME_VAR, &s("home")),
+                (stig::SYSTEM_RUNTIME_VAR, &s("run")),
                 ("TMPDIR", &s("t")),
                 ("PATH", "/usr/bin:/bin"),
             ],
@@ -47,7 +47,7 @@ impl Fx {
         let d = self.p(rel);
         std::fs::create_dir_all(&d).unwrap();
         git(&d, &["init", "-q", "-b", "main"]);
-        std::fs::write(d.join("a.txt"), "one").unwrap();
+        crate::fsio::write(d.join("a.txt"), "one").unwrap();
         git(&d, &["add", "a.txt"]);
         git(&d, &["commit", "-q", "-m", "base"]);
         d
@@ -55,7 +55,7 @@ impl Fx {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])
         .args(args)
         .current_dir(dir)
@@ -85,7 +85,7 @@ fn sandbox() -> Sandbox {
 async fn commit_runs_inside_the_sandbox() {
     let fx = Fx::new();
     let wt = fx.repo("wt");
-    std::fs::write(wt.join("a.txt"), "two").unwrap();
+    crate::fsio::write(wt.join("a.txt"), "two").unwrap();
     let (sb, env) = (sandbox(), fx.env());
     let before = snapshot::head_of(&wt);
     let made = commit_with(
@@ -116,7 +116,7 @@ async fn commit_for_a_finished_worker_uses_its_entity() {
     let fx = Fx::new();
     let wt = fx.repo("wt");
     std::fs::remove_file(wt.join("a.txt")).unwrap();
-    std::fs::write(wt.join("b.txt"), "new").unwrap();
+    crate::fsio::write(wt.join("b.txt"), "new").unwrap();
     let (sb, env) = (sandbox(), fx.env());
     let paths = [PathBuf::from("a.txt"), PathBuf::from("b.txt")];
     let made = commit_with(Some((&sb, &env)), "S2", &wt, &paths, "revert")
@@ -142,7 +142,7 @@ async fn commit_in_a_linked_worktree_is_reported_not_fatal() {
         &main,
         &["worktree", "add", "-q", "-b", "side", lw.to_str().unwrap()],
     );
-    std::fs::write(lw.join("a.txt"), "changed").unwrap();
+    crate::fsio::write(lw.join("a.txt"), "changed").unwrap();
     let (sb, env) = (sandbox(), fx.env());
     let before = snapshot::head_of(&lw);
     let r = commit_with(
@@ -156,7 +156,7 @@ async fn commit_in_a_linked_worktree_is_reported_not_fatal() {
     assert!(r.is_err(), "{r:?}");
     assert_eq!(snapshot::head_of(&lw), before);
     assert_eq!(
-        std::fs::read_to_string(lw.join("a.txt")).unwrap(),
+        crate::fsio::read_to_string(lw.join("a.txt")).unwrap(),
         "changed"
     );
 }
@@ -170,7 +170,7 @@ async fn commit_failure_is_reported_not_fatal() {
     let wt = fx.p("wt");
     std::fs::create_dir_all(&wt).unwrap();
     git(&wt, &["init", "-q", "-b", "main"]);
-    std::fs::write(wt.join("a.txt"), "two").unwrap();
+    crate::fsio::write(wt.join("a.txt"), "two").unwrap();
     let (sb, env) = (sandbox(), fx.env());
     let r = commit_with(
         Some((&sb, &env)),
@@ -183,5 +183,8 @@ async fn commit_failure_is_reported_not_fatal() {
     let e = r.unwrap_err();
     assert!(e.contains("HEAD"), "{e}");
     assert_eq!(snapshot::head_of(&wt), None);
-    assert_eq!(std::fs::read_to_string(wt.join("a.txt")).unwrap(), "two");
+    assert_eq!(
+        crate::fsio::read_to_string(wt.join("a.txt")).unwrap(),
+        "two"
+    );
 }

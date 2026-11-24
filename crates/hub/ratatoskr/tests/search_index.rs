@@ -105,7 +105,7 @@ impl Worker {
                     return;
                 }
             }
-            let _ = tx.send(None);
+            ratatoskr::soft::done(tx.send(None), "tx send");
         });
         Worker {
             child: Some(child),
@@ -132,7 +132,7 @@ impl Worker {
         let mut child = self.child.take().unwrap();
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let _ = tx.send(child.wait());
+            ratatoskr::soft::done(tx.send(child.wait()), "tx send");
         });
         rx.recv_timeout(BOUND)
             .expect("the worker never exited")
@@ -143,8 +143,8 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         if let Some(c) = self.child.as_mut() {
-            let _ = c.kill();
-            let _ = c.wait();
+            ratatoskr::soft::done(c.kill(), "search_index");
+            ratatoskr::soft::done(c.wait(), "search_index");
         }
     }
 }
@@ -315,8 +315,8 @@ fn power(on_ac: bool) -> TempDir {
         ("BAT0", "Battery", "1"),
     ] {
         std::fs::create_dir_all(ps.join(name)).unwrap();
-        std::fs::write(ps.join(name).join("type"), format!("{ty}\n")).unwrap();
-        std::fs::write(ps.join(name).join("online"), format!("{online}\n")).unwrap();
+        ratatoskr::fsio::write(ps.join(name).join("type"), format!("{ty}\n")).unwrap();
+        ratatoskr::fsio::write(ps.join(name).join("online"), format!("{online}\n")).unwrap();
     }
     d
 }
@@ -365,7 +365,7 @@ async fn worker_crash_is_reported_and_retried_once() {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = ratatoskr::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -381,7 +381,7 @@ fn repo_at(dir: &Path, files: &[(&str, &str)]) {
     for (p, c) in files {
         let f = dir.join(p);
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(f, c).unwrap();
+        ratatoskr::fsio::write(f, c).unwrap();
     }
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-q", "-m", "one"]);
@@ -560,7 +560,7 @@ async fn denied_root_refused_and_canary_never_embedded() {
 
     // HOME as a repository holding ~/org
     std::fs::remove_dir_all(home.path().join("org/proj/.git")).unwrap();
-    std::fs::write(home.path().join("org/notes.org"), format!("* {canary}\n")).unwrap();
+    ratatoskr::fsio::write(home.path().join("org/notes.org"), format!("* {canary}\n")).unwrap();
     repo_at(home.path(), &[("src/a.el", "(defun a-home () 1)\n")]);
     let p = Project::open(spec_for(home.path().to_path_buf()))
         .await
@@ -662,7 +662,7 @@ fn battery_holds_tier2_and_tier1_goes_on() {
         assert_eq!(held.embedded, 0);
         assert_eq!(embedder.facts().spawns, 0, "no worker on battery");
 
-        std::fs::write(
+        ratatoskr::fsio::write(
             f.root.join("core/f1.el"),
             ";;; f1.el\n(defun f1-run () \"Changed.\" 10)\n",
         )
@@ -825,7 +825,7 @@ async fn seeded(p: &Project, root: &Path) -> String {
 }
 
 fn edit(root: &Path, rel: &str, name: &str) {
-    std::fs::write(
+    ratatoskr::fsio::write(
         root.join(rel),
         format!(";;; edited\n(defun {name} () \"Edited here.\" 1)\n"),
     )
@@ -1008,7 +1008,7 @@ async fn removed_worktree_drops_its_overlay() {
     edit(&trees[1], "core/f0.el", "locked-fn");
     let (a, b) = (seeded(&p, &trees[0]).await, seeded(&p, &trees[1]).await);
     git(&f.root, &["worktree", "lock", trees[1].to_str().unwrap()]);
-    std::fs::rename(&trees[1], f.home.path().join("src/moved-away")).unwrap();
+    ratatoskr::fsio::rename(&trees[1], f.home.path().join("src/moved-away")).unwrap();
     git(
         &f.root,
         &["worktree", "remove", "--force", trees[0].to_str().unwrap()],
@@ -1081,13 +1081,13 @@ async fn editing_search_toml_takes_effect_at_the_next_refresh() {
     assert!(base_names(&p).await.contains(&"f1-run".to_string()));
     let toml = f.root.join(".drgnx/search.toml");
     std::fs::create_dir_all(toml.parent().unwrap()).unwrap();
-    std::fs::write(&toml, "ignore = [\"core/f1.el\"]\n").unwrap();
+    ratatoskr::fsio::write(&toml, "ignore = [\"core/f1.el\"]\n").unwrap();
     assert_eq!(p.refresh_now().await.unwrap().files_changed, 1);
     let n = base_names(&p).await;
     assert!(!n.contains(&"f1-run".to_string()), "{n:?}");
     assert!(n.contains(&"f0-run".to_string()) && n.contains(&"f2-run".to_string()));
     // a file that cannot be read is an error the listing reports, not the defaults
-    std::fs::write(&toml, "ignore = [\n").unwrap();
+    ratatoskr::fsio::write(&toml, "ignore = [\n").unwrap();
     let e = p.refresh_now().await.unwrap_err();
     assert!(e.to_string().contains("search.toml cannot be read"), "{e}");
     std::fs::remove_file(&toml).unwrap();

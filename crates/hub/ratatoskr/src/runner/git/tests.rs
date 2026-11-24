@@ -12,10 +12,10 @@ struct Env {
 }
 
 fn sh(env: &Path, dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args(args)
         .current_dir(dir)
-        .env("HOME", env)
+        .env(stig::HOME_VAR, env)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
@@ -39,7 +39,7 @@ fn env() -> Env {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&repo).unwrap();
     sh(&home, &repo, &["init", "-q", "-b", "main"]);
-    std::fs::write(repo.join("x.txt"), "one\ntwo\nthree\n").unwrap();
+    crate::fsio::write(repo.join("x.txt"), "one\ntwo\nthree\n").unwrap();
     sh(&home, &repo, &["add", "-A"]);
     sh(&home, &repo, &["commit", "-q", "-m", "base"]);
     Env {
@@ -53,7 +53,7 @@ fn env() -> Env {
 fn commit(e: &Env, tree: &TaskTree, file: &str, body: &str) {
     let p = tree.path.join(file);
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-    std::fs::write(p, body).unwrap();
+    crate::fsio::write(p, body).unwrap();
     sh(&e.home, &tree.path, &["add", "-A"]);
     sh(&e.home, &tree.path, &["commit", "-q", "-m", file]);
 }
@@ -95,8 +95,10 @@ impl GatePolicy for Policy {
 }
 
 fn hub(e: &Env, mode: TreeMode, p: Policy, db: Option<urdr::Handle>) -> HubGit {
-    HubGit::new(e.root.clone(), mode, Box::new(p), db)
-        .with_env(vec![("HOME".into(), e.home.to_string_lossy().into_owned())])
+    HubGit::new(e.root.clone(), mode, Box::new(p), db).with_env(vec![(
+        stig::HOME_VAR.into(),
+        e.home.to_string_lossy().into_owned(),
+    )])
 }
 
 /// Accept every path of the task as it is now.
@@ -122,8 +124,10 @@ fn shared(
     db: Option<urdr::Handle>,
 ) -> (HubGit, std::sync::Arc<Policy>) {
     let p = std::sync::Arc::new(p);
-    let h = HubGit::new(e.root.clone(), mode, Box::new(Shared(p.clone())), db)
-        .with_env(vec![("HOME".into(), e.home.to_string_lossy().into_owned())]);
+    let h = HubGit::new(e.root.clone(), mode, Box::new(Shared(p.clone())), db).with_env(vec![(
+        stig::HOME_VAR.into(),
+        e.home.to_string_lossy().into_owned(),
+    )]);
     (h, p)
 }
 
@@ -286,15 +290,21 @@ fn a_fifo_at_a_ref_file_never_blocks_the_hub() {
             .unwrap();
         let dot = a.path.join(".git");
         let loose = dot.join("refs/heads").join(&a.branch);
-        let _ = std::fs::remove_file(&loose);
+        crate::soft::done(std::fs::remove_file(&loose), "std::fs::remove_file");
         mkfifo(&loose);
         let tip = snapshot_tip(&a.path, &a.branch);
         std::fs::remove_file(&loose).unwrap();
-        let _ = std::fs::remove_file(dot.join("packed-refs"));
+        crate::soft::done(
+            std::fs::remove_file(dot.join("packed-refs")),
+            "std::fs::remove_file",
+        );
         mkfifo(&dot.join("packed-refs"));
         let packed = snapshot_tip(&a.path, &a.branch);
         // whatever it answers (the branch is gone, so the tree is made again), it answers
-        let _ = rt.block_on(h.task_worktree(&e.repo, "r1", "a", &base(&e)));
+        crate::soft::done(
+            rt.block_on(h.task_worktree(&e.repo, "r1", "a", &base(&e))),
+            "tests",
+        );
         tx.send((tip, packed)).unwrap();
     });
     let got = rx
@@ -505,9 +515,9 @@ async fn snapshot_bundle_fsck() {
     let mut bytes = std::fs::read(&bundle).unwrap();
     let n = bytes.len();
     bytes[n - 5] ^= 0xff;
-    std::fs::write(&bundle, bytes).unwrap();
+    crate::fsio::write(&bundle, bytes).unwrap();
     assert!(h.inspect(&e.repo, &t2).await.is_err());
-    let missing = std::process::Command::new("git")
+    let missing = crate::proc::Command::new("git")
         .args([
             "rev-parse",
             "--verify",
@@ -515,7 +525,7 @@ async fn snapshot_bundle_fsck() {
             &format!("refs/heads/{}", t2.branch),
         ])
         .current_dir(&e.repo)
-        .env("HOME", &e.home)
+        .env(stig::HOME_VAR, &e.home)
         .status()
         .unwrap();
     assert!(!missing.success());

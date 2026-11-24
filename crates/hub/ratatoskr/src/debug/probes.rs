@@ -299,7 +299,7 @@ impl Probes {
     pub fn open(file: Option<PathBuf>) -> Probes {
         let data = file
             .as_ref()
-            .and_then(|f| std::fs::read_to_string(f).ok())
+            .and_then(|f| crate::fsio::read_to_string(f).ok())
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
         let disk = file.as_ref().map(|_| {

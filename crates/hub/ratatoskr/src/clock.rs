@@ -485,7 +485,7 @@ mod virt {
                 "a unit test runs on its own virtual clock (clock::on_virtual), never the process's"
             );
         }
-        let _ = GLOBAL.set(Arc::new(Virtual::new()));
+        crate::soft::done(GLOBAL.set(Arc::new(Virtual::new())), "clock");
         urdr::wait::set(store_wait);
         install_provider();
     }

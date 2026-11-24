@@ -160,7 +160,7 @@ async fn world() -> World {
         .unwrap();
     let folder = private_folder(&d.path().join("s")).unwrap();
     let path = d.path().join("n.ipynb");
-    std::fs::write(&path, NB).unwrap();
+    crate::fsio::write(&path, NB).unwrap();
     let views = Arc::new(NbViews::default());
     let sink = Arc::new(WatchSink {
         inner: Arc::new(Quiet),
@@ -445,7 +445,7 @@ const NB_OUT: &str = r##"{"cells": [
 async fn a_shown_full_output_is_built_from_the_notebook_in_the_editors_window_and_a_gone_cell_says_so()
  {
     let w = world().await;
-    std::fs::write(w._d.path().join("o.ipynb"), NB_OUT).unwrap();
+    crate::fsio::write(w._d.path().join("o.ipynb"), NB_OUT).unwrap();
     let id =
         w.nb.open(1, &w._d.path().join("o.ipynb"), None)
             .await

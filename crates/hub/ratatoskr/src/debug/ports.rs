@@ -105,7 +105,10 @@ fn lock(path: &Path) -> Option<File> {
         .open(path)
         .ok()?;
     // the umask narrowed the mode: widen it (only ours can be changed, and only ours needs it)
-    let _ = f.set_permissions(std::fs::Permissions::from_mode(0o666));
+    crate::soft::done(
+        f.set_permissions(std::fs::Permissions::from_mode(0o666)),
+        "ports",
+    );
     // SAFETY: flock(2) on a descriptor this function owns.
     (unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(f)
 }
@@ -316,7 +319,7 @@ pub fn output_within(
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut p) = p {
-                let _ = p.read_to_end(&mut buf);
+                crate::soft::done(p.read_to_end(&mut buf), "ports");
             }
             buf
         })
@@ -341,8 +344,8 @@ pub fn output_within(
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::soft::done(child.kill(), "ports");
+                crate::soft::done(child.wait(), "ports");
                 return Err(format!(
                     "{name} did not answer within {} ms (killed)",
                     within.as_millis()
@@ -386,7 +389,7 @@ fn listener_pids(port: u16) -> Result<Vec<Option<i32>>, String> {
 fn listener_pids(port: u16) -> Result<Vec<Option<i32>>, String> {
     let mut inodes = vec![];
     for f in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        let Ok(t) = std::fs::read_to_string(f) else {
+        let Ok(t) = crate::fsio::read_to_string(f) else {
             continue;
         };
         for line in t.lines().skip(1) {

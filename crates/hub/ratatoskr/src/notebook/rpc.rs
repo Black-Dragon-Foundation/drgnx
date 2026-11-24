@@ -52,13 +52,13 @@ fn make(front: &Front, views: &Arc<NbViews>) -> Result<Notebooks, String> {
     // SAFETY: geteuid has no preconditions.
     let uid = unsafe { libc::geteuid() };
     let runtime = runtime_dir(
-        std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+        std::env::var_os(stig::SYSTEM_RUNTIME_VAR).map(PathBuf::from),
         Path::new(&format!("/tmp/drgnx-{uid}")),
     )?;
     let folder = spec::private_folder(&runtime.join("drgnx-notebooks"))?;
     // connection files of kernels that are gone: this hub has none running yet
     spec::sweep(&folder, &[]);
-    let home = std::env::var_os("HOME")
+    let home = std::env::var_os(stig::HOME_VAR)
         .map(PathBuf::from)
         .unwrap_or_default();
     let dirs = spec::standard_dirs(

@@ -645,13 +645,13 @@ fn the_model_stream_is_the_fixture_sja_loads() {
         "/tests/fixtures/grep-append.json"
     );
     if std::env::var_os("UPDATE_SJA_FIXTURES").is_some() {
-        std::fs::write(
+        crate::fsio::write(
             path,
             format!("{}\n", serde_json::to_string_pretty(&now).unwrap()),
         )
         .unwrap();
     }
-    let have: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let have: Value = serde_json::from_str(&crate::fsio::read_to_string(path).unwrap()).unwrap();
     assert_eq!(
         have, now,
         "the fixture is stale: UPDATE_SJA_FIXTURES=1 rewrites it"
@@ -1056,7 +1056,10 @@ fn a_window_move_names_each_path_once() {
         .flat_map(|n| n.as_array().unwrap())
         .filter(|n| n["kind"] == "file")
         .count();
-    eprintln!("a window move of 2,000 entries: {} bytes", line.len());
+    crate::soft::err_line(&format!(
+        "a window move of 2,000 entries: {} bytes",
+        line.len()
+    ));
     assert!(added_files > 0);
     assert_eq!(
         line.matches(dir).count(),
@@ -1195,7 +1198,7 @@ fn a_stopped_run_hands_its_unticks_to_the_next() {
 fn the_run_records_each_files_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let small = dir.path().join("a.txt");
-    std::fs::write(&small, "a needle\n").unwrap();
+    crate::fsio::write(&small, "a needle\n").unwrap();
     let snap = snapshot(&small).expect("a file it can read");
     let meta = std::fs::metadata(&small).unwrap();
     assert_eq!(snap.size, 9);
@@ -1428,7 +1431,7 @@ fn ctx_matches(file: &str) -> Vec<Match> {
 fn a_label_row_goes_above_each_definitions_first_match() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("a.rs");
-    std::fs::write(&path, CTX_RS).unwrap();
+    crate::fsio::write(&path, CTX_RS).unwrap();
     let file = path.to_string_lossy().into_owned();
     let ms = ctx_matches(&file);
     let read = run::read(&path, &ms, true).expect("readable");
@@ -1489,9 +1492,9 @@ fn a_label_row_goes_above_each_definitions_first_match() {
 fn context_off_or_a_text_file_gives_no_labels() {
     let dir = tempfile::tempdir().unwrap();
     let rs = dir.path().join("a.rs");
-    std::fs::write(&rs, CTX_RS).unwrap();
+    crate::fsio::write(&rs, CTX_RS).unwrap();
     let txt = dir.path().join("a.txt");
-    std::fs::write(&txt, CTX_RS).unwrap();
+    crate::fsio::write(&txt, CTX_RS).unwrap();
     let off = run::read(&rs, &ctx_matches(&rs.to_string_lossy()), false).unwrap();
     assert!(off.ctx.iter().all(Option::is_none));
     assert_eq!(Some(off.snap), snapshot(&rs));
@@ -1509,7 +1512,7 @@ fn context_off_or_a_text_file_gives_no_labels() {
 
 /// `git ARGS` in DIR, with no user or system configuration.
 fn git_in(dir: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args([
             "-c",
             "user.name=t",
@@ -1532,7 +1535,7 @@ fn repo_of(branch: &str, files: &[(&str, &str)]) -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     git_in(d.path(), &["init", "-q", "-b", branch]);
     for (f, text) in files {
-        std::fs::write(d.path().join(f), text).unwrap();
+        crate::fsio::write(d.path().join(f), text).unwrap();
     }
     git_in(d.path(), &["add", "-A"]);
     git_in(d.path(), &["commit", "-q", "-m", "base"]);
@@ -1563,14 +1566,14 @@ fn git_scope_lists_at_a_checkouts_size() {
     for i in 0..5000 {
         let f = root.join(file(i));
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(f, &body).unwrap();
+        crate::fsio::write(f, &body).unwrap();
     }
     git_in(root, &["add", "-A"]);
     git_in(root, &["commit", "-q", "-m", "base"]);
     git_in(root, &["switch", "-q", "-c", "work"]);
     let touch = |from: usize| {
         for i in (from..from + 50).map(|k| k * 7 % 5000) {
-            std::fs::write(root.join(file(i)), format!("{body}changed\n")).unwrap();
+            crate::fsio::write(root.join(file(i)), format!("{body}changed\n")).unwrap();
         }
     };
     touch(0);
@@ -1597,10 +1600,10 @@ fn git_scope_lists_at_a_checkouts_size() {
             })
             .collect();
         ms.sort_by(f64::total_cmp);
-        println!(
+        crate::soft::out_line(&format!(
             "git-scope {name}: {files} files, p50 {:.1} ms, p95 {:.1} ms (budget {budget} ms)",
             ms[10], ms[18]
-        );
+        ));
     }
 }
 
@@ -1609,9 +1612,9 @@ fn a_changed_scope_lists_its_files_under_the_root_and_counts_the_rest() {
     let body = "one\ntwo\nthree\n";
     let d = repo_of("main", &[("a.txt", body), ("b.txt", body), ("c.txt", body)]);
     let root = d.path();
-    std::fs::write(root.join("a.txt"), "one\nneedle\nthree\n").unwrap();
+    crate::fsio::write(root.join("a.txt"), "one\nneedle\nthree\n").unwrap();
     std::fs::remove_file(root.join("c.txt")).unwrap();
-    std::fs::write(root.join("new.txt"), "needle\n").unwrap();
+    crate::fsio::write(root.join("new.txt"), "needle\n").unwrap();
     let s = scoped::find(root, &git_scope(ScopeKind::Changed, false)).unwrap();
     assert_eq!(s.files, [root.join("a.txt"), root.join("new.txt")]);
     assert_eq!(
@@ -1629,7 +1632,7 @@ fn a_changed_scope_lists_its_files_under_the_root_and_counts_the_rest() {
 fn changed_lines_keep_only_a_match_on_an_added_line() {
     let d = repo_of("main", &[("a.txt", "needle one\ntwo\nthree\n")]);
     let root = d.path();
-    std::fs::write(root.join("a.txt"), "needle one\nneedle two\nthree\n").unwrap();
+    crate::fsio::write(root.join("a.txt"), "needle one\nneedle two\nthree\n").unwrap();
     let s = scoped::find(root, &git_scope(ScopeKind::Changed, true)).unwrap();
     let a = root.join("a.txt").to_string_lossy().into_owned();
     let mut ms = vec![
@@ -2110,7 +2113,7 @@ fn regroup_ten_thousand_time() {
                 regroup_patches(&mut s, CONN, "s", run, g, None)
             })
             .unwrap();
-        println!("regroup to {g:?}: {:?}", t.elapsed());
+        crate::soft::out_line(&format!("regroup to {g:?}: {:?}", t.elapsed()));
     }
 }
 

@@ -313,7 +313,7 @@ fn steps_for(
         return Ok(vec![]);
     };
     let path = root.join(".vscode/tasks.json");
-    let text = std::fs::read_to_string(&path)
+    let text = crate::fsio::read_to_string(&path)
         .map_err(|e| format!("{field} {name}: {}: {e}", path.display()))?;
     let tasks = parse(&text).map_err(|e| format!("{}:{e}", path.display()))?;
     let tasks = tasks
@@ -515,16 +515,22 @@ async fn watch(s: &Step, bg: &Background, env: &[(OsString, OsString)]) -> Resul
         }
         let group = rustix::process::Pid::from_raw(child.id());
         if let Some(g) = group {
-            let _ = rustix::process::kill_process_group(g, rustix::process::Signal::TERM);
+            crate::soft::done(
+                rustix::process::kill_process_group(g, rustix::process::Signal::TERM),
+                "rustix::process::kill_process_group",
+            );
         }
         if crate::clock::timeout(STOP_GRACE, child.wait())
             .await
             .is_err()
         {
             if let Some(g) = group {
-                let _ = rustix::process::kill_process_group(g, rustix::process::Signal::KILL);
+                crate::soft::done(
+                    rustix::process::kill_process_group(g, rustix::process::Signal::KILL),
+                    "rustix::process::kill_process_group",
+                );
             }
-            let _ = child.wait().await;
+            crate::soft::done(child.wait().await, "tasks");
         }
     });
     Ok(Watch {

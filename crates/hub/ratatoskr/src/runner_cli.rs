@@ -495,9 +495,8 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
             regions,
             sizes,
         } => {
-            println!(
-                "{}",
-                crate::runners::cloud::aws::policy_for(&hub, &regions, &sizes)
+            crate::soft::out_line(
+                &(crate::runners::cloud::aws::policy_for(&hub, &regions, &sizes)).to_string(),
             );
             return 0;
         }
@@ -519,17 +518,17 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
         Ok(a) => {
             // `add` and `profile` answer the runner: its lack of room is said plainly, not only in the JSON
             if let Some(why) = a["no_room"].as_str() {
-                eprintln!("{}", wrap(why, 0).join("\n"));
+                crate::soft::err_line(&(wrap(why, 0).join("\n")).to_string());
             }
             if json_out || method != "runners/list" {
-                println!("{a}");
+                crate::soft::out_line(&a.to_string());
             } else {
                 print!("{}", format_list(&a));
             }
             0
         }
         Err(e) => {
-            eprintln!("ratatoskr runner: {e}");
+            crate::soft::err_line(&format!("ratatoskr runner: {e}"));
             1
         }
     }

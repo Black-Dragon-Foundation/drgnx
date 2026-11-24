@@ -127,15 +127,15 @@ fn check_ignore(root: &Path, paths: &[PathBuf]) -> BTreeSet<PathBuf> {
     let stdin = child.stdin.take();
     let writer = std::thread::spawn(move || {
         if let Some(mut s) = stdin {
-            let _ = s.write_all(&input);
+            crate::soft::done(s.write_all(&input), "shell");
         }
     });
     let mut out = Vec::new();
     if let Some(mut s) = child.stdout.take() {
-        let _ = s.read_to_end(&mut out);
+        crate::soft::done(s.read_to_end(&mut out), "shell");
     }
-    let _ = writer.join();
-    let _ = child.wait();
+    crate::soft::done(writer.join(), "shell");
+    crate::soft::done(child.wait(), "shell");
     out.split(|b| *b == 0)
         .filter(|s| !s.is_empty())
         .map(|s| PathBuf::from(std::ffi::OsStr::from_bytes(s)))
@@ -181,7 +181,7 @@ impl Traces {
     ) -> io::Result<Arc<SessionTrace>> {
         self.end(sid);
         let root = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = std::env::var_os(stig::HOME_VAR).map(PathBuf::from);
         let learned = lock(&self.learned).entry(root.clone()).or_default().clone();
         let socket = mode
             .scope()
@@ -221,7 +221,7 @@ impl Traces {
                 h.abort();
             }
             if let Some(s) = &st.socket {
-                let _ = std::fs::remove_file(s);
+                crate::soft::done(std::fs::remove_file(s), "std::fs::remove_file");
             }
         }
     }
@@ -238,8 +238,11 @@ impl Traces {
             }
             return;
         }
-        let _ = crate::clock::blocking(move || st.apply(TraceEv::StepClosed { step, command, at }))
-            .await;
+        crate::soft::done(
+            crate::clock::blocking(move || st.apply(TraceEv::StepClosed { step, command, at }))
+                .await,
+            "crate::clock::blocking",
+        );
     }
 }
 
@@ -344,7 +347,7 @@ impl SessionTrace {
             (Scope::Step, TraceMode::PerStep) => self.per_step(offer, open),
             (Scope::Tree, TraceMode::Tree) => self.tree(offer),
             _ => {
-                let _ = offer.skip();
+                crate::soft::done(offer.skip(), "shell");
             }
         }
     }
@@ -356,7 +359,7 @@ impl SessionTrace {
         let command = match open {
             Some(c) if command_matches(&offer.hello.command, &c) => c,
             Some(_) => {
-                let _ = offer.skip();
+                crate::soft::done(offer.skip(), "shell");
                 return;
             }
             None => offer.hello.command.clone(),
@@ -369,7 +372,7 @@ impl SessionTrace {
                 tree: false,
                 label: Some(LABEL_BUILD.into()),
             });
-            let _ = offer.skip();
+            crate::soft::done(offer.skip(), "shell");
             return;
         }
         self.apply(TraceEv::Started {
@@ -412,7 +415,7 @@ impl SessionTrace {
                 });
             }
         }
-        let _ = listener.join();
+        listener.join();
         self.apply(TraceEv::Ended { trace });
     }
 
@@ -461,7 +464,7 @@ impl SessionTrace {
                 });
             }
         }
-        let _ = listener.join();
+        listener.join();
     }
 
     /// O's path, unless it can be dropped now: a system or toolchain path, or a read of a file that is not there (a

@@ -110,27 +110,27 @@ pub fn run(env: &Env, cmd: PluginsCommand) -> i32 {
         PluginsCommand::Install { path, replace } => {
             match crate::plugins::install(&root, &path, replace) {
                 Ok(i) => {
-                    println!(
+                    crate::soft::out_line(&format!(
                         "installed {} {}\nhash {}\napprove it in drgnx (Extensions or Settings → Plugins)",
                         i.name, i.version, i.hash
-                    );
+                    ));
                     tell_hub(env);
                     0
                 }
                 Err(e) => {
-                    eprintln!("ratatoskr plugins: {e}");
+                    crate::soft::err_line(&format!("ratatoskr plugins: {e}"));
                     1
                 }
             }
         }
         PluginsCommand::Remove { name } => match crate::plugins::remove(&root, &name) {
             Ok(()) => {
-                println!("removed {name}");
+                crate::soft::out_line(&format!("removed {name}"));
                 tell_hub(env);
                 0
             }
             Err(e) => {
-                eprintln!("ratatoskr plugins: {e}");
+                crate::soft::err_line(&format!("ratatoskr plugins: {e}"));
                 1
             }
         },
@@ -143,7 +143,7 @@ pub fn run(env: &Env, cmd: PluginsCommand) -> i32 {
                 .and_then(|mut c| c.call("plugins/list", json!({}), CALL))
             {
                 Ok(a) if json_out => {
-                    println!("{a}");
+                    crate::soft::out_line(&a.to_string());
                     0
                 }
                 Ok(a) => {
@@ -151,7 +151,7 @@ pub fn run(env: &Env, cmd: PluginsCommand) -> i32 {
                     0
                 }
                 Err(e) => {
-                    eprintln!("ratatoskr plugins: {e}");
+                    crate::soft::err_line(&format!("ratatoskr plugins: {e}"));
                     1
                 }
             }
@@ -162,7 +162,7 @@ pub fn run(env: &Env, cmd: PluginsCommand) -> i32 {
 /// A hub that runs looks at the folder now (its cards, its events). One that does not has nothing to be told.
 fn tell_hub(env: &Env) {
     if let Ok(mut c) = Client::user(env, Duration::from_secs(2)) {
-        let _ = c.call("plugins/list", json!({}), CALL);
+        crate::soft::done(c.call("plugins/list", json!({}), CALL), "plugins_cli");
     }
 }
 

@@ -121,7 +121,7 @@ fn the_buffers_cells_make_the_notebooks_cells_removed_moved_added_and_edited() {
 fn saving_writes_the_runs_outputs_and_leaves_stale_ones_as_the_file_had_them() {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("n.ipynb");
-    std::fs::write(&path, NB).unwrap();
+    crate::fsio::write(&path, NB).unwrap();
     let mut b = Book::open(&path, NB.to_string()).unwrap();
     let minted = b.cells()[2].id.clone();
     b.sync(&[

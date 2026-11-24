@@ -25,8 +25,8 @@ impl Rig {
     fn put(&self, name: &str, manifest: &str, wasm: &[u8]) {
         let d = self.root().join(name);
         std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("plugin.json"), manifest).unwrap();
-        std::fs::write(d.join("plugin.wasm"), wasm).unwrap();
+        crate::fsio::write(d.join("plugin.json"), manifest).unwrap();
+        crate::fsio::write(d.join("plugin.wasm"), wasm).unwrap();
     }
 
     async fn global(&self, name: &str, value: Value) {
@@ -397,7 +397,7 @@ async fn kv_quota_enforced() {
 }
 
 fn public(name: &str) -> Vec<IpAddr> {
-    let _ = name;
+    let _only_when_used_elsewhere = &name;
     vec!["93.184.216.34".parse().unwrap()]
 }
 
@@ -565,8 +565,8 @@ fn http_with_no_session_and_no_job_is_refused() {
 fn source(dir: &Path, manifest: &str, wasm: &[u8]) -> PathBuf {
     let s = dir.join("src");
     std::fs::create_dir_all(&s).unwrap();
-    std::fs::write(s.join("plugin.json"), manifest).unwrap();
-    std::fs::write(s.join("plugin.wasm"), wasm).unwrap();
+    crate::fsio::write(s.join("plugin.json"), manifest).unwrap();
+    crate::fsio::write(s.join("plugin.wasm"), wasm).unwrap();
     s
 }
 
@@ -596,7 +596,7 @@ async fn install_copies_refuses_an_existing_name_and_replaces_with_a_flag() {
     assert_eq!(hash_of(&rows, "alpha"), got.hash);
     r.plugins.approve("alpha", &got.hash).await.unwrap();
 
-    std::fs::write(src.join("plugin.wasm"), b"two").unwrap();
+    crate::fsio::write(src.join("plugin.wasm"), b"two").unwrap();
     let e = install(&r.root(), &src, false).unwrap_err();
     assert!(e.contains("--replace"), "{e}");
     assert_eq!(
@@ -630,14 +630,14 @@ fn install_refuses_what_does_not_read() {
             .unwrap_err()
             .contains("plugin.json")
     );
-    std::fs::write(src.join("plugin.json"), manifest("alpha", "")).unwrap();
+    crate::fsio::write(src.join("plugin.json"), manifest("alpha", "")).unwrap();
     std::fs::remove_file(src.join("plugin.wasm")).unwrap();
     assert!(
         install(&root, &src, false)
             .unwrap_err()
             .contains("plugin.wasm")
     );
-    std::fs::write(dir.path().join("elsewhere"), b"x").unwrap();
+    crate::fsio::write(dir.path().join("elsewhere"), b"x").unwrap();
     std::os::unix::fs::symlink(dir.path().join("elsewhere"), src.join("plugin.wasm")).unwrap();
     assert!(
         install(&root, &src, false).is_err(),

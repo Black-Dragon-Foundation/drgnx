@@ -34,7 +34,7 @@ async fn start_in(fx: &Fx, profile: &str, role: Option<&str>) -> String {
 fn repo(fx: &Fx) {
     let wt = fx.work();
     git(&wt, &["init", "-q", "-b", "main"]);
-    std::fs::write(wt.join("a.txt"), FIVE).unwrap();
+    crate::fsio::write(wt.join("a.txt"), FIVE).unwrap();
     git(&wt, &["add", "-A"]);
     git(&wt, &["commit", "-q", "-m", "base"]);
 }
@@ -96,7 +96,7 @@ async fn second_agent_runs_from_the_checkpoint() {
     assert_eq!(f.level, RestoreLevel::Message);
     assert_ne!(f.branch, f.source_branch);
     assert_eq!(
-        std::fs::read_to_string(Path::new(&f.path).join("a.txt")).unwrap(),
+        crate::fsio::read_to_string(Path::new(&f.path).join("a.txt")).unwrap(),
         FIVE
     );
     assert_eq!(l.fx.read("a.txt"), edited, "the source's files stay");
@@ -220,7 +220,7 @@ async fn two() -> Two {
     let f = fork_at(&fx, &sid, target, "fs:write b.txt one\\nthree\\n").await;
     turn_end(&mut steps, &f.id).await;
     assert_eq!(
-        std::fs::read_to_string(Path::new(&f.path).join("b.txt")).unwrap(),
+        crate::fsio::read_to_string(Path::new(&f.path).join("b.txt")).unwrap(),
         "one\nthree\n",
         "the fork's agent wrote over the checkpoint"
     );
@@ -356,14 +356,14 @@ async fn take_writes_whole_hunks_into_the_worktree() {
     };
     let part = take(&t.fx.front, &user(), taking(h.theirs_end - 1)).await;
     assert!(part.is_err(), "{part:?}");
-    std::fs::write(wt.join("b.txt"), "mine\n").unwrap();
+    crate::fsio::write(wt.join("b.txt"), "mine\n").unwrap();
     let r = take(&t.fx.front, &user(), taking(h.theirs_end)).await;
     assert!(
         r.as_ref().is_err_and(|e| e.message.contains("stale")),
         "{r:?}"
     );
     assert_eq!(t.fx.read("b.txt"), "mine\n");
-    std::fs::write(wt.join("b.txt"), "one\ntwo\n").unwrap();
+    crate::fsio::write(wt.join("b.txt"), "one\ntwo\n").unwrap();
     let r = take(&t.fx.front, &user(), taking(h.theirs_end))
         .await
         .unwrap();
@@ -410,7 +410,7 @@ async fn redo_puts_back_what_the_revert_undid() {
     let edited = l.fx.read("a.txt");
     let a = reverted(&l).await;
     assert_eq!(l.fx.read("a.txt"), FIVE);
-    std::fs::write(l.wt().join("a.txt"), FIVE.replace("l1", "L1")).unwrap();
+    crate::fsio::write(l.wt().join("a.txt"), FIVE.replace("l1", "L1")).unwrap();
     let head = crate::timeline::snapshot::head_of(&l.wt());
     let r = redone(&l, a.op).await;
     assert_eq!(l.fx.read("a.txt"), edited.replace("l1", "L1"));
@@ -435,7 +435,7 @@ async fn redo_keeps_the_users_conflicting_edit() {
     let l = Live::new().await;
     let a = reverted(&l).await;
     let mine = format!("{FIVE}mine\n");
-    std::fs::write(l.wt().join("a.txt"), &mine).unwrap();
+    crate::fsio::write(l.wt().join("a.txt"), &mine).unwrap();
     let r = redone(&l, a.op).await;
     assert_eq!(l.fx.read("a.txt"), mine);
     assert!(r.written.is_empty(), "{r:?}");

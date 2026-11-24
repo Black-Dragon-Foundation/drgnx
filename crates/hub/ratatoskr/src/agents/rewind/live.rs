@@ -49,7 +49,7 @@ async fn turn(fx: &Fx, sid: &str, text: &str) -> i64 {
 }
 
 fn lines(path: &PathBuf, key: &str) -> Vec<Value> {
-    std::fs::read_to_string(path)
+    crate::fsio::read_to_string(path)
         .unwrap_or_default()
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())

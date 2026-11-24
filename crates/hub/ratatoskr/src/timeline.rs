@@ -41,7 +41,7 @@ pub struct SnapState {
 impl SnapState {
     /// The checkpoints' folder, where the markers are (the first one told stays).
     fn attach(&self, root: &Path) {
-        let _ = self.root.set(root.to_path_buf());
+        crate::soft::done(self.root.set(root.to_path_buf()), "timeline");
     }
 
     fn marker(&self, sid: &str) -> Option<PathBuf> {
@@ -57,7 +57,7 @@ impl SnapState {
         for sid in gone {
             if let Some(m) = self.marker(sid) {
                 let made = m.parent().map(std::fs::create_dir_all).transpose();
-                if let Err(e) = made.and_then(|_| std::fs::write(&m, b"")) {
+                if let Err(e) = made.and_then(|_| crate::fsio::write(&m, b"")) {
                     tracing::warn!(sid, "the pruned mark was not kept: {e}");
                 }
             }

@@ -10,18 +10,18 @@ fn an_edit_is_measured_from_the_manifest_and_env_files_are_not() {
     let d = tempfile::tempdir().unwrap();
     let t = d.path();
     std::fs::create_dir_all(t.join("pkg")).unwrap();
-    std::fs::write(t.join("stock.py"), "a = 1\n").unwrap();
-    std::fs::write(t.join("pkg/m.py"), "b = 2\n").unwrap();
-    std::fs::write(t.join(".env"), "").unwrap();
+    crate::fsio::write(t.join("stock.py"), "a = 1\n").unwrap();
+    crate::fsio::write(t.join("pkg/m.py"), "b = 2\n").unwrap();
+    crate::fsio::write(t.join(".env"), "").unwrap();
     let before = manifest(t);
     assert_eq!(
         before.keys().cloned().collect::<Vec<_>>(),
         ["pkg/m.py", "stock.py"]
     );
-    std::fs::write(t.join("stock.py"), "a = 2\n").unwrap();
-    std::fs::write(t.join("new.py"), "c = 3\n").unwrap();
+    crate::fsio::write(t.join("stock.py"), "a = 2\n").unwrap();
+    crate::fsio::write(t.join("new.py"), "c = 3\n").unwrap();
     std::fs::remove_file(t.join("pkg/m.py")).unwrap();
-    std::fs::write(t.join(".env.local"), "X=1").unwrap();
+    crate::fsio::write(t.join(".env.local"), "X=1").unwrap();
     assert_eq!(
         differ(&before, &manifest(t)),
         ["new.py", "pkg/m.py", "stock.py"]
@@ -36,7 +36,7 @@ fn env_files_are_bound_at_their_places_in_the_tree() {
     std::fs::create_dir_all(root.join("app")).unwrap();
     std::fs::create_dir_all(&tree).unwrap();
     for f in [".env", ".env.test", "app/.env", "app/settings.env", "envrc"] {
-        std::fs::write(root.join(f), "").unwrap();
+        crate::fsio::write(root.join(f), "").unwrap();
     }
     let config = json!({
         "cwd": tree.join("app").to_string_lossy(),
@@ -69,8 +69,8 @@ fn the_spec_is_sealed_and_validates() {
     for p in [&tree, &tmp, &root] {
         std::fs::create_dir_all(p).unwrap();
     }
-    std::fs::write(root.join(".env"), "").unwrap();
-    std::fs::write(tree.join(".env"), "").unwrap();
+    crate::fsio::write(root.join(".env"), "").unwrap();
+    crate::fsio::write(tree.join(".env"), "").unwrap();
     let shape = Shape {
         tree: &tree,
         tmp: &tmp,
@@ -113,7 +113,7 @@ fn the_mac_spec_keeps_to_its_block_and_reads_env_files_in_place() {
     for p in [&tree, &tmp, &root] {
         std::fs::create_dir_all(p).unwrap();
     }
-    std::fs::write(root.join(".env"), "API_TOKEN=x\n").unwrap();
+    crate::fsio::write(root.join(".env"), "API_TOKEN=x\n").unwrap();
     let env_files = vec![(root.join(".env"), tree.join(".env"))];
     link_env_files(&env_files).unwrap();
     assert_eq!(
@@ -121,7 +121,7 @@ fn the_mac_spec_keeps_to_its_block_and_reads_env_files_in_place() {
         root.join(".env")
     );
     assert_eq!(
-        std::fs::read_to_string(tree.join(".env")).unwrap(),
+        crate::fsio::read_to_string(root.join(".env")).unwrap(),
         "API_TOKEN=x\n"
     );
     // a second fork of the same tree finds the link there

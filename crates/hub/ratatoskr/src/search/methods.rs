@@ -255,7 +255,7 @@ pub fn config_file(root: &Path) -> Result<hrafn::rules::RuleSet, String> {
 impl Hub {
     /// The front, once it is in its `Arc` (the MCP tool reaches the hub through it).
     pub fn bind(&self, front: &Arc<Front>) {
-        let _ = self.front.set(Arc::downgrade(front));
+        crate::soft::done(self.front.set(Arc::downgrade(front)), "methods");
     }
 
     /// The front the hub was bound to, while it lives.
@@ -266,16 +266,22 @@ impl Hub {
     /// Where things are, once the server knows: ENV for the state and cache folders, HOME and CONFIG for the deny-list,
     /// RUNTIME for the model consent.
     pub fn configure(&self, env: &Env, home: PathBuf, config: PathBuf, runtime: urdr::Handle) {
-        let _ = self.search.set(Search::new(env));
-        let _ = self.saved.set(Arc::new(Saved::new(
-            paths::state_dir(env).join("hub").join("search"),
-        )));
-        let _ = self.dirs.set(Dirs {
-            env: env.clone(),
-            home,
-            config,
-            runtime,
-        });
+        crate::soft::done(self.search.set(Search::new(env)), "methods");
+        crate::soft::done(
+            self.saved.set(Arc::new(Saved::new(
+                paths::state_dir(env).join("hub").join("search"),
+            ))),
+            "methods",
+        );
+        crate::soft::done(
+            self.dirs.set(Dirs {
+                env: env.clone(),
+                home,
+                config,
+                runtime,
+            }),
+            "methods",
+        );
     }
 
     /// The built-in model's worker, once the model is `Ready` in the cache.
@@ -333,7 +339,7 @@ impl Hub {
             }
         }
         WatchStatus {
-            max_user_watches: std::fs::read_to_string(MAX_USER_WATCHES)
+            max_user_watches: crate::fsio::read_to_string(MAX_USER_WATCHES)
                 .ok()
                 .and_then(|t| t.trim().parse().ok()),
             projects,
@@ -347,11 +353,14 @@ impl Hub {
         let Some(s) = self.saved.get() else { return };
         if s.offer(root, view, spec, crate::clock::now()) {
             let (s, root) = (Arc::clone(s), root.to_path_buf());
-            let _ = std::thread::Builder::new()
-                .name("search-recent".into())
-                .spawn(move || {
-                    let _ = s.flush(&root);
-                });
+            crate::soft::done(
+                std::thread::Builder::new()
+                    .name("search-recent".into())
+                    .spawn(move || {
+                        crate::soft::done(s.flush(&root), "methods");
+                    }),
+                "std::thread::Builder::new",
+            );
         }
     }
 
@@ -1234,7 +1243,7 @@ impl Hub {
                     .and_then(|s| s.lock().ok().map(|s| s.watched as u64))
             })
             .unwrap_or(0);
-        let limit: Option<u64> = std::fs::read_to_string(MAX_USER_WATCHES)
+        let limit: Option<u64> = crate::fsio::read_to_string(MAX_USER_WATCHES)
             .ok()
             .and_then(|t| t.trim().parse().ok());
         let watch = w::SearchWatch {
@@ -1625,7 +1634,7 @@ impl Hub {
         if given.is_none() {
             let to = write_to.with_file_name(format!("{}.vpack", &done.sha256[..16]));
             let (from, dest) = (write_to.clone(), to.clone());
-            clock::blocking(move || std::fs::rename(from, dest))
+            clock::blocking(move || crate::fsio::rename(from, dest))
                 .await
                 .map_err(internal)?
                 .map_err(internal)?;

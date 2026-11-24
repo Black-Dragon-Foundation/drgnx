@@ -71,8 +71,11 @@ impl Hub {
         let report = serde_json::json!({"size": g.h.size()?, "cap": cap, "at": now, "pins": pins});
         // a copy of the report that cannot be written is no reason to fail the sweep: the doctor says it is missing
         let tmp = self.dir.join(format!("{REPORT}.tmp"));
-        if std::fs::write(&tmp, report.to_string()).is_ok() {
-            let _ = std::fs::rename(&tmp, self.dir.join(REPORT));
+        if crate::fsio::write(&tmp, report.to_string()).is_ok() {
+            crate::soft::done(
+                crate::fsio::rename(&tmp, self.dir.join(REPORT)),
+                "crate::fsio::rename",
+            );
         }
         Ok(Swept { expired, compacted })
     }
@@ -100,7 +103,10 @@ impl Hub {
                     let Some(hub) = weak.upgrade() else { return };
                     // read here: a blocking thread does not carry the virtual clock
                     let now = crate::clock::wall_secs();
-                    let _ = crate::clock::blocking(move || hub.settle_due(now)).await;
+                    crate::soft::done(
+                        crate::clock::blocking(move || hub.settle_due(now)).await,
+                        "crate::clock::blocking",
+                    );
                 }
             }
         });
@@ -111,7 +117,10 @@ impl Hub {
                     crate::clock::sleep(PARK_EVERY).await;
                     let Some(hub) = weak.upgrade() else { return };
                     let now = crate::clock::wall_secs();
-                    let _ = crate::clock::blocking(move || hub.park_idle(now)).await;
+                    crate::soft::done(
+                        crate::clock::blocking(move || hub.park_idle(now)).await,
+                        "crate::clock::blocking",
+                    );
                 }
             }
         });
@@ -142,7 +151,7 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         let git = |args: &[&str]| {
             assert!(
-                std::process::Command::new("git")
+                crate::proc::Command::new("git")
                     .args(["-c", "user.name=t", "-c", "user.email=t@t"])
                     .args(args)
                     .current_dir(repo.path())
@@ -153,14 +162,14 @@ mod tests {
             )
         };
         git(&["init", "-q", "-b", "main"]);
-        std::fs::write(repo.path().join("a.txt"), "one\n").unwrap();
+        crate::fsio::write(repo.path().join("a.txt"), "one\n").unwrap();
         git(&["add", "."]);
         git(&["commit", "-q", "-m", "base"]);
         let hist = tempfile::tempdir().unwrap();
         let hub = Arc::new(Hub::open(hist.path()).unwrap());
         // the base is the commit: the document starts as the file on disk (with no base it starts empty and
         // `register` records the disk as an outside change, an op before anyone typed)
-        let head = std::process::Command::new("git")
+        let head = crate::proc::Command::new("git")
             .args(["rev-parse", "HEAD"])
             .current_dir(repo.path())
             .output()

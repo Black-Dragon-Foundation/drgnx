@@ -105,13 +105,13 @@ impl BrokerHandle {
     /// Stop the browser (`why`: `memory`, or the caller's reason); an agent connected gets a 1001 close. A stopped
     /// browser starts again at the next upgrade.
     pub fn stop(&self, why: &str) {
-        let _ = self.ctl.send(Cmd::Stop(why.to_owned()));
+        crate::soft::done(self.ctl.send(Cmd::Stop(why.to_owned())), "ctl send");
     }
 
     /// End the broker: the browser stopped (`hub`), the agent closed, no more upgrades, and the socketpair closed, so
     /// the browser host exits.
     pub fn close(&self) {
-        let _ = self.ctl.send(Cmd::Close);
+        crate::soft::done(self.ctl.send(Cmd::Close), "ctl send");
         self.accept.abort();
     }
 
@@ -373,7 +373,7 @@ impl Actor {
                         Claim::Free(conn)
                     }
                 };
-                let _ = reply.send(answer);
+                crate::soft::done(reply.send(answer), "reply send");
             }
             Cmd::Agent { conn, tx, ack } => {
                 let Some(slot) = self.agent.as_mut().filter(|s| s.conn == conn) else {
@@ -385,7 +385,7 @@ impl Actor {
                 if self.state == State::Stopped {
                     self.start_browser().await;
                 }
-                let _ = ack.send(());
+                crate::soft::done(ack.send(()), "ack send");
             }
             Cmd::AgentGone { conn } => {
                 if self.agent.as_ref().is_some_and(|s| s.conn == conn) {
@@ -415,7 +415,7 @@ impl Actor {
         };
         self.connected.store(false, Ordering::Release);
         if let (Some((code, why)), Some(tx)) = (close, &slot.tx) {
-            let _ = tx.send(ToAgent::Close(code, reason(&why))).await;
+            crate::soft::done(tx.send(ToAgent::Close(code, reason(&why))).await, "tx send");
         }
         self.held.clear();
         self.held_bytes = 0;
@@ -496,13 +496,16 @@ impl Actor {
 
     async fn send_agent(&mut self, msg: Vec<u8>) {
         if let Some(tx) = self.agent.as_ref().and_then(|s| s.tx.as_ref()) {
-            let _ = tx.send(ToAgent::Text(msg)).await;
+            crate::soft::done(tx.send(ToAgent::Text(msg)).await, "tx send");
         }
     }
 
     async fn send_host(&mut self, kind: u8, payload: Vec<u8>) {
         if let Some(tx) = &self.host_tx {
-            let _ = tx.send(codec::Frame::encode(kind, &payload)).await;
+            crate::soft::done(
+                tx.send(codec::Frame::encode(kind, &payload)).await,
+                "tx send",
+            );
         }
     }
 
@@ -551,7 +554,10 @@ impl Actor {
                 Some("exited") => self.exited(&v).await,
                 Some("stderr") => {
                     if let Some(tx) = &self.stderr {
-                        let _ = tx.send(v["line"].as_str().unwrap_or("").to_owned());
+                        crate::soft::done(
+                            tx.send(v["line"].as_str().unwrap_or("").to_owned()),
+                            "tx send",
+                        );
                     }
                     tracing::debug!(
                         "cdp://{}: browser: {}",
@@ -702,10 +708,12 @@ async fn accept(listener: UnixListener, sh: Arc<Shared>) {
             let mut b = http1::Builder::new();
             b.timer(TokioTimer::new())
                 .header_read_timeout(HEADER_READ_TIMEOUT);
-            let _ = b
-                .serve_connection(TokioIo::new(s), svc)
-                .with_upgrades()
-                .await;
+            crate::soft::done(
+                b.serve_connection(TokioIo::new(s), svc)
+                    .with_upgrades()
+                    .await,
+                "broker",
+            );
         });
     }
 }
@@ -766,7 +774,7 @@ async fn handle(sh: Arc<Shared>, mut req: Request<Incoming>) -> Response<Full<By
     let (resp, fut) = match fastwebsockets::upgrade::upgrade(&mut req) {
         Ok(x) => x,
         Err(_) => {
-            let _ = sh.ctl.send(Cmd::AgentGone { conn });
+            crate::soft::done(sh.ctl.send(Cmd::AgentGone { conn }), "ctl send");
             return status(StatusCode::NOT_FOUND, "");
         }
     };
@@ -780,7 +788,7 @@ async fn agent_conn(sh: Arc<Shared>, conn: u64, fut: fastwebsockets::upgrade::Up
         Ok(ws) => ws,
         Err(e) => {
             tracing::debug!("cdp://{}: the upgrade did not complete: {e}", sh.sid);
-            let _ = sh.ctl.send(Cmd::AgentGone { conn });
+            crate::soft::done(sh.ctl.send(Cmd::AgentGone { conn }), "ctl send");
             return;
         }
     };
@@ -811,7 +819,10 @@ async fn agent_conn(sh: Arc<Shared>, conn: u64, fut: fastwebsockets::upgrade::Up
                 ToAgent::Text(b) => wr.write_frame(Frame::text(Payload::Owned(b))).await,
                 ToAgent::Frame(f) => wr.write_frame(f).await,
                 ToAgent::Close(code, why) => {
-                    let _ = wr.write_frame(Frame::close(code, why.as_bytes())).await;
+                    crate::soft::done(
+                        wr.write_frame(Frame::close(code, why.as_bytes())).await,
+                        "broker",
+                    );
                     clock::sleep(CLOSE_WAIT).await;
                     break;
                 }
@@ -847,7 +858,7 @@ async fn agent_conn(sh: Arc<Shared>, conn: u64, fut: fastwebsockets::upgrade::Up
             Err(_) => break,
         }
     }
-    let _ = sh.ctl.send(Cmd::AgentGone { conn });
+    crate::soft::done(sh.ctl.send(Cmd::AgentGone { conn }), "ctl send");
 }
 
 /// `__test_browser_endpoint {socket}` (test-hooks): a broker on SOCKET whose gate allows, with no browser host

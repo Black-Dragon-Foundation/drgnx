@@ -14,7 +14,7 @@ const FIVE: &str = "l1\nl2\nl3\nl4\nl5\n";
 const AGENT: &str = "A1\nl2\nl3\nl4\nl5\n";
 
 fn sh(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])
         .args(args)
         .current_dir(dir)
@@ -49,22 +49,25 @@ impl Fx {
         for s in ["home", "config", "hub"] {
             std::fs::create_dir_all(d.path().join(s)).unwrap();
         }
-        let _ = f.dirs.set(crate::graph::StoreDirs {
-            home: d.path().join("home"),
-            config: d.path().join("config"),
-            hub: d.path().join("hub"),
-        });
+        crate::soft::done(
+            f.dirs.set(crate::graph::StoreDirs {
+                home: d.path().join("home"),
+                config: d.path().join("config"),
+                hub: d.path().join("hub"),
+            }),
+            "tests",
+        );
         let root = d.path().join("hub").join("checkpoints");
         let wt = d.path().join("wt");
         std::fs::create_dir_all(&wt).unwrap();
         sh(&wt, &["init", "-q", "-b", "main"]);
-        std::fs::write(wt.join("a.txt"), FIVE).unwrap();
+        crate::fsio::write(wt.join("a.txt"), FIVE).unwrap();
         sh(&wt, &["add", "-A"]);
         sh(&wt, &["commit", "-q", "-m", "base"]);
         let h0 = sh(&wt, &["rev-parse", "HEAD"]);
         let cp2 = snapshot::take(&root, &wt, "s1", 2, &[]).unwrap();
-        std::fs::write(wt.join("a.txt"), AGENT).unwrap();
-        std::fs::write(wt.join("b.txt"), "agent's\n").unwrap();
+        crate::fsio::write(wt.join("a.txt"), AGENT).unwrap();
+        crate::fsio::write(wt.join("b.txt"), "agent's\n").unwrap();
         if commit {
             sh(&wt, &["add", "-A"]);
             sh(&wt, &["commit", "-q", "-m", "agent"]);
@@ -173,7 +176,7 @@ impl Fx {
     }
 
     fn read(&self, rel: &str) -> Option<String> {
-        std::fs::read_to_string(self.wt.join(rel)).ok()
+        crate::fsio::read_to_string(self.wt.join(rel)).ok()
     }
 
     async fn status_of(&self, n: i64) -> Option<String> {
@@ -213,11 +216,14 @@ impl Fx {
     fn again(&self) -> Front {
         let d = self._d.path();
         let f = crate::runner::graph_plan_tests::front(d);
-        let _ = f.dirs.set(crate::graph::StoreDirs {
-            home: d.join("home"),
-            config: d.join("config"),
-            hub: d.join("hub"),
-        });
+        crate::soft::done(
+            f.dirs.set(crate::graph::StoreDirs {
+                home: d.join("home"),
+                config: d.join("config"),
+                hub: d.join("hub"),
+            }),
+            "tests",
+        );
         f
     }
 
@@ -266,7 +272,7 @@ async fn a_preview_is_stored_and_applied_once_after_a_restart() {
 #[tokio::test(flavor = "multi_thread")]
 async fn merged_and_edited_texts_are_announced_as_the_hubs() {
     let fx = Fx::new(false, true).await;
-    std::fs::write(fx.wt.join("a.txt"), "A1\nl2\nl3\nl4\nU5\n").unwrap();
+    crate::fsio::write(fx.wt.join("a.txt"), "A1\nl2\nl3\nl4\nU5\n").unwrap();
     let card = fx.preview().await.unwrap();
     fx.apply(card.preview_id, None, vec![]).await.unwrap();
     let merged = "l1\nl2\nl3\nl4\nU5\n";
@@ -274,7 +280,7 @@ async fn merged_and_edited_texts_are_announced_as_the_hubs() {
     assert!(fx.announced("a.txt", merged));
 
     let fx = Fx::new(false, true).await;
-    std::fs::write(fx.wt.join("a.txt"), "U1\nl2\nl3\nl4\nl5\n").unwrap();
+    crate::fsio::write(fx.wt.join("a.txt"), "U1\nl2\nl3\nl4\nl5\n").unwrap();
     let card = fx.preview().await.unwrap();
     let edited = RevertChoice::Edited {
         text: "E1\n".into(),
@@ -340,7 +346,7 @@ async fn commits_after_the_step_get_one_forward_commit() {
 #[tokio::test(flavor = "multi_thread")]
 async fn users_later_edit_is_merged_not_overwritten() {
     let fx = Fx::new(false, true).await;
-    std::fs::write(fx.wt.join("a.txt"), "A1\nl2\nl3\nl4\nU5\n").unwrap();
+    crate::fsio::write(fx.wt.join("a.txt"), "A1\nl2\nl3\nl4\nU5\n").unwrap();
     let card = fx.preview().await.unwrap();
     assert_eq!(card.non_overlapping_files, ["a.txt"]);
     assert!(card.overlaps.is_empty());
@@ -356,7 +362,7 @@ async fn users_later_edit_is_merged_not_overwritten() {
 async fn users_conflicting_edit_is_kept_unless_chosen() {
     let fx = Fx::new(false, true).await;
     let mine = "U1\nl2\nl3\nl4\nl5\n";
-    std::fs::write(fx.wt.join("a.txt"), mine).unwrap();
+    crate::fsio::write(fx.wt.join("a.txt"), mine).unwrap();
     let card = fx.preview().await.unwrap();
     assert_eq!(card.overlaps.len(), 1);
     assert_eq!(card.overlaps[0].path, "a.txt");
@@ -376,7 +382,7 @@ async fn users_conflicting_edit_is_kept_unless_chosen() {
 
     // again, taking the reverted file: the user's version is kept under undone
     let fx = Fx::new(false, true).await;
-    std::fs::write(fx.wt.join("a.txt"), mine).unwrap();
+    crate::fsio::write(fx.wt.join("a.txt"), mine).unwrap();
     let card = fx.preview().await.unwrap();
     let a = fx
         .apply(card.preview_id, None, vec![RevertChoice::TakeReverted])
@@ -391,7 +397,7 @@ async fn users_conflicting_edit_is_kept_unless_chosen() {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_edited_answer_writes_its_text() {
     let fx = Fx::new(false, true).await;
-    std::fs::write(fx.wt.join("a.txt"), "U1\nl2\nl3\nl4\nl5\n").unwrap();
+    crate::fsio::write(fx.wt.join("a.txt"), "U1\nl2\nl3\nl4\nl5\n").unwrap();
     let card = fx.preview().await.unwrap();
     fx.apply(
         card.preview_id,
@@ -410,7 +416,7 @@ async fn an_edited_answer_writes_its_text() {
 async fn roll_back_mine_keeps_the_users_version_under_undone() {
     let fx = Fx::new(false, true).await;
     let mine = "A1\nl2\nl3\nl4\nU5\n";
-    std::fs::write(fx.wt.join("a.txt"), mine).unwrap();
+    crate::fsio::write(fx.wt.join("a.txt"), mine).unwrap();
     let card = fx.preview().await.unwrap();
     let a = fx
         .apply(card.preview_id, Some(RevertMode::RollBackMine), vec![])
@@ -426,7 +432,7 @@ async fn roll_back_mine_keeps_the_users_version_under_undone() {
 async fn stale_preview_is_refused() {
     let fx = Fx::new(false, true).await;
     let card = fx.preview().await.unwrap();
-    std::fs::write(fx.wt.join("c.txt"), "typed\n").unwrap();
+    crate::fsio::write(fx.wt.join("c.txt"), "typed\n").unwrap();
     let e = fx.apply(card.preview_id, None, vec![]).await.unwrap_err();
     assert!(e.message.starts_with("stale:"), "{e:?}");
     assert_eq!(fx.read("a.txt").as_deref(), Some(AGENT));

@@ -94,7 +94,7 @@ fn read_slots(from: &str) -> Result<String, String> {
             .read_to_string(&mut text)
             .map_err(|e| format!("standard input: {e}"))?;
     } else {
-        text = std::fs::read_to_string(from).map_err(|e| format!("{from}: {e}"))?;
+        text = crate::fsio::read_to_string(from).map_err(|e| format!("{from}: {e}"))?;
     }
     Ok(text)
 }
@@ -105,12 +105,12 @@ pub fn run(env: &Env, cmd: &MachinesCommand) -> i32 {
         Ok(text) => match cmd.params(text.as_deref()) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("ratatoskr machines: {e}");
+                crate::soft::err_line(&format!("ratatoskr machines: {e}"));
                 return 2;
             }
         },
         Err(e) => {
-            eprintln!("ratatoskr machines: {e}");
+            crate::soft::err_line(&format!("ratatoskr machines: {e}"));
             return 2;
         }
     };
@@ -122,11 +122,11 @@ pub fn run(env: &Env, cmd: &MachinesCommand) -> i32 {
         .and_then(|mut c| c.call("machines/report", params, CALL))
     {
         Ok(a) => {
-            println!("{a}");
+            crate::soft::out_line(&a.to_string());
             0
         }
         Err(e) => {
-            eprintln!("ratatoskr machines: {e}");
+            crate::soft::err_line(&format!("ratatoskr machines: {e}"));
             1
         }
     }

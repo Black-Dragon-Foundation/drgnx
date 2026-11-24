@@ -336,12 +336,12 @@ impl Store {
     /// `FILE.damaged` and the store starts empty.
     pub fn open(file: Option<PathBuf>) -> Store {
         let data = match &file {
-            Some(f) => match std::fs::read_to_string(f) {
+            Some(f) => match crate::fsio::read_to_string(f) {
                 Ok(t) => serde_json::from_str(&t).unwrap_or_else(|e| {
                     tracing::warn!(target: "drgnx::debug", "breakpoints {}: {e}; kept aside", f.display());
                     let mut aside = f.as_os_str().to_owned();
                     aside.push(".damaged");
-                    let _ = std::fs::rename(f, PathBuf::from(aside));
+                    crate::soft::done(crate::fsio::rename(f, PathBuf::from(aside)), "crate::fsio::rename");
                     Data::default()
                 }),
                 Err(_) => Data::default(),

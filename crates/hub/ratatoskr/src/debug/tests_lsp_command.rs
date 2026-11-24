@@ -45,12 +45,12 @@ fn a_glob_names_exactly_one_file_under_the_tools_folder() {
     let dir = tempfile::tempdir().unwrap();
     let plugins = dir.path().join("jdtls/plugins");
     std::fs::create_dir_all(&plugins).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         plugins.join("org.eclipse.equinox.launcher_1.6.900.v2024.jar"),
         "",
     )
     .unwrap();
-    std::fs::write(plugins.join("other.jar"), "").unwrap();
+    crate::fsio::write(plugins.join("other.jar"), "").unwrap();
     let v = vars(dir.path());
     let got = expand(
         "{glob:jdtls/plugins/org.eclipse.equinox.launcher_*.jar}",
@@ -67,7 +67,7 @@ fn a_glob_names_exactly_one_file_under_the_tools_folder() {
             .unwrap_err()
             .contains("matches nothing")
     );
-    std::fs::write(plugins.join("org.eclipse.equinox.launcher_2.jar"), "").unwrap();
+    crate::fsio::write(plugins.join("org.eclipse.equinox.launcher_2.jar"), "").unwrap();
     assert!(
         expand(
             "{glob:jdtls/plugins/org.eclipse.equinox.launcher_*.jar}",

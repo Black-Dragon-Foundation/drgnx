@@ -1123,8 +1123,8 @@ pub(crate) mod tests {
 
     impl Drop for Mock {
         fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            crate::soft::done(self.child.kill(), "embed");
+            crate::soft::done(self.child.wait(), "embed");
         }
     }
 
@@ -1132,7 +1132,7 @@ pub(crate) mod tests {
         /// `ratatoskr-mock llm` with SCRIPT (the answers), logging to a file in DIR.
         fn start(dir: &Path, script: &Value) -> Mock {
             let file = dir.join("script.json");
-            std::fs::write(&file, script.to_string()).unwrap();
+            crate::fsio::write(&file, script.to_string()).unwrap();
             let log = dir.join("mock.log");
             let mut child = Command::new(mock_binary())
                 .args(["llm", "--script"])
@@ -1159,7 +1159,7 @@ pub(crate) mod tests {
 
         /// The texts of each request that reached `/embed`, in order.
         fn requests(&self) -> Vec<Vec<String>> {
-            let text = std::fs::read_to_string(&self.log).unwrap_or_default();
+            let text = crate::fsio::read_to_string(&self.log).unwrap_or_default();
             text.lines()
                 .filter_map(|l| serde_json::from_str::<Value>(l).ok())
                 .filter_map(|v| v.get("request").cloned())
@@ -1324,7 +1324,7 @@ pub(crate) mod tests {
         let sent = mock.requests();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0], ["fine one", "fine two"]);
-        let log = std::fs::read_to_string(&mock.log).unwrap();
+        let log = crate::fsio::read_to_string(&mock.log).unwrap();
         assert!(!log.contains(&canary), "a denied text reached the provider");
         assert_eq!(vectors(&db).await, 2);
     }

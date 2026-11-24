@@ -301,7 +301,7 @@ impl HubIo {
                 .await
                 .map_err(|e| format!("HTTP: {e}"))?;
         let _conn = Abort(crate::clock::spawn("plugins/http", async move {
-            let _ = conn.await;
+            crate::soft::done(conn.await, "hub_io");
         }));
         let resp = crate::clock::real(sender.send_request(request(req)?))
             .await

@@ -163,10 +163,13 @@ async fn listing(
             )));
         };
         front.groups.running.lock().unwrap().remove(tree);
-        let text = std::fs::read_to_string(wt.join(LISTING_OUT)).ok();
+        let text = crate::fsio::read_to_string(wt.join(LISTING_OUT)).ok();
         let end = listing_end(done.status, done.exit, text.as_deref());
         let (d, w) = (dir.to_owned(), wt.clone());
-        let _ = crate::clock::blocking(move || remove_tree(&d, &w)).await;
+        crate::soft::done(
+            crate::clock::blocking(move || remove_tree(&d, &w)).await,
+            "crate::clock::blocking",
+        );
         match end {
             Ok(g) => {
                 front.groups.ends.lock().unwrap().remove(tree);
@@ -224,7 +227,10 @@ async fn listing(
         }
         Err(e) => {
             let d = dir.to_owned();
-            let _ = crate::clock::blocking(move || remove_tree(&d, &wt)).await;
+            crate::soft::done(
+                crate::clock::blocking(move || remove_tree(&d, &wt)).await,
+                "crate::clock::blocking",
+            );
             Err(e.message)
         }
     }
@@ -232,9 +238,12 @@ async fn listing(
 
 /// Remove the listing's detached tree WT of the line's tree DIR.  Blocking.
 fn remove_tree(dir: &Path, wt: &Path) {
-    let _ = git(
-        dir,
-        &["worktree", "remove", "--force", &wt.to_string_lossy()],
+    crate::soft::done(
+        git(
+            dir,
+            &["worktree", "remove", "--force", &wt.to_string_lossy()],
+        ),
+        "git",
     );
 }
 
@@ -507,7 +516,6 @@ async fn reruns(
 mod tests {
     use super::*;
     use runstav::methods::exec::ExecStatus;
-    use std::process::Command;
     use vordr::rows::Class;
 
     #[test]
@@ -561,7 +569,7 @@ mod tests {
     }
 
     fn sh(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -579,7 +587,7 @@ mod tests {
     }
 
     fn commit(dir: &Path, file: &str, text: &str) -> String {
-        std::fs::write(dir.join(file), text).unwrap();
+        crate::fsio::write(dir.join(file), text).unwrap();
         sh(dir, &["add", "-A"]);
         sh(dir, &["commit", "-q", "-m", file]);
         sh(dir, &["rev-parse", "HEAD"])

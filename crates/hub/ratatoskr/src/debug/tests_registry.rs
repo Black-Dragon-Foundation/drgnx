@@ -823,7 +823,7 @@ async fn a_stop_publishes_its_inline_values() {
     let dir = std::env::temp_dir().join(format!("drgnx-inline-hub-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("app.py");
-    std::fs::write(&path, "def f(n):\n    total = n * 2\n    return total\n").unwrap();
+    crate::fsio::write(&path, "def f(n):\n    total = n * 2\n    return total\n").unwrap();
     let stopped = |total: i64| {
         vec![
             json!({"event": "stopped", "body": {"reason": "step", "threadId": 1}}),

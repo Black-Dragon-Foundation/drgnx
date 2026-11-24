@@ -66,7 +66,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub fn hex(hash: &[u8; 32]) -> String {
     use std::fmt::Write;
     hash.iter().fold(String::with_capacity(64), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
+        crate::soft::done(write!(s, "{b:02x}"), "write");
         s
     })
 }
@@ -256,7 +256,7 @@ pub fn host_io(
 impl Plugins {
     /// The plugins under ROOT (`<data>/plugins`), their approvals in DB (`runtime.db`) and the lists in SETTINGS.
     pub fn open(&self, root: PathBuf, db: urdr::Handle, settings: Arc<Settings>) {
-        let _ = self.open.set(Open { root, db, settings });
+        crate::soft::done(self.open.set(Open { root, db, settings }), "plugins");
     }
 
     /// Every plugin's row and the names the user's setting turns on, as of the last [`Plugins::sync`]: memory only,
@@ -311,7 +311,7 @@ impl Plugins {
             .collect();
         for id in ids {
             if let Some((_, tx)) = by.remove(&id) {
-                let _ = tx.send(());
+                crate::soft::done(tx.send(()), "tx send");
             }
         }
     }
@@ -870,8 +870,8 @@ pub fn install(root: &Path, src: &Path, replace: bool) -> Result<Installation, S
         .ok_or_else(|| format!("{}: has no parent folder", root.display()))?;
     let stage = parent.join(format!(".plugin-new-{name}-{}", std::process::id()));
     let old = parent.join(format!(".plugin-old-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&stage);
-    let _ = std::fs::remove_dir_all(&old);
+    crate::soft::done(std::fs::remove_dir_all(&stage), "std::fs::remove_dir_all");
+    crate::soft::done(std::fs::remove_dir_all(&old), "std::fs::remove_dir_all");
     let made = (|| -> Result<(), String> {
         private_dir(&stage)?;
         let pinned = eitri::open_path(&stage, Kind::Dir).map_err(|e| e.to_string())?;
@@ -880,13 +880,13 @@ pub fn install(root: &Path, src: &Path, replace: bool) -> Result<Installation, S
                 .map_err(|e| format!("{file}: {e}"))?;
         }
         if dest.symlink_metadata().is_ok() {
-            std::fs::rename(&dest, &old).map_err(|e| format!("{}: {e}", dest.display()))?;
+            crate::fsio::rename(&dest, &old).map_err(|e| format!("{}: {e}", dest.display()))?;
         }
-        std::fs::rename(&stage, &dest).map_err(|e| format!("{}: {e}", dest.display()))
+        crate::fsio::rename(&stage, &dest).map_err(|e| format!("{}: {e}", dest.display()))
     })();
-    let _ = std::fs::remove_dir_all(&old);
+    crate::soft::done(std::fs::remove_dir_all(&old), "std::fs::remove_dir_all");
     if let Err(e) = made {
-        let _ = std::fs::remove_dir_all(&stage);
+        crate::soft::done(std::fs::remove_dir_all(&stage), "std::fs::remove_dir_all");
         return Err(e);
     }
     Ok(Installation {

@@ -36,7 +36,7 @@ const QUIET_MACHINE: &str = r#"{"psi": {"mem_some10": 0.0, "cpu_some10": 0.0, "i
 "disk_free_gb": 100, "disk_total_gb": 200, "mem_available_mib": 8192}"#;
 
 fn ssh_config() -> String {
-    format!("{}/.ssh/config", std::env::var("HOME").unwrap())
+    format!("{}/.ssh/config", std::env::var(stig::HOME_VAR).unwrap())
 }
 
 fn ssh(runner: &str) -> Command {
@@ -243,7 +243,7 @@ impl Link {
 
     /// Cuts the channel: ssh killed, so `serve` sees an EOF without `bye`.
     async fn cut(mut self) {
-        let _ = self.child.kill().await;
+        ratatoskr::soft::done(self.child.kill().await, "fleet_runners");
     }
 }
 
@@ -561,7 +561,8 @@ mod queue {
             light.waiting.as_deref().is_some_and(|w| !w.is_empty()),
             "{light:?}"
         );
-        let log = std::fs::read_to_string(dir.path().join("xheavy/log")).unwrap_or_default();
+        let log =
+            ratatoskr::fsio::read_to_string(dir.path().join("xheavy/log")).unwrap_or_default();
         assert!(log.contains("heavy"), "{log}");
     }
 }
@@ -657,7 +658,7 @@ mod drill {
             &mut outcomes,
             "row 150 in the hub's copy of the log",
             |_, _| {
-                std::fs::read_to_string(&log)
+                ratatoskr::fsio::read_to_string(&log)
                     .ok()
                     .filter(|l| l.contains("\"t150\""))
                     .map(|_| ())
@@ -670,7 +671,7 @@ mod drill {
             Session::start("r2", channels, q.route(), q.link_events()),
         );
         // the cut: r1's link is lost, and with no grace attempt 1 ends at once
-        let _ = child1.kill().await;
+        ratatoskr::soft::done(child1.kill().await, "fleet_runners");
         let (attempt, result) =
             drive_through_losses(&q, &mut events, &mut outcomes, "attempt 2's result", |o| {
                 o.iter().find_map(|o| match o {
@@ -703,8 +704,9 @@ mod drill {
                 .map(String::from)
                 .collect()
         };
-        let first = rows(&std::fs::read_to_string(dir.path().join("xdrill/log.1")).unwrap());
-        let second = rows(&std::fs::read_to_string(&log).unwrap());
+        let first =
+            rows(&ratatoskr::fsio::read_to_string(dir.path().join("xdrill/log.1")).unwrap());
+        let second = rows(&ratatoskr::fsio::read_to_string(&log).unwrap());
         assert_eq!(first.len(), 150, "{first:?}");
         assert_eq!(
             second.len(),

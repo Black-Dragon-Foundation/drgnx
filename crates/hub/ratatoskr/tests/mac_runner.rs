@@ -22,7 +22,6 @@ use ratatoskr::runners::transport::OpensshTransport;
 use runstav::methods::runners::AddParams;
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -35,7 +34,7 @@ fn host() -> String {
 
 /// SCRIPT's stdout as the runner account; panics when it fails.
 fn sh(script: &str) -> String {
-    let out = Command::new("ssh")
+    let out = ratatoskr::proc::Command::new("ssh")
         .args(["-o", "BatchMode=yes", &host(), script])
         .output()
         .expect("ssh");
@@ -49,7 +48,7 @@ fn sh(script: &str) -> String {
 
 /// SCRIPT's output as the runner account, whatever its exit (for a report written while a row fails).
 fn sh_lossy(script: &str) -> String {
-    match Command::new("ssh")
+    match ratatoskr::proc::Command::new("ssh")
         .args(["-o", "BatchMode=yes", &host(), script])
         .output()
     {
@@ -77,23 +76,21 @@ impl Drop for Report {
         if !std::thread::panicking() {
             return;
         }
-        eprintln!("==== the report of a failed wait");
-        eprintln!("-- the runner: {:?}", self.q.runner("mac"));
+        ratatoskr::soft::err_line("==== the report of a failed wait");
+        ratatoskr::soft::err_line(&format!("-- the runner: {:?}", self.q.runner("mac")));
         for id in &self.ids {
-            eprintln!("-- {id}: {:?}", self.q.row(id));
-            eprintln!("-- {id}'s hub log: {}", log(&self.dir, id));
+            ratatoskr::soft::err_line(&format!("-- {id}: {:?}", self.q.row(id)));
+            ratatoskr::soft::err_line(&format!("-- {id}'s hub log: {}", log(&self.dir, id)));
         }
         if let Ok(said) = self.said.lock() {
-            eprintln!("-- the last of what the links and the queue said:");
+            ratatoskr::soft::err_line("-- the last of what the links and the queue said:");
             for s in said.iter().rev().take(60).rev() {
-                eprintln!("   {s}");
+                ratatoskr::soft::err_line(&format!("   {s}"));
             }
         }
         if let Some(root) = &self.root {
-            eprintln!(
-                "{}",
-                sh_lossy(&format!(
-                    "cd '{root}' || exit 0; echo '-- the root'; ls -la . run jobs 2>&1; \
+            ratatoskr::soft::err_line(&sh_lossy(&format!(
+                "cd '{root}' || exit 0; echo '-- the root'; ls -la . run jobs 2>&1; \
                      for d in $(find jobs -mindepth 1 -maxdepth 1 -type d 2>/dev/null); do d=\"$d/\"; \
                        echo \"== $d\"; ls -la \"$d\"; \
                        for f in job-exec.log log result.json meta.json job.json job.sb; do \
@@ -101,10 +98,9 @@ impl Drop for Report {
                      echo '-- other logs'; find . -maxdepth 3 -name '*.log' ! -path './jobs/*' \
                        -exec sh -c 'echo \"== $1\"; tail -c 4000 \"$1\"' _ {{}} \\; ; \
                      echo '-- processes'; ps -axo pid,ppid,pgid,etime,command | grep -E 'sleipnir|sandbox-exec' | grep -v grep"
-                ))
-            );
+            )));
         }
-        eprintln!("==== end of the report");
+        ratatoskr::soft::err_line("==== end of the report");
     }
 }
 
@@ -275,7 +271,7 @@ fn project(dir: &Path) -> (PathBuf, PathBuf) {
     let work = dir.join("work");
     std::fs::create_dir_all(&work).unwrap();
     git(&work, &["init", "-q"]);
-    std::fs::write(work.join("hello.txt"), "hello from the hub\n").unwrap();
+    ratatoskr::fsio::write(work.join("hello.txt"), "hello from the hub\n").unwrap();
     git(&work, &["add", "-A"]);
     git(&work, &["commit", "-qm", "hello"]);
     (work, dir.join("blobs"))
@@ -287,7 +283,7 @@ fn freeze(work: &Path, blobs: &Path) -> Frozen {
 
 /// The user's git in DIR: no system or global config, a fixed identity.
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = ratatoskr::proc::Command::new("git")
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -368,7 +364,7 @@ fn job(id: &str, script: &str, frozen: Frozen, mem_mib: u64) -> Submit {
 }
 
 fn log(dir: &Path, id: &str) -> String {
-    std::fs::read_to_string(dir.join("exec").join(id).join("log")).unwrap_or_default()
+    ratatoskr::fsio::read_to_string(dir.join("exec").join(id).join("log")).unwrap_or_default()
 }
 
 /// The account's home, and a root of the row's own under it.
@@ -472,7 +468,7 @@ mod mac_runner {
         // the ssh master killed, as a dropped connection would end it (`-O stop` keeps open sessions by design): the
         // link is lost, the job runs on
         let run = dir.path().join("run");
-        let killed = std::process::Command::new("pkill")
+        let killed = ratatoskr::proc::Command::new("pkill")
             .args(["-KILL", "-f", &run.display().to_string()])
             .status()
             .expect("pkill");

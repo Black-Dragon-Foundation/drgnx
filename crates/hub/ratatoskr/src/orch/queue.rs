@@ -169,7 +169,7 @@ impl Queue {
 
 /// Whether tips A and B conflict (`git merge-tree` exits 1).  Blocking.
 fn conflict(dir: &Path, a: &str, b: &str) -> bool {
-    std::process::Command::new("git")
+    crate::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["merge-tree", "--write-tree", "--name-only", a, b])

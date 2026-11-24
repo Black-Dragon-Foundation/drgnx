@@ -208,7 +208,7 @@ fn export(meta: &RunMeta, frames: &[Frame], to: &Path) -> Result<Exported, Strin
         Ok(size)
     };
     let bytes = write().map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, to).map_err(|e| format!("{}: {e}", to.display()))?;
+    crate::fsio::rename(&tmp, to).map_err(|e| format!("{}: {e}", to.display()))?;
     Ok(Exported {
         code: code_of(&key),
         bytes,
@@ -334,11 +334,11 @@ fn git(repo: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, Stri
     let stdin = child.stdin.take();
     let writer = std::thread::spawn(move || {
         if let (Some(mut s), Some(b)) = (stdin, feed) {
-            let _ = s.write_all(&b);
+            crate::soft::done(s.write_all(&b), "share");
         }
     });
     let out = child.wait_with_output().map_err(|e| format!("git: {e}"))?;
-    let _ = writer.join();
+    crate::soft::done(writer.join(), "share");
     if !out.status.success() {
         return Err(format!(
             "git {}: {}",

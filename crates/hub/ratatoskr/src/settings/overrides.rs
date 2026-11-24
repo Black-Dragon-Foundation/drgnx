@@ -522,7 +522,7 @@ mod tests {
     fn rig(entries: &str) -> Rig {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("settings.el");
-        std::fs::write(
+        crate::fsio::write(
             &file,
             format!(";;; settings.el\n(drgnx-settings\n :version 1\n{entries})\n"),
         )
@@ -759,7 +759,7 @@ mod tests {
             let file = file.clone();
             tasks.push(tokio::spawn(async move {
                 if i % 3 == 0 {
-                    std::fs::write(
+                    crate::fsio::write(
                         &file,
                         format!(";;; settings.el\n(drgnx-settings\n :version 1\n(drgnx-agents-mcp (f{i})))\n"),
                     )

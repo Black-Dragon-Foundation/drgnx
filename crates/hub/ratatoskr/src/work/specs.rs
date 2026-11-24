@@ -88,7 +88,7 @@ pub async fn on_written(
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?
             .as_secs_f64();
-        Some((std::fs::read_to_string(&owned).ok()?, mtime))
+        Some((crate::fsio::read_to_string(&owned).ok()?, mtime))
     })
     .await;
     let Ok(Some((text, mtime))) = read else {

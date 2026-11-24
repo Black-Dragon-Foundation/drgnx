@@ -112,7 +112,7 @@ impl Script {
 
 impl Prober for Script {
     fn run(&self, dir: &Path) -> BoxFut<'static, Outcome> {
-        let state = std::fs::read_to_string(dir.join("state")).unwrap_or_default();
+        let state = crate::fsio::read_to_string(dir.join("state")).unwrap_or_default();
         let state = state.trim().to_owned();
         let n = {
             let mut r = self.runs.lock().unwrap();
@@ -145,10 +145,10 @@ fn history(d: &Path) -> (PathBuf, PathBuf, Vec<Candidate>) {
     std::fs::create_dir_all(&src).unwrap();
     let mut out = Vec::new();
     for i in 0..9 {
-        std::fs::write(src.join("state"), format!("s{i}\n")).unwrap();
-        std::fs::write(src.join("app.py"), format!("LIMIT = {i}\n")).unwrap();
+        crate::fsio::write(src.join("state"), format!("s{i}\n")).unwrap();
+        crate::fsio::write(src.join("app.py"), format!("LIMIT = {i}\n")).unwrap();
         if i == 4 {
-            std::fs::write(src.join("extra.py"), "x = 1\n").unwrap();
+            crate::fsio::write(src.join("extra.py"), "x = 1\n").unwrap();
         }
         let tree =
             crate::timeline::snapshot::take_kept(&root, &src, "t", &format!("refs/drgnx/test/{i}"))
@@ -234,7 +234,7 @@ async fn nine_states_one_bad_step_one_that_does_not_build() {
     assert!(dirs.iter().all(|d| d.starts_with(&work)));
     // a slot holds the files of the last state it ran, nothing stale
     for (dir, state) in runs.iter().rev().take(1) {
-        let app = std::fs::read_to_string(dir.join("app.py")).unwrap();
+        let app = crate::fsio::read_to_string(dir.join("app.py")).unwrap();
         assert_eq!(app, format!("LIMIT = {}\n", &state[1..]));
     }
     // the card's events: the estimate first, a dot per finished run, the result last
@@ -310,26 +310,26 @@ async fn narrowing_a_step_of_several_hunks_on_real_trees() {
     let d = tempfile::tempdir().unwrap();
     let (root, src) = (d.path().join("cp"), d.path().join("src"));
     std::fs::create_dir_all(&src).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         src.join("a.py"),
         "a = 1\nb = 2\nc = 3\nd = 4\ne = 5\nf = 6\ng = 7\nh = 8\n",
     )
     .unwrap();
-    std::fs::write(src.join("b.py"), "z = 0\n").unwrap();
+    crate::fsio::write(src.join("b.py"), "z = 0\n").unwrap();
     let good = crate::timeline::snapshot::take_kept(&root, &src, "t", "refs/drgnx/test/g").unwrap();
     // three hunks: two in a.py, one in b.py; only `LIMIT` in b.py breaks it
-    std::fs::write(
+    crate::fsio::write(
         src.join("a.py"),
         "a = 10\nb = 2\nc = 3\nd = 4\ne = 5\nf = 6\ng = 70\nh = 8\n",
     )
     .unwrap();
-    std::fs::write(src.join("b.py"), "z = 0\nLIMIT = 0\n").unwrap();
+    crate::fsio::write(src.join("b.py"), "z = 0\nLIMIT = 0\n").unwrap();
     let bad = crate::timeline::snapshot::take_kept(&root, &src, "t", "refs/drgnx/test/b").unwrap();
     let stage = Stage::new(root, src, d.path().join("bisect"));
     let hunks = stage.hunks(&good, &bad).unwrap();
     assert_eq!(hunks.len(), 3);
     let picked = bisect::narrow(&stage, &good, &hunks, |dir: PathBuf| {
-        let b = std::fs::read_to_string(dir.join("b.py")).unwrap_or_default();
+        let b = crate::fsio::read_to_string(dir.join("b.py")).unwrap_or_default();
         Box::pin(async move {
             if b.contains("LIMIT") {
                 Outcome::Bad

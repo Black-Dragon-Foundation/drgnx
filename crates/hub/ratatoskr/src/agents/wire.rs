@@ -225,7 +225,8 @@ mod tests {
             line("new"),
         );
         assert_eq!(o, Offered::default());
-        let _ = p.offer(t0 + std::time::Duration::from_millis(100), "s01", line("b"));
+
+        p.offer(t0 + std::time::Duration::from_millis(100), "s01", line("b"));
         let (lines, again) = p.flush(t0 + SNAPSHOT_WINDOW);
         assert_eq!(lines, vec![line("new"), line("b")]);
         assert_eq!(again, None);
@@ -235,7 +236,7 @@ mod tests {
             assert!(p.offer(t1, &format!("u{i:02}"), line("u")).send.is_some());
         }
         for i in 0..40 {
-            let _ = p.offer(t1, &format!("t{i:02}"), line("c"));
+            p.offer(t1, &format!("t{i:02}"), line("c"));
         }
         let (lines, again) = p.flush(t1 + SNAPSHOT_WINDOW);
         assert_eq!(lines.len(), SNAPSHOTS_PER_WINDOW as usize);
@@ -248,9 +249,9 @@ mod tests {
         let mut p = Pacer::default();
         let t0 = Instant::now();
         for i in 0..SNAPSHOTS_PER_WINDOW {
-            let _ = p.offer(t0, &format!("s{i:02}"), line("a"));
+            p.offer(t0, &format!("s{i:02}"), line("a"));
         }
-        let _ = p.offer(t0, "x", line("w"));
+        p.offer(t0, "x", line("w"));
         p.forget("x");
         let (lines, _) = p.flush(t0 + SNAPSHOT_WINDOW);
         assert!(lines.is_empty());

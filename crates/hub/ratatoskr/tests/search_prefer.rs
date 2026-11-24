@@ -50,8 +50,8 @@ pub(crate) struct Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        ratatoskr::soft::done(self.child.kill(), "search_prefer");
+        ratatoskr::soft::done(self.child.wait(), "search_prefer");
     }
 }
 
@@ -59,7 +59,7 @@ impl Server {
     pub(crate) fn start(dir: &Path) -> Server {
         let log = dir.join("embed.log");
         let model_file = dir.join("model.txt");
-        std::fs::write(&model_file, "mock/embed-1\n").unwrap();
+        ratatoskr::fsio::write(&model_file, "mock/embed-1\n").unwrap();
         let mut child = Command::new(mock_bin())
             .args(["embed", "--dims", "8", "--log"])
             .arg(&log)
@@ -90,7 +90,7 @@ impl Server {
 
     /// Swaps the model the server stands in for (`MODEL [DIMS [EMBED_DIMS]]`).
     pub(crate) fn set_model(&self, line: &str) {
-        std::fs::write(&self.model_file, format!("{line}\n")).unwrap();
+        ratatoskr::fsio::write(&self.model_file, format!("{line}\n")).unwrap();
     }
 
     /// The embedding requests that are not the hub's probe: what the hub sent to be embedded.
@@ -107,7 +107,7 @@ impl Server {
 
     /// What reached the server: `(path, body)`, in order.
     pub(crate) fn requests(&self) -> Vec<(String, Value)> {
-        std::fs::read_to_string(&self.log)
+        ratatoskr::fsio::read_to_string(&self.log)
             .unwrap_or_default()
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())

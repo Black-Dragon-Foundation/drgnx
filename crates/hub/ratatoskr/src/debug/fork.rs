@@ -540,15 +540,18 @@ async fn next_of(
                 match launcher.child().await {
                     Ok(c) => {
                         t.add(start, c);
-                        let _ = reply.send(Ok(()));
+                        crate::soft::done(reply.send(Ok(())), "reply send");
                     }
                     Err(e) => {
-                        let _ = reply.send(Err(e));
+                        crate::soft::done(reply.send(Err(e)), "reply send");
                     }
                 }
             }
             Update::RunInTerminal { reply, .. } => {
-                let _ = reply.send(Err("a fork has no terminal".into()));
+                crate::soft::done(
+                    reply.send(Err("a fork has no terminal".into())),
+                    "reply send",
+                );
             }
             Update::Ended(end) => {
                 t.sessions[i].ended = true;
@@ -745,12 +748,14 @@ impl Drive {
     /// Ends the fork's sessions, children before their root (the program goes with them).
     async fn finish(t: &mut Tree) {
         for s in t.sessions.iter().rev().filter(|s| !s.ended) {
-            let _ = s
-                .handle
-                .op(Op::Stop {
-                    kill_debuggee: Some(true),
-                })
-                .await;
+            crate::soft::done(
+                s.handle
+                    .op(Op::Stop {
+                        kill_debuggee: Some(true),
+                    })
+                    .await,
+                "fork",
+            );
         }
     }
 }

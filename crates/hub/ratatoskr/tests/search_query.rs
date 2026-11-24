@@ -14,7 +14,6 @@ use rmcp::model::{
 use rmcp::{ClientLifecycleMode, ClientServiceExt};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use support::{Client, FAILED_AFTER, Hub, Root};
 
 /// The built-in model, as the wire names it: by its fingerprint (the label is `hrafn_embed::default_model().id`).
@@ -25,7 +24,7 @@ fn model() -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = ratatoskr::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -42,7 +41,7 @@ fn repo(dir: &Path, files: &[(&str, &str)]) {
     for (p, text) in files {
         let f = dir.join(p);
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(f, text).unwrap();
+        ratatoskr::fsio::write(f, text).unwrap();
     }
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-q", "-m", "one"]);
@@ -132,7 +131,7 @@ fn project(root: &Root, name: &str) -> PathBuf {
 fn settings(root: &Root, body: &str) {
     let dir = root.dir.path().join("h/c");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
+    ratatoskr::fsio::write(
         dir.join("settings.el"),
         format!("(drgnx-settings\n :version 1\n {body})\n"),
     )
@@ -474,13 +473,13 @@ fn plant_engine(root: &Root) -> PathBuf {
     let exe = dir.join("bin").join(asset.binary);
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
     let ran = root.dir.path().join("engine-ran");
-    std::fs::write(
+    ratatoskr::fsio::write(
         &exe,
         format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 1\n", ran.display()),
     )
     .unwrap();
     std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    std::fs::write(dir.join(engine_install::MARKER), asset.sha256).unwrap();
+    ratatoskr::fsio::write(dir.join(engine_install::MARKER), asset.sha256).unwrap();
     ran
 }
 
@@ -525,7 +524,7 @@ fn engine_not_started_without_consent() {
     assert!(
         !ran.exists(),
         "the engine never ran: {:?}",
-        std::fs::read_to_string(&ran)
+        ratatoskr::fsio::read_to_string(&ran)
     );
 }
 
@@ -615,7 +614,7 @@ fn project_with_tree(root: &Root) -> (PathBuf, PathBuf) {
         &proj,
         &["worktree", "add", "-q", "-b", "topic", wt.to_str().unwrap()],
     );
-    std::fs::write(
+    ratatoskr::fsio::write(
         wt.join("core/branch.el"),
         ";;; branch.el\n\n(defun drgnx-branch-only (x)\n  \"Only the branch has this.\"\n  x)\n",
     )

@@ -346,7 +346,10 @@ impl HubGit {
             .await
         }
         .await;
-        let _ = self.git_in(repo, &["update-ref", "-d", &incoming]).await;
+        crate::soft::done(
+            self.git_in(repo, &["update-ref", "-d", &incoming]).await,
+            "git",
+        );
         result.map(|_| tip)
     }
 
@@ -605,7 +608,7 @@ impl HubGit {
                     .unwrap_or_default();
                 let files: Vec<PathBuf> = files.lines().map(PathBuf::from).collect();
                 if self.git_in(job_tree, &["merge", "--abort"]).await.is_err() {
-                    let _ = self.git_in(job_tree, &["reset", "--merge"]).await;
+                    crate::soft::done(self.git_in(job_tree, &["reset", "--merge"]).await, "git");
                 }
                 if files.is_empty() {
                     Err(e)
@@ -779,7 +782,7 @@ impl HubGit {
                         return Err(e);
                     }
                     conflicts.extend(files);
-                    let _ = self.git_in(&scratch, &["merge", "--abort"]).await;
+                    crate::soft::done(self.git_in(&scratch, &["merge", "--abort"]).await, "git");
                 }
             }
             conflicts.sort();
@@ -790,10 +793,12 @@ impl HubGit {
             })
         }
         .await;
-        let _ = self
-            .git_in(repo, &["worktree", "remove", "--force", &s])
-            .await;
-        let _ = std::fs::remove_dir_all(&scratch);
+        crate::soft::done(
+            self.git_in(repo, &["worktree", "remove", "--force", &s])
+                .await,
+            "git",
+        );
+        crate::soft::done(std::fs::remove_dir_all(&scratch), "std::fs::remove_dir_all");
         result
     }
 }
@@ -836,13 +841,13 @@ fn snapshot_tip(path: &Path, branch: &str) -> Option<String> {
 /// Copy a bare store to a task's `.git`, sharing blocks where the filesystem can (APFS, btrfs, XFS).
 async fn reflink_copy(from: &str, to: &str) -> Result<(), GitError> {
     for flags in [["-a", "--reflink=auto"], ["-a", "-c"], ["-a", "-a"]] {
-        let _ = std::fs::remove_dir_all(to);
-        let ok = Command::new("cp")
+        crate::soft::done(std::fs::remove_dir_all(to), "std::fs::remove_dir_all");
+        let ok = crate::proc::Command::new("cp")
             .args(flags)
             .arg(from)
             .arg(to)
             .stderr(std::process::Stdio::null())
-            .status()
+            .status_async()
             .await
             .is_ok_and(|s| s.success());
         if ok {

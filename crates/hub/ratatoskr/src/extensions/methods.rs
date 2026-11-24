@@ -140,7 +140,7 @@ fn internal(message: impl ToString) -> Error {
 impl Hub {
     /// Where the files are; the hub calls this once at start.
     pub fn configure(&self, env: &Env) {
-        let _ = self.files.set(Arc::new(RealFiles::new(env)));
+        crate::soft::done(self.files.set(Arc::new(RealFiles::new(env))), "methods");
         lock(&self.cache).show_packs(true);
     }
 

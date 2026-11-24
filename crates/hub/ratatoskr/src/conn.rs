@@ -206,18 +206,21 @@ impl Outbox {
     /// Wait until everything queued so far is written (or the connection closed), at most WITHIN on the hub's clock.
     /// Woken by each write, never by polling: on the virtual clock a poll's sleep would wait for an advance.
     pub async fn flushed(&self, within: Duration) {
-        let _ = clock::timeout(within, async {
-            loop {
-                let note = self.drained.notified();
-                let mut note = std::pin::pin!(note);
-                note.as_mut().enable();
-                if self.lock().core.queued_bytes() == 0 {
-                    return;
+        crate::soft::done(
+            clock::timeout(within, async {
+                loop {
+                    let note = self.drained.notified();
+                    let mut note = std::pin::pin!(note);
+                    note.as_mut().enable();
+                    if self.lock().core.queued_bytes() == 0 {
+                        return;
+                    }
+                    note.await;
                 }
-                note.await;
-            }
-        })
-        .await;
+            })
+            .await,
+            "clock::timeout",
+        );
     }
 
     /// What is queued, taken (tests: an outbox without a writer).
@@ -239,7 +242,7 @@ impl Outbox {
 
     async fn closed(&self) {
         let mut rx = self.closed.subscribe();
-        let _ = rx.wait_for(|c| *c).await;
+        crate::soft::done(rx.wait_for(|c| *c).await, "conn");
     }
 
     /// The line to write next (left queued until written); none when the writer is to end.
@@ -464,7 +467,7 @@ async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
     }
     front.gone(id);
     let Some(a) = attached else {
-        let _ = writer.await;
+        crate::soft::done(writer.await, "conn");
         return;
     };
     // the answer written first, then the connection is MCP's from its next byte
@@ -505,7 +508,7 @@ async fn sequenced(
                     ended |= d.end.is_some();
                     attaching |= d.lines.last().is_some_and(|l| l.attach);
                     let closed = d.end == Some(End::Closed);
-                    let _ = reply.send(d);
+                    crate::soft::done(reply.send(d), "reply send");
                     if closed {
                         return None;
                     }
@@ -526,7 +529,7 @@ async fn sequenced(
                         attaching = false;
                     }
                     let who = session.attach.take();
-                    let _ = done.send(());
+                    crate::soft::done(done.send(()), "done send");
                     if who.is_some() {
                         return who;
                     }
@@ -920,8 +923,11 @@ mod real_wait {
         clock::spawn("test:real-wait", async move {
             match ms {
                 Some(ms) => {
-                    let _ = clock::blocking(move || std::thread::sleep(Duration::from_millis(ms)))
-                        .await;
+                    crate::soft::done(
+                        clock::blocking(move || std::thread::sleep(Duration::from_millis(ms)))
+                            .await,
+                        "clock::blocking",
+                    );
                 }
                 None => clock::real(std::future::pending::<()>()).await,
             }

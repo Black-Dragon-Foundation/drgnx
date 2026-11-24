@@ -130,7 +130,7 @@ pub fn mock_main(script: &std::ffi::OsStr) -> std::process::ExitCode {
     {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("debug-mock: {shown}: {e}");
+            crate::soft::err_line(&format!("debug-mock: {shown}: {e}"));
             return ExitCode::from(2);
         }
     };
@@ -140,7 +140,7 @@ pub fn mock_main(script: &std::ffi::OsStr) -> std::process::ExitCode {
     {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("debug-mock: no runtime: {e}");
+            crate::soft::err_line(&format!("debug-mock: no runtime: {e}"));
             return ExitCode::from(2);
         }
     };
@@ -153,7 +153,7 @@ pub fn mock_main(script: &std::ffi::OsStr) -> std::process::ExitCode {
     match r {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("debug-mock: {e}");
+            crate::soft::err_line(&format!("debug-mock: {e}"));
             ExitCode::from(1)
         }
     }
@@ -260,7 +260,7 @@ pub trait Terminals: Send + Sync {
     /// exit status (the first command end with one, or its program's exit; none when it is gone) and, when that is not
     /// 0, its text.
     fn run_task(&self, term: String) -> BoxFut<'_, (Option<i32>, String)> {
-        let _ = term;
+        let _only_when_used_elsewhere = &term;
         Box::pin(async { (None, String::new()) })
     }
 }
@@ -398,12 +398,12 @@ impl Debug {
 
     /// Call HOOK with the live sessions' roots whenever they change (once; a later hook is ignored).
     pub fn on_state(&self, hook: StateHook) {
-        let _ = self.inner.on_state.set(hook);
+        crate::soft::done(self.inner.on_state.set(hook), "mod");
     }
 
     /// Use HOOK to put the editor's buffer positions on the breakpoints sent for a file (once; a later hook is ignored).
     pub fn on_lines(&self, hook: LinesHook) {
-        let _ = self.inner.lines.set(hook);
+        crate::soft::done(self.inner.lines.set(hook), "mod");
     }
 
     /// Give each breakpoint of V (PATH's view) the buffer positions of its line when the editor holds PATH's text.
@@ -1184,7 +1184,7 @@ impl Debug {
         let sid = id.clone();
         crate::clock::spawn("debug:updates", async move {
             me.updates(sid, rx).await;
-            let _ = ended_tx.send(true);
+            crate::soft::done(ended_tx.send(true), "ended_tx send");
         });
         Ok(id)
     }
@@ -1375,7 +1375,7 @@ impl Debug {
             .get(id)
             .map(|e| e.ended.clone());
         if let Some(mut rx) = rx {
-            let _ = rx.wait_for(|e| *e).await;
+            crate::soft::done(rx.wait_for(|e| *e).await, "mod");
         }
     }
 
@@ -1391,14 +1391,16 @@ impl Debug {
                 .collect()
         };
         for id in roots {
-            let _ = self
-                .control(
+            crate::soft::done(
+                self.control(
                     &id,
                     Op::Stop {
                         kill_debuggee: None,
                     },
                 )
-                .await;
+                .await,
+                "mod",
+            );
         }
     }
 
@@ -1520,7 +1522,10 @@ impl Debug {
                 Update::RunInTerminal { arguments, reply } => {
                     let conn = lock(&self.inner.state).sessions.get(&id).map(|e| e.conn);
                     let Some(conn) = conn else {
-                        let _ = reply.send(Err("the session has ended".into()));
+                        crate::soft::done(
+                            reply.send(Err("the session has ended".into())),
+                            "reply send",
+                        );
                         continue;
                     };
                     let terms = self.inner.terms.clone();
@@ -1535,10 +1540,10 @@ impl Debug {
                                     conn,
                                     json!({"session": sid, "term": o.term, "view": o.view, "editor": o.editor}),
                                 );
-                                let _ = reply.send(Ok(o.pid));
+                                crate::soft::done(reply.send(Ok(o.pid)), "reply send");
                             }
                             Err(e) => {
-                                let _ = reply.send(Err(e));
+                                crate::soft::done(reply.send(Err(e)), "reply send");
                             }
                         }
                     });
@@ -1549,7 +1554,10 @@ impl Debug {
                         .get(&id)
                         .map(|e| (e.conn, e.root.clone(), e.start.clone(), e.launcher.clone()));
                     let Some((conn, root, mut start, launcher)) = parent else {
-                        let _ = reply.send(Err("the session has ended".into()));
+                        crate::soft::done(
+                            reply.send(Err("the session has ended".into())),
+                            "reply send",
+                        );
                         continue;
                     };
                     start.arguments = arguments
@@ -1584,7 +1592,7 @@ impl Debug {
                                 record::Launch::default(),
                             )
                             .await;
-                        let _ = reply.send(r.map(|_| ()));
+                        crate::soft::done(reply.send(r.map(|_| ())), "reply send");
                     });
                 }
                 Update::Breakpoints { path, breakpoints } => {
@@ -1620,7 +1628,7 @@ impl Debug {
                     if let Some((root, mut start)) = entry {
                         self.fill(&root, &id, &mut start);
                         self.add_probes(&root, &mut start);
-                        let _ = reply.send(start);
+                        crate::soft::done(reply.send(start), "reply send");
                     }
                 }
                 Update::Ended(end) => {
@@ -1665,7 +1673,7 @@ impl Debug {
             start.restart_with(value);
             let me = self.clone();
             crate::clock::spawn("debug:restart", async move {
-                let _ = me.start(e.conn, &e.root, start, e.launcher).await;
+                crate::soft::done(me.start(e.conn, &e.root, start, e.launcher).await, "mod");
             });
         }
     }

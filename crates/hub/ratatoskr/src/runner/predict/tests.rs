@@ -189,7 +189,7 @@ fn a_clean_same_file_merge_is_no_clash() {
 // ---- the texts ----
 
 fn sh(dir: &Path, script: &str) {
-    let ok = std::process::Command::new("sh")
+    let ok = crate::proc::Command::new("sh")
         .args(["-c", script])
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -213,7 +213,7 @@ fn uncommitted_work_counts() {
          git -c user.name=t -c user.email=t@t commit -q -m init && git worktree add -q -b b ../wt",
     );
     let head = String::from_utf8(
-        std::process::Command::new("git")
+        crate::proc::Command::new("git")
             .args(["rev-parse", "HEAD"])
             .current_dir(&main)
             .output()
@@ -228,13 +228,13 @@ fn uncommitted_work_counts() {
         None,
         "neither changed it"
     );
-    std::fs::write(main.join("x.rs"), "from a\n").unwrap();
+    crate::fsio::write(main.join("x.rs"), "from a\n").unwrap();
     assert_eq!(
         texts(&main, (&main, &head), (&wt, &head), "x.rs"),
         None,
         "b did not change it"
     );
-    std::fs::write(wt.join("x.rs"), "from b\n").unwrap();
+    crate::fsio::write(wt.join("x.rs"), "from b\n").unwrap();
     let (base, a, b) = texts(&main, (&main, &head), (&wt, &head), "x.rs").unwrap();
     assert_eq!(
         (base.as_str(), a.as_str(), b.as_str()),

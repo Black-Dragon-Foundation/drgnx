@@ -277,7 +277,7 @@ impl Editors {
     /// The editor's `settings/confirm` of TX: to the tool waiting for it, if one is.
     pub fn confirmed(&self, tx: i64, ok: bool, error: Option<String>) {
         if let Some(s) = lock(&self.confirms).remove(&tx) {
-            let _ = s.send(EditorAnswer::Confirmed { ok, error });
+            crate::soft::done(s.send(EditorAnswer::Confirmed { ok, error }), "s send");
         }
     }
 

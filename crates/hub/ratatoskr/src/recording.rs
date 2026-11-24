@@ -90,7 +90,7 @@ pub async fn start(env: &Env) -> Result<(), String> {
                 r.manifest(|m| m["caps"] = caps);
             }
             tracing::info!(dir, provenance, "recording this run (DRGNX_RECORD)");
-            let _ = MODE.set(Mode::Record(r));
+            crate::soft::done(MODE.set(Mode::Record(r)), "recording");
             Ok(())
         }
         (None, Some(dir)) => {
@@ -102,15 +102,18 @@ pub async fn start(env: &Env) -> Result<(), String> {
                     .await
                     .map_err(|e| format!("the replayer did not start: {e}"))??;
             tracing::info!(dir = %dir.display(), port, "replaying a recorded run (DRGNX_REPLAY)");
-            let _ = MODE.set(Mode::Replay(Replay {
-                dir,
-                port,
-                mock,
-                scratch,
-                roots: Roots::of_env(env).to_json().to_string(),
-                speed: var(env, "DRGNX_REPLAY_SPEED").unwrap_or("0").to_owned(),
-                strict: var(env, "DRGNX_REPLAY_STRICT") == Some("1"),
-            }));
+            crate::soft::done(
+                MODE.set(Mode::Replay(Replay {
+                    dir,
+                    port,
+                    mock,
+                    scratch,
+                    roots: Roots::of_env(env).to_json().to_string(),
+                    speed: var(env, "DRGNX_REPLAY_SPEED").unwrap_or("0").to_owned(),
+                    strict: var(env, "DRGNX_REPLAY_STRICT") == Some("1"),
+                })),
+                "recording",
+            );
             Ok(())
         }
         (None, None) => Ok(()),
@@ -253,7 +256,10 @@ fn replayer(dir: &Path, env: &Env) -> Result<(u16, PathBuf, PathBuf), String> {
     .join("replay");
     std::fs::create_dir_all(&scratch)
         .map_err(|e| format!("cannot make {}: {e}", scratch.display()))?;
-    let _ = std::fs::remove_dir_all(scratch.join("claims"));
+    crate::soft::done(
+        std::fs::remove_dir_all(scratch.join("claims")),
+        "std::fs::remove_dir_all",
+    );
     let speed = var(env, "DRGNX_REPLAY_SPEED").unwrap_or("0");
     let mut child = std::process::Command::new(&mock)
         .arg("llm")
@@ -282,13 +288,13 @@ fn replayer(dir: &Path, env: &Env) -> Result<(u16, PathBuf, PathBuf), String> {
         Some(p) => {
             // it ends with this hub (`--parent`); its status is read when it does, so it leaves no zombie
             std::thread::spawn(move || {
-                let _ = child.wait();
+                crate::soft::done(child.wait(), "recording");
             });
             Ok((p, mock, scratch))
         }
         None => {
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::soft::done(child.kill(), "recording");
+            crate::soft::done(child.wait(), "recording");
             Err(format!("the replayer said {:?}, not its port", line.trim()))
         }
     }
@@ -336,7 +342,7 @@ impl Recorder {
         let started = crate::log::rfc3339(crate::clock::wall_secs() as u64);
         let manifest = rec::manifest(provenance, &started, crate::version::COMMIT, build, &roots);
         let text = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
-        std::fs::write(dir.join("manifest.json"), text + "\n")
+        crate::fsio::write(dir.join("manifest.json"), text + "\n")
             .map_err(|e| format!("cannot write {}/manifest.json: {e}", dir.display()))?;
         let (tx, rx) = mpsc::channel::<(String, String)>();
         let into = dir.to_path_buf();
@@ -389,7 +395,10 @@ impl Recorder {
     fn write(&self, stream: &str, seq: u64, at: Instant, dir: &str, msg: Value) {
         let line = json!({"seq": seq, "t_ms": self.t_ms(at), "dir": dir, "msg": msg}).to_string();
         // the receiver gone means the hub is stopping: nothing more is written
-        let _ = lock(&self.lines).send((stream.to_owned(), line));
+        crate::soft::done(
+            lock(&self.lines).send((stream.to_owned(), line)),
+            "lines send",
+        );
     }
 
     /// A connection's reader thread spent D in the worktree look (git and file reads, on that thread): the worst so
@@ -407,8 +416,8 @@ impl Recorder {
         f(&mut m);
         let text = serde_json::to_string_pretty(&*m).unwrap_or_default() + "\n";
         let tmp = self.dir.join("manifest.json.tmp");
-        if let Err(e) = std::fs::write(&tmp, text)
-            .and_then(|()| std::fs::rename(&tmp, self.dir.join("manifest.json")))
+        if let Err(e) = crate::fsio::write(&tmp, text)
+            .and_then(|()| crate::fsio::rename(&tmp, self.dir.join("manifest.json")))
         {
             tracing::error!("the recording's manifest cannot be written: {e}");
         }
@@ -422,13 +431,9 @@ fn write_lines(dir: &Path, rx: &mpsc::Receiver<(String, String)>) {
         if !files.contains_key(&stream) {
             let path = dir.join(&stream);
             if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
+                crate::soft::done(std::fs::create_dir_all(parent), "std::fs::create_dir_all");
             }
-            match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-            {
+            match crate::fsio::append(&path, true) {
                 Ok(f) => {
                     files.insert(stream.clone(), f);
                 }
@@ -536,7 +541,7 @@ impl Line {
         self.line.insert("response".into(), Value::Object(response));
         let text = Value::Object(std::mem::take(&mut self.line)).to_string();
         // the receiver gone means the hub is stopping: nothing more is written
-        let _ = self.lines.send(("llm.jsonl".into(), text));
+        crate::soft::done(self.lines.send(("llm.jsonl".into(), text)), "lines send");
     }
 }
 
@@ -753,16 +758,19 @@ impl AcpTap {
             };
             let to = out.join("files").join(f);
             if let Some(p) = to.parent() {
-                let _ = std::fs::create_dir_all(p);
+                crate::soft::done(std::fs::create_dir_all(p), "std::fs::create_dir_all");
             }
-            if let Err(e) = std::fs::write(&to, bytes) {
+            if let Err(e) = crate::fsio::write(&to, bytes) {
                 tracing::error!("the recording cannot write {}: {e}", to.display());
             }
         }
         if !deleted.is_empty() {
             deleted.sort();
             let list: String = deleted.iter().map(|d| format!("{d}\n")).collect();
-            let _ = std::fs::write(out.join("deleted.txt"), list);
+            crate::soft::done(
+                crate::fsio::write(out.join("deleted.txt"), list),
+                "crate::fsio::write",
+            );
         }
         let mut msg = json!({"path": rel});
         if moved {
@@ -884,7 +892,7 @@ impl Tree {
 
 /// `git -C CWD ARGS…`'s output, when it succeeds.
 fn git(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    std::process::Command::new("git")
+    crate::proc::Command::new("git")
         .arg("-C")
         .arg(cwd)
         .args(args)

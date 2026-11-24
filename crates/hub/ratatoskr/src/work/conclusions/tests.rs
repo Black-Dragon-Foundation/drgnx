@@ -419,9 +419,9 @@ mod after_a_step {
             .write(meta(), |tx| {
                 // the target step saw the decision log at version 1; the first decision made it, the second came after
                 let first = decision(tx, None);
-                let _ = step(tx, 0);
+                step(tx, 0);
                 let target = step(tx, 1);
-                let _ = target;
+                let _only_when_used_elsewhere = &target;
                 let second = decision(tx, None);
                 finding(tx, "note:unstamped", None);
                 Ok((first, second))

@@ -298,7 +298,7 @@ impl Connection {
             .open(&path)
             .map_err(|e| format!("cannot create {}: {e}", path.display()))?;
         if let Err(e) = f.write_all(body.to_string().as_bytes()) {
-            let _ = std::fs::remove_file(&path);
+            crate::soft::done(std::fs::remove_file(&path), "std::fs::remove_file");
             return Err(format!("cannot write {}: {e}", path.display()));
         }
         Ok(Connection {
@@ -326,12 +326,12 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        crate::soft::done(std::fs::remove_file(&self.path), "std::fs::remove_file");
         // a real kernel (ipykernel) leaves its ipc socket files behind when it ends
         if self.ports.is_none() {
             for ch in CHANNELS {
                 if let Some(s) = self.socket(ch) {
-                    let _ = std::fs::remove_file(s);
+                    crate::soft::done(std::fs::remove_file(s), "std::fs::remove_file");
                 }
             }
         }
@@ -367,7 +367,7 @@ fn private_group(gid: u32) -> bool {
     let me = unsafe { libc::geteuid() };
     // a shared primary group (`users`, 100) has no member listed either: it is the user's own only if no other account has it
     let alone = gid == me
-        || std::fs::read_to_string("/etc/passwd")
+        || crate::fsio::read_to_string("/etc/passwd")
             .ok()
             .is_some_and(|p| only_primary_of(&p, gid, me));
     alone && group_has_no_members(gid)

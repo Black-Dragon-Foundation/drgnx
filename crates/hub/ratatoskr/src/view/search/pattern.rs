@@ -166,7 +166,7 @@ mod tests {
 
     fn put(dir: &std::path::Path, name: &str, text: &str) -> String {
         let f = dir.join(name);
-        std::fs::write(&f, text).unwrap();
+        crate::fsio::write(&f, text).unwrap();
         f.to_string_lossy().into_owned()
     }
 

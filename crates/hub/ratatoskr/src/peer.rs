@@ -157,7 +157,7 @@ mod listen {
 
     /// The pid FD names: the `Pid:` line of `/proc/self/fdinfo/FD` (-1 or 0: the process is gone).
     fn pid_of(fd: &OwnedFd) -> Result<u32, String> {
-        let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()))
+        let info = crate::fsio::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()))
             .map_err(|e| format!("the pidfd's process does not read: {e}"))?;
         info.lines()
             .find_map(|l| l.strip_prefix("Pid:"))
@@ -300,7 +300,7 @@ mod os {
     /// The fields of `/proc/PID/stat` from field 3 (the state) on: comm, field 2, may hold spaces and parens, so they
     /// are counted from after the last `)`.
     fn fields(pid: i32) -> io::Result<Vec<String>> {
-        let line = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+        let line = crate::fsio::read_to_string(format!("/proc/{pid}/stat"))?;
         Ok(after_comm(&line)?.map(str::to_owned).collect())
     }
 
@@ -340,7 +340,7 @@ mod os {
     /// since boot: the same every time it is read, so the identity's hash never moves.
     pub(super) fn start_secs(pid: i32) -> io::Result<f64> {
         let ticks: u64 = number(field(&fields(pid)?, 22)?)?;
-        let stat = std::fs::read_to_string("/proc/stat")?;
+        let stat = crate::fsio::read_to_string("/proc/stat")?;
         let btime: u64 = stat
             .lines()
             .find_map(|l| l.strip_prefix("btime "))

@@ -157,17 +157,23 @@ pub fn confirm_delete(
         return true;
     }
     if !tty {
-        let _ = writeln!(
-            out,
-            "search delete {root}: not a terminal to ask; run it with --yes to delete"
+        crate::soft::done(
+            writeln!(
+                out,
+                "search delete {root}: not a terminal to ask; run it with --yes to delete"
+            ),
+            "writeln",
         );
         return false;
     }
-    let _ = write!(
-        out,
-        "Delete the index of {root} (its store, packs and the vectors no other root holds)? [y/N] "
+    crate::soft::done(
+        write!(
+            out,
+            "Delete the index of {root} (its store, packs and the vectors no other root holds)? [y/N] "
+        ),
+        "write",
     );
-    let _ = out.flush();
+    crate::soft::done(out.flush(), "search_cli");
     let mut answer = String::new();
     if input.read_line(&mut answer).is_err() {
         return false;
@@ -520,7 +526,7 @@ fn serve_mcp(env: &Env, root: PathBuf) -> i32 {
     {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("ratatoskr search: no runtime: {e}");
+            crate::soft::err_line(&format!("ratatoskr search: no runtime: {e}"));
             return 1;
         }
     };
@@ -688,7 +694,7 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("ratatoskr search: no working directory: {e}");
+            crate::soft::err_line(&format!("ratatoskr search: no working directory: {e}"));
             return 1;
         }
     };
@@ -880,7 +886,7 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
         .and_then(|mut c| c.call(method, params.clone(), CALL));
     match answer {
         Ok(a) if json => {
-            println!("{a}");
+            crate::soft::out_line(&a.to_string());
             0
         }
         Ok(a) => match text(method, &params, a) {
@@ -889,12 +895,12 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
                 0
             }
             Err(e) => {
-                eprintln!("ratatoskr search: {e}");
+                crate::soft::err_line(&format!("ratatoskr search: {e}"));
                 1
             }
         },
         Err(e) => {
-            eprintln!("ratatoskr search: {e}");
+            crate::soft::err_line(&format!("ratatoskr search: {e}"));
             1
         }
     }
@@ -1152,7 +1158,7 @@ mod tests {
             .build()
             .unwrap();
         let client = ClientBackend {
-            env: Env::new(&[("HOME", "/nonexistent")], 1),
+            env: Env::new(&[(stig::HOME_VAR, "/nonexistent")], 1),
         };
         let hub = HubBackend(std::sync::Weak::new());
         for method in [

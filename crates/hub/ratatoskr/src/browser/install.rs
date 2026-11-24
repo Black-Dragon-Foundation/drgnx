@@ -54,7 +54,7 @@ pub struct PlatformPin {
 pub fn pins() -> Vec<Pin> {
     #[cfg(feature = "test-hooks")]
     if let Some(path) = std::env::var_os("DRGNX_TEST_PINS") {
-        let text = fs::read_to_string(path).expect("DRGNX_TEST_PINS is readable");
+        let text = crate::fsio::read_to_string(path).expect("DRGNX_TEST_PINS is readable");
         return serde_json::from_str(&text).expect("DRGNX_TEST_PINS is a pin table");
     }
     serde_json::from_str(PINS).expect("pins.json is a pin table")
@@ -190,7 +190,7 @@ impl Partial {
 impl Drop for Partial {
     fn drop(&mut self) {
         if self.armed {
-            let _ = fs::remove_dir_all(&self.dir);
+            crate::soft::done(fs::remove_dir_all(&self.dir), "fs::remove_dir_all");
         }
     }
 }
@@ -237,7 +237,7 @@ pub(crate) async fn install_with(
     let root = browsers_dir(data_dir);
     let dir = root.join(&pin.version);
     let installed_json = dir.join("installed.json");
-    if let Ok(text) = fs::read_to_string(&installed_json)
+    if let Ok(text) = crate::fsio::read_to_string(&installed_json)
         && let Ok(file) = serde_json::from_str::<InstalledFile>(&text)
     {
         return Ok(Installed {
@@ -309,12 +309,12 @@ pub(crate) async fn install_with(
             "the archive has an installed.json".into(),
         ));
     }
-    fs::write(&marker, text).map_err(|e| io_err(&marker, e))?;
+    crate::fsio::write(&marker, text).map_err(|e| io_err(&marker, e))?;
     // a folder without a marker is an earlier crash's; it is not an install
     if fs::symlink_metadata(&dir).is_ok() {
         fs::remove_dir_all(&dir).map_err(|e| io_err(&dir, e))?;
     }
-    fs::rename(&partial, &dir).map_err(|e| io_err(&dir, e))?;
+    crate::fsio::rename(&partial, &dir).map_err(|e| io_err(&dir, e))?;
     guard.keep();
     Ok(Installed {
         binary: dir.join(binary_rel),
@@ -407,7 +407,7 @@ async fn download(
         written: 0,
         max: limits.download,
     };
-    let _ = (version, platform);
+    let _only_when_used_elsewhere = (&version, &platform);
     #[cfg(any(test, feature = "test-hooks"))]
     if let Base::Dir(dir) = base {
         let path = dir
@@ -464,7 +464,7 @@ fn plain(base: &Base) -> bool {
     }
     #[cfg(not(test))]
     {
-        let _ = base;
+        let _only_when_used_elsewhere = &base;
         false
     }
 }
@@ -743,7 +743,7 @@ mod tests {
         let platform = platform_key().unwrap();
         let dir = root.join("cft").join(V).join(platform);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("chrome-headless-shell-x.zip"), zip).unwrap();
+        crate::fsio::write(dir.join("chrome-headless-shell-x.zip"), zip).unwrap();
         let pin: Pin = serde_json::from_value(serde_json::json!({
             "version": V, "released": "2026-01-02",
             "platforms": { platform: {
@@ -837,9 +837,10 @@ mod tests {
         );
         assert!(!done.dir.join("download.zip").exists());
         assert_eq!(leftovers(tmp.path()), [V]);
-        let marker: InstalledFile =
-            serde_json::from_str(&fs::read_to_string(done.dir.join("installed.json")).unwrap())
-                .unwrap();
+        let marker: InstalledFile = serde_json::from_str(
+            &crate::fsio::read_to_string(done.dir.join("installed.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             (marker.version.as_str(), marker.sha256.as_str()),
             (V, sha(&zip).as_str())
@@ -980,13 +981,13 @@ mod tests {
         // an earlier try died halfway: a partial folder with junk, and a link where a folder would go
         let partial = browsers_dir(&data).join(format!("{V}.partial"));
         fs::create_dir_all(partial.join("chrome-headless-shell-x")).unwrap();
-        fs::write(
+        crate::fsio::write(
             partial.join("chrome-headless-shell-x/chrome-headless-shell"),
             "half",
         )
         .unwrap();
-        fs::write(partial.join("download.zip"), "half").unwrap();
-        fs::write(partial.join("junk"), "x").unwrap();
+        crate::fsio::write(partial.join("download.zip"), "half").unwrap();
+        crate::fsio::write(partial.join("junk"), "x").unwrap();
         assert_eq!(
             super::super::resolve::installed(&data).len(),
             0,
@@ -1001,7 +1002,7 @@ mod tests {
         assert_eq!(super::super::resolve::installed(&data).len(), 1);
         // and a version folder with no marker (a crash between the steps) is replaced too
         fs::remove_file(done.dir.join("installed.json")).unwrap();
-        fs::write(done.dir.join("junk"), "x").unwrap();
+        crate::fsio::write(done.dir.join("junk"), "x").unwrap();
         let done = run(tmp.path(), &pins, &base, None).await.unwrap();
         assert!(!done.already && !done.dir.join("junk").exists());
     }
@@ -1073,7 +1074,7 @@ mod tests {
                     "/ftp" => "HTTP/1.1 302 Found\r\nlocation: ftp://x/y\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
                     _ => "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
                 };
-                let _ = s.write_all(reply.as_bytes()).await;
+                crate::soft::done(s.write_all(reply.as_bytes()).await, "install");
             }
         });
         let get = |path: &'static str| async move {
@@ -1149,13 +1150,13 @@ mod tests {
         tokio::spawn(async move {
             while let Ok((mut s, _)) = listener.accept().await {
                 let mut buf = [0u8; 2048];
-                let _ = s.read(&mut buf).await;
+                crate::soft::done(s.read(&mut buf).await, "install");
                 let head = format!(
                     "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                     body.len()
                 );
-                let _ = s.write_all(head.as_bytes()).await;
-                let _ = s.write_all(&body).await;
+                crate::soft::done(s.write_all(head.as_bytes()).await, "install");
+                crate::soft::done(s.write_all(&body).await, "install");
             }
         });
         for (digest, ok) in [(sha(&zip), true), ("cd".repeat(32), false)] {

@@ -15,7 +15,6 @@ use ratatoskr::search::project::{Project, ProjectSpec, Tier2};
 use ratatoskr::settings::providers::ChainStep;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use tempfile::TempDir;
 use urdr::graph::search::Embedder;
@@ -99,7 +98,7 @@ fn ollama_fingerprint_from_show() {
 /// A git repository of three small files.
 fn repo(dir: &Path) {
     let git = |args: &[&str]| {
-        let st = Command::new("git")
+        let st = ratatoskr::proc::Command::new("git")
             .arg("-C")
             .arg(dir)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -119,7 +118,7 @@ fn add_files(dir: &Path, n: usize, tag: &str) {
     for i in 0..n {
         let f = dir.join(format!("core/{tag}{i}.el"));
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(
+        ratatoskr::fsio::write(
             f,
             format!(";;; {tag}{i}.el\n(defun {tag}{i}-run () \"Run number {i} of {tag}.\" {i})\n"),
         )

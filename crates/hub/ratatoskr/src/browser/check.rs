@@ -50,9 +50,9 @@ pub fn write(env: &Env, result: &CheckResult) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec(result)?)?;
+    crate::fsio::write(&tmp, serde_json::to_vec(result)?)?;
     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-    std::fs::rename(&tmp, &path)
+    crate::fsio::rename(&tmp, &path)
 }
 
 /// The last result, when there is one and it reads.
@@ -152,9 +152,9 @@ async fn attempt(
     let dir = paths::make_session_dir(&env, &paths::socket_path(&env), &sid)
         .map_err(|e| format!("the check's session directory: {e}"))?;
     let result = session(front, &env, &sid, &dir, shape, secret, pid).await;
-    let _ = std::fs::remove_dir_all(&dir);
+    crate::soft::done(std::fs::remove_dir_all(&dir), "std::fs::remove_dir_all");
     if let Ok(scratch) = launch::scratch_dir(&env, &sid) {
-        let _ = std::fs::remove_dir_all(scratch);
+        crate::soft::done(std::fs::remove_dir_all(scratch), "std::fs::remove_dir_all");
     }
     result.map(|mut r| {
         r.browser = browser.clone();
@@ -355,7 +355,7 @@ async fn screenshot(
     )
     .await?;
     let bytes = decoded_len(shot["data"].as_str().unwrap_or(""));
-    let _ = ws.write_frame(Frame::close(1000, b"done")).await;
+    crate::soft::done(ws.write_frame(Frame::close(1000, b"done")).await, "check");
     Ok((start_ms, bytes))
 }
 
@@ -412,8 +412,8 @@ mod tests {
     fn env(dir: &std::path::Path) -> Env {
         Env::new(
             &[
-                ("XDG_STATE_HOME", dir.to_str().unwrap()),
-                ("HOME", dir.to_str().unwrap()),
+                (stig::Xdg::State.var(), dir.to_str().unwrap()),
+                (stig::HOME_VAR, dir.to_str().unwrap()),
             ],
             1000,
         )
@@ -440,7 +440,7 @@ mod tests {
         let failed = failed(None, "no browser".into());
         write(&env, &failed).unwrap();
         assert_eq!(read(&env).unwrap().why.as_deref(), Some("no browser"));
-        std::fs::write(result_path(&env), b"{").unwrap();
+        crate::fsio::write(result_path(&env), b"{").unwrap();
         assert!(read(&env).is_none());
     }
 

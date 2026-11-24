@@ -183,19 +183,22 @@ impl JobNetwork {
         if let Some(a) = &self.asker {
             a.abort();
         }
-        let _ = tokio::process::Command::new(&self.podman)
-            .args(["rm", "-f", "-t", "0", &self.job])
-            .envs(self.env.iter().map(|(k, v)| (k, v)))
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await;
+        crate::soft::done(
+            tokio::process::Command::new(&self.podman)
+                .args(["rm", "-f", "-t", "0", &self.job])
+                .envs(self.env.iter().map(|(k, v)| (k, v)))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await,
+            "tokio::process::Command::new",
+        );
         // the channel task owns the sidecar's stdio: dropped (awaited after the abort), the sidecar reads its EOF; a
         // channel that ended already ([`JobNetwork::ended`]) dropped it then
         if !self.channel.is_finished() {
             self.channel.abort();
-            let _ = (&mut self.channel).await;
+            crate::soft::done((&mut self.channel).await, "net");
         }
         let code = match self.sidecar {
             Some(s) => s.stop(&self.podman, &self.names.sidecar, &self.env).await,
@@ -260,7 +263,7 @@ pub async fn prepare_net(
         Sidecar::start(podman, argv, &env),
         crate::clock::blocking(move || -> Result<(), Refusal> {
             let info = container::check_limits(&checks_shell, &p, Duration::from_secs(30))?;
-            sleipnir::linux::netcheck::net_ready(&info).map_err(setup)?;
+            sleipnir::linux::netcheck::net_ready(&info).map_err(|e| setup(e.to_string()))?;
             container::ensure_image(&checks_shell, &p, &reference, container::PULL_TIMEOUT)
         })
     );
@@ -305,11 +308,7 @@ pub async fn prepare_net(
     );
     handle.listen(proxy::Listener::Streams(streams_rx), 1);
     let px_log = ferja::shell::Log::default();
-    let log_file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log)
-        .await;
+    let log_file = crate::fsio::append(log, true).map(tokio::fs::File::from_std);
     let drained = px_log.clone();
     let log = tokio::spawn(async move {
         if let Ok(f) = log_file {
@@ -423,7 +422,7 @@ mod tests {
         };
         let job = net.job.clone();
         assert_eq!(net.end().await, Some(0), "the sidecar exits by itself");
-        let rms = std::fs::read_to_string(&rms).unwrap();
+        let rms = crate::fsio::read_to_string(&rms).unwrap();
         assert_eq!(
             rms.lines().next(),
             Some(format!("rm -f -t 0 {job}").as_str()),

@@ -1475,11 +1475,11 @@ fn answer_read(resp: hermod::Responder<ReadTextFileResponse>, got: Result<String
             if let Ok(r) =
                 serde_json::from_value::<ReadTextFileResponse>(json!({"content": content}))
             {
-                let _ = resp.respond(r);
+                crate::soft::done(resp.respond(r), "session");
             }
         }
         Err(m) => {
-            let _ = resp.fail(-32602, &m);
+            crate::soft::done(resp.fail(-32602, &m), "session");
         }
     }
 }
@@ -1616,9 +1616,10 @@ async fn spawn_spec(
     // the lock's files where the sandbox would show them; Codex's /etc ones have no place outside a sandbox
     for (path, bytes) in plan.ro_files.iter().filter(|(p, _)| !p.starts_with("/etc")) {
         if let Some(d) = path.parent() {
-            let _ = std::fs::create_dir_all(d);
+            crate::soft::done(std::fs::create_dir_all(d), "std::fs::create_dir_all");
         }
-        std::fs::write(path, bytes).map_err(|e| internal(format!("{}: {e}", path.display())))?;
+        crate::fsio::write(path, bytes)
+            .map_err(|e| internal(format!("{}: {e}", path.display())))?;
     }
     let mut pairs: Vec<(String, std::ffi::OsString)> = p
         .env
@@ -1634,7 +1635,7 @@ async fn spawn_spec(
             .map_err(|e| internal(format!("session dir: {e}")))?;
         let link = run.join(gleipnir::trace::WRAPPER_NAME);
         let exe = std::env::current_exe().map_err(|e| internal(e.to_string()))?;
-        let _ = std::fs::remove_file(&link);
+        crate::soft::done(std::fs::remove_file(&link), "std::fs::remove_file");
         std::os::unix::fs::symlink(&exe, &link)
             .map_err(|e| internal(format!("{}: {e}", link.display())))?;
         pairs.push(("CLAUDE_CODE_SHELL_PREFIX".into(), link.into()));
@@ -1647,7 +1648,7 @@ async fn spawn_spec(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_os_str()))
         .collect();
-    let env = shell.build(&["PATH", "HOME", "LANG", "TMPDIR"], &[], &set);
+    let env = shell.build(&["PATH", stig::HOME_VAR, "LANG", "TMPDIR"], &[], &set);
     let spec = draugr::Spec {
         program: PathBuf::from(prog),
         args: args.to_vec(),
@@ -1897,7 +1898,7 @@ pub(super) async fn prepare(
         .map_err(|e| internal(format!("the matrix: {e:?}")))?;
     let mut plan = plock::plan(profile, role, &eff);
     if profile.provider() == Some(crate::settings::profiles::Provider::Claude)
-        && let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty())
+        && let Some(home) = std::env::var_os(stig::HOME_VAR).filter(|h| !h.is_empty())
     {
         let (deny, ask) = plock::claude_deny_ask(&PathBuf::from(home).join(".claude"), cwd);
         plan = plan.with_claude_rules(deny, ask);
@@ -2388,7 +2389,7 @@ async fn launch_once(
     )
     .await;
     if out.is_err() && opened {
-        let _ = front.mcp.close(sid).await;
+        crate::soft::done(front.mcp.close(sid).await, "session");
     }
     out
 }
@@ -2869,7 +2870,7 @@ async fn restart_manager_from_graph(hub: &super::Hub, front: &Front, row: &Row) 
     front.mcp.mark_manager(&row.0);
     let first = crate::manager::restart_prompt(front, &row.0).await;
     // an open socket from before has the plain tool list
-    let _ = front.mcp.close(&row.0).await;
+    crate::soft::done(front.mcp.close(&row.0).await, "session");
     resume_row_with(hub, front, row.clone(), Some(first)).await
 }
 
@@ -2891,7 +2892,7 @@ pub(crate) async fn rotate(hub: &super::Hub, front: &Front, sid: &str, first: St
 pub(crate) async fn close_for_swap(front: &Front, old: &Session) {
     old.close_now().await;
     gateway_gone(front, &old.id).await;
-    let _ = front.mcp.close(&old.id).await;
+    crate::soft::done(front.mcp.close(&old.id).await, "session");
 }
 
 /// Session SID's recorded role is now ROLE (the user made it a manager).
@@ -3095,7 +3096,7 @@ impl Session {
     /// problem with the file is said once per change to every editor.
     fn cwd_trusted(&self) -> bool {
         let env = runstav::paths::Env::process();
-        let Some(home) = env.vars.get("HOME") else {
+        let Some(home) = env.vars.get(stig::HOME_VAR) else {
             return false;
         };
         let file = runstav::paths::state_dir(&env).join("trusted-folders.eld");
@@ -3869,7 +3870,7 @@ async fn write_steps(
                 step,
             };
             sink.editors.broadcast("agent-step", json!(ev));
-            let _ = sink.bus.send(ev);
+            crate::soft::done(sink.bus.send(ev), "bus send");
         }
     }
     // no more rows will come: whoever waits for one stops waiting
@@ -4284,7 +4285,7 @@ impl Session {
             self.flow.sent.fetch_add(1, Ordering::SeqCst);
             // counted before the call is let go, so the hold never lapses between the call's end and the step's claim
             flight.sent.fetch_add(1, Ordering::SeqCst);
-            let _ = self.steps.send(c);
+            crate::soft::done(self.steps.send(c), "steps send");
         }
         flight.call.store(call, Ordering::SeqCst);
     }
@@ -4293,12 +4294,14 @@ impl Session {
     pub(crate) async fn steps_written(&self) {
         self.drain_steps();
         let target = self.flow.sent.load(Ordering::SeqCst);
-        let _ = self
-            .flow
-            .written
-            .subscribe()
-            .wait_for(|w| *w >= target)
-            .await;
+        crate::soft::done(
+            self.flow
+                .written
+                .subscribe()
+                .wait_for(|w| *w >= target)
+                .await,
+            "session",
+        );
     }
 
     /// The entries not yet in the transcript file, written (redacted) next, off the hub's workers ([`crate::disk`]); a turn
@@ -4372,7 +4375,7 @@ impl Session {
             match e {
                 TurnEffect::StartTurn { turn, item } => self.start_turn(turn, item),
                 TurnEffect::CancelTurn => {
-                    let _ = self.conn.cancel(&self.acp);
+                    crate::soft::done(self.conn.cancel(&self.acp), "session");
                 }
                 TurnEffect::ArmStopDeadline { turn } => self.stop_deadline(turn),
                 TurnEffect::EndTurn { waiting: true, .. } => self.close_when_idle(),
@@ -4892,11 +4895,11 @@ impl Session {
                             if let Ok(r) = serde_json::from_value::<ReadTextFileResponse>(
                                 json!({"content": content}),
                             ) {
-                                let _ = resp.respond(r);
+                                crate::soft::done(resp.respond(r), "session");
                             }
                         }
                         Err(m) => {
-                            let _ = resp.fail(-32602, &m);
+                            crate::soft::done(resp.fail(-32602, &m), "session");
                         }
                     }
                 }
@@ -4921,11 +4924,11 @@ impl Session {
                                     if let Ok(ok) =
                                         serde_json::from_value::<WriteTextFileResponse>(json!({}))
                                     {
-                                        let _ = resp.respond(ok);
+                                        crate::soft::done(resp.respond(ok), "session");
                                     }
                                 }
                                 Err(m) => {
-                                    let _ = resp.fail(-32602, &m);
+                                    crate::soft::done(resp.fail(-32602, &m), "session");
                                 }
                             }
                         });
@@ -4940,11 +4943,11 @@ impl Session {
                                 if let Ok(r) =
                                     serde_json::from_value::<WriteTextFileResponse>(json!({}))
                                 {
-                                    let _ = resp.respond(r);
+                                    crate::soft::done(resp.respond(r), "session");
                                 }
                             }
                             Err((code, m)) => {
-                                let _ = resp.fail(code, &m);
+                                crate::soft::done(resp.fail(code, &m), "session");
                             }
                         }
                     });
@@ -5316,13 +5319,15 @@ impl Session {
         };
         let name = g.id.strip_prefix("always:").unwrap_or(&g.id).to_owned();
         let meta = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "agents/grants");
-        let _ = self
-            .writer
-            .db
-            .write(meta, move |tx| {
-                norn::write::always::put(tx, &name, data).map(|_| ())
-            })
-            .await;
+        crate::soft::done(
+            self.writer
+                .db
+                .write(meta, move |tx| {
+                    norn::write::always::put(tx, &name, data).map(|_| ())
+                })
+                .await,
+            "session",
+        );
     }
 
     /// The Always grants of this session, revoked ones too.
@@ -5893,7 +5898,7 @@ impl Session {
                     Some(p) => Some(p),
                     None => crate::graph::project_of(&self.cwd).await?.map(|r| r.id),
                 };
-                let _ = self.project.set(p.clone());
+                crate::soft::done(self.project.set(p.clone()), "session");
                 p
             }
         };
@@ -6183,7 +6188,7 @@ impl Session {
         self.persist_queue();
         // landed before the session that follows (a rewind's, a rotation's) reads them
         self.disk.written().await;
-        let _ = self.conn.close_session(&self.acp).await;
+        crate::soft::done(self.conn.close_session(&self.acp).await, "session");
         draugr::kill_group(self.conn.pid(), STOP_GRACE, &draugr::RealSignaller).await;
     }
 
@@ -6641,7 +6646,7 @@ impl Session {
         self.withdraw_cards(cards).await;
         // a message the store gave this session and that never ran waits in the store again, for its next session
         super::deliver::put_back(&self.writer, &dropped).await;
-        let _ = self.conn.cancel(&self.acp);
+        crate::soft::done(self.conn.cancel(&self.acp), "session");
         let grace = if kill { Duration::ZERO } else { STOP_GRACE };
         draugr::kill_group(self.conn.pid(), grace, &draugr::RealSignaller).await;
         // the session is gone for good (its runtime.db rows go next): so is what a manager delegated to it
@@ -6779,7 +6784,7 @@ impl Session {
             Err(e) => Err(e),
         };
         // the reader task ends the turn, after the updates the agent sent before its answer
-        let _ = self.done.send(TurnEnd(turn, out));
+        crate::soft::done(self.done.send(TurnEnd(turn, out)), "done send");
     }
 
     fn finish_turn(self: &Arc<Self>, end: TurnEnd) {
@@ -7103,7 +7108,7 @@ fn reply(resp: hermod::Responder<RequestPermissionResponse>, option: Option<Stri
         None => json!({"outcome": {"outcome": "cancelled"}}),
     };
     if let Ok(r) = serde_json::from_value::<RequestPermissionResponse>(outcome) {
-        let _ = resp.respond(r);
+        crate::soft::done(resp.respond(r), "session");
     }
 }
 
@@ -7178,7 +7183,7 @@ pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
     let r = f.core.agents.stop(p.id.as_str()).await;
     if r.is_ok() && ends {
         gateway_gone(f, p.id.as_str()).await;
-        let _ = f.mcp.close(p.id.as_str()).await;
+        crate::soft::done(f.mcp.close(p.id.as_str()).await, "session");
         asks_gone(f, p.id.as_str());
     }
     r
@@ -7289,7 +7294,7 @@ pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
         gateway_gone(f, p.id.as_str()).await;
         asks_gone(f, p.id.as_str());
     }
-    let _ = f.mcp.close(p.id.as_str()).await;
+    crate::soft::done(f.mcp.close(p.id.as_str()).await, "session");
     r
 }
 
@@ -7326,7 +7331,7 @@ pub(crate) async fn gateway_gone(f: &Front, sid: &str) {
         f.core.budgets.unbind_job(&j);
     }
     if let Some(t) = f.core.agents.take_gateway(sid) {
-        let _ = f.gate.unregister(&t).await;
+        crate::soft::done(f.gate.unregister(&t).await, "session");
     }
 }
 
@@ -8297,7 +8302,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("state")).unwrap();
         let git = |args: &[&str]| {
             assert!(
-                std::process::Command::new("git")
+                crate::proc::Command::new("git")
                     .args(["-c", "user.name=t", "-c", "user.email=t@t"])
                     .args(["-c", "commit.gpgsign=false"])
                     .args(args)
@@ -8310,7 +8315,7 @@ mod tests {
             )
         };
         git(&["init", "-q", "-b", "main"]);
-        std::fs::write(work.join("a.txt"), "one\n").unwrap();
+        crate::fsio::write(work.join("a.txt"), "one\n").unwrap();
         git(&["add", "."]);
         git(&["commit", "-q", "-m", "base"]);
         let hubs = Arc::new(crate::history::wire::Hubs::default());
@@ -8401,7 +8406,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("state")).unwrap();
         let git = |args: &[&str]| {
             assert!(
-                std::process::Command::new("git")
+                crate::proc::Command::new("git")
                     .args(["-c", "user.name=t", "-c", "user.email=t@t"])
                     .args(["-c", "commit.gpgsign=false"])
                     .args(args)
@@ -8414,7 +8419,7 @@ mod tests {
             )
         };
         git(&["init", "-q", "-b", "main"]);
-        std::fs::write(work.join("a.txt"), "one\n").unwrap();
+        crate::fsio::write(work.join("a.txt"), "one\n").unwrap();
         git(&["add", "."]);
         git(&["commit", "-q", "-m", "base"]);
         let hubs = Arc::new(crate::history::wire::Hubs::default());
@@ -8427,9 +8432,9 @@ mod tests {
         };
         hub.on_agent_write(&tree, "a.txt", b"one\ntwo\n", "a1", cause, 10.5)
             .unwrap();
-        std::fs::write(work.join("a.txt"), "one\ntwo\n").unwrap();
+        crate::fsio::write(work.join("a.txt"), "one\ntwo\n").unwrap();
         // the agent's own edit tool wrote note.txt in its process: the hub never saw it
-        std::fs::write(work.join("note.txt"), "new\n").unwrap();
+        crate::fsio::write(work.join("note.txt"), "new\n").unwrap();
         let writer = crate::coord::Writer {
             db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
             signals: Arc::new(crate::coord::Signals::default()),
@@ -8516,14 +8521,14 @@ mod tests {
     #[tokio::test]
     async fn an_edit_step_whose_row_is_lost_closes_its_checkpoint() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("not-a-folder"), "").unwrap();
+        crate::fsio::write(dir.path().join("not-a-folder"), "").unwrap();
         let writer = crate::coord::Writer {
             db: norn::store::CoordDb::spawn(dir.path().join("not-a-folder/work.db")),
             signals: Arc::new(crate::coord::Signals::default()),
         };
         let wt = dir.path().join("wt");
         std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(wt.join("a.txt"), "edited").unwrap();
+        crate::fsio::write(wt.join("a.txt"), "edited").unwrap();
         let snap = crate::timeline::Snap::for_test(
             dir.path().join("cp"),
             Arc::new(crate::settings::Settings::new()),
@@ -8592,7 +8597,7 @@ mod tests {
         snap.before_write("a1", &wt, vec![cell]).await;
         let repo = crate::timeline::snapshot::repo_of(&dir.path().join("cp"), &wt);
         let refs = if repo.exists() {
-            let out = std::process::Command::new("git")
+            let out = crate::proc::Command::new("git")
                 .arg("--git-dir")
                 .arg(&repo)
                 .args(["for-each-ref", "--format=%(refname)"])
@@ -8615,8 +8620,8 @@ mod tests {
         };
         let wt = dir.join("wt");
         std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(wt.join("a.txt"), "edited").unwrap();
-        std::fs::write(wt.join(".env"), "KEY=1").unwrap();
+        crate::fsio::write(wt.join("a.txt"), "edited").unwrap();
+        crate::fsio::write(wt.join(".env"), "KEY=1").unwrap();
         let settings = Arc::new(crate::settings::Settings::new());
         let sink = StepSink {
             writer: writer.clone(),
@@ -8705,7 +8710,7 @@ mod tests {
         let tree = steps[1].snapshot.clone().expect("the edit's snapshot");
         let repo =
             crate::timeline::snapshot::repo_of(&dir.path().join("cp"), &dir.path().join("wt"));
-        let out = std::process::Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args(["--git-dir"])
             .arg(&repo)
             .args(["ls-tree", "-r", "--name-only", &tree])
@@ -8914,7 +8919,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path().join("work");
         std::fs::create_dir(&cwd).unwrap();
-        std::fs::write(dir.path().join("secret"), "x").unwrap();
+        crate::fsio::write(dir.path().join("secret"), "x").unwrap();
         std::os::unix::fs::symlink(dir.path().join("secret"), cwd.join("link")).unwrap();
         let f = Fence {
             cwd: cwd.clone(),

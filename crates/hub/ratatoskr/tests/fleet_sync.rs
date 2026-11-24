@@ -41,15 +41,16 @@ const QUIET_MACHINE: &str = r#"{"psi": {"mem_some10": 0.0, "cpu_some10": 0.0, "i
 "disk_free_gb": 100, "disk_total_gb": 200, "mem_available_mib": 8192}"#;
 
 fn ssh_config() -> String {
-    format!("{}/.ssh/config", std::env::var("HOME").unwrap())
+    format!("{}/.ssh/config", std::env::var(stig::HOME_VAR).unwrap())
 }
 
 /// SCRIPT's stdout on RUNNER; panics when it fails.
 fn sh(runner: &str, script: &str) -> String {
-    let out = Command::new("ssh")
+    let out = ratatoskr::proc::Command::new("ssh")
         .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
         .arg(script)
-        .output()
+        .output_async()
+        .await
         .expect("ssh");
     assert!(
         out.status.success(),
@@ -144,7 +145,7 @@ async fn drive<T>(
 
 /// The user's git in DIR: no system or global config, a fixed identity.
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = ratatoskr::proc::Command::new("git")
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -157,7 +158,8 @@ fn git(dir: &Path, args: &[&str]) -> String {
             "init.defaultBranch=main",
         ])
         .args(args)
-        .output()
+        .output_async()
+        .await
         .unwrap();
     assert!(
         out.status.success(),
@@ -315,7 +317,7 @@ impl Project {
     }
 
     fn commit(&self, file: &str, text: &str) {
-        std::fs::write(self.work.join(file), text).unwrap();
+        ratatoskr::fsio::write(self.work.join(file), text).unwrap();
         git(&self.work, &["add", "-A"]);
         git(&self.work, &["commit", "-qm", file]);
     }
@@ -536,7 +538,8 @@ mod sync_rows {
         q.submit(job("xorigin", "cat hello.txt", f, &img), now());
         let r = result(&q, &mut events, &mut outcomes, "xorigin").await;
         assert_eq!(r["verdict"], "Pass", "{r}");
-        let log = std::fs::read_to_string(dir.path().join("exec/xorigin/log")).unwrap_or_default();
+        let log = ratatoskr::fsio::read_to_string(dir.path().join("exec/xorigin/log"))
+            .unwrap_or_default();
         assert!(log.contains("hello from origin"), "{log}");
         let refs = sh(
             "r1",
@@ -560,7 +563,7 @@ mod sync_rows {
         let img = image("r1");
         let dir = tempfile::tempdir().unwrap();
         let p = Project::new(dir.path(), "r1");
-        std::fs::write(p.work.join("note.txt"), "overlay!\n").unwrap();
+        ratatoskr::fsio::write(p.work.join("note.txt"), "overlay!\n").unwrap();
         let (q, mut events, _child) = queue_shared(dir.path(), &root, prefix, hub, &img);
         let mut outcomes = vec![];
         ready(&q, &mut events, &mut outcomes).await;
@@ -568,7 +571,7 @@ mod sync_rows {
         stays_here(&q, "xoff", "drgnx-runners-shared-overlay");
         // split, so the repository's own secret check passes this file
         let key = concat!("AKIA", "IOSFODNN7EXAMPLE");
-        std::fs::write(
+        ratatoskr::fsio::write(
             p.work.join("leak.txt"),
             format!("aws_access_key_id = {key}\n"),
         )
@@ -586,7 +589,8 @@ mod sync_rows {
             _ => None,
         });
         assert_eq!(shared, Some(Some("r1".to_string())), "{outcomes:?}");
-        let log = std::fs::read_to_string(dir.path().join("exec/xon/log")).unwrap_or_default();
+        let log =
+            ratatoskr::fsio::read_to_string(dir.path().join("exec/xon/log")).unwrap_or_default();
         assert!(log.contains("overlay!"), "{log}");
         stays_here(&q, "xoff", "drgnx-runners-shared-overlay");
     }
@@ -624,7 +628,8 @@ mod sync_rows {
         };
         assert_eq!(result["verdict"], "Pass", "{result}");
         let job_dir = dir.path().join("exec/xret");
-        let patch = std::fs::read_to_string(job_dir.join("returned.patch")).unwrap_or_default();
+        let patch =
+            ratatoskr::fsio::read_to_string(job_dir.join("returned.patch")).unwrap_or_default();
         assert!(patch.contains("+from the runner"), "{patch:?}");
         assert!(job_dir.join("returned.outputs").exists());
         let back = back.expect("what came back");
@@ -640,11 +645,11 @@ mod sync_rows {
             ]
         );
         assert_eq!(
-            std::fs::read_to_string(p.work.join("hello.txt")).unwrap(),
+            ratatoskr::fsio::read_to_string(p.work.join("hello.txt")).unwrap(),
             "hello from origin\nfrom the runner\n"
         );
         assert_eq!(
-            std::fs::read_to_string(job_dir.join("outputs/dist/out.txt")).unwrap(),
+            ratatoskr::fsio::read_to_string(job_dir.join("outputs/dist/out.txt")).unwrap(),
             "built\n"
         );
     }

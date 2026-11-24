@@ -29,7 +29,7 @@ fn run(mut c: Command, input: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let mut child = c.spawn().map_err(|e| e.to_string())?;
     if let (Some(bytes), Some(mut stdin)) = (input, child.stdin.take()) {
         // a broken pipe is git's own error, reported by its exit status
-        let _ = stdin.write_all(bytes);
+        crate::soft::done(stdin.write_all(bytes), "blob");
     }
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if out.status.success() {

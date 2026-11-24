@@ -1307,7 +1307,7 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
                                 let next = lock(files).recv();
                                 let Ok(ms) = next else { break };
                                 if let Some(r) = read_file(ms) {
-                                    let _ = to_send.send(r);
+                                    crate::soft::done(to_send.send(r), "to_send send");
                                 }
                             }
                         });
@@ -1317,7 +1317,7 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
                     let grep = s.spawn(move || {
                         // its end drops the readers' sender: they stop once they have taken every file
                         grep::run(q, c, |ms| {
-                            let _ = to_read.send(ms);
+                            crate::soft::done(to_read.send(ms), "to_read send");
                         })
                         .map_err(|e| e.to_string())
                     });
@@ -2032,7 +2032,7 @@ async fn handoff_pair(f: &Front, c: &Caller, root: &Path, profile: &str) -> Resu
         Err(e) => Err(e),
     };
     if let Err(e) = paired {
-        let _ = f.core.agents.kill(started.id.as_str()).await;
+        crate::soft::done(f.core.agents.kill(started.id.as_str()).await, "mod");
         return Err(e);
     }
     Ok(started.id)
@@ -2081,7 +2081,7 @@ async fn handoff_worker(
             c,
         )
         .await?;
-    let _ = f.core.runs.git().touched(&tree.path).await;
+    crate::soft::done(f.core.runs.git().touched(&tree.path).await, "mod");
     let cwd = tree.path.to_string_lossy().into_owned();
     let reg = norn::write::agents::AgentRegister {
         id: started.id.clone(),

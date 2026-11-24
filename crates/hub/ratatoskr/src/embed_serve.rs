@@ -414,37 +414,38 @@ pub fn run(env: &runstav::paths::Env, cmd: EmbedCommand) -> i32 {
     let a = match answer {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("ratatoskr embed serve: {e}");
+            crate::soft::err_line(&format!("ratatoskr embed serve: {e}"));
             return 1;
         }
     };
     let text = |k: &str| a.get(k).and_then(serde_json::Value::as_str);
     match cmd {
         EmbedCommand::Start { .. } => {
-            println!("serving on {}", text("url").unwrap_or_default());
+            crate::soft::out_line(&format!("serving on {}", text("url").unwrap_or_default()));
             if let Some(c) = text("cert_sha256") {
-                println!("certificate sha256 {c} (the client pins it on first use)");
+                crate::soft::out_line(&format!(
+                    "certificate sha256 {c} (the client pins it on first use)"
+                ));
             }
             match text("token") {
-                Some(t) => println!("token {t}\n(shown once: put it in the client's key_env)"),
-                None => println!(
-                    "the token is the one shown before (embed serve --new-token makes another)"
+                Some(t) => crate::soft::out_line(&format!(
+                    "token {t}\n(shown once: put it in the client's key_env)"
+                )),
+                None => crate::soft::out_line(
+                    "the token is the one shown before (embed serve --new-token makes another)",
                 ),
             }
         }
-        EmbedCommand::Stop => println!(
-            "{}",
-            if a.as_bool() == Some(true) {
-                "stopped"
-            } else {
-                "no vector server was running"
-            }
-        ),
+        EmbedCommand::Stop => crate::soft::out_line(if a.as_bool() == Some(true) {
+            "stopped"
+        } else {
+            "no vector server was running"
+        }),
         EmbedCommand::NewToken => {
-            println!(
+            crate::soft::out_line(&format!(
                 "token {}\n(shown once; the old one is refused from now)",
                 text("token").unwrap_or_default()
-            );
+            ));
         }
     }
     0
@@ -513,7 +514,7 @@ fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     let tmp = dir.join(format!(".{name}.new"));
-    let _ = std::fs::remove_file(&tmp);
+    crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -521,7 +522,7 @@ fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
         .open(&tmp)?;
     f.write_all(bytes)?;
     f.sync_all()?;
-    std::fs::rename(&tmp, dir.join(name))
+    crate::fsio::rename(&tmp, dir.join(name))
 }
 
 /// A new token (32 random bytes, hex), its sha256 kept in DIR.
@@ -596,7 +597,7 @@ pub async fn start(
             .create(&spec.dir)
             .map_err(|e| format!("{}: {e}", spec.dir.display()))?;
     }
-    let kept = std::fs::read_to_string(spec.dir.join(TOKEN_FILE))
+    let kept = crate::fsio::read_to_string(spec.dir.join(TOKEN_FILE))
         .ok()
         .and_then(|t| key_of(t.trim()));
     let (token_sha, token) = match kept {
@@ -688,7 +689,10 @@ where
     let mut b = hyper::server::conn::http1::Builder::new();
     b.timer(TokioTimer::new())
         .header_read_timeout(HEADER_READ_TIMEOUT);
-    let _ = b.serve_connection(TokioIo::new(s), svc).await;
+    crate::soft::done(
+        b.serve_connection(TokioIo::new(s), svc).await,
+        "embed_serve",
+    );
 }
 
 type Reply = hyper::Response<http_body_util::Full<bytes::Bytes>>;

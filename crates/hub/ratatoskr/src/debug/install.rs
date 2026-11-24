@@ -167,8 +167,8 @@ struct Gone(PathBuf);
 
 impl Drop for Gone {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-        let _ = fs::remove_file(&self.0);
+        crate::soft::done(fs::remove_dir_all(&self.0), "fs::remove_dir_all");
+        crate::soft::done(fs::remove_file(&self.0), "fs::remove_file");
     }
 }
 
@@ -204,7 +204,7 @@ pub async fn install(
             }
             super::tasks::run(&steps, env).await?;
             let file = tools.join("venv/drgnx-requirements.txt");
-            fs::write(&file, req).map_err(|e| io_err(&file, e))?;
+            crate::fsio::write(&file, req).map_err(|e| io_err(&file, e))?;
             super::tasks::run(&[step("pip install", pip)], env).await?;
             Ok(format!(
                 "{requirement} installed in {}",
@@ -345,7 +345,7 @@ async fn stage(plan: &Plan, tools: &Path, source: &Source) -> Result<Staged, Str
     let made = if let Some(file) = file {
         // one file: the download itself, in a folder of its own
         let to = partial.join(file);
-        fs::rename(&download, &to).map_err(|e| io_err(&to, e))?;
+        crate::fsio::rename(&download, &to).map_err(|e| io_err(&to, e))?;
         partial.clone()
     } else {
         let dl = download.clone();
@@ -376,7 +376,7 @@ async fn stage(plan: &Plan, tools: &Path, source: &Source) -> Result<Staged, Str
     };
     // what is installed says which pin it is, for the doctor: `VERSION`, then the digest
     let marker = made.join(INSTALLED_MARKER);
-    fs::write(
+    crate::fsio::write(
         &marker,
         format!(
             "{}\n{sha256}\n",
@@ -397,10 +397,10 @@ async fn stage(plan: &Plan, tools: &Path, source: &Source) -> Result<Staged, Str
 /// Puts a staged folder in place, the one it replaces kept aside until the install ends.
 fn commit(s: &Staged) -> Result<(), String> {
     if s.dest.exists() {
-        fs::rename(&s.dest, &s.old).map_err(|e| io_err(&s.dest, e))?;
+        crate::fsio::rename(&s.dest, &s.old).map_err(|e| io_err(&s.dest, e))?;
     }
-    if let Err(e) = fs::rename(&s.made, &s.dest) {
-        let _ = fs::rename(&s.old, &s.dest);
+    if let Err(e) = crate::fsio::rename(&s.made, &s.dest) {
+        crate::soft::done(crate::fsio::rename(&s.old, &s.dest), "crate::fsio::rename");
         return Err(io_err(&s.dest, e));
     }
     Ok(())
@@ -408,9 +408,9 @@ fn commit(s: &Staged) -> Result<(), String> {
 
 /// Takes a committed folder out again and brings back the one it replaced.
 fn rollback(s: &Staged) {
-    let _ = fs::remove_dir_all(&s.dest);
+    crate::soft::done(fs::remove_dir_all(&s.dest), "fs::remove_dir_all");
     if s.old.exists() {
-        let _ = fs::rename(&s.old, &s.dest);
+        crate::soft::done(crate::fsio::rename(&s.old, &s.dest), "crate::fsio::rename");
     }
 }
 

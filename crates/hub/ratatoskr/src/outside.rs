@@ -337,7 +337,7 @@ fn users_only(c: &Caller) -> Result<(), Error> {
 
 /// `$HOME` as a truename.
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
+    std::env::var_os(stig::HOME_VAR)
         .filter(|h| !h.is_empty())
         .and_then(|h| std::fs::canonicalize(h).ok())
 }

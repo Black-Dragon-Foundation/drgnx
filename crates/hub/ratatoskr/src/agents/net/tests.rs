@@ -159,7 +159,7 @@ async fn socket_is_0600_and_closed_with_the_session() {
     let dir = d.path();
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     let sock = dir.join(runstav::paths::SESSION_PROXY_SOCKET);
-    std::fs::write(&sock, b"stale").unwrap();
+    crate::fsio::write(&sock, b"stale").unwrap();
 
     let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = upstream.local_addr().unwrap().port();

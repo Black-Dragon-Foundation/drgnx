@@ -49,10 +49,10 @@ fn project_5_agents_5000_lines_within_2_ms() {
     times.sort_unstable();
     let p95 = times[times.len() * 95 / 100];
     // the reading, for the timing lane's report (the verdict is the assert)
-    eprintln!(
+    ratatoskr::soft::err_line(&format!(
         "5 agents onto 5,000 lines: p50 {} µs, p95 {p95} µs",
         times[times.len() / 2]
-    );
+    ));
     assert!(p95 <= 2_000, "5 agents onto 5,000 lines: p95 {p95} µs");
 }
 
@@ -90,10 +90,10 @@ fn range_update_per_op_within_100_us() {
     }
     times.sort_unstable();
     let p95 = times[times.len() * 95 / 100];
-    eprintln!(
+    ratatoskr::soft::err_line(&format!(
         "range update on 5,000 lines: p50 {} ns, p95 {p95} ns",
         times[times.len() / 2]
-    );
+    ));
     assert!(p95 <= 100_000, "range update: p95 {p95} ns");
 }
 
@@ -173,5 +173,8 @@ fn blame_rebuild_5000_lines() {
     let took = t.elapsed();
     // the agent's lines, less those the user typed on too
     assert_eq!(g.ranges("agent:a").len(), 500 - 72);
-    eprintln!("blame rebuild of 5,000 lines: {} µs", took.as_micros());
+    ratatoskr::soft::err_line(&format!(
+        "blame rebuild of 5,000 lines: {} µs",
+        took.as_micros()
+    ));
 }

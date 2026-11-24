@@ -111,7 +111,10 @@ impl Session {
         // dropped, and a runner that then writes to it (its log lines) ends
         if let Some(mut err) = err {
             tasks.push(crate::clock::spawn("runners:link-err", async move {
-                let _ = tokio::io::copy(&mut err, &mut tokio::io::sink()).await;
+                crate::soft::done(
+                    tokio::io::copy(&mut err, &mut tokio::io::sink()).await,
+                    "tokio::io::copy",
+                );
             }));
         }
         Session(Arc::new(Shared {
@@ -145,7 +148,7 @@ impl Session {
             t.abort();
         }
         for t in tasks {
-            let _ = t.await;
+            crate::soft::done(t.await, "link");
         }
     }
 }
@@ -187,7 +190,7 @@ async fn write_loop(
             break;
         }
     }
-    let _ = tx.shutdown().await;
+    crate::soft::done(tx.shutdown().await, "link");
 }
 
 /// Reads frames until the channel ends: pings answered, logs appended, the rest passed on; the link lost after
@@ -209,17 +212,20 @@ async fn read_loop(
         };
         match f {
             Frame::Ping { at } => {
-                let _ = out.send(Frame::Pong { at });
+                crate::soft::done(out.send(Frame::Pong { at }), "out send");
                 if at > 0 {
-                    let _ = events.send(LinkEvent::Clock {
-                        runner: runner.clone(),
-                        at,
-                    });
+                    crate::soft::done(
+                        events.send(LinkEvent::Clock {
+                            runner: runner.clone(),
+                            at,
+                        }),
+                        "events send",
+                    );
                 }
             }
             Frame::Pong { .. } | Frame::Unknown => {}
             Frame::Bye { .. } => {
-                let _ = events.send(LinkEvent::Bye { runner });
+                crate::soft::done(events.send(LinkEvent::Bye { runner }), "events send");
                 return;
             }
             Frame::Log { r, offset, bytes } => match route.write_log(&runner, &r, offset, &bytes) {
@@ -230,23 +236,29 @@ async fn read_loop(
                     r.nonce
                 ),
                 Some(Ok(upto)) => {
-                    let _ = events.send(LinkEvent::Logged {
-                        runner: runner.clone(),
-                        r,
-                        upto,
-                    });
+                    crate::soft::done(
+                        events.send(LinkEvent::Logged {
+                            runner: runner.clone(),
+                            r,
+                            upto,
+                        }),
+                        "events send",
+                    );
                 }
                 Some(Err(e)) => tracing::warn!("runners: {runner}: {} log: {e}", r.job),
             },
             frame => {
-                let _ = events.send(LinkEvent::Frame {
-                    runner: runner.clone(),
-                    frame,
-                });
+                crate::soft::done(
+                    events.send(LinkEvent::Frame {
+                        runner: runner.clone(),
+                        frame,
+                    }),
+                    "events send",
+                );
             }
         }
     };
-    let _ = events.send(LinkEvent::Lost { runner, why });
+    crate::soft::done(events.send(LinkEvent::Lost { runner, why }), "events send");
 }
 
 /// One frame from RX, through the protocol's codec: its line, then the chunk its `len` announces.
@@ -308,10 +320,7 @@ pub(crate) async fn read_frame(rx: &mut BufReader<Reader>) -> std::io::Result<Op
 /// length after it.
 pub fn append_at(path: &Path, offset: u64, bytes: &[u8]) -> std::io::Result<u64> {
     use std::io::Write;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut f = crate::fsio::append(path, true)?;
     let len = f.metadata()?.len();
     if offset > len {
         return Err(std::io::Error::new(

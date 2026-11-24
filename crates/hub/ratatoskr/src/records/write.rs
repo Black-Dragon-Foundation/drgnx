@@ -242,7 +242,7 @@ async fn create_file(
     match apply_text(db, actor, &file, rk, parse, text, true).await {
         Ok(tx) => Ok((file, tx)),
         Err(e) => {
-            let _ = std::fs::remove_file(&file);
+            crate::soft::done(std::fs::remove_file(&file), "std::fs::remove_file");
             Err(e)
         }
     }
@@ -613,7 +613,7 @@ mod tests {
     async fn a_new_spec_creates_its_file_adopted_and_in_the_graph() {
         let f = fix();
         let r = created(&f).await;
-        let text = std::fs::read_to_string(file_of(&f)).unwrap();
+        let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
         let want = saga::spec::new_text(
             "Menus",
             "proposed",
@@ -674,7 +674,7 @@ mod tests {
             "sections": [{"key": "section data", "heading": "Data", "body": "New rows.\n"}],
             "base_version": r.version}));
         let r2 = write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
-        let text = std::fs::read_to_string(file_of(&f)).unwrap();
+        let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
         assert!(text.contains("New rows."), "{text}");
         assert!(text.contains("Small."), "{text}");
         assert_eq!(key_id(&r, "section goals"), key_id(&r2, "section goals"));
@@ -687,15 +687,15 @@ mod tests {
         let f = fix();
         let r = created(&f).await;
         let p = file_of(&f);
-        let hand = std::fs::read_to_string(&p)
+        let hand = crate::fsio::read_to_string(&p)
             .unwrap()
             .replace("Rows.", "Hand rows.");
-        std::fs::write(&p, hand).unwrap();
+        crate::fsio::write(&p, hand).unwrap();
         let edit = w(json!({"record": r.record, "kind": "spec",
             "sections": [{"key": "section goals", "heading": "Goals", "body": "Graph goals.\n\n"}],
             "base_version": r.version}));
         write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
-        let text = std::fs::read_to_string(&p).unwrap();
+        let text = crate::fsio::read_to_string(&p).unwrap();
         assert!(text.contains("Hand rows."), "{text}");
         assert!(text.contains("Graph goals."), "{text}");
     }
@@ -705,15 +705,15 @@ mod tests {
         let f = fix();
         let r = created(&f).await;
         let p = file_of(&f);
-        let hand = std::fs::read_to_string(&p)
+        let hand = crate::fsio::read_to_string(&p)
             .unwrap()
             .replace("Small.", "Hand small.");
-        std::fs::write(&p, hand).unwrap();
+        crate::fsio::write(&p, hand).unwrap();
         let edit = w(json!({"record": r.record, "kind": "spec",
             "sections": [{"key": "section goals", "heading": "Goals", "body": "Graph goals.\n\n"}],
             "base_version": r.version}));
         write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
-        let text = std::fs::read_to_string(&p).unwrap();
+        let text = crate::fsio::read_to_string(&p).unwrap();
         assert!(
             text.contains("Hand small."),
             "the file keeps its text: {text}"
@@ -732,7 +732,7 @@ mod tests {
             "base_version": r.version}),
         );
         write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
-        let text = std::fs::read_to_string(file_of(&f)).unwrap();
+        let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
         assert!(!text.contains("## Data"), "{text}");
         let id = key_id(&r, "section data");
         let live: i64 =
@@ -771,7 +771,7 @@ mod tests {
             "base_version": r.version}),
         );
         write_core(&f.db, &f.views, &user(&f), edit).await.unwrap();
-        let text = std::fs::read_to_string(file_of(&f)).unwrap();
+        let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
         assert!(text.contains("**Status:** approved"), "{text}");
     }
 
@@ -785,7 +785,7 @@ mod tests {
             "base_version": r.version}));
         let e = write_core(&f.db, &f.views, &me, edit).await.unwrap_err();
         assert!(e.message.contains("only the user"), "{}", e.message);
-        let text = std::fs::read_to_string(file_of(&f)).unwrap();
+        let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
         assert!(!text.contains("matrix:"), "{text}");
     }
 
@@ -796,7 +796,7 @@ mod tests {
         write_core(&f.db, &f.views, &me, new_spec(SPEC_PATH))
             .await
             .unwrap();
-        let text = std::fs::read_to_string(file_of(&f)).unwrap();
+        let text = crate::fsio::read_to_string(file_of(&f)).unwrap();
         assert!(text.contains("**Status:** proposed"), "{text}");
         let st: Option<String> =
             f.db.read(|c| {
@@ -909,7 +909,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let text = std::fs::read_to_string(f.root.join("docs/plans/r/p2.md")).unwrap();
+        let text = crate::fsio::read_to_string(f.root.join("docs/plans/r/p2.md")).unwrap();
         let d = saga::plan::parse(&text);
         assert_eq!(d.title, "A plan");
         let nums: Vec<&str> = d.tasks.iter().map(|t| t.number.as_str()).collect();
@@ -988,10 +988,10 @@ mod tests {
         .unwrap();
         let p = f.root.join("docs/plans/r/p3.md");
         // a hand edit of task 2, in the file
-        let hand = std::fs::read_to_string(&p)
+        let hand = crate::fsio::read_to_string(&p)
             .unwrap()
             .replace("### Task 2: second", "### Task 2: second (hand)");
-        std::fs::write(&p, hand).unwrap();
+        crate::fsio::write(&p, hand).unwrap();
         // plan_write changes task 1's title, body and steps
         let change: WriteParams = serde_json::from_value(json!({"plan": got.plan, "tasks": [
             {"number": "1", "title": "first, renamed", "body": "Do it differently.\n",
@@ -1001,7 +1001,7 @@ mod tests {
             .await
             .unwrap();
         f.sync(&p).await;
-        let text = std::fs::read_to_string(&p).unwrap();
+        let text = crate::fsio::read_to_string(&p).unwrap();
         assert!(text.contains("### Task 1: first, renamed"), "{text}");
         assert!(text.contains("Do it differently."), "{text}");
         assert!(text.contains("- [ ] think"), "{text}");

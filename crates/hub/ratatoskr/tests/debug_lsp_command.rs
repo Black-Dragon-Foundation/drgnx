@@ -86,7 +86,7 @@ fn rig_with(mode: &str, port: Option<u16>, fill: Vec<Fill>) -> Rig {
     let root = dir.path().join("project");
     std::fs::create_dir_all(&root).unwrap();
     let file = root.join("Main.java");
-    std::fs::write(&file, "class Main {}").unwrap();
+    ratatoskr::fsio::write(&file, "class Main {}").unwrap();
     let bin = Path::new(BIN);
     let mut server = vec![
         "{tools}/ratatoskr".to_owned(),
@@ -196,7 +196,7 @@ async fn the_server_opens_a_dap_port_the_hub_connects_and_the_launch_is_filled()
     tokio::time::timeout(Duration::from_secs(30), c.proc.wait())
         .await
         .expect("the server ends");
-    let _ = &r.file;
+    let _only_when_used_elsewhere = &r.file;
 }
 
 #[tokio::test]

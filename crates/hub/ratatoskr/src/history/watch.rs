@@ -54,7 +54,7 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         let run = |args: &[&str]| {
             assert!(
-                std::process::Command::new("git")
+                crate::proc::Command::new("git")
                     .args(["-c", "user.name=t", "-c", "user.email=t@t"])
                     .args(args)
                     .current_dir(repo.path())
@@ -65,13 +65,13 @@ mod tests {
             )
         };
         run(&["init", "-q", "-b", "main"]);
-        std::fs::write(repo.path().join("a.txt"), "one\n").unwrap();
+        crate::fsio::write(repo.path().join("a.txt"), "one\n").unwrap();
         run(&["add", "."]);
         run(&["commit", "-q", "-m", "base"]);
         let hist = tempfile::tempdir().unwrap();
         let hub = Hub::open(hist.path()).unwrap();
         let tree = Tree::new(repo.path(), &repo.path().join(".git"), None);
-        std::fs::write(repo.path().join("a.txt"), "one\ntwo\n").unwrap();
+        crate::fsio::write(repo.path().join("a.txt"), "one\ntwo\n").unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let file = |t: &str| WatchEvent::File {
             tree: t.into(),
@@ -99,7 +99,7 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         let run = |dir: &std::path::Path, args: &[&str]| {
             assert!(
-                std::process::Command::new("git")
+                crate::proc::Command::new("git")
                     .args(["-c", "user.name=t", "-c", "user.email=t@t"])
                     .args(args)
                     .current_dir(dir)
@@ -110,7 +110,7 @@ mod tests {
             )
         };
         run(repo.path(), &["init", "-q", "-b", "main"]);
-        std::fs::write(repo.path().join("a.txt"), "one\n").unwrap();
+        crate::fsio::write(repo.path().join("a.txt"), "one\n").unwrap();
         run(repo.path(), &["add", "."]);
         run(repo.path(), &["commit", "-q", "-m", "base"]);
         // a linked worktree, nested in the main checkout like the agents' ones
@@ -123,7 +123,7 @@ mod tests {
         let hist = tempfile::tempdir().unwrap();
         let hub = Hub::open(hist.path()).unwrap();
         let tree = Tree::new(&wt, &git_dir, None);
-        std::fs::write(wt.join("a.txt"), "one\ntwo\n").unwrap();
+        crate::fsio::write(wt.join("a.txt"), "one\ntwo\n").unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         // the watcher's events for the worktree carry its own key and a path relative to it; another tree's are not ours
         tx.send(WatchEvent::File {
@@ -131,7 +131,7 @@ mod tests {
             rel: "a.txt".into(),
         })
         .unwrap();
-        std::fs::write(wt.join("b.txt"), "other\n").unwrap();
+        crate::fsio::write(wt.join("b.txt"), "other\n").unwrap();
         tx.send(WatchEvent::File {
             tree: "other".into(),
             rel: "b.txt".into(),

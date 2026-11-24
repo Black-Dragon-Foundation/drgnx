@@ -288,10 +288,13 @@ pub(super) fn request(s: Arc<Session>, method: String, params: Value, resp: Resp
             Ok(tool) => Ok(before_tool(&s, tool).await),
             Err(r) => Err(r),
         };
-        let _ = match answer {
-            Ok(v) => resp.respond(v),
-            Err((code, why)) => resp.fail(code, &why),
-        };
+        crate::soft::done(
+            match answer {
+                Ok(v) => resp.respond(v),
+                Err((code, why)) => resp.fail(code, &why),
+            },
+            "panel",
+        );
     });
 }
 

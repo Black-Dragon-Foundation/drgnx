@@ -97,32 +97,38 @@ async fn source_repo(f: &Front, sid: &str) -> Option<PathBuf> {
 /// follows no link).
 async fn remove_tree(repo: Option<PathBuf>, path: &Path) {
     let p = path.to_path_buf();
-    let _ = crate::clock::blocking(move || {
-        let git = |args: &[&std::ffi::OsStr]| {
-            if let Some(r) = &repo {
-                let _ = std::process::Command::new("git")
-                    .arg("-C")
-                    .arg(r)
-                    .args(args)
-                    .env("GIT_TERMINAL_PROMPT", "0")
-                    .stdin(std::process::Stdio::null())
-                    .output();
+    crate::soft::done(
+        crate::clock::blocking(move || {
+            let git = |args: &[&std::ffi::OsStr]| {
+                if let Some(r) = &repo {
+                    crate::soft::done(
+                        crate::proc::Command::new("git")
+                            .arg("-C")
+                            .arg(r)
+                            .args(args)
+                            .env("GIT_TERMINAL_PROMPT", "0")
+                            .stdin(std::process::Stdio::null())
+                            .output(),
+                        "std::process::Command::new",
+                    );
+                }
+            };
+            git(&[
+                "worktree".as_ref(),
+                "remove".as_ref(),
+                "--force".as_ref(),
+                p.as_os_str(),
+            ]);
+            if p.exists()
+                && let Err(e) = std::fs::remove_dir_all(&p)
+            {
+                tracing::warn!(path = %p.display(), "the fork's tree is not removed: {e}");
             }
-        };
-        git(&[
-            "worktree".as_ref(),
-            "remove".as_ref(),
-            "--force".as_ref(),
-            p.as_os_str(),
-        ]);
-        if p.exists()
-            && let Err(e) = std::fs::remove_dir_all(&p)
-        {
-            tracing::warn!(path = %p.display(), "the fork's tree is not removed: {e}");
-        }
-        git(&["worktree".as_ref(), "prune".as_ref()]);
-    })
-    .await;
+            git(&["worktree".as_ref(), "prune".as_ref()]);
+        })
+        .await,
+        "crate::clock::blocking",
+    );
 }
 
 /// The branch NAME of HUB frozen at the hub's time (kept for compare until it expires).

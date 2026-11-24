@@ -187,7 +187,7 @@ async fn fetch(
         fs::remove_file(&part).await.map_err(disk)?;
         return Err(DownloadError::Corrupt(file.name.to_string()));
     }
-    fs::rename(&part, &dest).await.map_err(disk)
+    crate::fsio::rename(&part, &dest).map_err(disk)
 }
 
 /// The start of a 206's `Content-Range: bytes START-END/SIZE`.

@@ -266,10 +266,10 @@ mod tests {
     #[test]
     fn the_newest_copy_skips_the_pre_migration_one() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("work-pre7-1.db"), b"x").unwrap();
-        std::fs::write(dir.path().join("notes.txt"), b"x").unwrap();
+        crate::fsio::write(dir.path().join("work-pre7-1.db"), b"x").unwrap();
+        crate::fsio::write(dir.path().join("notes.txt"), b"x").unwrap();
         assert_eq!(newest_copy(dir.path()), None);
-        std::fs::write(dir.path().join("work-20261023.db"), b"x").unwrap();
+        crate::fsio::write(dir.path().join("work-20261023.db"), b"x").unwrap();
         assert!(newest_copy(dir.path()).is_some());
     }
 }

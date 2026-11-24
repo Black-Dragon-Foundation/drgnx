@@ -737,10 +737,13 @@ impl SayTx {
     /// Session SID's turn ended with MESSAGE (its last agent message; empty when the turn failed).
     pub(crate) fn turn_ended(&self, sid: &str, message: &str) {
         if lock(&self.live).contains(sid) {
-            let _ = self.tx.send(Input::Turn {
-                sid: sid.to_owned(),
-                message: message.to_owned(),
-            });
+            crate::soft::done(
+                self.tx.send(Input::Turn {
+                    sid: sid.to_owned(),
+                    message: message.to_owned(),
+                }),
+                "tx send",
+            );
         }
     }
 }
@@ -761,9 +764,12 @@ impl Say {
     /// The user stopped session SID (`agents/stop`, `agents/kill`): a planning session's planning stops.
     pub fn stopped(&self, sid: &str) {
         if self.has(sid) {
-            let _ = self.tx.send(Input::Stop {
-                sid: sid.to_owned(),
-            });
+            crate::soft::done(
+                self.tx.send(Input::Stop {
+                    sid: sid.to_owned(),
+                }),
+                "tx send",
+            );
         }
     }
 
@@ -771,11 +777,11 @@ impl Say {
         if let Input::Start { sid, .. } = &input {
             lock(&self.live).insert(sid.clone());
         }
-        let _ = self.tx.send(input);
+        crate::soft::done(self.tx.send(input), "tx send");
     }
 
     fn send(&self, input: Input) {
-        let _ = self.tx.send(input);
+        crate::soft::done(self.tx.send(input), "tx send");
     }
 
     fn forget(&self, sid: &str) {
@@ -937,7 +943,10 @@ async fn perform(
                 front.core.say.forget(sid);
                 let by_id: ById =
                     serde_json::from_value(json!({ "id": sid })).expect("a session id is an id");
-                let _ = crate::agents::session::stop(front, &crate::runner::user(), by_id).await;
+                crate::soft::done(
+                    crate::agents::session::stop(front, &crate::runner::user(), by_id).await,
+                    "crate::agents::session::stop",
+                );
                 return;
             }
         };
@@ -995,10 +1004,13 @@ async fn propose(front: &Front, sid: &str, p: &Planning) -> Result<(String, bool
         .map_err(|e| e.message)?;
     let s_id = sid.to_owned();
     if let Ok(line) = front.writer.db.read(move |c| planning_of(c, &s_id)).await {
-        let _ = crate::runner::update_data(front, &user, &s.id, move |data| {
-            data.insert("planning".into(), line);
-        })
-        .await;
+        crate::soft::done(
+            crate::runner::update_data(front, &user, &s.id, move |data| {
+                data.insert("planning".into(), line);
+            })
+            .await,
+            "crate::runner::update_data",
+        );
     }
     let started = s.status.as_deref() != Some("proposed");
     Ok((s.id, started))

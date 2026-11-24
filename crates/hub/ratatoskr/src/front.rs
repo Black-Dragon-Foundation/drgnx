@@ -1718,7 +1718,7 @@ mod tests {
                         tokio::time::timeout(Duration::from_secs(10), f.line(&mut s, &out, &line))
                             .await
                             .unwrap_or_else(|_| panic!("{} was not answered within 10 s", m.name));
-                        let _ = answers(&out);
+                        answers(&out);
                     }
                     // the dispatchers on the way: the front's, the agent core's, the store's, the coordination writes
                     for name in ["ping", "agents/list", "graph/backup", "coord/prune"] {

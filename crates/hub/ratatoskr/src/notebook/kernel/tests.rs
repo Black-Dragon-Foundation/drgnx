@@ -153,7 +153,7 @@ async fn a_kernel_that_never_binds_is_killed_with_its_group_at_the_deadline() {
         .err()
         .unwrap();
     assert!(e.contains("not ready within"), "{e}");
-    let pid: i32 = std::fs::read_to_string(&pidfile)
+    let pid: i32 = crate::fsio::read_to_string(&pidfile)
         .unwrap()
         .trim()
         .parse()
@@ -407,7 +407,7 @@ async fn a_kernel_that_floods_the_hub_is_killed() {
         });
         key
     };
-    let _ = key;
+    let _only_when_used_elsewhere = &key;
 }
 
 fn plan(enforced: crate::agents::lock::Enforced) -> crate::agents::lock::LaunchPlan {
@@ -457,10 +457,14 @@ async fn a_start_that_is_dropped_part_way_kills_the_kernel_it_began() {
         .await
     });
     let pid: i32 = skuld::wait_until("the kernel's pid", 30, || {
-        std::fs::read_to_string(&pidfile).ok()?.trim().parse().ok()
+        crate::fsio::read_to_string(&pidfile)
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
     });
     start.abort();
-    let _ = start.await;
+    crate::soft::done(start.await, "tests");
     skuld::wait_until("the group to go", 30, || (!group_alive(pid)).then_some(()));
 }
 
@@ -505,7 +509,11 @@ async fn workers_a_kernel_forked_go_with_it_and_nothing_is_signalled_after_it_is
     .await
     .unwrap();
     let worker: i32 = skuld::wait_until("the worker's pid", 30, || {
-        std::fs::read_to_string(&workers).ok()?.trim().parse().ok()
+        crate::fsio::read_to_string(&workers)
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
     });
     // only the leader dies (not its group)
     // SAFETY: the process this test started
@@ -588,7 +596,7 @@ fn recording(log: &Path, transport: Transport, tail: &str) -> Kernelspec {
 }
 
 fn transports(log: &Path) -> Vec<String> {
-    std::fs::read_to_string(log)
+    crate::fsio::read_to_string(log)
         .unwrap_or_default()
         .lines()
         .map(|l| l.replace("\"transport\":", "").replace('"', ""))

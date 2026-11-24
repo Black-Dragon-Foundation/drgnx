@@ -454,7 +454,7 @@ mod openssh_impl {
                 if let Ok(mut l) = link.try_lock()
                     && let Some(m) = l.master.take()
                 {
-                    let _ = m.owner.detach();
+                    m.owner.detach();
                 }
             }
         }

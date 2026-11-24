@@ -39,9 +39,9 @@ fn read_frame(r: &mut impl BufRead) -> Option<Value> {
 
 fn write_frame(w: &mut impl Write, v: &Value) {
     let body = serde_json::to_vec(v).expect("json");
-    let _ = write!(w, "Content-Length: {}\r\n\r\n", body.len());
-    let _ = w.write_all(&body);
-    let _ = w.flush();
+    crate::soft::done(write!(w, "Content-Length: {}\r\n\r\n", body.len()), "write");
+    crate::soft::done(w.write_all(&body), "lsp_mock");
+    crate::soft::done(w.flush(), "lsp_mock");
 }
 
 /// The DAP server on LISTENER: every connection (a child session is a second one) gets a thread that answers each request
@@ -79,12 +79,12 @@ pub fn main(mode: &str, arg: Option<&str>) -> i32 {
         match method.as_str() {
             "initialize" => {
                 if mode == "exit-init" {
-                    eprintln!("the mock server cannot start");
+                    crate::soft::err_line("the mock server cannot start");
                     return 3;
                 }
                 if mode == "oversized" {
-                    let _ = write!(out, "Content-Length: {}\r\n\r\n", 20 << 20);
-                    let _ = out.flush();
+                    crate::soft::done(write!(out, "Content-Length: {}\r\n\r\n", 20 << 20), "write");
+                    crate::soft::done(out.flush(), "lsp_mock");
                     std::thread::sleep(std::time::Duration::from_secs(120));
                     return 0;
                 }

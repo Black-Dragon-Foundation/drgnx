@@ -633,7 +633,7 @@ pub struct ToolHub {
 impl ToolHub {
     /// The front the job tools reach `exec/*` through.
     pub fn bind(&self, front: &Arc<Front>) {
-        let _ = self.front.set(Arc::downgrade(front));
+        crate::soft::done(self.front.set(Arc::downgrade(front)), "coord");
     }
 
     /// The front, once bound and while it lives.
@@ -1059,9 +1059,12 @@ mod tests {
             .execute_batch(DDL)
             .unwrap();
         for ext in ["-wal", "-shm"] {
-            let _ = std::fs::remove_file(dir.path().join(format!("work.db{ext}")));
+            crate::soft::done(
+                std::fs::remove_file(dir.path().join(format!("work.db{ext}"))),
+                "std::fs::remove_file",
+            );
         }
-        std::fs::rename(&next, &file).unwrap();
+        crate::fsio::rename(&next, &file).unwrap();
         let card = call(
             &w,
             "coord/card-create",
@@ -1234,7 +1237,7 @@ mod tests {
         std::fs::create_dir_all(&work).unwrap();
         let mock = crate::embed::tests::mock_binary();
         let file = config.join("settings.el");
-        std::fs::write(
+        crate::fsio::write(
             &file,
             format!(
                 "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command ({mock:?} \"acp\" \"--as\" \"claude\")))))\n"
@@ -1272,6 +1275,9 @@ mod tests {
             rows.iter().map(|r| &r.id).collect::<Vec<_>>()
         );
         let kill = params("agents/kill", json!({"id": id}));
-        let _ = crate::agent_core::serve(&front, &user, kill).await;
+        crate::soft::done(
+            crate::agent_core::serve(&front, &user, kill).await,
+            "crate::agent_core::serve",
+        );
     }
 }

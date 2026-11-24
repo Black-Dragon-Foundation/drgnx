@@ -146,7 +146,7 @@ pub fn rerun_of(
 }
 
 pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -296,7 +296,10 @@ async fn start_claimed(
                 key: (key.to_owned(), rerun.selector.clone()),
                 worktree,
             };
-            let _ = crate::clock::blocking(move || cleanup(&run)).await;
+            crate::soft::done(
+                crate::clock::blocking(move || cleanup(&run)).await,
+                "crate::clock::blocking",
+            );
             return Err(e.message);
         }
     };

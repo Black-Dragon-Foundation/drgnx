@@ -65,7 +65,7 @@ fn pin_hub() {
 /// debugpy is copied in.
 fn tools(at: &Path) -> PathBuf {
     let python = std::env::var("DRGNX_DEBUG_LIVE_PYTHON").unwrap_or_else(|_| "python3".into());
-    let out = std::process::Command::new(&python)
+    let out = crate::proc::Command::new(&python)
         .args([
             "-c",
             "import debugpy, os, sys; print(os.path.dirname(debugpy.__file__)); print(os.path.realpath(sys.executable)); print('python%d.%d' % sys.version_info[:2])",
@@ -90,7 +90,7 @@ fn tools(at: &Path) -> PathBuf {
     let site = t.join(format!("venv/lib/{ver}/site-packages"));
     std::fs::create_dir_all(t.join("venv/bin")).unwrap();
     std::fs::create_dir_all(&site).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         t.join("venv/pyvenv.cfg"),
         format!(
             "home = {}\ninclude-system-site-packages = false\n",
@@ -100,7 +100,7 @@ fn tools(at: &Path) -> PathBuf {
     .unwrap();
     std::os::unix::fs::symlink(exe, t.join("venv/bin/python3")).unwrap();
     // copied, not linked: the fork's sandbox binds the venv, and a link out of it (to a venv elsewhere) dangles there
-    let copied = std::process::Command::new("cp")
+    let copied = crate::proc::Command::new("cp")
         .args(["-r", pkg])
         .arg(&site)
         .status()
@@ -155,12 +155,12 @@ fn fixture_at(
     let root = base.as_path().join("proj");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         root.join(file),
         text.replace("@ROOT@", &root.display().to_string()),
     )
     .unwrap();
-    std::fs::write(root.join(".env"), "API_TOKEN=s3cr3t-value\n").unwrap();
+    crate::fsio::write(root.join(".env"), "API_TOKEN=s3cr3t-value\n").unwrap();
     let checkpoints = base.as_path().join("checkpoints");
     let tree = crate::timeline::snapshot::tree_now(&checkpoints, &root, &root, &[]).unwrap();
     let resolved = config(&root);
@@ -218,10 +218,10 @@ fn fixture_at(
     let path_env = std::env::var("PATH").unwrap();
     let env = runstav::paths::Env::new(
         &[
-            ("HOME", home.to_str().unwrap()),
+            (stig::HOME_VAR, home.to_str().unwrap()),
             ("PATH", &path_env),
             (
-                "XDG_RUNTIME_DIR",
+                stig::SYSTEM_RUNTIME_VAR,
                 base.as_path().join("run").to_str().unwrap(),
             ),
         ],
@@ -429,7 +429,7 @@ async fn a_python_trace_sees_its_injected_env_and_file() {
         )
         .await
         .unwrap();
-    let seen = std::fs::read_to_string(g.path.join("seen.txt")).unwrap();
+    let seen = crate::fsio::read_to_string(g.path.join("seen.txt")).unwrap();
     assert_eq!(seen, format!("{}|origin-17", g.path.display()));
     // no fork entry; the tree goes with the guard
     assert!(f.forks.list().is_empty());
@@ -622,7 +622,7 @@ async fn python_runs_in_bisect_slots_report_a_probe_and_an_exception() {
     // slot 2: a version that raises (one caught on line 2 first): the watched raise is found
     let two = slots.join("s2");
     std::fs::create_dir_all(&two).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         two.join("stock.py"),
         "def f():\n    raise ValueError('x')\ntry:\n    f()\nexcept ValueError:\n    pass\nraise KeyError('y')\n",
     )
@@ -645,7 +645,7 @@ async fn python_runs_in_bisect_slots_report_a_probe_and_an_exception() {
     // slot 3: a program that never ends: the time box
     let three = slots.join("s3");
     std::fs::create_dir_all(&three).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         three.join("stock.py"),
         "import time\nwhile True:\n    time.sleep(0.1)\n",
     )
@@ -727,7 +727,7 @@ async fn a_recorded_python_run_is_forked_end_to_end() {
     std::fs::create_dir_all(&root).unwrap();
     let text = PY.replace("@ROOT@", &root.display().to_string());
     let file = root.join("stock.py");
-    std::fs::write(&file, &text).unwrap();
+    crate::fsio::write(&file, &text).unwrap();
     let path = file.display().to_string();
     let root_s = root.display().to_string();
     let resolved = py_config(&root);
@@ -838,9 +838,12 @@ async fn a_recorded_python_run_is_forked_end_to_end() {
     let path_env = std::env::var("PATH").unwrap();
     let env = runstav::paths::Env::new(
         &[
-            ("HOME", home.to_str().unwrap()),
+            (stig::HOME_VAR, home.to_str().unwrap()),
             ("PATH", &path_env),
-            ("XDG_RUNTIME_DIR", d.path().join("run").to_str().unwrap()),
+            (
+                stig::SYSTEM_RUNTIME_VAR,
+                d.path().join("run").to_str().unwrap(),
+            ),
         ],
         unsafe { libc::getuid() },
     );
@@ -923,12 +926,12 @@ async fn debug_fork_start() {
     }
     took.sort();
     let p95 = took[(took.len() * 95).div_ceil(100) - 1];
-    println!(
+    crate::soft::out_line(&format!(
         "debug-fork-start: 10 forks to the point, p50 {:.0} ms, p95 {:.0} ms, max {:.0} ms (budget p95 2000)",
         took[took.len() / 2].as_secs_f64() * 1000.0,
         p95.as_secs_f64() * 1000.0,
         took[took.len() - 1].as_secs_f64() * 1000.0
-    );
+    ));
 }
 
 /// A replay to a late pass (spec §19.9's fork start, for a point deep in a loop): pass 200 of 300 within 6 s, where a
@@ -957,10 +960,10 @@ async fn a_late_pass(
         json!({"matched": 199, "of": 199, "first": null}),
         "{v}"
     );
-    println!(
+    crate::soft::out_line(&format!(
         "{file}: a fork to pass 200 in {} ms (budget 6000)",
         took.as_millis()
-    );
+    ));
     assert!(
         took < Duration::from_secs(6),
         "a fork to pass 200 took {took:?}"
@@ -994,7 +997,7 @@ fn sockets_of(groups: &[i32]) -> Vec<(u16, Option<u16>)> {
     let out = match super::ports::output_within(cmd, super::ports::LSOF_WITHIN) {
         Ok(o) => o,
         Err(e) => {
-            println!("lsof sweep: {e}");
+            crate::soft::out_line(&format!("lsof sweep: {e}"));
             return vec![];
         }
     };
@@ -1018,18 +1021,18 @@ const FORK_WITHIN: Duration = Duration::from_secs(90);
 /// command), their sockets (lsof, bounded) and a short stack sample of each.
 #[cfg(target_os = "macos")]
 fn stuck(groups: &[i32]) {
-    println!("stuck fork: process groups {groups:?}");
+    crate::soft::out_line(&format!("stuck fork: process groups {groups:?}"));
     let run = |name: &str, args: &[&str]| {
         let mut cmd = std::process::Command::new(name);
         cmd.args(args);
         match super::ports::output_within(cmd, Duration::from_secs(10)) {
             Ok(o) => {
-                println!("$ {name} {}", args.join(" "));
+                crate::soft::out_line(&format!("$ {name} {}", args.join(" ")));
                 for l in String::from_utf8_lossy(&o.stdout).lines().take(80) {
-                    println!("  {l}");
+                    crate::soft::out_line(&format!("  {l}"));
                 }
             }
-            Err(e) => println!("{name}: {e}"),
+            Err(e) => crate::soft::out_line(&format!("{name}: {e}")),
         }
     };
     let list = groups
@@ -1042,7 +1045,7 @@ fn stuck(groups: &[i32]) {
         &["-o", "pid,pgid,stat,wchan,etime,command", "-g", &list],
     );
     run("/usr/sbin/lsof", &["-b", "-w", "-nP", "-a", "-g", &list]);
-    let out = std::process::Command::new("/bin/ps")
+    let out = crate::proc::Command::new("/bin/ps")
         .args(["-o", "pid=", "-g", &list])
         .output();
     for pid in out
@@ -1057,7 +1060,7 @@ fn stuck(groups: &[i32]) {
 /// The system log's Seatbelt refusals of the last 3 minutes (their last 60 lines), for a failed fork's report.
 #[cfg(target_os = "macos")]
 fn sandbox_denials() {
-    let out = std::process::Command::new("/usr/bin/log")
+    let out = crate::proc::Command::new("/usr/bin/log")
         .args([
             "show",
             "--style",
@@ -1072,12 +1075,15 @@ fn sandbox_denials() {
         Ok(o) => {
             let text = String::from_utf8_lossy(&o.stdout);
             let lines: Vec<&str> = text.lines().collect();
-            println!("Seatbelt refusals (last 3 min, {} lines):", lines.len());
+            crate::soft::out_line(&format!(
+                "Seatbelt refusals (last 3 min, {} lines):",
+                lines.len()
+            ));
             for l in &lines[lines.len().saturating_sub(60)..] {
-                println!("  {l}");
+                crate::soft::out_line(&format!("  {l}"));
             }
         }
-        Err(e) => println!("log show: {e}"),
+        Err(e) => crate::soft::out_line(&format!("log show: {e}")),
     }
 }
 

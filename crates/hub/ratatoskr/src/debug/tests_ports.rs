@@ -146,9 +146,12 @@ fn holder_of_a_block_for_another_test() {
     };
     let blocks = Blocks::with(46600..46616, 8, |_| true, Path::new(&dir));
     let b = blocks.claim().unwrap();
-    println!("drgnx-held {}", b.ports()[0]);
+    crate::soft::out_line(&format!("drgnx-held {}", b.ports()[0]));
     let mut rest = String::new();
-    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut rest);
+    crate::soft::done(
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut rest),
+        "std::io::Read::read_to_string",
+    );
     drop(b);
 }
 

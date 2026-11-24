@@ -92,14 +92,14 @@ fn world(interrupt: &str) -> World {
     let kernels = d.path().join("kernels");
     std::fs::create_dir_all(kernels.join("fake")).unwrap();
     let argv = r#"["sh", "-c", "sleep 600", "kernel", "{connection_file}"]"#;
-    std::fs::write(
+    crate::fsio::write(
         kernels.join("fake/kernel.json"),
         format!(r#"{{"argv": {argv}, "display_name": "Fake", "language": "fake", "interrupt_mode": "{interrupt}"}}"#),
     )
     .unwrap();
     let folder = private_folder(&d.path().join("s")).unwrap();
     let path = d.path().join("n.ipynb");
-    std::fs::write(&path, NB).unwrap();
+    crate::fsio::write(&path, NB).unwrap();
     let events = Arc::new(Events::default());
     let t = Timeouts {
         ready: Duration::from_secs(30),
@@ -719,7 +719,7 @@ async fn only_regular_notebook_files_ending_in_ipynb_are_opened() {
     );
     // one connection holds at most MAX_OPEN
     for _ in 0..MAX_OPEN {
-        let _ = w.hub.open(9, &w.path, None).await;
+        crate::soft::done(w.hub.open(9, &w.path, None).await, "tests");
     }
     assert!(
         w.hub
@@ -763,7 +763,7 @@ async fn a_start_that_fails_leaves_the_slot_free() {
             .contains("no kernel")
     );
     std::fs::create_dir_all(w.d.path().join("kernels/fake")).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         w.d.path().join("kernels/fake/kernel.json"),
         r#"{"argv": ["sh", "-c", "sleep 600", "kernel", "{connection_file}"], "display_name": "Fake", "language": "fake"}"#,
     )

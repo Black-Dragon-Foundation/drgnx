@@ -180,7 +180,7 @@ fn saved_put_list_and_delete() {
 
 fn project_file(f: &Fx, text: &str) {
     std::fs::create_dir_all(f.root().join(".drgnx")).unwrap();
-    std::fs::write(f.root().join(PROJECT_FILE), text).unwrap();
+    crate::fsio::write(f.root().join(PROJECT_FILE), text).unwrap();
 }
 
 #[test]
@@ -288,7 +288,7 @@ fn share_writes_the_project_file_atomically_and_keeps_the_rest() {
     assert_eq!(path, f.root().join(PROJECT_FILE));
     f.saved.put(f.root(), "Mine", text("second"), true).unwrap();
     f.saved.share(f.root(), "Mine").unwrap();
-    let body = std::fs::read_to_string(&path).unwrap();
+    let body = crate::fsio::read_to_string(&path).unwrap();
     assert!(
         body.starts_with(";; keep this comment\n(:name \"Other\" :query \"o\")\n"),
         "{body}"
@@ -330,7 +330,7 @@ fn share_creates_the_folder_and_refuses_a_file_it_cannot_read() {
         Err(ShareError::Refused(_))
     ));
     assert_eq!(
-        std::fs::read_to_string(f.root().join(PROJECT_FILE)).unwrap(),
+        crate::fsio::read_to_string(f.root().join(PROJECT_FILE)).unwrap(),
         "(:name \"broken\" :query \"x\""
     );
 }

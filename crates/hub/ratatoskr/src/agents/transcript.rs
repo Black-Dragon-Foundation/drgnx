@@ -116,7 +116,7 @@ impl Store {
     /// The entries written so far, in index order (a later line for an index replaces the earlier one; a line that
     /// does not parse is skipped).
     pub fn load(&self, sid: &str) -> Vec<Entry> {
-        let Ok(text) = std::fs::read_to_string(self.file(sid, "jsonl")) else {
+        let Ok(text) = crate::fsio::read_to_string(self.file(sid, "jsonl")) else {
             return Vec::new();
         };
         let mut by: std::collections::BTreeMap<u64, Entry> = std::collections::BTreeMap::new();
@@ -155,7 +155,7 @@ impl Store {
     }
 
     pub fn load_meta(&self, sid: &str) -> Value {
-        std::fs::read_to_string(self.file(sid, "meta.json"))
+        crate::fsio::read_to_string(self.file(sid, "meta.json"))
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or(Value::Null)
@@ -186,7 +186,7 @@ impl Store {
     }
 
     pub fn load_queue(&self, sid: &str) -> (Queue, bool) {
-        let Ok(text) = std::fs::read_to_string(self.file(sid, "queue.json")) else {
+        let Ok(text) = crate::fsio::read_to_string(self.file(sid, "queue.json")) else {
             return (Queue::default(), false);
         };
         let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
@@ -223,7 +223,7 @@ impl Store {
 
     /// Whether the user held SID's wheel when the hub ended, and the snapshot tree it is measured from.
     pub fn load_wheel(&self, sid: &str) -> (bool, Option<String>) {
-        let Ok(text) = std::fs::read_to_string(self.file(sid, "wheel.json")) else {
+        let Ok(text) = crate::fsio::read_to_string(self.file(sid, "wheel.json")) else {
             return (false, None);
         };
         let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
@@ -290,7 +290,7 @@ mod tests {
         let path = dir.path().join("transcripts/a1.jsonl");
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
-        let raw = std::fs::read_to_string(&path).unwrap();
+        let raw = crate::fsio::read_to_string(&path).unwrap();
         assert!(!raw.contains("Zk3Qw9"), "{raw}");
         let back = s.load("a1");
         assert_eq!(back.len(), 2);

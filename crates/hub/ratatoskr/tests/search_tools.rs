@@ -13,11 +13,10 @@ use rmcp::model::{
 use rmcp::{ClientLifecycleMode, ClientServiceExt};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use support::{Client, FAILED_AFTER, Hub, Root};
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = ratatoskr::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -55,7 +54,7 @@ fn project(root: &Root, name: &str) -> (PathBuf, PathBuf) {
     for (p, text) in FILES {
         let f = dir.join(p);
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(f, text).unwrap();
+        ratatoskr::fsio::write(f, text).unwrap();
     }
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-q", "-m", "one"]);
@@ -64,7 +63,7 @@ fn project(root: &Root, name: &str) -> (PathBuf, PathBuf) {
         &dir,
         &["worktree", "add", "-q", "-b", "topic", wt.to_str().unwrap()],
     );
-    std::fs::write(
+    ratatoskr::fsio::write(
         wt.join("src/branch.rs"),
         "pub fn branch_only() {\n    make_widget();\n}\n",
     )
@@ -75,7 +74,7 @@ fn project(root: &Root, name: &str) -> (PathBuf, PathBuf) {
 fn settings(root: &Root, body: &str) {
     let dir = root.dir.path().join("h/c");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
+    ratatoskr::fsio::write(
         dir.join("settings.el"),
         format!("(drgnx-settings\n :version 1\n {body})\n"),
     )
@@ -163,7 +162,7 @@ fn why_names_layer_and_rule() {
     let root = Root::new();
     let (proj, _wt) = project(&root, "proj");
     std::fs::create_dir_all(proj.join(".drgnx")).unwrap();
-    std::fs::write(
+    ratatoskr::fsio::write(
         proj.join(".drgnx/search.toml"),
         "ignore = [\"src/user.rs\"]\n",
     )

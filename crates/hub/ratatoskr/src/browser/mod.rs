@@ -145,8 +145,8 @@ pub fn host_main(args: Vec<OsString>) -> i32 {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = args;
-        eprintln!("ratatoskr browser-host: the browser host is Linux only");
+        let _only_when_used_elsewhere = &args;
+        crate::soft::err_line("ratatoskr browser-host: the browser host is Linux only");
         1
     }
 }
@@ -210,18 +210,18 @@ pub fn run(env: &Env, cmd: BrowserCommand) -> i32 {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("drgnx browser install: no async runtime: {e}");
+                    crate::soft::err_line(&format!("drgnx browser install: no async runtime: {e}"));
                     return 1;
                 }
             };
             let log = |line: &str| {
                 if !cmd.json {
-                    eprintln!("{line}");
+                    crate::soft::err_line(line);
                 }
             };
             match runtime.block_on(install::install(&data, version.as_deref(), &log)) {
                 Ok(done) if cmd.json => {
-                    println!("{}", json!({"ok": true, "installed": done}));
+                    crate::soft::out_line(&(json!({"ok": true, "installed": done})).to_string());
                     0
                 }
                 Ok(done) => {
@@ -230,19 +230,21 @@ pub fn run(env: &Env, cmd: BrowserCommand) -> i32 {
                     } else {
                         "installed"
                     };
-                    println!(
+                    crate::soft::out_line(&format!(
                         "{how}: chrome-headless-shell {} (released {}) at {}",
                         done.version,
                         done.released,
                         done.binary.display()
-                    );
+                    ));
                     0
                 }
                 Err(e) => {
                     if cmd.json {
-                        println!("{}", json!({"ok": false, "error": e.to_string()}));
+                        crate::soft::out_line(
+                            &(json!({"ok": false, "error": e.to_string()})).to_string(),
+                        );
                     } else {
-                        eprintln!("drgnx browser install: {e}");
+                        crate::soft::err_line(&format!("drgnx browser install: {e}"));
                     }
                     1
                 }
@@ -272,33 +274,32 @@ pub fn run(env: &Env, cmd: BrowserCommand) -> i32 {
                     Ok(f) => (json!(f), json!(null)),
                     Err(n) => (json!(null), json!(n.fix)),
                 };
-                println!(
-                    "{}",
-                    json!({"browser": browser, "fix": fix, "installed": installed, "pinned": pinned})
-                );
+                crate::soft::out_line(&(json!({"browser": browser, "fix": fix, "installed": installed, "pinned": pinned})).to_string());
             } else {
                 match &found {
-                    Ok(f) => println!(
+                    Ok(f) => crate::soft::out_line(&format!(
                         "sessions get: {} ({:?}, {})",
                         f.path.display(),
                         f.kind,
                         f.version.as_deref().unwrap_or("version unknown")
-                    ),
-                    Err(n) => println!("sessions get: no browser; {}", n.fix),
+                    )),
+                    Err(n) => {
+                        crate::soft::out_line(&format!("sessions get: no browser; {}", n.fix))
+                    }
                 }
                 for (dir, f) in &downloads {
-                    println!(
+                    crate::soft::out_line(&format!(
                         "downloaded: {} (released {}) in {}",
                         f.version,
                         f.released,
                         dir.display()
-                    );
+                    ));
                 }
                 for p in &pins {
                     let ready = platform
                         .and_then(|k| p.platforms.get(k))
                         .is_some_and(|x| x.sha256.is_some());
-                    println!(
+                    crate::soft::out_line(&format!(
                         "pinned: {} (released {}){}",
                         p.version,
                         p.released,
@@ -307,7 +308,7 @@ pub fn run(env: &Env, cmd: BrowserCommand) -> i32 {
                         } else {
                             ", not installable on this platform yet"
                         }
-                    );
+                    ));
                 }
             }
             0
@@ -380,8 +381,8 @@ mod tests {
         // whole values only, as the kernel's file gives them
         let set = |v: &str| {
             let tmp = dir.path().join("memory.tmp");
-            std::fs::write(&tmp, v).unwrap();
-            std::fs::rename(&tmp, dir.path().join("memory.current")).unwrap();
+            crate::fsio::write(&tmp, v).unwrap();
+            crate::fsio::rename(&tmp, dir.path().join("memory.current")).unwrap();
         };
         set("10\n");
         let stops = Arc::new(AtomicUsize::new(0));

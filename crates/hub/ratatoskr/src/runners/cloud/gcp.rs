@@ -1197,7 +1197,7 @@ mod tests {
     fn test_service_account() -> (ServiceAccount, Vec<u8>) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("k");
-        let ok = std::process::Command::new("ssh-keygen")
+        let ok = crate::proc::Command::new("ssh-keygen")
             .args([
                 "-q", "-t", "rsa", "-b", "2048", "-m", "PKCS8", "-N", "", "-f",
             ])
@@ -1207,7 +1207,7 @@ mod tests {
             .unwrap()
             .success();
         assert!(ok, "ssh-keygen made no key");
-        let pem = std::fs::read_to_string(&path).unwrap();
+        let pem = crate::fsio::read_to_string(&path).unwrap();
         let json = json!({
             "type": "service_account", "project_id": "p1", "private_key_id": "k1", "private_key": pem,
             "client_email": "drgnx@p1.iam.gserviceaccount.com", "token_uri": "https://oauth2.googleapis.com/token",

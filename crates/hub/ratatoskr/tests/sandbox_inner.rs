@@ -21,7 +21,7 @@ const CANARY: &str = "glp-parent-canary-5b7e";
 fn landlock_here(test: &str) -> bool {
     let abi = landlock::kernel_abi();
     if abi == 0 {
-        eprintln!("SKIP {test}: the kernel has no Landlock");
+        ratatoskr::soft::err_line(&format!("SKIP {test}: the kernel has no Landlock"));
     }
     abi > 0
 }
@@ -163,7 +163,7 @@ fn run_fd(spec_fd: OwnedFd, cmd: &[&str], o: Opts) -> Outcome {
     let mut out = child.stdout.take().unwrap();
     let out = std::thread::spawn(move || {
         let mut s = String::new();
-        let _ = out.read_to_string(&mut s);
+        ratatoskr::soft::done(out.read_to_string(&mut s), "sandbox_inner");
         s
     });
     let err_buf = Arc::new(Mutex::new(String::new()));
@@ -581,7 +581,10 @@ fn supervise(sock: &Path, shut: bool) -> std::thread::JoinHandle<AtSocket> {
 /// The supervisor's result once the helper is gone: a connection of our own wakes an `accept` the helper never
 /// reached (it has exited, so it never will), and is then nothing.
 fn supervised(sock: &Path, h: std::thread::JoinHandle<AtSocket>) -> AtSocket {
-    let _ = std::os::unix::net::UnixStream::connect(sock);
+    ratatoskr::soft::done(
+        std::os::unix::net::UnixStream::connect(sock),
+        "std::os::unix::net::UnixStream::connect",
+    );
     h.join().unwrap()
 }
 
@@ -597,7 +600,7 @@ fn a_whole_tree_spec_hands_its_listener_over() {
     let dir = fixture();
     let root = dir.path().canonicalize().unwrap();
     let marker = root.join("marker");
-    std::fs::write(&marker, "seen\n").unwrap();
+    ratatoskr::fsio::write(&marker, "seen\n").unwrap();
     let sock = root.join("trace.sock");
     let mut s = spec(&root);
     s.landlock.unix_connect_roots = vec![sock.clone()];
@@ -681,9 +684,9 @@ fn a_whole_tree_spec_hands_its_listener_over() {
 fn a_reduced_run_end_to_end() {
     let abi = landlock::kernel_abi();
     if abi < 9 {
-        eprintln!(
+        ratatoskr::soft::err_line(&format!(
             "SKIP a_reduced_run_end_to_end: the kernel's Landlock ABI is {abi}, this needs 9"
-        );
+        ));
         return;
     }
     use gleipnir::backend::linux::reduced;
@@ -763,14 +766,19 @@ fn a_reduced_run_end_to_end() {
         o.stdout,
         format!("{}\nout-refused\ntcp-refused\n", root.join("w").display())
     );
-    assert_eq!(std::fs::read_to_string(root.join("w/f")).unwrap(), "in\n");
+    assert_eq!(
+        ratatoskr::fsio::read_to_string(root.join("w/f")).unwrap(),
+        "in\n"
+    );
     assert!(!out.join("f").exists());
 }
 
 fn abi9_here(test: &str) -> bool {
     let abi = landlock::kernel_abi();
     if abi < 9 {
-        eprintln!("SKIP {test}: the kernel's Landlock ABI is {abi}, the browser needs 9");
+        ratatoskr::soft::err_line(&format!(
+            "SKIP {test}: the kernel's Landlock ABI is {abi}, the browser needs 9"
+        ));
     }
     abi >= 9
 }
@@ -794,7 +802,7 @@ fn browser(
         hub_fd: 5,
         argv: argv.iter().map(|a| a.to_string()).collect(),
         env: vec![
-            ("HOME".into(), own.to_str().unwrap().into()),
+            (stig::HOME_VAR.into(), own.to_str().unwrap().into()),
             ("PATH".into(), "/usr/bin:/bin".into()),
         ],
         own_dir: own.clone(),

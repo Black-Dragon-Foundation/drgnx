@@ -44,8 +44,11 @@ impl Replay for Direct {
 
 fn run_traced(dir: &Path, script: &str, watch: &[String]) -> Vec<origin::Rec> {
     let tracer = origin::write_tracer(&dir.join(origin::DIR)).unwrap();
-    let _ = std::fs::remove_file(tracer.join(origin::OUT));
-    std::fs::write(dir.join("stock.py"), script).unwrap();
+    crate::soft::done(
+        std::fs::remove_file(tracer.join(origin::OUT)),
+        "std::fs::remove_file",
+    );
+    crate::fsio::write(dir.join("stock.py"), script).unwrap();
     let mut c = Command::new("python3");
     c.arg("stock.py").current_dir(dir).env_remove("PYTHONPATH");
     for (k, v) in origin::env(&tracer, dir, watch, None) {
@@ -57,7 +60,7 @@ fn run_traced(dir: &Path, script: &str, watch: &[String]) -> Vec<origin::Rec> {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    match origin::traced(&std::fs::read_to_string(tracer.join(origin::OUT)).unwrap_or_default())
+    match origin::traced(&crate::fsio::read_to_string(tracer.join(origin::OUT)).unwrap_or_default())
         .unwrap()
     {
         Traced::Records(r) => r,

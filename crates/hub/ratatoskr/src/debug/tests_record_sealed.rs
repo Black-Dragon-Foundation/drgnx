@@ -33,7 +33,7 @@ async fn record_into(
     let project = dir.join("proj");
     std::fs::create_dir_all(&project).unwrap();
     let file = project.join("app.py");
-    std::fs::write(&file, "x = 1\n").unwrap();
+    crate::fsio::write(&file, "x = 1\n").unwrap();
     let root = project.to_string_lossy().into_owned();
     let path = file.to_string_lossy().into_owned();
     let ev = Arc::new(Events::default());
@@ -219,7 +219,7 @@ async fn with_the_key_gone_runs_cannot_be_read_and_prune_still_works() {
     let mut opts = Opts::new(d.path().join("runs"), d.path().join("checkpoints"));
     opts.key = memory(|_| {});
     let rec2 = dbg2.record_into(opts);
-    let _ = rec2.unlock().await;
+    crate::soft::done(rec2.unlock().await, "tests_record_sealed");
     let root = d.path().join("proj").to_string_lossy().into_owned();
     // still listed (its record's plain fields), never read
     assert_eq!(rec2.list(&root).len(), 1);

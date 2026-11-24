@@ -220,9 +220,9 @@ fn place_of(given: &Path) -> Option<Place> {
             (dot.clone(), dot)
         } else if dot.is_file() {
             // a linked worktree: `gitdir: <main>/.git/worktrees/<name>`, whose `commondir` is the main `.git`
-            let text = std::fs::read_to_string(&dot).ok()?;
+            let text = crate::fsio::read_to_string(&dot).ok()?;
             let gitdir = dir.join(text.trim().strip_prefix("gitdir:")?.trim());
-            let common = std::fs::read_to_string(gitdir.join("commondir"))
+            let common = crate::fsio::read_to_string(gitdir.join("commondir"))
                 .map(|c| gitdir.join(c.trim()))
                 .unwrap_or_else(|_| gitdir.clone());
             (gitdir, std::fs::canonicalize(&common).unwrap_or(common))
@@ -234,7 +234,7 @@ fn place_of(given: &Path) -> Option<Place> {
             Some(n) if n == ".git" => common.parent().unwrap_or(dir).to_path_buf(),
             _ => dir.to_path_buf(),
         };
-        let branch = std::fs::read_to_string(gitdir.join("HEAD"))
+        let branch = crate::fsio::read_to_string(gitdir.join("HEAD"))
             .ok()
             .and_then(|h| {
                 h.trim()
@@ -882,7 +882,7 @@ impl Map {
     /// minutes at once rather than from the next tick, and on a test hub the scene's sessions.
     fn opening(g: &mut Inner, now: u64) -> Vec<Event> {
         #[cfg(not(feature = "test-hooks"))]
-        let _ = g;
+        let _only_when_used_elsewhere = &g;
         #[allow(unused_mut)]
         let mut out = vec![Event::Tick { minute: now }];
         #[cfg(feature = "test-hooks")]
@@ -2496,7 +2496,7 @@ async fn refs_of(f: &Front, ws: &Workspace) -> Vec<RefFact> {
 
 /// The map's background: the store's records read again after each write while a map is open, and the clock's minute.
 pub async fn run(front: Arc<Front>) {
-    let _ = front.core.map.front.set(Arc::downgrade(&front));
+    crate::soft::done(front.core.map.front.set(Arc::downgrade(&front)), "map");
     let ticks = front.clone();
     crate::clock::spawn("map:ticks", async move {
         loop {

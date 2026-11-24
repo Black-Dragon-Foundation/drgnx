@@ -238,12 +238,13 @@ impl Machine {
 
     /// SCRIPT's stdout on the machine, or its stderr as the error.
     fn try_sh(&self, script: &str) -> Result<String, String> {
-        let out = std::process::Command::new("ssh")
+        let out = ratatoskr::proc::Command::new("ssh")
             .arg("-F")
             .arg(self.ssh_config())
             .arg(&self.cfg.host)
             .arg(script)
-            .output()
+            .output_async()
+            .await
             .expect("ssh");
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())

@@ -793,7 +793,7 @@ impl MatrixGate {
     /// [`Self::refresh`] from the settings alone (a session holds those, not the front).
     pub fn refresh_from(&self, settings: &crate::settings::Settings) {
         if let Some((v, _)) = settings.effective("drgnx-agents-matrix", None) {
-            let _ = self.apply_setting(&v);
+            crate::soft::done(self.apply_setting(&v), "matrix_gate");
         }
         let once = settings.current().loaded.values.agents_browser_once_window;
         self.st.lock().expect("matrix gate").once_window = Some(once);

@@ -159,7 +159,7 @@ pub fn main(args: Vec<OsString>) -> i32 {
     let a = match parse(args) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("ratatoskr browser-host: {e}");
+            crate::soft::err_line(&format!("ratatoskr browser-host: {e}"));
             return EXIT_USAGE;
         }
     };
@@ -167,13 +167,15 @@ pub fn main(args: Vec<OsString>) -> i32 {
     if !a.unconfined
         && let Err(why) = check_layered()
     {
-        eprintln!("ratatoskr browser-host: refusing to run outside the browser layer: {why}");
+        crate::soft::err_line(&format!(
+            "ratatoskr browser-host: refusing to run outside the browser layer: {why}"
+        ));
         return EXIT_FAILED;
     }
     let (hub, ready) = match (take_fd(a.hub_fd), take_fd(a.ready_fd)) {
         (Ok(h), Ok(r)) => (h, r),
         (Err(e), _) | (_, Err(e)) => {
-            eprintln!("ratatoskr browser-host: {e}");
+            crate::soft::err_line(&format!("ratatoskr browser-host: {e}"));
             return EXIT_FAILED;
         }
     };
@@ -183,7 +185,7 @@ pub fn main(args: Vec<OsString>) -> i32 {
 /// Whether this process runs under the browser layer: `no_new_privs` is set (`/proc/self/status`), and a TCP bind on
 /// loopback is refused. The browser layer binds no port at all; the agent's own layer and an unsandboxed process may.
 pub fn check_layered() -> Result<(), String> {
-    let status = std::fs::read_to_string("/proc/self/status")
+    let status = crate::fsio::read_to_string("/proc/self/status")
         .map_err(|e| format!("cannot read /proc/self/status: {e}"))?;
     let nnp = status
         .lines()
@@ -253,7 +255,7 @@ pub fn chromium_argv(cfg: &HostCfg) -> Vec<String> {
 /// Chromium's whole environment: `HOME`, `XDG_CACHE_HOME` and `TMPDIR`, each the browser's own dir.
 pub fn chromium_env(cfg: &HostCfg) -> Vec<(String, String)> {
     let dir = cfg.dir.to_string_lossy().into_owned();
-    ["HOME", "XDG_CACHE_HOME", "TMPDIR"]
+    [stig::HOME_VAR, stig::Xdg::Cache.var(), "TMPDIR"]
         .map(|k| (k.to_owned(), dir.clone()))
         .to_vec()
 }
@@ -262,7 +264,7 @@ pub fn chromium_env(cfg: &HostCfg) -> Vec<(String, String)> {
 /// closes. Its exit code: [`EXIT_OK`] after the hub's EOF, [`EXIT_FAILED`] when the stream broke.
 pub fn serve(cfg: &HostCfg, hub: OwnedFd, ready: OwnedFd) -> i32 {
     let fail = |what: String| {
-        eprintln!("ratatoskr browser-host: {what}");
+        crate::soft::err_line(&format!("ratatoskr browser-host: {what}"));
         EXIT_FAILED
     };
     // off fd 3, where the inherited end is not close-on-exec
@@ -310,7 +312,7 @@ pub fn serve(cfg: &HostCfg, hub: OwnedFd, ready: OwnedFd) -> i32 {
                 // as with EOF
                 Err(e) if e.kind() == io::ErrorKind::ConnectionReset => break EXIT_OK,
                 Err(e) => {
-                    eprintln!("ratatoskr browser-host: reading the hub: {e}");
+                    crate::soft::err_line(&format!("ratatoskr browser-host: reading the hub: {e}"));
                     break EXIT_FAILED;
                 }
             };
@@ -321,12 +323,14 @@ pub fn serve(cfg: &HostCfg, hub: OwnedFd, ready: OwnedFd) -> i32 {
                     }
                 }
                 Err(e) => {
-                    eprintln!("ratatoskr browser-host: the hub's stream: {e}");
+                    crate::soft::err_line(&format!(
+                        "ratatoskr browser-host: the hub's stream: {e}"
+                    ));
                     break EXIT_FAILED;
                 }
             }
         };
-        let _ = to_main.send(FromHub::End(end));
+        crate::soft::done(to_main.send(FromHub::End(end)), "to_main send");
     });
     let mut browser: Option<Browser> = None;
     let code = loop {
@@ -342,12 +346,14 @@ pub fn serve(cfg: &HostCfg, hub: OwnedFd, ready: OwnedFd) -> i32 {
             match f.kind {
                 KIND_CDP => match &browser {
                     Some(b) => b.send(f.payload),
-                    None => eprintln!(
-                        "ratatoskr browser-host: a CDP message while no browser runs: dropped"
+                    None => crate::soft::err_line(
+                        "ratatoskr browser-host: a CDP message while no browser runs: dropped",
                     ),
                 },
                 KIND_CONTROL => control(cfg, &f.payload, &mut browser, &out, &sink),
-                k => eprintln!("ratatoskr browser-host: a frame of unknown kind {k}: dropped"),
+                k => crate::soft::err_line(&format!(
+                    "ratatoskr browser-host: a frame of unknown kind {k}: dropped"
+                )),
             }
         }
     };
@@ -383,10 +389,10 @@ fn control(
                 b.stop(v["why"].as_str().unwrap_or("unknown"));
             }
         }
-        _ => eprintln!(
+        _ => crate::soft::err_line(&format!(
             "ratatoskr browser-host: an unknown control frame: {}",
             String::from_utf8_lossy(&payload[..payload.len().min(200)])
-        ),
+        )),
     }
 }
 
@@ -402,14 +408,17 @@ impl Out {
 
     /// A control event; a hub that is gone is the reading side's to notice.
     fn control(&self, v: Value) {
-        let _ = self.frame(KIND_CONTROL, v.to_string().as_bytes());
+        crate::soft::done(self.frame(KIND_CONTROL, v.to_string().as_bytes()), "host");
     }
 
     /// [`Self::control`], then THEN while no other frame can be written: whoever takes the stream after sees THEN's
     /// effect along with the event.
     fn control_then(&self, v: Value, then: impl FnOnce()) {
         let mut w = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let _ = write_frame(&mut w, KIND_CONTROL, v.to_string().as_bytes());
+        crate::soft::done(
+            write_frame(&mut w, KIND_CONTROL, v.to_string().as_bytes()),
+            "write_frame",
+        );
         then();
     }
 
@@ -472,8 +481,8 @@ impl StderrSink {
 }
 
 fn write_tail(path: &Path, tail: &mut VecDeque<u8>) {
-    if let Err(e) = std::fs::write(path, tail.make_contiguous()) {
-        eprintln!("ratatoskr browser-host: {}: {e}", path.display());
+    if let Err(e) = crate::fsio::write(path, tail.make_contiguous()) {
+        crate::soft::err_line(&format!("ratatoskr browser-host: {}: {e}", path.display()));
     }
 }
 
@@ -501,7 +510,9 @@ impl Browser {
         match spawn(cfg) {
             Ok(s) => Some(Browser::run(cfg, s, out, sink)),
             Err((code, e)) => {
-                eprintln!("ratatoskr browser-host: cannot start the browser: {e}");
+                crate::soft::err_line(&format!(
+                    "ratatoskr browser-host: cannot start the browser: {e}"
+                ));
                 out.control(json!({
                     "ev": "exited", "code": code, "signal": null,
                     "error": format!("cannot start {}: {e}", cfg.program.display()),
@@ -523,7 +534,9 @@ impl Browser {
         std::thread::spawn(move || {
             for msg in rx {
                 if let Err(e) = to.write_all(&msg) {
-                    eprintln!("ratatoskr browser-host: writing to the browser: {e}");
+                    crate::soft::err_line(&format!(
+                        "ratatoskr browser-host: writing to the browser: {e}"
+                    ));
                     break;
                 }
             }
@@ -537,7 +550,9 @@ impl Browser {
         let (mut gone_r, gone_w) = match pipe() {
             Ok((r, w)) => (Some(File::from(r)), Some(File::from(w))),
             Err(e) => {
-                eprintln!("ratatoskr browser-host: the reader's stop pipe: {e}");
+                crate::soft::err_line(&format!(
+                    "ratatoskr browser-host: the reader's stop pipe: {e}"
+                ));
                 (None, None)
             }
         };
@@ -548,12 +563,12 @@ impl Browser {
                 for m in nul.push(bytes) {
                     match m {
                         Ok(m) if l.load(Ordering::Acquire) => {
-                            let _ = o.frame(KIND_CDP, &m);
+                            crate::soft::done(o.frame(KIND_CDP, &m), "host");
                         }
                         Ok(_) => {}
-                        Err(e) => {
-                            eprintln!("ratatoskr browser-host: from the browser: {e}: dropped")
-                        }
+                        Err(e) => crate::soft::err_line(&format!(
+                            "ratatoskr browser-host: from the browser: {e}: dropped"
+                        )),
                     }
                 }
             };
@@ -593,7 +608,7 @@ impl Browser {
                 };
                 take(&buf[..n]);
             }
-            let _ = drained_tx.send(());
+            crate::soft::done(drained_tx.send(()), "drained_tx send");
         });
         let err = File::from(s.stderr);
         let sk = sink.clone();
@@ -631,14 +646,14 @@ impl Browser {
                 // fd open until it has read what this says (a reader gone already never reads the word)
                 if unsafe { libc::ioctl(from_fd, libc::FIONREAD, &mut held) } == 0 {
                     let held = u64::try_from(held).unwrap_or(0);
-                    let _ = g.write_all(&held.to_ne_bytes());
+                    crate::soft::done(g.write_all(&held.to_ne_bytes()), "host");
                 }
             });
-            let _ = drained.recv_timeout(DRAIN);
+            crate::soft::done(drained.recv_timeout(DRAIN), "host");
             live.store(false, Ordering::Release);
-            eprintln!(
+            crate::soft::err_line(&format!(
                 "ratatoskr browser-host: the browser exited (code {code:?}, signal {signal:?})"
-            );
+            ));
             o.control_then(
                 json!({"ev": "exited", "code": code, "signal": signal}),
                 || {
@@ -647,7 +662,7 @@ impl Browser {
             );
             #[cfg(test)]
             tests::exited_delay(&bdir);
-            let _ = done_tx.send(());
+            crate::soft::done(done_tx.send(()), "done_tx send");
         });
         Browser {
             pid,
@@ -668,13 +683,15 @@ impl Browser {
 
     fn send(&self, msg: Vec<u8>) {
         if msg.contains(&0) {
-            eprintln!("ratatoskr browser-host: a CDP message with a NUL in it: dropped");
+            crate::soft::err_line(
+                "ratatoskr browser-host: a CDP message with a NUL in it: dropped",
+            );
             return;
         }
         let mut msg = msg;
         msg.push(0);
         if let Some(tx) = &self.to_chrome {
-            let _ = tx.send(msg);
+            crate::soft::done(tx.send(msg), "tx send");
         }
     }
 
@@ -682,12 +699,14 @@ impl Browser {
     /// with the pipe closed first, a browser that ends at the pipe's end (as Chromium does) could exit 0 before the
     /// signal came, and a stop read as the browser leaving by itself.
     fn stop(mut self, why: &str) {
-        eprintln!("ratatoskr browser-host: stopping the browser ({why})");
+        crate::soft::err_line(&format!(
+            "ratatoskr browser-host: stopping the browser ({why})"
+        ));
         self.signal(libc::SIGTERM);
         drop(self.to_chrome.take());
         if let Err(RecvTimeoutError::Timeout) = self.done.recv_timeout(self.grace) {
             self.signal(libc::SIGKILL);
-            let _ = self.done.recv_timeout(Duration::from_secs(5));
+            crate::soft::done(self.done.recv_timeout(Duration::from_secs(5)), "host");
         }
     }
 
@@ -1115,7 +1134,7 @@ mod tests {
                 .unwrap()
                 .filter_map(Result::ok)
                 .any(|e| {
-                    let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else {
+                    let Ok(stat) = crate::fsio::read_to_string(e.path().join("stat")) else {
                         return false;
                     };
                     // after the command's ")": state ppid pgrp …
@@ -1146,7 +1165,7 @@ mod tests {
         assert_eq!(r["result"]["echo"]["method"], "Browser.getVersion", "{r}");
         let e = fx.event("stderr", Duration::from_secs(5));
         assert_eq!(e["line"], "fake-chromium: up");
-        let tail = std::fs::read_to_string(fx.bdir().join(STDERR_TAIL_FILE)).unwrap();
+        let tail = crate::fsio::read_to_string(fx.bdir().join(STDERR_TAIL_FILE)).unwrap();
         assert!(tail.contains("fake-chromium: up"), "{tail:?}");
         let argv = std::fs::read(fx.bdir().join("argv")).unwrap();
         let argv: Vec<String> = argv
@@ -1199,11 +1218,11 @@ mod tests {
         let mut line = String::new();
         fx.ready.read_to_string(&mut line).unwrap();
         let hold = fx.bdir().join("exited-hold");
-        std::fs::write(&hold, "").unwrap();
+        crate::fsio::write(&hold, "").unwrap();
         struct Release(PathBuf);
         impl Drop for Release {
             fn drop(&mut self) {
-                let _ = std::fs::remove_file(&self.0);
+                crate::soft::done(std::fs::remove_file(&self.0), "std::fs::remove_file");
             }
         }
         let release = Release(hold);
@@ -1342,7 +1361,7 @@ mod tests {
         fx.cdp(r#"{"id":1,"method":"Fake.stray"}"#);
         fx.reply(1);
         let stray = skuld::wait_until("the stray's pid", 5, || {
-            std::fs::read_to_string(fx.bdir().join("stray"))
+            crate::fsio::read_to_string(fx.bdir().join("stray"))
                 .ok()
                 .and_then(|p| p.trim().parse::<libc::pid_t>().ok())
         });

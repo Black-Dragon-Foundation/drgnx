@@ -135,7 +135,7 @@ async fn a_pinned_tarball_is_checked_and_unpacked_under_its_folder() {
         ("js-debug/src/dapDebugServer.js", b"// server", 0o644),
         ("js-debug/bin/run", b"#!/bin/sh", 0o755),
     ]);
-    std::fs::write(src.path().join("js.tgz"), &bytes).unwrap();
+    crate::fsio::write(src.path().join("js.tgz"), &bytes).unwrap();
     let plan = archive("js.tgz", &sha(&bytes), "js-debug", Some("js-debug"));
     install::install(&plan, tools.path(), &Source::Dir(src.path().into()), &[])
         .await
@@ -162,7 +162,7 @@ async fn a_download_with_another_digest_installs_nothing() {
     let src = tempfile::tempdir().unwrap();
     let tools = tempfile::tempdir().unwrap();
     let bytes = tgz(&[("js-debug/a.js", b"x", 0o644)]);
-    std::fs::write(src.path().join("js.tgz"), &bytes).unwrap();
+    crate::fsio::write(src.path().join("js.tgz"), &bytes).unwrap();
     let plan = archive("js.tgz", &"0".repeat(64), "js-debug", Some("js-debug"));
     let e = install::install(&plan, tools.path(), &Source::Dir(src.path().into()), &[])
         .await
@@ -182,7 +182,7 @@ async fn an_archive_that_climbs_or_links_installs_nothing() {
         ("climb.tgz", tgz(&[("js-debug/../../evil", b"x", 0o644)])),
         ("link.tgz", tgz(&[("js-debug/l", b"/etc/passwd", 0o120777)])),
     ] {
-        std::fs::write(src.path().join(name), &bytes).unwrap();
+        crate::fsio::write(src.path().join(name), &bytes).unwrap();
         let plan = archive(name, &sha(&bytes), "js-debug", Some("js-debug"));
         let e = install::install(&plan, tools.path(), &Source::Dir(src.path().into()), &[])
             .await
@@ -205,7 +205,7 @@ async fn a_link_inside_the_archive_is_made_and_one_that_leaves_it_is_not() {
         ("jdk/legal/b/", b"", 0o755),
         ("jdk/legal/b/LICENSE", b"../a/LICENSE", 0o120777),
     ]);
-    std::fs::write(src.path().join("ok.tgz"), &good).unwrap();
+    crate::fsio::write(src.path().join("ok.tgz"), &good).unwrap();
     let plan = archive("ok.tgz", &sha(&good), "jdk", Some("jdk"));
     install::install(&plan, tools.path(), &Source::Dir(src.path().into()), &[])
         .await
@@ -241,7 +241,7 @@ async fn a_link_inside_the_archive_is_made_and_one_that_leaves_it_is_not() {
         ),
     ] {
         let bytes = tgz(&entries);
-        std::fs::write(src.path().join(name), &bytes).unwrap();
+        crate::fsio::write(src.path().join(name), &bytes).unwrap();
         let t2 = tempfile::tempdir().unwrap();
         let plan = archive(name, &sha(&bytes), "jdk", Some("jdk"));
         let e = install::install(&plan, t2.path(), &Source::Dir(src.path().into()), &[])
@@ -257,9 +257,9 @@ async fn installing_again_replaces_the_folder_whole() {
     let src = tempfile::tempdir().unwrap();
     let tools = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(tools.path().join("js-debug")).unwrap();
-    std::fs::write(tools.path().join("js-debug/old.js"), "old").unwrap();
+    crate::fsio::write(tools.path().join("js-debug/old.js"), "old").unwrap();
     let bytes = tgz(&[("js-debug/new.js", b"new", 0o644)]);
-    std::fs::write(src.path().join("js.tgz"), &bytes).unwrap();
+    crate::fsio::write(src.path().join("js.tgz"), &bytes).unwrap();
     let plan = archive("js.tgz", &sha(&bytes), "js-debug", Some("js-debug"));
     install::install(&plan, tools.path(), &Source::Dir(src.path().into()), &[])
         .await
@@ -276,7 +276,7 @@ async fn a_vsix_is_unpacked_whole_with_its_modes() {
         ("extension/adapter/codelldb", b"\x7fELF", 0o755),
         ("extension/package.json", b"{}", 0o644),
     ]);
-    std::fs::write(src.path().join("c.vsix"), &bytes).unwrap();
+    crate::fsio::write(src.path().join("c.vsix"), &bytes).unwrap();
     let plan = archive("c.vsix", &sha(&bytes), "codelldb", None);
     install::install(&plan, tools.path(), &Source::Dir(src.path().into()), &[])
         .await
@@ -336,8 +336,8 @@ async fn an_install_of_parts_is_all_or_none_and_a_file_part_is_one_checked_file(
     std::fs::create_dir_all(&src).unwrap();
     let jdk = tgz(&[("jdk-1/", b"", 0o755), ("jdk-1/bin/java", b"#!java", 0o755)]);
     let jar = b"PK-the-plugin".to_vec();
-    std::fs::write(src.join("jdk.tar.gz"), &jdk).unwrap();
-    std::fs::write(src.join("plugin.jar"), &jar).unwrap();
+    crate::fsio::write(src.join("jdk.tar.gz"), &jdk).unwrap();
+    crate::fsio::write(src.join("plugin.jar"), &jar).unwrap();
     let recipe = |jar_sha: &str| {
         serde_json::json!({"parts": [
             {"url": "https://example.invalid/jdk.tar.gz", "sha256": sha(&jdk), "into": "jdk", "root": "jdk-1"},
@@ -397,7 +397,7 @@ async fn the_parts_of_an_adapter_say_what_is_pinned_and_what_is_installed() {
     let (src, tools) = (dir.path().join("src"), dir.path().join("tools"));
     std::fs::create_dir_all(&src).unwrap();
     let jar = b"jar".to_vec();
-    std::fs::write(src.join("p.jar"), &jar).unwrap();
+    crate::fsio::write(src.join("p.jar"), &jar).unwrap();
     let recipe = serde_json::json!({"parts": [
         {"url": "https://example.invalid/p.jar", "sha256": sha(&jar), "into": "jv", "file": "p.jar", "version": "0.53.1"},
         {"into": "jdk", "version": "21.0.5", "platforms": []},
@@ -452,7 +452,7 @@ async fn an_install_waits_while_another_install_of_the_same_adapter_holds_its_lo
     let src = tempfile::tempdir().unwrap();
     let tools = tempfile::tempdir().unwrap();
     let bytes = tgz(&[("js-debug/new.js", b"new", 0o644)]);
-    std::fs::write(src.path().join("js.tgz"), &bytes).unwrap();
+    crate::fsio::write(src.path().join("js.tgz"), &bytes).unwrap();
     let plan = archive("js.tgz", &sha(&bytes), "js-debug", Some("js-debug"));
     // the other install: the lock file of the target, held
     let lock = std::fs::File::create(tools.path().join(".js-debug.lock")).unwrap();

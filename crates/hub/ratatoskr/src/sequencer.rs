@@ -452,7 +452,7 @@ impl Sequencer {
         let Some(mail) = mail else { return };
         let (tx, rx) = oneshot::channel();
         if mail.send(Msg::Serve(text, tx)).is_ok() {
-            let _ = rx.await;
+            crate::soft::done(rx.await, "sequencer");
         }
     }
 
@@ -465,7 +465,7 @@ impl Sequencer {
             }
             let mail = lock(&self.conns).get(&conn).map(|h| h.mail.clone());
             if let Some(mail) = mail {
-                let _ = mail.send(Msg::Finish);
+                crate::soft::done(mail.send(Msg::Finish), "mail send");
             }
             lock(&self.eof).remove(&conn);
         }

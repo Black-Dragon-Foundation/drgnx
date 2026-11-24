@@ -307,13 +307,13 @@ async fn the_store_survives_the_hub_and_writes_atomically() {
 async fn a_damaged_file_starts_empty_and_is_kept_aside() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("bps.json");
-    std::fs::write(&file, "{not json").unwrap();
+    crate::fsio::write(&file, "{not json").unwrap();
     let mut s = Store::open(Some(file.clone()));
     assert!(s.paths().is_empty());
     assert!(dir.path().join("bps.json.damaged").exists());
     s.apply(add("/p/a.py", 1));
     s.disk().unwrap().written().await;
-    assert!(std::fs::read_to_string(&file).unwrap().contains("a.py"));
+    assert!(crate::fsio::read_to_string(&file).unwrap().contains("a.py"));
 }
 
 #[test]
@@ -568,30 +568,30 @@ fn columns_turn_between_characters_and_utf16_units() {
     assert_eq!(chars_of(None, 4), 4);
 }
 
-/// A save that waits on the disk (here a FIFO in place of the temp file, opened by nobody) holds no async worker: the
+/// A save that waits on the disk (here a held path, `fsio::disk`) holds no async worker: the
 /// operation answers at once and the file lands once the disk does.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_save_that_waits_on_the_disk_holds_no_worker() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("bps.json");
-    let tmp = dir.path().join("bps.json.drgnx-tmp");
-    let made = std::process::Command::new("mkfifo")
-        .arg(&tmp)
-        .status()
-        .unwrap();
-    assert!(made.success());
+    let path = file.clone();
+    let mut store = Store::open(Some(file.clone()));
+    // the disk is held from here: the load is done, the save waits
+    let slow = crate::fsio::disk::slow(&file);
     let applied = crate::clock::spawn("debug:test-save", async move {
-        let mut s = Store::open(Some(file));
-        s.apply(add("/p/a.py", 7)).is_some()
+        store.apply(add("/p/a.py", 7)).is_some()
     });
     let answered = crate::clock::timeout(std::time::Duration::from_secs(10), applied).await;
-    // the disk answers: the write waiting on the FIFO goes on (and a worker held by it is freed)
-    let reader = std::thread::spawn(move || std::fs::read_to_string(&tmp).unwrap_or_default());
     assert!(
         matches!(answered, Ok(Ok(true))),
         "the operation waited for the disk on a worker"
     );
-    let written = reader.join().unwrap();
+    // the disk answers: the write waiting on it goes on and the file lands
+    slow.reached();
+    slow.release();
+    let written = skuld::wait_until("the file lands", 30, || {
+        crate::fsio::read_to_string(&path).ok()
+    });
     assert!(written.contains("a.py"), "{written}");
 }
 

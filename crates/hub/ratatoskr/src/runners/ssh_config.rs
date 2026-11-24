@@ -143,7 +143,7 @@ pub fn write_in(runtime_dir: &Path, name: &str, file: &str, text: &str) -> io::R
     f.sync_all()?;
     drop(f);
     let p = d.join(file);
-    std::fs::rename(&tmp, &p)?;
+    crate::fsio::rename(&tmp, &p)?;
     Ok(p)
 }
 
@@ -270,7 +270,10 @@ mod tests {
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
         let p = write(t.path(), "desktop", "ForwardAgent no\n").unwrap();
         assert_eq!(p, t.path().join("drgnx-runners/desktop/ssh_config"));
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), "ForwardAgent no\n");
+        assert_eq!(
+            crate::fsio::read_to_string(&p).unwrap(),
+            "ForwardAgent no\n"
+        );
         assert_eq!(mode(&p), 0o600);
         assert_eq!(mode(&t.path().join("drgnx-runners")), 0o700);
         assert_eq!(mode(&t.path().join("drgnx-runners/desktop")), 0o700);
@@ -280,7 +283,7 @@ mod tests {
         let d = t.path().join("drgnx-runners/desktop");
         std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
         write(t.path(), "desktop", "BatchMode yes\n").unwrap();
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), "BatchMode yes\n");
+        assert_eq!(crate::fsio::read_to_string(&p).unwrap(), "BatchMode yes\n");
         assert_eq!(mode(&p), 0o600);
         assert_eq!(mode(&d), 0o700);
 

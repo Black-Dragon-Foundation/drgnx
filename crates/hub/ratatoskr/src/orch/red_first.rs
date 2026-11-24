@@ -2,14 +2,13 @@
 //! git; `orch::gates` adds the evidence and the job's rule pack, the decision is `vordr::redfirst`'s.
 
 use std::path::Path;
-use std::process::Command;
 
 use serde_json::{Map, Value, json};
 use vordr::pack::Pack;
 use vordr::redfirst::{self, Inputs};
 
 fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -149,7 +148,7 @@ mod tests {
     use super::*;
 
     fn sh(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -173,7 +172,7 @@ mod tests {
     fn commit(dir: &Path, file: &str, text: &str) -> String {
         let p = dir.join(file);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, text).unwrap();
+        crate::fsio::write(p, text).unwrap();
         sh(dir, &["add", "-A"]);
         sh(dir, &["commit", "-q", "-m", file]);
         sh(dir, &["rev-parse", "HEAD"])

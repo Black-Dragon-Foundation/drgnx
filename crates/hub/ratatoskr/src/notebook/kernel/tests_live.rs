@@ -15,7 +15,7 @@ use crate::notebook::spec::{Transport, private_folder};
 fn kernel_python() -> String {
     let python = std::env::var("DRGNX_NB_KERNEL_PYTHON")
         .unwrap_or_else(|_| "/opt/nb-kernel/bin/python3".into());
-    let ok = std::process::Command::new(&python)
+    let ok = crate::proc::Command::new(&python)
         .args(["-c", "import ipykernel_launcher"])
         .output()
         .is_ok_and(|o| o.status.success());
@@ -141,7 +141,7 @@ async fn a_real_kernel_lives(transport: Transport) -> (tempfile::TempDir, PathBu
         .unwrap_or_else(|e| panic!("the kernel did not start: {e}"));
     let pid = k.pid();
     let file = folder.join("kernel-live.json");
-    let body: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let body: Value = serde_json::from_str(&crate::fsio::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(
         body["transport"],
         if transport == Transport::Tcp {
@@ -223,9 +223,9 @@ async fn a_real_kernel_lives(transport: Transport) -> (tempfile::TempDir, PathBu
     // sometimes aborts (SIGABRT) in its interpreter teardown, about one run in five, after it has done everything asked;
     // the status is printed whenever it is not a plain 0, so a pattern shows in the logs.)
     if exit.code != Some(0) {
-        eprintln!(
+        crate::soft::err_line(&format!(
             "the kernel's exit status after an orderly shutdown over {transport:?}: {exit:?}"
-        );
+        ));
     }
     assert!(
         exit.signal != Some(libc::SIGKILL) && exit.code.is_none_or(|c| c == 0),

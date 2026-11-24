@@ -392,7 +392,7 @@ async fn plain_http_refused_on_a_public_address() {
 async fn new_token_revokes_old() {
     let m = Machine::start(true, false).await;
     let kept = m.state.path().join("embed-serve/token.sha256");
-    let at_rest = std::fs::read_to_string(&kept).unwrap();
+    let at_rest = ratatoskr::fsio::read_to_string(&kept).unwrap();
     assert!(!at_rest.contains(&m.token), "the token itself is kept");
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(

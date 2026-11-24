@@ -189,7 +189,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().canonicalize().unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        crate::fsio::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
         (d, root)
     }
 
@@ -279,7 +279,7 @@ mod tests {
             "credentials.toml",
             "secrets.env",
         ] {
-            std::fs::write(root.join(f), "token").unwrap();
+            crate::fsio::write(root.join(f), "token").unwrap();
         }
         let e = chat(Preset::Balanced);
         for rel in [

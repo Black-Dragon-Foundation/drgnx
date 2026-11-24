@@ -522,8 +522,8 @@ pub fn confirm(yes: bool, terminal: bool) -> Confirm {
 
 /// Ask QUESTION on OUT and read one line from INPUT: only `y` or `yes` goes ahead.
 pub fn ask(question: &str, input: &mut impl BufRead, out: &mut impl Write) -> bool {
-    let _ = write!(out, "{question} [y/N] ");
-    let _ = out.flush();
+    crate::soft::done(write!(out, "{question} [y/N] "), "write");
+    crate::soft::done(out.flush(), "graph_cli");
     let mut line = String::new();
     if input.read_line(&mut line).is_err() {
         return false;
@@ -754,7 +754,7 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("ratatoskr graph: no working directory: {e}");
+            crate::soft::err_line(&format!("ratatoskr graph: no working directory: {e}"));
             return 1;
         }
     };
@@ -762,7 +762,7 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
     let (method, params) = match cmd.request(&cwd, now) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("ratatoskr graph: {e}");
+            crate::soft::err_line(&format!("ratatoskr graph: {e}"));
             return 2;
         }
     };
@@ -777,8 +777,8 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
         match confirm(*yes, stdin.is_terminal()) {
             Confirm::Go => {}
             Confirm::Refuse => {
-                eprintln!(
-                    "ratatoskr graph excise: it cannot be undone; run it in a terminal to confirm, or pass --yes"
+                crate::soft::err_line(
+                    "ratatoskr graph excise: it cannot be undone; run it in a terminal to confirm, or pass --yes",
                 );
                 return 2;
             }
@@ -787,7 +787,7 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
                     "Excise {target} for good (reason: {reason}); the text is blanked in every version and copy?"
                 );
                 if !ask(&q, &mut stdin.lock(), &mut std::io::stderr()) {
-                    eprintln!("nothing changed");
+                    crate::soft::err_line("nothing changed");
                     return 1;
                 }
             }
@@ -802,7 +802,7 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
     match answer {
         Ok(a) => {
             if cmd.json {
-                println!("{a}");
+                crate::soft::out_line(&a.to_string());
                 return 0;
             }
             let (text, ok) = render(&cmd.sub, &a);
@@ -810,7 +810,7 @@ pub fn run(env: &Env, cmd: GraphCommand) -> i32 {
             i32::from(!ok)
         }
         Err(e) => {
-            eprintln!("ratatoskr graph: {e}");
+            crate::soft::err_line(&format!("ratatoskr graph: {e}"));
             1
         }
     }

@@ -103,11 +103,11 @@ const SERVE_PIDS: &str = "for c in /proc/[0-9]*/cmdline; do
 done";
 
 fn ssh_config() -> String {
-    format!("{}/.ssh/config", std::env::var("HOME").unwrap())
+    format!("{}/.ssh/config", std::env::var(stig::HOME_VAR).unwrap())
 }
 
 fn ssh(runner: &str, script: &str) -> std::process::Output {
-    Command::new("ssh")
+    ratatoskr::proc::Command::new("ssh")
         .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
         .arg(script)
         .output()
@@ -159,13 +159,13 @@ struct UserConfig {
 impl UserConfig {
     /// A home under DIR whose known hosts are KNOWN_HOSTS, a copy of the fleet's.
     fn new(dir: &Path, known_hosts: &Path) -> UserConfig {
-        let fleet_home = std::env::var("HOME").unwrap();
+        let fleet_home = std::env::var(stig::HOME_VAR).unwrap();
         let home = PathBuf::from(&fleet_home);
         assert!(
             Path::new("/run/.containerenv").exists() && fleet_home.contains("/fleet/"),
             "the drills run only in a fleet's harness container (fleet.sh test)"
         );
-        let base = std::fs::read_to_string(home.join(".ssh/config")).unwrap();
+        let base = ratatoskr::fsio::read_to_string(home.join(".ssh/config")).unwrap();
         std::fs::copy(home.join(".ssh/known_hosts"), known_hosts).unwrap();
         let ssh = dir.join("home/.ssh");
         std::fs::create_dir_all(&ssh).unwrap();
@@ -176,9 +176,9 @@ impl UserConfig {
                 known_hosts.display()
             ));
         }
-        std::fs::write(ssh.join("config"), format!("{text}{base}")).unwrap();
+        ratatoskr::fsio::write(ssh.join("config"), format!("{text}{base}")).unwrap();
         // SAFETY: the rows run one at a time (--test-threads=1) and set HOME before any task or child reads it
-        unsafe { std::env::set_var("HOME", dir.join("home")) };
+        unsafe { std::env::set_var(stig::HOME_VAR, dir.join("home")) };
         UserConfig { fleet_home }
     }
 }
@@ -186,7 +186,7 @@ impl UserConfig {
 impl Drop for UserConfig {
     fn drop(&mut self) {
         // SAFETY: as in `new`: the row's tasks and children are done with HOME by its end
-        unsafe { std::env::set_var("HOME", &self.fleet_home) };
+        unsafe { std::env::set_var(stig::HOME_VAR, &self.fleet_home) };
     }
 }
 
@@ -791,7 +791,7 @@ mod drill {
         let before = d.masters();
         assert_eq!(before.len(), 1, "{before:?}");
         let config = generated::path(&d.dir.path().join("run"), "r1");
-        let stop = Command::new("ssh")
+        let stop = ratatoskr::proc::Command::new("ssh")
             .arg("-F")
             .arg(&config)
             .arg("-o")
@@ -1150,10 +1150,13 @@ mod drill {
 
     impl Drop for OtherHubGoes {
         fn drop(&mut self) {
-            let _ = ssh(
-                "r1",
-                "systemctl --user stop dr-other-hub; \
+            ratatoskr::soft::done(
+                ssh(
+                    "r1",
+                    "systemctl --user stop dr-other-hub; \
                  rm -f $XDG_RUNTIME_DIR/forseti/reservations/drgnx-hub-other.xother-1.json",
+                ),
+                "ssh",
             );
         }
     }
@@ -1223,16 +1226,16 @@ mod drill {
         d.parked("xhost").await;
         d.sessions();
         let known = d.dir.path().join("known_hosts");
-        let good = std::fs::read_to_string(&known).unwrap();
+        let good = ratatoskr::fsio::read_to_string(&known).unwrap();
         let other = d.dir.path().join("other");
-        let made = Command::new("ssh-keygen")
+        let made = ratatoskr::proc::Command::new("ssh-keygen")
             .args(["-q", "-t", "ed25519", "-N", ""])
             .arg("-f")
             .arg(&other)
             .status()
             .unwrap();
         assert!(made.success());
-        let key = std::fs::read_to_string(other.with_extension("pub")).unwrap();
+        let key = ratatoskr::fsio::read_to_string(other.with_extension("pub")).unwrap();
         let key: Vec<&str> = key.split_whitespace().take(2).collect();
         let changed: String = good
             .lines()
@@ -1254,7 +1257,7 @@ mod drill {
         }
         // the runner comes back with another host key (here: the hub's known key no longer matches it; this row's own
         // ssh, which shares the known hosts, waits until the key is accepted again)
-        std::fs::write(&known, &changed).unwrap();
+        ratatoskr::fsio::write(&known, &changed).unwrap();
         // the hub's dial, as the registry's: refused, and the runner waits for the user
         match d.q.dial(&*d.t, &d.cfg(), d.remote()).await {
             Err(LinkError::HostKeyChanged) => {}
@@ -1262,7 +1265,7 @@ mod drill {
             Ok(()) => panic!("a changed host key was accepted"),
         }
         assert_eq!(
-            std::fs::read_to_string(&known).unwrap(),
+            ratatoskr::fsio::read_to_string(&known).unwrap(),
             changed,
             "never accepted"
         );
@@ -1274,7 +1277,7 @@ mod drill {
         let k = d.kept("xhost").await;
         assert_eq!((k.len(), k[0].state.as_str()), (1, "detached"), "{k:?}");
         // the user logs in and accepts the runner's key
-        std::fs::write(&known, &good).unwrap();
+        ratatoskr::fsio::write(&known, &good).unwrap();
         d.relink().await;
         let k = d.kept_as("xhost", "running").await;
         assert_eq!(
@@ -1296,10 +1299,13 @@ mod drill {
     async fn set_linger(word: &str) {
         let share = PathBuf::from(std::env::var("DRGNX_FLEET_SHARE").unwrap());
         for w in ["enable", "disable"] {
-            let _ = std::fs::remove_file(share.join(format!("{w}-linger")));
+            ratatoskr::soft::done(
+                std::fs::remove_file(share.join(format!("{w}-linger"))),
+                "std::fs::remove_file",
+            );
         }
         let file = share.join(format!("{word}-linger"));
-        std::fs::write(&file, b"").unwrap();
+        ratatoskr::fsio::write(&file, b"").unwrap();
         let want = if word == "enable" { "yes" } else { "no" };
         skuld::wait_until_async(&format!("linger {want} on r1"), WAIT, || {
             let said = sh(
@@ -1321,8 +1327,14 @@ mod drill {
                 return;
             }
             let share = PathBuf::from(std::env::var("DRGNX_FLEET_SHARE").unwrap());
-            let _ = std::fs::remove_file(share.join("disable-linger"));
-            let _ = std::fs::write(share.join("enable-linger"), b"");
+            ratatoskr::soft::done(
+                std::fs::remove_file(share.join("disable-linger")),
+                "std::fs::remove_file",
+            );
+            ratatoskr::soft::done(
+                ratatoskr::fsio::write(share.join("enable-linger"), b""),
+                "ratatoskr::fsio::write",
+            );
         }
     }
 
@@ -1456,7 +1468,9 @@ mod drill {
         let clock = std::time::Instant::now;
         let one = set_wall("set1", &["r1"], SET, &clock).await;
         let two = set_wall("set2", &["r1", "r2"], SET, &clock).await;
-        println!("the set of {SET}: one runner {one:?}, two {two:?}");
+        ratatoskr::soft::out_line(&format!(
+            "the set of {SET}: one runner {one:?}, two {two:?}"
+        ));
         assert!(
             two.as_secs_f64() <= 0.6 * one.as_secs_f64(),
             "two runners took {two:?}, one took {one:?}"

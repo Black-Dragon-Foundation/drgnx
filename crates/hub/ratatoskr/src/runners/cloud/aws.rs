@@ -1304,8 +1304,8 @@ pub(super) mod tests {
 
     impl Drop for Mock {
         fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            crate::soft::done(self.child.kill(), "aws");
+            crate::soft::done(self.child.wait(), "aws");
         }
     }
 

@@ -13,10 +13,10 @@ struct Env {
 }
 
 fn sh(env: &Path, dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args(args)
         .current_dir(dir)
-        .env("HOME", env)
+        .env(stig::HOME_VAR, env)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
@@ -40,7 +40,7 @@ fn env() -> Env {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&repo).unwrap();
     sh(&home, &repo, &["init", "-q", "-b", "main"]);
-    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    crate::fsio::write(repo.join("a.txt"), "one\n").unwrap();
     sh(&home, &repo, &["add", "-A"]);
     sh(&home, &repo, &["commit", "-q", "-m", "base"]);
     Env {
@@ -77,7 +77,10 @@ fn hub(e: &Env, mode: TreeMode) -> (HubGit, Rows) {
     let rows: Rows = Arc::default();
     let sink = rows.clone();
     let h = HubGit::new(e.trees.clone(), mode, Box::new(NoPolicy), None)
-        .with_env(vec![("HOME".into(), e.home.to_string_lossy().into_owned())])
+        .with_env(vec![(
+            stig::HOME_VAR.into(),
+            e.home.to_string_lossy().into_owned(),
+        )])
         .with_bases(
             e.snaps.clone(),
             Arc::new(move |r| sink.lock().unwrap().push(r)),
@@ -87,7 +90,7 @@ fn hub(e: &Env, mode: TreeMode) -> (HubGit, Rows) {
 
 fn listing(snaps: &Path, wt: &Path, tree: &str) -> Vec<String> {
     let shadow = snapshot::repo_of(snaps, wt);
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .env("GIT_DIR", shadow)
         .args(["ls-tree", "-r", "--name-only", tree])
         .output()
@@ -122,7 +125,7 @@ async fn recorded_at_creation_with_its_tree() {
 async fn never_main_by_default() {
     let e = env();
     sh(&e.home, &e.repo, &["checkout", "-q", "-b", "rp-i6"]);
-    std::fs::write(e.repo.join("b.txt"), "two\n").unwrap();
+    crate::fsio::write(e.repo.join("b.txt"), "two\n").unwrap();
     sh(&e.home, &e.repo, &["add", "-A"]);
     sh(&e.home, &e.repo, &["commit", "-q", "-m", "second"]);
     let tip = sh(&e.home, &e.repo, &["rev-parse", "HEAD"]);

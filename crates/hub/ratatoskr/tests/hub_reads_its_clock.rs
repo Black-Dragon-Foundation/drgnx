@@ -106,7 +106,7 @@ fn hub_sources() -> Vec<(String, String)> {
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/");
-            (!exempt(&rel)).then(|| (rel, fs::read_to_string(&f).unwrap()))
+            (!exempt(&rel)).then(|| (rel, ratatoskr::fsio::read_to_string(&f).unwrap()))
         })
         .collect()
 }

@@ -553,7 +553,7 @@ impl Huddles {
         for o in opens {
             let (me, f) = (self.clone(), front.clone());
             crate::clock::spawn("huddle:open", async move {
-                let _ = me.open(&f, o, By::Hub).await;
+                crate::soft::done(me.open(&f, o, By::Hub).await, "huddle");
             });
         }
     }
@@ -582,7 +582,7 @@ impl Huddles {
         };
         let (me, f) = (self.clone(), front.clone());
         crate::clock::spawn("huddle:escalated", async move {
-            let _ = me.open(&f, o, By::Hub).await;
+            crate::soft::done(me.open(&f, o, By::Hub).await, "huddle");
         });
     }
 }
@@ -705,10 +705,13 @@ async fn verdict(front: &Front, sid: &str) -> runstav::methods::matrix::Verdict 
 /// TEXT to session TO, queued under the huddle's key (it never cancels a turn).
 fn tell(front: &Front, id: &str, to: &str, text: String) {
     if let Ok(s) = front.core.agents.find(to) {
-        let _ = s.prompt_keyed(
-            text,
-            crate::agents::queue::Origin::Hub,
-            Some(format!("huddle:{id}")),
+        crate::soft::done(
+            s.prompt_keyed(
+                text,
+                crate::agents::queue::Origin::Hub,
+                Some(format!("huddle:{id}")),
+            ),
+            "huddle",
         );
     }
 }
@@ -720,13 +723,16 @@ async fn save(front: &Front, h: &Huddle) {
     };
     let (id, d) = (h.id.clone(), data.clone());
     let meta = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "agents/huddle");
-    let _ = front
-        .writer
-        .db
-        .write(meta, move |tx| {
-            norn::write::huddles::put(tx, &id, d).map(|_| ())
-        })
-        .await;
+    crate::soft::done(
+        front
+            .writer
+            .db
+            .write(meta, move |tx| {
+                norn::write::huddles::put(tx, &id, d).map(|_| ())
+            })
+            .await,
+        "huddle",
+    );
     front.broadcast("huddle", data);
     // the Work map's strip and needs-you list carry it while it waits for the user or goes on
     let open = !matches!(h.state, HuddleState::Decided | HuddleState::Closed);

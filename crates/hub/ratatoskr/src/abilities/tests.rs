@@ -395,7 +395,7 @@ async fn the_ask_card_is_withdrawn_when_the_call_ends() {
     until_waiting(&mut waiting, &mut call).await;
     // the client cancels the MCP call: the server drops the call's future
     call.abort();
-    let _ = call.await;
+    crate::soft::done(call.await, "tests");
     waiting.wait_for(|n| *n == 0).await.unwrap();
     withdrawn.wait_for(|n| *n == 1).await.unwrap();
     let cards = r.cards().await;

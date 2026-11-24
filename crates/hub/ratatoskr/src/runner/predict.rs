@@ -136,7 +136,7 @@ pub fn outside_run(
 
 /// Git's answer in MAIN (the trusted main checkout), none when it fails.
 fn git(main: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args(args)
         .current_dir(main)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -268,7 +268,7 @@ struct Other {
 impl Live {
     /// From now on the predictor runs its checks in FRONT.
     pub fn bind(&self, front: &Arc<Front>) {
-        let _ = self.front.set(Arc::downgrade(front));
+        crate::soft::done(self.front.set(Arc::downgrade(front)), "predict");
     }
 
     /// The predictions SESSION is in (an escalation's huddle).
@@ -395,7 +395,10 @@ impl Live {
             match (&job, &o.job) {
                 // both in one plan run: the run's own clash pass cards it, keyed in the job's data
                 (Some(j), Some(k)) if j == k => {
-                    let _ = crate::runner::tick::clashes(front, j).await;
+                    crate::soft::done(
+                        crate::runner::tick::clashes(front, j).await,
+                        "crate::runner::tick::clashes",
+                    );
                 }
                 _ => {
                     self.outside(front, (sid, task.as_deref()), (&o.id, o.task.as_deref()), p)
@@ -422,7 +425,7 @@ impl Live {
             found
         };
         for c in &found {
-            let _ = card(front, c).await;
+            crate::soft::done(card(front, c).await, "card");
         }
         front.core.huddles.clashed(front, None, &found);
     }

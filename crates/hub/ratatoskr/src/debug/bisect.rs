@@ -249,7 +249,7 @@ impl Stage {
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
             if name.starts_with("slot-") || name == "narrow" {
-                let _ = std::fs::remove_dir_all(e.path());
+                crate::soft::done(std::fs::remove_dir_all(e.path()), "std::fs::remove_dir_all");
             }
         }
     }
@@ -297,7 +297,7 @@ impl Stage {
         let tmp = self.work.join("narrow-index");
         std::fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
         let (index, patch) = (tmp.join("index"), tmp.join("patch"));
-        let _ = std::fs::remove_file(&index);
+        crate::soft::done(std::fs::remove_file(&index), "std::fs::remove_file");
         let mut text = String::new();
         let mut last: Option<&str> = None;
         for h in hunks {
@@ -307,7 +307,7 @@ impl Stage {
             }
             text.push_str(&h.body);
         }
-        std::fs::write(&patch, text).map_err(|e| e.to_string())?;
+        crate::fsio::write(&patch, text).map_err(|e| e.to_string())?;
         let git =
             |args: &[&str]| crate::timeline::snapshot::run_git(&repo, None, Some(&index), args);
         git(&["read-tree", good])?;
@@ -320,7 +320,7 @@ impl Stage {
             &p,
         ])?;
         let tree = git(&["write-tree"]);
-        let _ = std::fs::remove_dir_all(&tmp);
+        crate::soft::done(std::fs::remove_dir_all(&tmp), "std::fs::remove_dir_all");
         tree
     }
 }

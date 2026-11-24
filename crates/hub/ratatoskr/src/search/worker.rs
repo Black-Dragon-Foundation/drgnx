@@ -139,10 +139,10 @@ fn cap_address_space() {
     };
     // SAFETY: setrlimit reads the struct it is given and changes only this process's limit.
     if unsafe { libc::setrlimit(libc::RLIMIT_AS, &lim) } != 0 {
-        eprintln!(
+        crate::soft::err_line(&format!(
             "embed-worker: the address-space cap was refused: {}",
             std::io::Error::last_os_error()
-        );
+        ));
     }
 }
 
@@ -178,7 +178,7 @@ fn auto(spec: &'static ModelSpec, args: &WorkerArgs) -> Choice {
         .clone()
         .unwrap_or_else(|| PathBuf::from(power::SYS));
     let battery = power::on_battery(&root);
-    let cached = std::fs::read_to_string(&args.device_cache)
+    let cached = crate::fsio::read_to_string(&args.device_cache)
         .ok()
         .and_then(|t| Choice::parse(&t));
     let order = device::order(&adapters());
@@ -198,10 +198,12 @@ fn auto(spec: &'static ModelSpec, args: &WorkerArgs) -> Choice {
             .device_cache
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&tmp, choice.to_json()))
-            .and_then(|()| std::fs::rename(&tmp, &args.device_cache));
+            .and_then(|()| crate::fsio::write(&tmp, choice.to_json()))
+            .and_then(|()| crate::fsio::rename(&tmp, &args.device_cache));
         if let Err(e) = written {
-            eprintln!("embed-worker: the device choice was not cached: {e}");
+            crate::soft::err_line(&format!(
+                "embed-worker: the device choice was not cached: {e}"
+            ));
         }
     }
     choice
@@ -218,7 +220,7 @@ fn device_name(d: &Device) -> (&'static str, String) {
 pub fn run(args: WorkerArgs) -> i32 {
     lower_priority();
     let Some(spec) = super::model(&args.model) else {
-        eprintln!("embed-worker: no model {:?}", args.model);
+        crate::soft::err_line(&format!("embed-worker: no model {:?}", args.model));
         return 2;
     };
     let out = Out(std::io::stdout());
@@ -294,7 +296,7 @@ pub fn run(args: WorkerArgs) -> i32 {
                 return;
             }
         }
-        let _ = tx.send(Msg::End);
+        crate::soft::done(tx.send(Msg::End), "tx send");
     });
 
     let mut w = Work {
@@ -395,7 +397,10 @@ impl Work<'_> {
         if let Some(marker) = &self.test.crash_once
             && !marker.exists()
         {
-            let _ = std::fs::write(marker, b"crashed\n");
+            crate::soft::done(
+                crate::fsio::write(marker, b"crashed\n"),
+                "crate::fsio::write",
+            );
             std::process::abort();
         }
     }
@@ -675,10 +680,10 @@ impl WorkerEmbedder {
             if let Ok(mut p) = theirs.lock() {
                 p.dead = true;
                 for (_, w) in p.waiting.drain() {
-                    let _ = w.send(Reply::Crashed);
+                    crate::soft::done(w.send(Reply::Crashed), "w send");
                 }
             }
-            let _ = child.wait();
+            crate::soft::done(child.wait(), "worker");
         });
         Ok(Live {
             stdin,
@@ -725,7 +730,7 @@ impl WorkerEmbedder {
                 if !sent && let Ok(mut p) = l.pending.lock() {
                     p.dead = true;
                     if let Some(w) = p.waiting.remove(&id) {
-                        let _ = w.send(Reply::Crashed);
+                        crate::soft::done(w.send(Reply::Crashed), "w send");
                     }
                 }
                 rx
@@ -816,7 +821,7 @@ fn answer(pending: &Mutex<Pending>, facts: &Mutex<WorkerFacts>, v: Value) {
     if let Ok(mut p) = pending.lock()
         && let Some(w) = p.waiting.remove(&id)
     {
-        let _ = w.send(reply);
+        crate::soft::done(w.send(reply), "w send");
     }
 }
 

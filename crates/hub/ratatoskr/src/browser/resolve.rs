@@ -193,8 +193,8 @@ fn version_output(program: &Path) -> Option<String> {
                 std::thread::sleep(Duration::from_millis(20));
             }
             _ => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::soft::done(child.kill(), "resolve");
+                crate::soft::done(child.wait(), "resolve");
                 return None;
             }
         }
@@ -245,7 +245,7 @@ pub(crate) fn installed(data_dir: &Path) -> Vec<(PathBuf, InstalledFile)> {
         .filter_map(|e| {
             let key = version_key(e.file_name().to_str()?)?;
             let dir = e.path();
-            let text = std::fs::read_to_string(dir.join("installed.json")).ok()?;
+            let text = crate::fsio::read_to_string(dir.join("installed.json")).ok()?;
             let file: InstalledFile = serde_json::from_str(&text).ok()?;
             Some((key, dir, file))
         })
@@ -299,7 +299,7 @@ mod tests {
             at: 1,
             binary: "shell/chrome-headless-shell".into(),
         };
-        std::fs::write(
+        crate::fsio::write(
             dir.join("installed.json"),
             serde_json::to_string(&file).unwrap(),
         )
@@ -427,7 +427,7 @@ mod tests {
             at: 0,
             binary: "../../escape".into(),
         };
-        std::fs::write(
+        crate::fsio::write(
             dir.join("installed.json"),
             serde_json::to_string(&file).unwrap(),
         )

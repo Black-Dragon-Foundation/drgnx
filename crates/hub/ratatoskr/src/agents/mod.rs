@@ -81,7 +81,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Hub {
     /// `runtime.db`, where the sessions are recorded (the server gives it once, after it opened).
     pub fn open_store(&self, db: urdr::Handle) {
-        let _ = self.db.set(db);
+        crate::soft::done(self.db.set(db), "mod");
     }
 
     pub(crate) fn db(&self) -> Option<&urdr::Handle> {
@@ -241,7 +241,7 @@ impl Hub {
             .map(|s| tokio::spawn(async move { s.shutdown().await }))
             .collect();
         for e in ends {
-            let _ = e.await;
+            crate::soft::done(e.await, "mod");
         }
     }
 

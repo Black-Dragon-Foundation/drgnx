@@ -375,12 +375,12 @@ impl Drop for SessionNet {
             std::fs::symlink_metadata(p).is_ok_and(|m| (m.dev(), m.ino()) == bound)
         };
         if ours(&self.socket, self.bound) {
-            let _ = std::fs::remove_file(&self.socket);
+            crate::soft::done(std::fs::remove_file(&self.socket), "std::fs::remove_file");
         }
         if let Some((broker, cdp, bound)) = self.broker.take() {
             broker.close();
             if ours(&cdp, bound) {
-                let _ = std::fs::remove_file(&cdp);
+                crate::soft::done(std::fs::remove_file(&cdp), "std::fs::remove_file");
             }
         }
     }

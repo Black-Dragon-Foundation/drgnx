@@ -54,7 +54,7 @@ fn vars(dir: &std::path::Path) -> Vars {
 fn tmp() -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(d.path().join("src")).unwrap();
-    std::fs::write(d.path().join("src/main.py"), "").unwrap();
+    crate::fsio::write(d.path().join("src/main.py"), "").unwrap();
     d
 }
 
@@ -142,7 +142,7 @@ fn paths_are_given_by_their_true_names() {
         .parent()
         .unwrap()
         .join(format!("link-{}", std::process::id()));
-    let _ = std::fs::remove_file(&link);
+    crate::soft::done(std::fs::remove_file(&link), "std::fs::remove_file");
     std::os::unix::fs::symlink(d.path(), &link).unwrap();
     let mut v = vars(&link);
     v.file = Some(link.join("src/main.py"));
@@ -293,7 +293,6 @@ fn file_variables_without_a_file_are_an_error() {
     v.file = None;
     let e = launch::substitute(&json!({"a": "${file}"}), &v, &HashMap::new()).unwrap_err();
     assert!(e.contains("file"), "{e}");
-    let _ = Value::Null;
 }
 
 /// A debugpy child (`startDebugging`) is an attach whose `connect` names the parent adapter's own client listener: the

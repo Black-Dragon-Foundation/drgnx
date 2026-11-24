@@ -108,7 +108,7 @@ async fn echo() -> SocketAddr {
         while let Ok((mut c, _)) = l.accept().await {
             tokio::spawn(async move {
                 let (mut r, mut w) = c.split();
-                let _ = tokio::io::copy(&mut r, &mut w).await;
+                crate::soft::done(tokio::io::copy(&mut r, &mut w).await, "tokio::io::copy");
             });
         }
     });
@@ -215,7 +215,8 @@ async fn refuse_stops_further_cards() {
     let f = front(dir.path());
     preset(&f, "balanced").await;
     let mut w = web(&f, dir.path(), "s1", None).await;
-    let _ = connect_to(w.socket(), "93.184.215.1:443").await;
+
+    connect_to(w.socket(), "93.184.215.1:443").await;
     steps(&mut w, 1).await;
     let card = cards(&f, "browser.web").await[0].0;
     settle(&f, card, "deny", None).await;
@@ -228,12 +229,14 @@ async fn refuse_stops_further_cards() {
     // and so for the session's next web proxy (a hub restart): the refusal is read from the store
     drop(w);
     let mut again = web(&f, dir.path(), "s1", None).await;
-    let _ = connect_to(again.socket(), "93.184.215.3:443").await;
+
+    connect_to(again.socket(), "93.184.215.3:443").await;
     steps(&mut again, 1).await;
     assert_eq!(cards(&f, "browser.web").await.len(), 1);
     // another session still asks
     let mut other = web(&f, dir.path(), "s2", None).await;
-    let _ = connect_to(other.socket(), "93.184.215.3:443").await;
+
+    connect_to(other.socket(), "93.184.215.3:443").await;
     steps(&mut other, 1).await;
     let c = cards(&f, "browser.web").await;
     assert_eq!(c.len(), 2, "{c:?}");

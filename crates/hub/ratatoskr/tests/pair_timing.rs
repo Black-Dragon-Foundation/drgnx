@@ -38,9 +38,9 @@ fn whole_file_5000_lines_within_2_ms() {
     times.sort_unstable();
     let p95 = times[times.len() * 95 / 100];
     // the reading, for the timing lane's report (the verdict is the assert)
-    eprintln!(
+    ratatoskr::soft::err_line(&format!(
         "whole-file diff of 5,000 lines: p50 {} ns, p95 {p95} ns",
         times[times.len() / 2]
-    );
+    ));
     assert!(p95 <= 2_000_000, "whole-file diff p95 {p95} ns");
 }

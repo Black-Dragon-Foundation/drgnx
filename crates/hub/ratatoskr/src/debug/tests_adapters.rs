@@ -6,7 +6,7 @@ use std::path::Path;
 
 fn exe(p: &Path) {
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-    std::fs::write(p, "#!/bin/sh\n").unwrap();
+    crate::fsio::write(p, "#!/bin/sh\n").unwrap();
     std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
@@ -94,7 +94,7 @@ fn an_adapter_is_found_on_path_in_the_tools_folder_or_as_a_python_module() {
     let tools = d.path().join("tools");
     exe(&bin.join("dlv"));
     std::fs::create_dir_all(tools.join("js-debug/src")).unwrap();
-    std::fs::write(tools.join("js-debug/src/dapDebugServer.js"), "").unwrap();
+    crate::fsio::write(tools.join("js-debug/src/dapDebugServer.js"), "").unwrap();
     exe(&tools.join("venv/bin/python3"));
     std::fs::create_dir_all(tools.join("venv/lib/python3.15/site-packages/debugpy")).unwrap();
     let env = Env {
@@ -120,7 +120,7 @@ fn an_adapter_is_found_on_path_in_the_tools_folder_or_as_a_python_module() {
 #[test]
 fn a_file_on_path_that_is_not_executable_is_not_found() {
     let d = tempfile::tempdir().unwrap();
-    std::fs::write(d.path().join("dlv"), "").unwrap();
+    crate::fsio::write(d.path().join("dlv"), "").unwrap();
     let env = Env {
         path: vec![d.path().to_path_buf()],
         tools: d.path().join("tools"),
@@ -209,5 +209,5 @@ async fn a_tcp_adapters_port_taken_by_a_stranger_is_never_connected_to() {
             .is_err_and(|e| e.kind() == std::io::ErrorKind::WouldBlock),
         "the hub connected to the stranger"
     );
-    let _ = json!(null);
+    json!(null);
 }

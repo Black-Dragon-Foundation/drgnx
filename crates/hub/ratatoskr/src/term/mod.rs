@@ -133,7 +133,7 @@ fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
 
 fn new_id() -> String {
     let mut b = [0u8; 6];
-    let _ = getrandom::fill(&mut b);
+    crate::soft::done(getrandom::fill(&mut b), "getrandom::fill");
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
@@ -162,8 +162,8 @@ impl Terms {
         if self.inner.dir.set(dir).is_err() {
             return;
         }
-        let _ = self.inner.sink.set(sink);
-        let _ = self.inner.hub.set(hub);
+        crate::soft::done(self.inner.sink.set(sink), "mod");
+        crate::soft::done(self.inner.hub.set(hub), "mod");
         match private {
             Ok(()) => self.adopt().await,
             Err(e) => tracing::warn!(error = %e, "terminals: their folder is not private"),
@@ -249,7 +249,7 @@ impl Terms {
             .stderr(log);
         if systemd {
             // systemd-run reaches the user manager through these
-            for k in ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] {
+            for k in [stig::SYSTEM_RUNTIME_VAR, "DBUS_SESSION_BUS_ADDRESS"] {
                 if !s.env.iter().any(|(n, _)| n == k)
                     && let Some(v) = std::env::var_os(k)
                 {
@@ -266,7 +266,7 @@ impl Terms {
         let pid = child.id() as i32;
         // reaped by a thread of its own while this hub lives; after a restart, by init
         std::thread::spawn(move || {
-            let _ = child.wait();
+            crate::soft::done(child.wait(), "mod");
         });
         let start_time = draugr::start_time(pid).unwrap_or(0);
         let mut rec = Record {
@@ -298,7 +298,7 @@ impl Terms {
                 }
             };
         rec.shell_pid = Some(hello.shell_pid);
-        let _ = rec.write(&dir);
+        crate::soft::done(rec.write(&dir), "mod");
         if let Some(sess) = &session {
             lock(&self.inner.state).sessions.insert(conn, sess.clone());
         }
@@ -429,7 +429,7 @@ impl Terms {
             }
             Out::Status { req, .. } | Out::Answer { req, .. } => {
                 if let Some((_, w)) = lock(&self.inner.state).waiting.remove(&req) {
-                    let _ = w.send(out);
+                    crate::soft::done(w.send(out), "w send");
                 }
             }
             Out::Hello { proto, .. } => {
@@ -460,7 +460,7 @@ impl Terms {
         self.send_event(t.owner, "term/exit", data);
         if let Some(dir) = self.dir() {
             Record::remove(dir, id);
-            let _ = std::fs::remove_file(&t.rec.socket);
+            crate::soft::done(std::fs::remove_file(&t.rec.socket), "std::fs::remove_file");
         }
     }
 
@@ -518,7 +518,7 @@ impl Terms {
             if !adopt::alive(&rec) {
                 tracing::info!(id = %rec.id, "terminal gone while no hub ran: its record goes");
                 Record::remove(&dir, &rec.id);
-                let _ = std::fs::remove_file(&rec.socket);
+                crate::soft::done(std::fs::remove_file(&rec.socket), "std::fs::remove_file");
                 continue;
             }
             match adopt::connect(&rec.socket, Duration::from_secs(5)).await {
@@ -575,7 +575,7 @@ impl Terms {
         };
         if let Some(dir) = self.dir() {
             for rec in back {
-                let _ = rec.write(dir);
+                crate::soft::done(rec.write(dir), "mod");
             }
         }
         for id in ids {
@@ -626,7 +626,7 @@ impl Terms {
             t.rec.clone()
         };
         if let Some(dir) = self.dir() {
-            let _ = rec.write(dir);
+            crate::soft::done(rec.write(dir), "mod");
         }
         self.send(
             id,
@@ -724,7 +724,7 @@ impl Terms {
         };
         if let Some(dir) = self.dir() {
             for rec in &recs {
-                let _ = rec.write(dir);
+                crate::soft::done(rec.write(dir), "mod");
             }
         }
         for id in &ids {
@@ -898,7 +898,7 @@ impl Terms {
     fn exited(&self, id: &str, status: Option<i32>) {
         let waiting = lock(&self.inner.state).exits.remove(id);
         for w in waiting.unwrap_or_default() {
-            let _ = w.send(status);
+            crate::soft::done(w.send(status), "w send");
         }
     }
 

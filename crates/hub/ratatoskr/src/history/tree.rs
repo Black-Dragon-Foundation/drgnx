@@ -110,7 +110,7 @@ fn git_dir(cwd: &Path) -> PathBuf {
     if dot.is_dir() {
         return dot;
     }
-    std::fs::read_to_string(&dot)
+    crate::fsio::read_to_string(&dot)
         .ok()
         .and_then(|s| s.trim_end().strip_prefix("gitdir: ").map(|g| cwd.join(g)))
         .unwrap_or(dot)
@@ -121,7 +121,7 @@ type Ran = (Option<i32>, String);
 
 /// ARGV in CWD with the hub's own rights (a folder no sandboxed agent worked in), with ENV.
 fn plain(cwd: &Path, argv: &[OsString], env: &[(String, String)]) -> Result<Ran, String> {
-    let out = std::process::Command::new(&argv[0])
+    let out = crate::proc::Command::new(&argv[0])
         .args(&argv[1..])
         .envs(env.iter().map(|(k, v)| (k, v)))
         .current_dir(cwd)
@@ -281,7 +281,10 @@ pub(crate) async fn commit_with(
     // the commit's own index goes (never through a link: `eitri`); a linked worktree's lies outside, and stays
     if let Ok(dir) = std::fs::File::open(cwd) {
         use std::os::fd::AsFd;
-        let _ = eitri::remove_beneath(dir.as_fd(), &Path::new(".git").join(COMMIT_INDEX));
+        crate::soft::done(
+            eitri::remove_beneath(dir.as_fd(), &Path::new(".git").join(COMMIT_INDEX)),
+            "eitri::remove_beneath",
+        );
     }
     r
 }

@@ -110,14 +110,14 @@ pub fn run(
     if let (Some(text), Some(mut w)) = (stdin, child.stdin.take()) {
         let text = text.to_vec();
         std::thread::spawn(move || {
-            let _ = w.write_all(&text);
+            crate::soft::done(w.write_all(&text), "run");
         });
     }
     let drain = |r: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut r) = r {
-                let _ = r.read_to_end(&mut buf);
+                crate::soft::done(r.read_to_end(&mut buf), "run");
             }
             buf
         })
@@ -144,12 +144,12 @@ pub fn run(
         }
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             stop(pid);
-            let _ = child.wait();
+            crate::soft::done(child.wait(), "run");
             return Err(STOPPED.to_owned());
         }
         if end.is_some_and(|e| crate::clock::real_now() >= e) {
             stop(pid);
-            let _ = child.wait();
+            crate::soft::done(child.wait(), "run");
             let secs = deadline.unwrap_or_default().as_secs();
             return Err(format!("git took longer than {secs} s and was stopped"));
         }

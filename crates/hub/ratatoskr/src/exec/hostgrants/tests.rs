@@ -325,7 +325,7 @@ async fn echo() -> std::net::SocketAddr {
         while let Ok((mut c, _)) = l.accept().await {
             tokio::spawn(async move {
                 let (mut r, mut w) = c.split();
-                let _ = tokio::io::copy(&mut r, &mut w).await;
+                crate::soft::done(tokio::io::copy(&mut r, &mut w).await, "tokio::io::copy");
             });
         }
     });

@@ -3,26 +3,29 @@
 // Linux only: the reduced tier is Linux's (Android: no backend; fails closed).
 #![cfg(target_os = "linux")]
 
-use std::process::{Command, Output, Stdio};
+use ratatoskr::proc::Output;
+use std::process::Stdio;
 
 const RATATOSKR: &str = env!("CARGO_BIN_EXE_ratatoskr");
 
 fn abi_9(test: &str) -> bool {
     let abi = gleipnir::landlock::kernel_abi();
     if abi < 9 {
-        eprintln!("SKIP {test}: the kernel's Landlock ABI is {abi}, the reduced tier needs 9");
+        ratatoskr::soft::err_line(&format!(
+            "SKIP {test}: the kernel's Landlock ABI is {abi}, the reduced tier needs 9"
+        ));
     }
     abi >= 9
 }
 
 fn run(args: &[&str]) -> Output {
     let home = tempfile::tempdir().unwrap();
-    Command::new(RATATOSKR)
+    ratatoskr::proc::Command::new(RATATOSKR)
         .args(args)
         .env_clear()
-        .env("HOME", home.path())
-        .env("XDG_STATE_HOME", home.path().join("s"))
-        .env("XDG_RUNTIME_DIR", home.path().join("r"))
+        .env(stig::HOME_VAR, home.path())
+        .env(stig::Xdg::State.var(), home.path().join("s"))
+        .env(stig::SYSTEM_RUNTIME_VAR, home.path().join("r"))
         .env("PATH", "/usr/bin:/bin")
         .stdin(Stdio::null())
         .output()
@@ -75,7 +78,7 @@ fn the_probe_dir_is_removed() {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
-    let out = Command::new(RATATOSKR)
+    let out = ratatoskr::proc::Command::new(RATATOSKR)
         .args(["sandbox", "check", "--tier", "reduced"])
         .env_clear()
         .env("TMPDIR", tmp.path())

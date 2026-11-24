@@ -45,12 +45,12 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl Keys {
     /// Events go through TELL (the hub's broadcast to user connections); the first call wins.
     pub fn set_tell(&self, tell: impl Fn(&str, Value) + Send + Sync + 'static) {
-        let _ = self.tell.set(Box::new(tell));
+        crate::soft::done(self.tell.set(Box::new(tell)), "keys");
     }
 
     /// Audit rows go to SINK as well (the graph's `key_sent` and `key_use`); the first call wins.
     pub fn set_sink(&self, sink: impl Fn(&AuditRow) + Send + Sync + 'static) {
-        let _ = self.sink.set(Box::new(sink));
+        crate::soft::done(self.sink.set(Box::new(sink)), "keys");
     }
 
     /// `runners/keys`: PAIRS to memory, nowhere else. The names now held.

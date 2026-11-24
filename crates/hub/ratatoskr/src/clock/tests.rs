@@ -132,7 +132,7 @@ fn a_task_idle_on_a_channel_after_its_wake_is_parked() {
         spawn("t", async move {
             sleep(ms(10)).await;
             mine.lock().unwrap().push("woke");
-            let _ = rx.await;
+            crate::soft::done(rx.await, "tests");
         });
         let a = advance(ms(10)).await;
         assert_eq!((a.now_ms, a.woken, a.busy.len()), (10, 1, 0), "{a:?}");
@@ -191,7 +191,7 @@ fn a_real_wait_is_waited_for_and_one_that_lasts_is_named() {
         let mine = l.clone();
         // a job's watcher: the child's end, under the clock's time box
         spawn("job:watch", async move {
-            let _ = timeout(ms(5000), real_long(rx)).await;
+            crate::soft::done(timeout(ms(5000), real_long(rx)).await, "timeout");
             mine.lock().unwrap().push("after");
         });
         // an advance counts it parked: the advance may be what ends it
@@ -226,7 +226,7 @@ fn a_blocking_call_is_a_real_wait() {
         let l = log();
         let mine = l.clone();
         spawn("work:edits", async move {
-            let _ = blocking(move || held.recv()).await;
+            crate::soft::done(blocking(move || held.recv()).await, "blocking");
             mine.lock().unwrap().push("done");
         });
         advance(Duration::ZERO).await;
@@ -245,11 +245,11 @@ fn a_real_wait_left_at_the_settle_names_its_line_and_its_time() {
         let (hold, held) = std::sync::mpsc::channel::<()>();
         let (go, rx) = tokio::sync::oneshot::channel::<()>();
         spawn("work:edits", async move {
-            let _ = blocking(move || held.recv()).await;
+            crate::soft::done(blocking(move || held.recv()).await, "blocking");
         });
         let at_blocking = line!() - 2;
         spawn("job:watch", async move {
-            let _ = real(rx).await;
+            crate::soft::done(real(rx).await, "real");
         });
         let at_real = line!() - 2;
         advance(Duration::ZERO).await;
@@ -354,12 +354,12 @@ fn a_task_woken_by_another_tasks_real_wait_is_waited_for() {
             let (go, rx) = tokio::sync::oneshot::channel::<()>();
             let (tell, heard) = tokio::sync::oneshot::channel::<()>();
             spawn("job:watch", async move {
-                let _ = real(rx).await;
-                let _ = tell.send(());
+                crate::soft::done(real(rx).await, "real");
+                crate::soft::done(tell.send(()), "tell send");
             });
             let mine = l.clone();
             spawn("wake:run", async move {
-                let _ = heard.await;
+                crate::soft::done(heard.await, "tests");
                 for _ in 0..20 {
                     tokio::task::yield_now().await;
                 }
@@ -398,12 +398,14 @@ fn a_store_threads_answer_is_a_real_wait() {
         let l = log();
         let mine = l.clone();
         spawn("records:follow", async move {
-            let _ = db
-                .read(move |_| {
-                    let _ = held.recv();
+            crate::soft::done(
+                db.read(move |_| {
+                    crate::soft::done(held.recv(), "tests");
                     Ok(())
                 })
-                .await;
+                .await,
+                "tests",
+            );
             mine.lock().unwrap().push("read");
         });
         advance(Duration::ZERO).await;
@@ -426,7 +428,7 @@ fn an_advance_waits_for_a_real_wait_inside_a_clock_timeout() {
             let (go, rx) = tokio::sync::oneshot::channel::<()>();
             spawn("search:download", async move {
                 sleep(ms(10)).await;
-                let _ = timeout(ms(5000), real(rx)).await;
+                crate::soft::done(timeout(ms(5000), real(rx)).await, "timeout");
                 mine.lock().unwrap().push("after");
             });
             advance(Duration::ZERO).await;
@@ -434,7 +436,7 @@ fn an_advance_waits_for_a_real_wait_inside_a_clock_timeout() {
                 for _ in 0..20 {
                     tokio::task::yield_now().await;
                 }
-                let _ = go.send(());
+                crate::soft::done(go.send(()), "go send");
             });
             let a = advance(ms(10)).await;
             assert!(a.busy.is_empty(), "{a:?}");
@@ -468,12 +470,14 @@ fn a_barrier_waits_for_a_store_answer_that_takes_longer_than_busy_after() {
         let l = log();
         let mine = l.clone();
         spawn("session:steps", async move {
-            let _ = db
-                .read(|_| {
+            crate::soft::done(
+                db.read(|_| {
                     std::thread::sleep(BUSY_AFTER + Duration::from_secs(1));
                     Ok(())
                 })
-                .await;
+                .await,
+                "tests",
+            );
             mine.lock().unwrap().push("written");
         });
         advance(Duration::ZERO).await;

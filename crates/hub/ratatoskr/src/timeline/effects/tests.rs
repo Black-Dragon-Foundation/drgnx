@@ -15,7 +15,7 @@ fn front_in(dir: &Path) -> Front {
 }
 
 fn sh(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args([
             "-c",
             "user.name=t",
@@ -44,7 +44,7 @@ fn repo() -> tempfile::TempDir {
 
 /// Commit TEXT as FILE in DIR; its sha.
 fn commit(dir: &Path, file: &str, text: &str, subject: &str) -> String {
-    std::fs::write(dir.join(file), text).unwrap();
+    crate::fsio::write(dir.join(file), text).unwrap();
     sh(dir, &["add", file]);
     sh(dir, &["commit", "-q", "-m", subject]);
     sh(dir, &["rev-parse", "HEAD"])

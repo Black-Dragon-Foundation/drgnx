@@ -26,7 +26,7 @@ use ratatoskr::runners::{Remote, RunnerCfg, ssh_config};
 use runstav::methods::runners::AddParams;
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -118,7 +118,7 @@ fn ctx() -> PlaceCtx {
 
 /// The user's git in DIR: no system or global config, a fixed identity.
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = ratatoskr::proc::Command::new("git")
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -142,7 +142,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 fn commit(dir: &Path, file: &str, text: &str) -> String {
-    std::fs::write(dir.join(file), text).unwrap();
+    ratatoskr::fsio::write(dir.join(file), text).unwrap();
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-qm", file]);
     git(dir, &["rev-parse", "HEAD"])
@@ -211,7 +211,7 @@ mod macos {
         let job: OwnedFd = std::fs::File::open(d.path()).unwrap().into();
         let outside = tempfile::tempdir().unwrap();
         let sentinel = outside.path().join("sentinel");
-        std::fs::write(&sentinel, "keep").unwrap();
+        ratatoskr::fsio::write(&sentinel, "keep").unwrap();
         symlink(outside.path(), d.path().join("reports")).unwrap();
         symlink(&sentinel, d.path().join("out.txt")).unwrap();
         std::fs::create_dir(d.path().join("real")).unwrap();
@@ -243,7 +243,7 @@ mod macos {
                 .unwrap()
                 .is_file()
         );
-        assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "keep");
+        assert_eq!(ratatoskr::fsio::read_to_string(&sentinel).unwrap(), "keep");
         assert_eq!(
             write(job.as_fd(), b"a/b/c.txt", b"c").unwrap(),
             PathBuf::from("a/b/c.txt")
@@ -362,7 +362,7 @@ mod macos {
                 let mut child = tokio::process::Command::new(&r.remote.control[0])
                     .args(&r.remote.control[1..])
                     .env("PATH", path)
-                    .env("HOME", &self.home)
+                    .env(stig::HOME_VAR, &self.home)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -375,7 +375,7 @@ mod macos {
                 );
                 control.err = Some(Box::new(child.stderr.take().unwrap()));
                 tokio::spawn(async move {
-                    let _ = child.wait().await;
+                    ratatoskr::soft::done(child.wait().await, "macos");
                 });
                 let idle =
                     || Channel::new(Box::new(tokio::io::sink()), Box::new(tokio::io::empty()));
@@ -435,7 +435,7 @@ mod macos {
         let bundle = dir.path().join("bundles/aarch64-apple-darwin");
         std::fs::create_dir_all(&bundle).unwrap();
         let fake = b"#!/bin/sh\nexit 3\n";
-        std::fs::write(bundle.join("sleipnir"), fake).unwrap();
+        ratatoskr::fsio::write(bundle.join("sleipnir"), fake).unwrap();
         let (queue, _events) = Queue::new(QueueCfg {
             hub_id: "hub".into(),
             exec_root: dir.path().join("exec"),
@@ -475,7 +475,7 @@ mod macos {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
-        let tm = std::fs::read_to_string(&tm).unwrap();
+        let tm = ratatoskr::fsio::read_to_string(&tm).unwrap();
         assert_eq!(tm.trim(), format!("addexclusion {}", root.display()));
         use ratatoskr::runners::registry::Store;
         assert!(store.list().await.unwrap().is_empty());
@@ -494,7 +494,7 @@ mod macos {
         let bundle = dir.path().join("bundles/aarch64-apple-darwin");
         std::fs::create_dir_all(&bundle).unwrap();
         let log = dir.path().join("sleipnir.log");
-        std::fs::write(
+        ratatoskr::fsio::write(
             bundle.join("sleipnir"),
             format!(
                 "#!/bin/sh\necho \"$*\" >> '{}'\n[ \"$1\" = tools ] && {{ echo '{{\"outcomes\":[],\"features\":[]}}'; exit 0; }}\nexit 3\n",
@@ -527,7 +527,7 @@ mod macos {
                 .unwrap();
         assert!(reg.add(p).await.is_err(), "the fake bundle served");
         let root = home.join(".drgnx-runner.noindex");
-        let calls = std::fs::read_to_string(&log).unwrap();
+        let calls = ratatoskr::fsio::read_to_string(&log).unwrap();
         assert_eq!(
             calls.lines().next(),
             Some(format!("tools --root {} node@22 rust@1.95", root.display()).as_str()),
@@ -545,7 +545,7 @@ mod macos {
             let home = dir.path().join("home");
             std::fs::create_dir_all(&home).unwrap();
             mac_tools(&bin, translated, &dir.path().join("tm.log"));
-            std::fs::write(
+            ratatoskr::fsio::write(
                 bin.join("uname"),
                 "#!/bin/sh\ncase \"$1\" in -m) echo x86_64 ;; -s) echo Darwin ;; esac\n",
             )

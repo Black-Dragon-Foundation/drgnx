@@ -6,10 +6,9 @@ use super::bisect_wire::{Make, Pending, commits, materialise, stage_repo};
 use rodd::faces::FaceId;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env_remove("GIT_DIR")
@@ -29,11 +28,11 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 fn commit(dir: &Path, files: &[(&str, &str)], msg: &str, at: u64) -> String {
     for (p, t) in files {
-        std::fs::write(dir.join(p), t).unwrap();
+        crate::fsio::write(dir.join(p), t).unwrap();
     }
     git(dir, &["add", "-A"]);
     let date = format!("@{at} +0000");
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_AUTHOR_DATE", &date)
         .env("GIT_COMMITTER_DATE", &date)
@@ -75,7 +74,7 @@ fn commits_and_records_become_trees_a_slot_runs() {
     let proj = tmp.path().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
     git(&proj, &["init", "-q", "-b", "main"]);
-    std::fs::write(proj.join("run.sh"), "exit 0\n").unwrap();
+    crate::fsio::write(proj.join("run.sh"), "exit 0\n").unwrap();
     std::fs::set_permissions(proj.join("run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
     let c1 = commit(&proj, &[("a.py", "x = 1\n")], "first", 1_000);
     let c2 = commit(&proj, &[("a.py", "x = 2\n")], "second", 2_000);
@@ -136,11 +135,11 @@ fn commits_and_records_become_trees_a_slot_runs() {
     let stage = Stage::new(work.clone(), source, work.clone());
     let slot = stage.restore(0, &states[1].tree).unwrap();
     assert_eq!(
-        std::fs::read_to_string(slot.join("a.py")).unwrap(),
+        crate::fsio::read_to_string(slot.join("a.py")).unwrap(),
         "x = 9\n"
     );
     assert_eq!(
-        std::fs::read_to_string(slot.join("lib/new.py")).unwrap(),
+        crate::fsio::read_to_string(slot.join("lib/new.py")).unwrap(),
         "n = 1\n"
     );
     assert!(!slot.join("b.py").exists());
@@ -151,11 +150,11 @@ fn commits_and_records_become_trees_a_slot_runs() {
     assert_eq!(mode & 0o111, 0o111, "the base's modes are kept");
     let slot = stage.restore(0, &states[3].tree).unwrap();
     assert_eq!(
-        std::fs::read_to_string(slot.join("a.py")).unwrap(),
+        crate::fsio::read_to_string(slot.join("a.py")).unwrap(),
         "x = 2\n"
     );
     assert_eq!(
-        std::fs::read_to_string(slot.join("b.py")).unwrap(),
+        crate::fsio::read_to_string(slot.join("b.py")).unwrap(),
         "y = 1\n"
     );
     assert!(!slot.join("lib/new.py").exists(), "nothing stale stays");
@@ -167,11 +166,11 @@ fn commits_and_records_become_trees_a_slot_runs() {
     let only_b = stage.with_hunks(&states[0].tree, &[&hunks[1]]).unwrap();
     let slot = stage.restore(1, &only_b).unwrap();
     assert_eq!(
-        std::fs::read_to_string(slot.join("a.py")).unwrap(),
+        crate::fsio::read_to_string(slot.join("a.py")).unwrap(),
         "x = 1\n"
     );
     assert_eq!(
-        std::fs::read_to_string(slot.join("b.py")).unwrap(),
+        crate::fsio::read_to_string(slot.join("b.py")).unwrap(),
         "y = 1\n"
     );
     stage.drop_slots();

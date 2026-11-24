@@ -81,6 +81,7 @@ name = "annall"
 version = "0.1.0"
 dependencies = [
  "hulda",
+ "libc",
  "raun",
  "stig",
  "tracing",
@@ -629,6 +630,7 @@ dependencies = [
  "serde_path_to_error",
  "sha2 0.11.1",
  "skuld",
+ "stig",
  "stund",
  "tempfile",
  "tokio",
@@ -1826,15 +1828,22 @@ dependencies = [
 name = "ferja"
 version = "0.1.0"
 dependencies = [
+ "draugr",
+ "eitri",
  "gleipnir",
  "hlaup",
  "libc",
+ "saman",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "skuld",
+ "stig",
+ "stund",
  "tempfile",
  "tokio",
+ "tracing",
+ "villa",
  "zeroize",
 ]
 
@@ -3057,34 +3066,47 @@ dependencies = [
 name = "gleipnir"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "draugr",
  "eitri",
  "insta",
  "landlock",
  "libc",
  "proptest",
  "rustix",
+ "saman",
  "seccompiler",
  "serde",
  "serde_json",
  "skuld",
+ "stig",
  "stund",
  "tempfile",
  "tokio",
+ "tracing",
+ "villa",
 ]
 
 [[package]]
 name = "gleipnir-escape"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "draugr",
+ "eitri",
  "gleipnir",
  "hlaup",
  "libc",
  "rustix",
+ "saman",
  "serde",
  "serde_json",
+ "stig",
+ "stund",
  "tempfile",
  "tokio",
+ "tracing",
+ "villa",
 ]
 
 [[package]]
@@ -3116,20 +3138,27 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 name = "glugg"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "base64 0.23.1",
+ "draugr",
+ "eitri",
  "ghostty-vt-sys",
  "icy_sixel",
  "image",
  "libc",
+ "mot",
  "png 0.18.1",
  "rodd",
  "rustix",
+ "saman",
  "serde",
  "serde_json",
  "skuld",
+ "stund",
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "villa",
 ]
 
 [[package]]
@@ -4633,8 +4662,10 @@ checksum = "610a5acd306ec67f907abe5567859a3c693fb9886eb1f012ab8f2a47bef3db51"
 name = "norn"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "brokkr",
  "draugr",
+ "eitri",
  "hlaup",
  "huginn",
  "insta",
@@ -4643,12 +4674,15 @@ dependencies = [
  "ratatoskr",
  "regex",
  "runstav",
+ "saman",
  "schemars 1.2.3",
  "serde",
  "serde_json",
  "serde_path_to_error",
  "sha1 0.11.0",
  "skuld",
+ "stig",
+ "stund",
  "tempfile",
  "tokio",
  "tracing",
@@ -5710,6 +5744,7 @@ dependencies = [
 name = "ratatoskr"
 version = "0.1.0"
 dependencies = [
+ "annall",
  "aws-credential-types",
  "aws-sigv4",
  "base64 0.23.1",
@@ -5761,6 +5796,7 @@ dependencies = [
  "rustls",
  "rustls-platform-verifier",
  "saga",
+ "saman",
  "secrecy",
  "security-framework",
  "serde",
@@ -5771,6 +5807,7 @@ dependencies = [
  "skald",
  "skuld",
  "sleipnir",
+ "stig",
  "stund",
  "subtle",
  "tar",
@@ -5786,6 +5823,7 @@ dependencies = [
  "urdr",
  "vegvisir",
  "verdandi",
+ "villa",
  "vor",
  "vordr",
  "xxhash-rust",
@@ -6936,6 +6974,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 name = "sleipnir"
 version = "0.1.0"
 dependencies = [
+ "annall",
+ "draugr",
+ "eitri",
  "ferja",
  "forseti",
  "gleipnir",
@@ -6943,6 +6984,7 @@ dependencies = [
  "libc",
  "proptest",
  "rustix",
+ "saman",
  "secrecy",
  "serde",
  "serde_json",
@@ -6950,8 +6992,12 @@ dependencies = [
  "sha2 0.11.1",
  "similar",
  "skuld",
+ "stig",
+ "stund",
  "tempfile",
  "tokio",
+ "tracing",
+ "villa",
  "zeroize",
 ]
 

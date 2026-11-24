@@ -39,7 +39,7 @@ fn a_worker_held_in_sync_work_is_named_with_its_task() {
     rt.spawn(Named::new(Cow::Borrowed("test:holder"), async move {
         tx.send(()).unwrap();
         // sync work on the worker, until the test frees it: what the watchdog is for
-        let _ = freed.recv();
+        crate::soft::done(freed.recv(), "tests");
     }));
     rx.recv().unwrap();
     // the kernel's view of the held thread once it waits: asleep in the wait's syscall (Linux reads /proc)

@@ -57,8 +57,8 @@ struct Rig {
 
 impl Drop for Rig {
     fn drop(&mut self) {
-        let _ = self.mock.kill();
-        let _ = self.mock.wait();
+        ratatoskr::soft::done(self.mock.kill(), "search_download");
+        ratatoskr::soft::done(self.mock.wait(), "search_download");
     }
 }
 
@@ -68,7 +68,7 @@ fn rig(flags: &[&str]) -> Rig {
     for (name, size) in FILES {
         let (path, bytes) = (served.path().join(name), bytes_of(name, size));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, &bytes).unwrap();
+        ratatoskr::fsio::write(&path, &bytes).unwrap();
         let sum: String = Sha256::digest(&bytes)
             .iter()
             .map(|b| format!("{b:02x}"))
@@ -79,7 +79,7 @@ fn rig(flags: &[&str]) -> Rig {
             bytes: size as u64,
         });
     }
-    std::fs::write(served.path().join("model.onnx"), b"not ours").unwrap();
+    ratatoskr::fsio::write(served.path().join("model.onnx"), b"not ours").unwrap();
     let spec = Box::leak(Box::new(ModelSpec {
         id: "tiny",
         repo: "org/tiny",
@@ -151,7 +151,7 @@ impl Rig {
     }
 
     fn requests(&self, server: &str) -> Vec<Value> {
-        std::fs::read_to_string(&self.log)
+        ratatoskr::fsio::read_to_string(&self.log)
             .unwrap_or_default()
             .lines()
             .map(|l| serde_json::from_str::<Value>(l).unwrap())
@@ -309,7 +309,7 @@ async fn a_host_that_ignores_range_starts_the_file_over() {
 async fn a_part_past_the_files_size_is_thrown_away() {
     let r = rig(&[]);
     std::fs::create_dir_all(r.dir()).unwrap();
-    std::fs::write(r.dir().join("config.json.part"), vec![0u8; 500]).unwrap();
+    ratatoskr::fsio::write(r.dir().join("config.json.part"), vec![0u8; 500]).unwrap();
     r.run().await.unwrap();
     assert_eq!(r.state(), ModelState::Ready);
 }
@@ -345,7 +345,7 @@ async fn offline_is_reported_once() {
     tokio::spawn(async move {
         while let Ok((mut s, _)) = l.accept().await {
             SEEN.fetch_add(1, Ordering::SeqCst);
-            let _ = s.shutdown().await;
+            ratatoskr::soft::done(s.shutdown().await, "search_download");
         }
     });
     let hangs_up: Uri = format!("http://127.0.0.1:{port}").parse().unwrap();
@@ -358,7 +358,7 @@ async fn mirror_setting_used() {
     let r = rig(&[]);
     let config = TempDir::new().unwrap();
     let file = config.path().join("settings.el");
-    std::fs::write(
+    ratatoskr::fsio::write(
         &file,
         format!(
             "(drgnx-settings\n :version 1\n (drgnx-search-model-mirror \"{}\"))\n",
@@ -413,7 +413,7 @@ fn release() -> Vec<u8> {
 
 /// The archive ARCHIVE served by R's host as `engine.tar.gz`, and an asset row for it (leaked) at its sum.
 fn asset(r: &Rig, archive: &[u8]) -> &'static EngineAsset {
-    std::fs::write(r.served.path().join("engine.tar.gz"), archive).unwrap();
+    ratatoskr::fsio::write(r.served.path().join("engine.tar.gz"), archive).unwrap();
     let sum: String = Sha256::digest(archive)
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -552,7 +552,7 @@ fn no_download_on_an_idle_path() {
     let conf = root.dir.path().join("h/c");
     std::fs::create_dir_all(&conf).unwrap();
     let file = conf.join("settings.el");
-    std::fs::write(
+    ratatoskr::fsio::write(
         &file,
         format!(
             "(drgnx-settings\n :version 1\n (drgnx-search-model-mirror \"{}\"))\n",
@@ -564,13 +564,13 @@ fn no_download_on_an_idle_path() {
     install_builtin(&root);
     let proj = root.dir.path().join("h/proj");
     std::fs::create_dir_all(&proj).unwrap();
-    std::fs::write(proj.join("a.el"), "(defun a-thing ()\n  \"Do a thing.\")\n").unwrap();
+    ratatoskr::fsio::write(proj.join("a.el"), "(defun a-thing ()\n  \"Do a thing.\")\n").unwrap();
     for args in [
         &["init", "-q"][..],
         &["add", "-A"],
         &["commit", "-q", "-m", "one"],
     ] {
-        let st = Command::new("git")
+        let st = ratatoskr::proc::Command::new("git")
             .arg("-C")
             .arg(&proj)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])

@@ -33,8 +33,8 @@ struct Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        ratatoskr::soft::done(self.child.kill(), "search_eval_sources");
+        ratatoskr::soft::done(self.child.wait(), "search_eval_sources");
     }
 }
 
@@ -68,7 +68,7 @@ impl Server {
 
     /// What reached the server: `(path, body)`, in order.
     fn requests(&self) -> Vec<(String, Value)> {
-        std::fs::read_to_string(&self.log)
+        ratatoskr::fsio::read_to_string(&self.log)
             .unwrap_or_default()
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
@@ -103,7 +103,7 @@ impl Server {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = ratatoskr::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -124,12 +124,12 @@ fn fixture(dir: &Path) -> (PathBuf, PathBuf) {
     let root = dir.join("proj");
     std::fs::create_dir_all(&root).unwrap();
     git(&root, &["init", "-q"]);
-    std::fs::write(
+    ratatoskr::fsio::write(
         root.join("greet.py"),
         "def build_greeting(name):\n    return 'hello ' + name\n",
     )
     .unwrap();
-    std::fs::write(
+    ratatoskr::fsio::write(
         root.join("math_ops.py"),
         "def add_numbers(a, b):\n    return a + b\n",
     )
@@ -142,7 +142,7 @@ fn fixture(dir: &Path) -> (PathBuf, PathBuf) {
                "age_days": 0, "dir": ".", "half": "test"})
         .to_string()
     };
-    std::fs::write(
+    ratatoskr::fsio::write(
         &rows,
         format!(
             "{}\n{}\n",
@@ -159,7 +159,7 @@ fn eval_run(dir: &Path, root: &Path, rows: &Path, tag: &str, extra: &[&str]) -> 
     let home = dir.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let out = dir.join(format!("{tag}.json"));
-    let run = Command::new(env!("CARGO_BIN_EXE_ratatoskr"))
+    let run = ratatoskr::proc::Command::new(env!("CARGO_BIN_EXE_ratatoskr"))
         .args(["search", "eval", "run"])
         .arg(root)
         .arg("--rows")
@@ -169,11 +169,11 @@ fn eval_run(dir: &Path, root: &Path, rows: &Path, tag: &str, extra: &[&str]) -> 
         .arg("--out")
         .arg(&out)
         .args(extra)
-        .env("HOME", &home)
-        .env("XDG_STATE_HOME", home.join("state"))
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("XDG_CONFIG_HOME", home.join("config"))
-        .env("XDG_CACHE_HOME", home.join("cache"))
+        .env(stig::HOME_VAR, &home)
+        .env(stig::Xdg::State.var(), home.join("state"))
+        .env(stig::Xdg::Data.var(), home.join("data"))
+        .env(stig::Xdg::Config.var(), home.join("config"))
+        .env(stig::Xdg::Cache.var(), home.join("cache"))
         .output()
         .unwrap();
     assert!(

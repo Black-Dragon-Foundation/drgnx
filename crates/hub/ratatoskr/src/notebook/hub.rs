@@ -531,7 +531,7 @@ impl Notebooks {
             .get(id)
             .is_some_and(|o| Arc::ptr_eq(o, &open));
         if !registered {
-            let _ = k.shutdown().await;
+            k.shutdown().await;
             return Err("the notebook was closed while its kernel started".into());
         }
         let (tx, rx) = mpsc::channel(64);
@@ -622,7 +622,7 @@ impl Notebooks {
     /// Forget notebook ID (its kernel ends first).
     pub async fn close(&self, conn: u64, id: &str) {
         if let Ok(open) = self.get(conn, id) {
-            let _ = end_kernel(&open).await;
+            crate::soft::done(end_kernel(&open).await, "end_kernel");
             self.books.lock().expect("books").remove(id);
         }
     }
@@ -639,7 +639,7 @@ impl Notebooks {
             ids.iter().filter_map(|k| books.remove(k)).collect()
         };
         for open in opens {
-            let _ = end_kernel(&open).await;
+            crate::soft::done(end_kernel(&open).await, "end_kernel");
         }
     }
 
@@ -1132,7 +1132,7 @@ impl Pump {
                         self.start_next().await;
                     }
                     Some(Cmd::Interrupt) => {
-                        let _ = self.kernel.interrupt();
+                        crate::soft::done(self.kernel.interrupt(), "hub");
                         self.drop_queue(RunStatus::Cancelled).await;
                         self.status(if self.current.is_some() { "busy" } else { "idle" });
                     }
@@ -1141,7 +1141,7 @@ impl Pump {
                         if let Some((_, parent)) = self.inputs.remove(&request) {
                             let mut reply = Message::request("hub", "input_reply", json!({"value": value, "status": "ok"}));
                             reply.parent = parent;
-                            let _ = self.kernel.send(Channel::Stdin, &reply);
+                            crate::soft::done(self.kernel.send(Channel::Stdin, &reply), "kernel send");
                         }
                     }
                 },
@@ -1187,7 +1187,7 @@ impl Pump {
         let exit = self.kernel.shutdown().await;
         send_status(&*sink, &open, "dead", None, 0);
         if let Some(tx) = shutdown {
-            let _ = tx.send(exit);
+            crate::soft::done(tx.send(exit), "tx send");
         }
     }
 }

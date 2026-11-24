@@ -536,7 +536,7 @@ pub fn first_seen_ms(id: &str, now_ms: u64) -> u64 {
     {
         return ms;
     }
-    let _ = id;
+    let _only_when_used_elsewhere = &id;
     now_ms
 }
 

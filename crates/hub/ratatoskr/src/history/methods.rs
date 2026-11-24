@@ -194,7 +194,7 @@ impl Hub {
         };
         g.h.activate(doc, branch, || Ok(String::new()))?;
         // the line authors, in step before the operations (each one keeps them in step)
-        let _ = g.kept_ranges(doc, branch);
+        crate::soft::done(g.kept_ranges(doc, branch), "methods");
         let mut spans = Vec::new();
         // the editor applying a hunk's revert (`history/revert/hunk`): the user's operations, in one `revert` record
         let mut reverts: Vec<HunkRevert> = Vec::new();
@@ -291,7 +291,7 @@ impl Hub {
         };
         let (key, author, _) = author_of("user")?;
         let peer = g.peer(branch, &key, &author)?;
-        let _ = g.kept_ranges(doc, branch);
+        crate::soft::done(g.kept_ranges(doc, branch), "methods");
         let inner = &mut *g;
         let mut ad = inner.h.activate(doc, branch, || Ok(String::new()))?;
         let old = ad.text();
@@ -335,7 +335,7 @@ mod tests {
     use std::path::Path;
 
     fn git(dir: &Path, args: &[&str]) {
-        let ok = std::process::Command::new("git")
+        let ok = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -368,14 +368,14 @@ mod tests {
         let root = home.path().join("proj");
         std::fs::create_dir_all(&root).unwrap();
         git(&root, &["init", "-q", "-b", "main"]);
-        std::fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
+        crate::fsio::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
         for (p, t) in files {
-            std::fs::write(root.join(p), t).unwrap();
+            crate::fsio::write(root.join(p), t).unwrap();
         }
         git(&root, &["add", "."]);
         git(&root, &["commit", "-q", "-m", "base"]);
         let head = {
-            let o = std::process::Command::new("git")
+            let o = crate::proc::Command::new("git")
                 .args(["rev-parse", "HEAD"])
                 .current_dir(&root)
                 .output()
@@ -385,7 +385,7 @@ mod tests {
         let cfg = home.path().join("config");
         std::fs::create_dir_all(&cfg).unwrap();
         let deny_file = cfg.join(norn::deny::DENY_FILE);
-        std::fs::write(
+        crate::fsio::write(
             &deny_file,
             serde_json::json!({"version": 1, "entries": [{"kind": "file", "path": root.join("notes.org")}]}).to_string(),
         )
@@ -421,9 +421,9 @@ mod tests {
     #[test]
     fn register_untracked_path_says_untracked() {
         let f = fx(&[("a.txt", "x\n")]);
-        std::fs::write(f.tree.root.join("ignored.txt"), "i\n").unwrap();
-        std::fs::write(f.tree.root.join(".env"), "KEY=1\n").unwrap();
-        std::fs::write(f.tree.root.join("notes.org"), "mine\n").unwrap();
+        crate::fsio::write(f.tree.root.join("ignored.txt"), "i\n").unwrap();
+        crate::fsio::write(f.tree.root.join(".env"), "KEY=1\n").unwrap();
+        crate::fsio::write(f.tree.root.join("notes.org"), "mine\n").unwrap();
         for (path, why) in [
             ("ignored.txt", "ignored"),
             (".env", "secret"),
@@ -438,7 +438,7 @@ mod tests {
             .register(&f.tree, "a.txt", "b2", &f.deny, 1.0)
             .unwrap();
         assert!(r.tracked, "{r:?}");
-        let _ = &f.home;
+        let _only_when_used_elsewhere = &f.home;
     }
 
     // pattern: D
@@ -446,7 +446,7 @@ mod tests {
     fn a_file_changed_since_the_commit_is_the_disks_before_any_batch() {
         let f = fx(&[("a.txt", "one\ntwo\n")]);
         let disk = "zero\none\ntwo\n";
-        std::fs::write(f.tree.root.join("a.txt"), disk).unwrap();
+        crate::fsio::write(f.tree.root.join("a.txt"), disk).unwrap();
         f.hub
             .register(&f.tree, "a.txt", "b1", &f.deny, 5.0)
             .unwrap();
@@ -468,7 +468,7 @@ mod tests {
             )]
         );
         // a new file, in no commit: its text, all of it the disk's
-        std::fs::write(f.tree.root.join("new.txt"), "fresh\n").unwrap();
+        crate::fsio::write(f.tree.root.join("new.txt"), "fresh\n").unwrap();
         f.hub
             .register(&f.tree, "new.txt", "b2", &f.deny, 6.0)
             .unwrap();

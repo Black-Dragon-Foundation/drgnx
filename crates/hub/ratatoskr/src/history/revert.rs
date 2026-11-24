@@ -118,7 +118,7 @@ async fn goes_on(f: &Front, at: RevertStep) -> bool {
         }
     };
     let Some(p) = park else { return true };
-    let _ = p.reached.send(());
+    crate::soft::done(p.reached.send(()), "reached send");
     p.go.await.unwrap_or(false)
 }
 
@@ -917,26 +917,29 @@ async fn expect(f: &Front, s: &Saved, path: &Path) {
         return;
     }
     let (p, rel) = (s.plan.clone(), path.to_string_lossy().into_owned());
-    let _ = crate::clock::blocking(move || {
-        let hash = match what {
-            Goes::Text(t) => {
-                match super::blob::hash_object(&tree.git_dir, &tree.root, &rel, t.as_bytes()) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        tracing::warn!(rel, "the revert's text is not announced: {e}");
-                        return;
+    crate::soft::done(
+        crate::clock::blocking(move || {
+            let hash = match what {
+                Goes::Text(t) => {
+                    match super::blob::hash_object(&tree.git_dir, &tree.root, &rel, t.as_bytes()) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            tracing::warn!(rel, "the revert's text is not announced: {e}");
+                            return;
+                        }
                     }
                 }
-            }
-            _ => snapshot::blob_id(&p.root, &p.cwd, &p.checkpoint, &rel)
-                .unwrap_or_else(|| "gone".into()),
-        };
-        hub.lock().origin.step(
-            &tree.id.0,
-            super::origin::OriginEv::HubWrite { path: rel, hash },
-        );
-    })
-    .await;
+                _ => snapshot::blob_id(&p.root, &p.cwd, &p.checkpoint, &rel)
+                    .unwrap_or_else(|| "gone".into()),
+            };
+            hub.lock().origin.step(
+                &tree.id.0,
+                super::origin::OriginEv::HubWrite { path: rel, hash },
+            );
+        })
+        .await,
+        "crate::clock::blocking",
+    );
 }
 
 /// The steps after the target marked undone by OP, and the session's conclusions after it withdrawn.
@@ -1042,7 +1045,7 @@ async fn run(f: &Front, s: Saved, op: Option<i64>) -> Result<w::Applied, Error> 
             E::Detach => {
                 if let Ok(sess) = f.core.agents.find(&p.sid) {
                     sess.detach();
-                    let _ = f.core.agents.cancel_after_tool(&p.sid);
+                    crate::soft::done(f.core.agents.cancel_after_tool(&p.sid), "revert");
                 }
                 continue;
             }

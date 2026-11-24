@@ -81,7 +81,7 @@ impl Rig {
             .map(|k| k.replace("{dir}", &dir.path().display().to_string()))
             .map(|k| format!("'{k}'"))
             .collect();
-        std::fs::write(
+        ratatoskr::fsio::write(
             &exe,
             format!(
                 "#!/bin/sh\nexec '{}' embed --as llama-server --log '{}' --dims {DIMS} {} \"$@\"\n",
@@ -113,7 +113,7 @@ impl Rig {
     }
 
     fn lines(&self, key: &str) -> Vec<Value> {
-        std::fs::read_to_string(&self.log)
+        ratatoskr::fsio::read_to_string(&self.log)
             .unwrap_or_default()
             .lines()
             .map(|l| serde_json::from_str::<Value>(l).unwrap())

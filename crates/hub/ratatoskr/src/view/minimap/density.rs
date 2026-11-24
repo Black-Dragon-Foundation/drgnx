@@ -381,7 +381,9 @@ mod tests {
         assert_eq!(spans, st.len, "the buckets tile the file");
         assert_eq!(b.iter().map(|x| x.1).sum::<u32>(), grep_c(&p, &error));
         assert_eq!(b.iter().map(|x| x.2).sum::<u32>(), grep_c(&p, &warning));
-        eprintln!("density-200mb: first part {first:?}, {parts} parts, whole scan {whole:?}");
+        crate::soft::err_line(&format!(
+            "density-200mb: first part {first:?}, {parts} parts, whole scan {whole:?}"
+        ));
         if let Some(first) = first {
             assert!(first <= FIRST_PART, "the first part at {first:?}");
         }
@@ -433,9 +435,7 @@ mod tests {
             crate::clock::real_now,
             |_| {
                 if std::mem::take(&mut first) {
-                    std::fs::OpenOptions::new()
-                        .append(true)
-                        .open(&p)
+                    crate::fsio::append(&p, false)
                         .unwrap()
                         .write_all(b"more\n")
                         .unwrap();
@@ -470,7 +470,7 @@ mod tests {
         }
         text.push_str(&long);
         text.push('\n');
-        std::fs::write(&p, &text).unwrap();
+        crate::fsio::write(&p, &text).unwrap();
         let (size, count) = geometry(text.len() as u64);
         let (t, start, n) = peek(&p, 3, 2).unwrap();
         assert_eq!(n, count);

@@ -297,7 +297,7 @@ async fn unknown_fingerprint_is_refused() {
     assert_eq!(taken.kept, taken.keys_in_pack);
     // and a pack that is not one is refused as such
     let junk = b.dir.path().join("junk");
-    std::fs::write(&junk, b"nothing").unwrap();
+    ratatoskr::fsio::write(&junk, b"nothing").unwrap();
     assert!(matches!(
         import(&b, &junk, &[], &[tiny().fp], false).await,
         Err(PackError::Store(_)) | Err(PackError::Refused(_))

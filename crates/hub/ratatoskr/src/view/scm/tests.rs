@@ -3,7 +3,7 @@ use std::process::Command;
 
 /// Run the shell SCRIPT in DIR (a fresh repository's git config names its author), panicking on failure.
 fn sh(dir: &Path, script: &str) {
-    let out = Command::new("/bin/sh")
+    let out = crate::proc::Command::new("/bin/sh")
         .arg("-c")
         .arg(script)
         .current_dir(dir)
@@ -262,7 +262,7 @@ fn discard_restores_the_index_text() {
     )
     .unwrap();
     assert_eq!(
-        std::fs::read_to_string(r.join("a.txt")).unwrap(),
+        crate::fsio::read_to_string(r.join("a.txt")).unwrap(),
         "staged\n"
     );
     let st = status_of(&r);

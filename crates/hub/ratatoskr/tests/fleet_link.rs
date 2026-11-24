@@ -47,18 +47,18 @@ struct Harness {
 
 impl Harness {
     fn new(extra: &str) -> Harness {
-        let home = PathBuf::from(std::env::var("HOME").unwrap());
+        let home = PathBuf::from(std::env::var(stig::HOME_VAR).unwrap());
         assert!(
             Path::new("/run/.containerenv").exists() && home.to_string_lossy().contains("/fleet/"),
             "the fleet rows run only in a fleet's harness container (fleet.sh test)"
         );
         let pw = passwd_home();
         assert_eq!(pw, Path::new("/root"), "the harness runs as its own root");
-        let base = std::fs::read_to_string(home.join(".ssh/config")).unwrap();
+        let base = ratatoskr::fsio::read_to_string(home.join(".ssh/config")).unwrap();
         let ssh = pw.join(".ssh");
         std::fs::create_dir_all(&ssh).unwrap();
         let user_config = ssh.join("config");
-        std::fs::write(&user_config, format!("{extra}\n{base}")).unwrap();
+        ratatoskr::fsio::write(&user_config, format!("{extra}\n{base}")).unwrap();
         Harness {
             user_config,
             tmp: tempfile::tempdir().unwrap(),
@@ -91,7 +91,10 @@ impl Harness {
 
 impl Drop for Harness {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.user_config);
+        ratatoskr::soft::done(
+            std::fs::remove_file(&self.user_config),
+            "std::fs::remove_file",
+        );
     }
 }
 

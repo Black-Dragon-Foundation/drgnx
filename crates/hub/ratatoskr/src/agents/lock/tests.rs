@@ -55,17 +55,17 @@ fn claude_rules_are_read_like_the_lisp_does() {
     let (home, cwd) = (d.path().join("home"), d.path().join("wt"));
     std::fs::create_dir_all(cwd.join(".claude")).unwrap();
     std::fs::create_dir_all(&home).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         home.join("settings.json"),
         r#"{"permissions":{"deny":["A","B"],"ask":["X"],"allow":["Z"]}}"#,
     )
     .unwrap();
-    std::fs::write(
+    crate::fsio::write(
         cwd.join(".claude/settings.json"),
         r#"{"permissions":{"deny":["B","C"]}}"#,
     )
     .unwrap();
-    std::fs::write(cwd.join(".claude/settings.local.json"), "not json").unwrap();
+    crate::fsio::write(cwd.join(".claude/settings.local.json"), "not json").unwrap();
     let (deny, ask) = claude_deny_ask(&home, &cwd);
     assert_eq!(
         (deny, ask),
@@ -376,10 +376,10 @@ fn gemini_admin_policy_shadowed_is_not_enforced() {
     let d = tempfile::tempdir().unwrap();
     let policies = d.path().join("etc/gemini-cli/policies");
     std::fs::create_dir_all(&policies).unwrap();
-    std::fs::write(policies.join("notes.txt"), "").unwrap();
+    crate::fsio::write(policies.join("notes.txt"), "").unwrap();
     let g = profile(&["gemini", "--acp"], None, &[], None);
     assert_eq!(locked(&g, &["read"], d.path()).enforced, Enforced::Yes);
-    std::fs::write(policies.join("site.toml"), "").unwrap();
+    crate::fsio::write(policies.join("site.toml"), "").unwrap();
     let plan = locked(&g, &["read"], d.path());
     let Enforced::No(why) = plan.enforced else {
         panic!("enforced")

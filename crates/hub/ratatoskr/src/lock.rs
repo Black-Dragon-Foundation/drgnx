@@ -51,7 +51,10 @@ impl Lock {
 /// open file releases it for all.
 impl Drop for Lock {
     fn drop(&mut self) {
-        let _ = rustix::fs::flock(&self._file, rustix::fs::FlockOperation::Unlock);
+        crate::soft::done(
+            rustix::fs::flock(&self._file, rustix::fs::FlockOperation::Unlock),
+            "rustix::fs::flock",
+        );
     }
 }
 
@@ -244,14 +247,17 @@ pub fn holder(path: &Path, procs: &impl Procs) -> io::Result<Holder> {
     match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
         Ok(()) => {
             // released by name, not by the close: a child forked meanwhile shares this open file (see `Lock`'s drop)
-            let _ = rustix::fs::flock(&file, rustix::fs::FlockOperation::Unlock);
+            crate::soft::done(
+                rustix::fs::flock(&file, rustix::fs::FlockOperation::Unlock),
+                "rustix::fs::flock",
+            );
             return Ok(Holder::Nobody);
         }
         Err(rustix::io::Errno::WOULDBLOCK) => {}
         Err(e) => return Err(e.into()),
     }
     let mut text = String::new();
-    let _ = (&mut file).take(64).read_to_string(&mut text);
+    crate::soft::done((&mut file).take(64).read_to_string(&mut text), "lock");
     let mut fields = text.split_whitespace();
     let pid = fields
         .next()
@@ -452,7 +458,7 @@ mod tests {
         let path = dir.path().join("hub-x.sock.lock");
         assert_eq!(holder(&path, &Fake(vec![])).unwrap(), Holder::Nobody);
         // a file naming a live pid that nobody holds: no holder
-        std::fs::write(&path, "100 7\n").unwrap();
+        crate::fsio::write(&path, "100 7\n").unwrap();
         assert_eq!(
             holder(&path, &Fake(vec![(100, false)])).unwrap(),
             Holder::Nobody
@@ -484,7 +490,7 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         // a Lisp directory: respected while its hub lives, else nobody
         std::fs::create_dir(&path).unwrap();
-        std::fs::write(path.join("pid"), "100").unwrap();
+        crate::fsio::write(path.join("pid"), "100").unwrap();
         assert_eq!(
             holder(&path, &Fake(vec![(100, true)])).unwrap(),
             Holder::Lisp { pid: Some(100) }
@@ -591,7 +597,7 @@ mod tests {
             Holder::Ratatoskr { pid: Some(_), .. }
         ));
         // a held lock whose text names pid 0: no process
-        std::fs::write(&path, "0 5\n").unwrap();
+        crate::fsio::write_in_place(&path, "0 5\n").unwrap();
         assert_eq!(
             holder(&path, &Fake(vec![])).unwrap(),
             Holder::Ratatoskr {
@@ -610,7 +616,7 @@ mod tests {
         drop(held);
         std::fs::remove_file(&path).unwrap();
         let elsewhere = root.path().join("elsewhere");
-        std::fs::write(&elsewhere, "1 1\n").unwrap();
+        crate::fsio::write(&elsewhere, "1 1\n").unwrap();
         std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
         assert!(holder(&path, &Fake(vec![])).is_err());
         // no directory: nobody
@@ -670,12 +676,15 @@ mod tests {
 
         // a live Lisp hub's directory: respected and left as it is
         std::fs::create_dir(&path).unwrap();
-        std::fs::write(path.join("pid"), "100").unwrap();
+        crate::fsio::write(path.join("pid"), "100").unwrap();
         assert!(matches!(
             acquire(&path, &Fake(vec![(100, true)])),
             Err(LockError::LispHub { pid: Some(100) })
         ));
-        assert_eq!(std::fs::read_to_string(path.join("pid")).unwrap(), "100");
+        assert_eq!(
+            crate::fsio::read_to_string(path.join("pid")).unwrap(),
+            "100"
+        );
         // its pid gone: taken over, the directory replaced by the lock file
         let taken = acquire(&path, &Fake(vec![])).unwrap();
         assert!(path.is_file());

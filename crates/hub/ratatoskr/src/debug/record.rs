@@ -62,7 +62,7 @@ fn canonical(v: &Value, out: &mut Vec<u8>) {
                 if i > 0 {
                     out.push(b',');
                 }
-                let _ = serde_json::to_writer(&mut *out, k);
+                crate::soft::done(serde_json::to_writer(&mut *out, k), "serde_json::to_writer");
                 out.push(b':');
                 canonical(&m[k], out);
             }
@@ -79,7 +79,7 @@ fn canonical(v: &Value, out: &mut Vec<u8>) {
             out.push(b']');
         }
         _ => {
-            let _ = serde_json::to_writer(&mut *out, v);
+            crate::soft::done(serde_json::to_writer(&mut *out, v), "serde_json::to_writer");
         }
     }
 }
@@ -827,7 +827,10 @@ impl Records {
 
     /// META to its record on disk; false: no key to seal it with.
     fn write_meta(&self, meta: &RunMeta) -> bool {
-        let _ = std::fs::create_dir_all(&self.opts.runs);
+        crate::soft::done(
+            std::fs::create_dir_all(&self.opts.runs),
+            "std::fs::create_dir_all",
+        );
         let Some(key) = lock(&self.key).clone() else {
             return false;
         };
@@ -847,7 +850,7 @@ impl Records {
         if let Some(l) = lock(&self.live).get(id) {
             return Some(l.meta.clone());
         }
-        let t = std::fs::read_to_string(self.file(id, "json")).ok()?;
+        let t = crate::fsio::read_to_string(self.file(id, "json")).ok()?;
         serde_json::from_str(&t).ok().map(|m| self.opened(m))
     }
 
@@ -889,7 +892,7 @@ impl Records {
             .flatten()
             .flatten()
             .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+            .filter_map(|e| crate::fsio::read_to_string(e.path()).ok())
             .filter_map(|t| serde_json::from_str::<RunMeta>(&t).ok())
             .filter(|m| root.is_empty() || m.root == root)
             .map(|mut m| {
@@ -1070,13 +1073,19 @@ impl Records {
         for id in &gone {
             let meta = all.iter().find(|m| &m.id == id);
             for ext in ["drun", "drun.idx", "json"] {
-                let _ = std::fs::remove_file(self.file(id, ext));
+                crate::soft::done(
+                    std::fs::remove_file(self.file(id, ext)),
+                    "std::fs::remove_file",
+                );
             }
             if let Some(s) = meta.and_then(|m| m.snapshot.as_ref()) {
-                let _ = crate::timeline::snapshot::drop_kept(
-                    &s.checkpoints,
-                    &s.source,
-                    &format!("refs/drgnx/debug/{id}"),
+                crate::soft::done(
+                    crate::timeline::snapshot::drop_kept(
+                        &s.checkpoints,
+                        &s.source,
+                        &format!("refs/drgnx/debug/{id}"),
+                    ),
+                    "crate::timeline::snapshot::drop_kept",
                 );
             }
             self.opts.store.gone(id);

@@ -105,7 +105,7 @@ impl Source for Gated {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = std::process::Command::new("git")
+    let st = ratatoskr::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -122,14 +122,14 @@ fn repo(home: &Path, name: &str, n: usize, shared: bool) -> PathBuf {
     std::fs::create_dir_all(root.join("core")).unwrap();
     git(&root, &["init", "-q"]);
     for i in 0..n {
-        std::fs::write(
+        ratatoskr::fsio::write(
             root.join(format!("core/{name}{i}.el")),
             format!(";;; {name}{i}.el\n(defun {name}{i}-run () \"Run {name} number {i}.\" {i})\n"),
         )
         .unwrap();
     }
     if shared {
-        std::fs::write(
+        ratatoskr::fsio::write(
             root.join("core/shared.el"),
             ";;; shared.el\n(defun shared-run () \"The same in every repo.\" 0)\n",
         )
@@ -266,7 +266,7 @@ async fn pause_survives_a_hub_restart() {
     );
     p.start_tier2();
     until(&p, "held", |t| *t == Tier2::Paused).await;
-    std::fs::write(
+    ratatoskr::fsio::write(
         root.join("core/new.el"),
         ";;; new.el\n(defun new-run () 1)\n",
     )
@@ -361,7 +361,7 @@ async fn stop_keeps_the_done_part_and_the_watcher() {
         "the first batch is kept"
     );
     // a change: tier 2 goes on from the keys left
-    std::fs::write(
+    ratatoskr::fsio::write(
         root.join("core/new.el"),
         ";;; new.el\n(defun new-run () 1)\n",
     )
@@ -441,7 +441,7 @@ async fn delete_frees_the_root_and_keeps_shared_vectors() {
     );
     let packs = ra.join(".drgnx/packs");
     std::fs::create_dir_all(&packs).unwrap();
-    std::fs::write(packs.join("0123456789abcdef.vpack"), b"pack").unwrap();
+    ratatoskr::fsio::write(packs.join("0123456789abcdef.vpack"), b"pack").unwrap();
     let a_id = a.id().to_owned();
     drop(a);
     let caches = Caches::shared(state.path());
@@ -481,8 +481,8 @@ async fn delete_frees_the_root_and_keeps_shared_vectors() {
 fn power(dir: &Path, online: bool) -> PathBuf {
     let ac = dir.join("class/power_supply/AC");
     std::fs::create_dir_all(&ac).unwrap();
-    std::fs::write(ac.join("type"), "Mains\n").unwrap();
-    std::fs::write(ac.join("online"), if online { "1\n" } else { "0\n" }).unwrap();
+    ratatoskr::fsio::write(ac.join("type"), "Mains\n").unwrap();
+    ratatoskr::fsio::write(ac.join("online"), if online { "1\n" } else { "0\n" }).unwrap();
     dir.to_path_buf()
 }
 
@@ -537,13 +537,13 @@ async fn an_auto_pause_never_clears_a_user_pause() {
 fn machine(dir: &Path, load: f64, cpus: u32, avail: u64, total: u64) -> PathBuf {
     let cpu = dir.join("devices/system/cpu");
     std::fs::create_dir_all(&cpu).unwrap();
-    std::fs::write(cpu.join("online"), format!("0-{}\n", cpus - 1)).unwrap();
-    std::fs::write(
+    ratatoskr::fsio::write(cpu.join("online"), format!("0-{}\n", cpus - 1)).unwrap();
+    ratatoskr::fsio::write(
         dir.join("loadavg"),
         format!("{load:.2} 1.00 1.00 2/300 42\n"),
     )
     .unwrap();
-    std::fs::write(dir.join("statvfs"), format!("{avail} {total}\n")).unwrap();
+    ratatoskr::fsio::write(dir.join("statvfs"), format!("{avail} {total}\n")).unwrap();
     dir.to_path_buf()
 }
 

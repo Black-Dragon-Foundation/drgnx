@@ -134,7 +134,7 @@ impl Scms {
         let key = (conn, view.to_owned());
         lock(&self.views).remove(&key);
         if let Some(tx) = lock(&self.watches).remove(&key) {
-            let _ = tx.send(Heard::Stop);
+            crate::soft::done(tx.send(Heard::Stop), "tx send");
         }
     }
 
@@ -142,7 +142,7 @@ impl Scms {
         lock(&self.views).retain(|(c, _), _| *c != conn);
         lock(&self.watches).retain(|(c, _), tx| {
             if *c == conn {
-                let _ = tx.send(Heard::Stop);
+                crate::soft::done(tx.send(Heard::Stop), "tx send");
             }
             *c != conn
         });
@@ -375,7 +375,7 @@ fn watch(front: Weak<Front>, conn: u64, view: String, roots: &[PathBuf]) {
         let Some(f) = front.upgrade() else { return };
         if let Some(old) = lock(&f.core.views.scms.watches).insert((conn, view.clone()), tx.clone())
         {
-            let _ = old.send(Heard::Stop);
+            crate::soft::done(old.send(Heard::Stop), "old send");
         }
     }
     // each git dir's events name the repository they belong to
@@ -398,19 +398,19 @@ fn watch(front: Weak<Front>, conn: u64, view: String, roots: &[PathBuf]) {
                 continue;
             }
             if let Some((_, root)) = owners.iter().find(|(d, _)| p.starts_with(d)) {
-                let _ = htx.send(root.clone());
-                let _ = poke.send(Heard::Changed);
+                crate::soft::done(htx.send(root.clone()), "htx send");
+                crate::soft::done(poke.send(Heard::Changed), "poke send");
             }
         }
     })
     .ok();
     if let Some(w) = watcher.as_mut() {
         for (_, g, c) in &dirs {
-            let _ = w.watch(g, RecursiveMode::NonRecursive);
+            crate::soft::done(w.watch(g, RecursiveMode::NonRecursive), "scm");
             if c != g {
-                let _ = w.watch(c, RecursiveMode::NonRecursive);
+                crate::soft::done(w.watch(c, RecursiveMode::NonRecursive), "scm");
             }
-            let _ = w.watch(&c.join("refs"), RecursiveMode::Recursive);
+            crate::soft::done(w.watch(&c.join("refs"), RecursiveMode::Recursive), "scm");
         }
     }
     loop {

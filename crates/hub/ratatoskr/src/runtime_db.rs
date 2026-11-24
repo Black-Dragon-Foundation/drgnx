@@ -129,12 +129,12 @@ pub fn open(hub_dir: &Path) -> Result<(urdr::Store, urdr::Handle), String> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs());
             let aside = hub_dir.join(format!("runtime.db.newer-{found}-{at}"));
-            std::fs::rename(&path, &aside)
+            crate::fsio::rename(&path, &aside)
                 .map_err(|e| format!("cannot move {} aside: {e}", path.display()))?;
             for ext in ["-wal", "-shm"] {
                 let from = hub_dir.join(format!("runtime.db{ext}"));
                 let to = hub_dir.join(format!("runtime.db.newer-{found}-{at}{ext}"));
-                match std::fs::rename(&from, &to) {
+                match crate::fsio::rename(&from, &to) {
                     Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                         return Err(format!("cannot move {} aside: {e}", from.display()));
                     }

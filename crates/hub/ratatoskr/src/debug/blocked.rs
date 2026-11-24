@@ -285,7 +285,7 @@ pub static GROUPS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 fn started(group: i32) {
     #[cfg(feature = "test-hooks")]
     GROUPS.lock().unwrap_or_else(|e| e.into_inner()).push(group);
-    let _ = group;
+    let _only_when_used_elsewhere = &group;
 }
 
 /// How long the hub waits for debugpy's listener before it gives up and stops the adapter.
@@ -380,7 +380,10 @@ async fn start_debuggee(spec: Spec) -> Result<draugr::Child, String> {
     started(child.id());
     if let Some(mut out) = child.take_stdout() {
         crate::clock::spawn("debug:debuggee-stdout", async move {
-            let _ = tokio::io::copy(&mut out, &mut tokio::io::sink()).await;
+            crate::soft::done(
+                tokio::io::copy(&mut out, &mut tokio::io::sink()).await,
+                "tokio::io::copy",
+            );
         });
     }
     Ok(child)
@@ -569,10 +572,13 @@ impl Launcher for Blocked {
                         Err(e) => {
                             tracing::debug!(target: "drgnx::debug", "the program was not started: {e}");
                             note(&notes, format!("the program was not started: {e}"));
-                            let _ = draugr::Signaller::kill(
-                                &draugr::RealSignaller,
-                                -adapter_pid,
-                                libc::SIGTERM,
+                            crate::soft::done(
+                                draugr::Signaller::kill(
+                                    &draugr::RealSignaller,
+                                    -adapter_pid,
+                                    libc::SIGTERM,
+                                ),
+                                "draugr::Signaller::kill",
                             );
                             return;
                         }
@@ -582,10 +588,13 @@ impl Launcher for Blocked {
                         Err(e) => {
                             tracing::debug!(target: "drgnx::debug", "the program did not start: {e}");
                             note(&notes, format!("the program did not start: {e}"));
-                            let _ = draugr::Signaller::kill(
-                                &draugr::RealSignaller,
-                                -adapter_pid,
-                                libc::SIGTERM,
+                            crate::soft::done(
+                                draugr::Signaller::kill(
+                                    &draugr::RealSignaller,
+                                    -adapter_pid,
+                                    libc::SIGTERM,
+                                ),
+                                "draugr::Signaller::kill",
                             );
                         }
                     }

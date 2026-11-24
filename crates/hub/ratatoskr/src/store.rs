@@ -50,7 +50,7 @@ impl WorkDb {
     ) -> Result<R, String> {
         let (reply, answer) = oneshot::channel();
         let job: Job = Box::new(move |c| {
-            let _ = reply.send(f(c));
+            crate::soft::done(reply.send(f(c)), "reply send");
         });
         self.tx
             .send(job)

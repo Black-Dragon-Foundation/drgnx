@@ -133,14 +133,14 @@ pub fn run(env: &Env, cmd: OutsideCommand) -> i32 {
     match Client::user(env, Duration::from_secs(5)).and_then(|mut c| c.call(method, params, CALL)) {
         Ok(a) => {
             if cmd.json {
-                println!("{a}");
+                crate::soft::out_line(&a.to_string());
             } else {
-                println!("{}", text(&cmd.sub, &a));
+                crate::soft::out_line(&(text(&cmd.sub, &a)).to_string());
             }
             i32::from(matches!(cmd.sub, Sub::Unbind(_)) && a != json!(true))
         }
         Err(e) => {
-            eprintln!("ratatoskr outside: {e}");
+            crate::soft::err_line(&format!("ratatoskr outside: {e}"));
             1
         }
     }

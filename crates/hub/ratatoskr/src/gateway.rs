@@ -237,7 +237,7 @@ impl Gate {
 
     /// The budgets (once, before [`Gate::listen`]).
     pub fn attach_budgets(&self, b: crate::budget::Budgets) {
-        let _ = self.budgets.set(b);
+        crate::soft::done(self.budgets.set(b), "gateway");
     }
 
     /// The spend ledger the engine records through, for spend that does not pass the engine (a remote vector server's

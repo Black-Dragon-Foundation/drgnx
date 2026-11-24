@@ -439,7 +439,7 @@ fn map_yields(
                 .push((r.stratum.clone(), eval::map_yield(&r.targets, got)));
         }
         if let Some(line) = tally.note(started.elapsed().as_secs_f64()) {
-            eprintln!("{line}");
+            crate::soft::err_line(&line.to_string());
         }
     }
     Ok(MapYields {
@@ -546,7 +546,7 @@ fn gen_sets(root: &Path, out: Option<PathBuf>) -> Result<String, String> {
             .map_err(|e| e.to_string())
     });
     store.shutdown();
-    let _ = std::fs::remove_dir_all(&state);
+    crate::soft::done(std::fs::remove_dir_all(&state), "std::fs::remove_dir_all");
     let rows = rows?;
     let dir =
         out.unwrap_or_else(|| PathBuf::from("crates/hub/hrafn/eval").join(project_name(root)));
@@ -774,7 +774,7 @@ fn dump_chunks(
     let all = texts.len();
     let texts = spread(texts, n);
     let json = serde_json::json!({ "texts": texts }).to_string();
-    std::fs::write(&out, json).map_err(|e| format!("{}: {e}", out.display()))?;
+    crate::fsio::write(&out, json).map_err(|e| format!("{}: {e}", out.display()))?;
     Ok(format!(
         "{} of {all} chunk texts written to {}",
         texts.len(),
@@ -844,14 +844,18 @@ fn run_set(
     let (fp, record) = eval_fingerprint(&model_id, dims);
     let cache = VectorCache::open_writer(&state_dir.join("vectors"), &fp, &record)
         .map_err(|e| e.to_string())?;
-    eprintln!("indexing {} into {}", root.display(), state_dir.display());
+    crate::soft::err_line(&format!(
+        "indexing {} into {}",
+        root.display(),
+        state_dir.display()
+    ));
     let began = clock::real_now();
     let listed = rt.block_on(index(&store, root, &[&cache]))?;
-    eprintln!(
+    crate::soft::err_line(&format!(
         "indexed {} files in {:.0}s",
         listed.len(),
         began.elapsed().as_secs_f64()
-    );
+    ));
 
     // tier 2, in this process: every chunk and path the model lacks (directories too when their weight counts)
     let (path_weight, dir_weight) = eval_weights();
@@ -888,15 +892,17 @@ fn run_set(
             .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
             .count() as u64;
         if embedded / 2048 > before / 2048 {
-            eprintln!(
+            crate::soft::err_line(&format!(
                 "embedded {embedded} chunks, {:.0}s",
                 begun.elapsed().as_secs_f64()
-            );
+            ));
         }
     }
     let embed_seconds = begun.elapsed().as_secs_f64();
 
-    eprintln!("embedded {embedded} chunks in {embed_seconds:.0}s; sampling names");
+    crate::soft::err_line(&format!(
+        "embedded {embedded} chunks in {embed_seconds:.0}s; sampling names"
+    ));
     let names = rt.block_on(sample_names(&store, 300))?;
     let docs = RefCell::new(docs);
     let queries = queries.map(RefCell::new);
@@ -921,7 +927,7 @@ fn run_set(
         let Ok(v) = asked else {
             return none();
         };
-        let now = |p: &str| std::fs::read_to_string(base.join(p)).ok();
+        let now = |p: &str| crate::fsio::read_to_string(base.join(p)).ok();
         rt.block_on(hrafn::search(
             &store,
             q,
@@ -935,7 +941,7 @@ fn run_set(
         let started = clock::real_now();
         let a = ask(q);
         if let Some(line) = phase.borrow_mut().note(started.elapsed().as_secs_f64()) {
-            eprintln!("{line}");
+            crate::soft::err_line(&line.to_string());
         }
         a
     };
@@ -945,10 +951,10 @@ fn run_set(
         .stats();
     let (floor, misses) = eval::exact_symbol_floor(&names, &answer);
     for m in &misses {
-        eprintln!("exact-symbol miss: {m}");
+        crate::soft::err_line(&format!("exact-symbol miss: {m}"));
     }
     report.exact_symbol_r1 = Some(floor);
-    eprintln!("coverage check");
+    crate::soft::err_line("coverage check");
     let per_file: HashMap<String, u32> = rt
         .block_on(store.handle().read(|c| {
             let mut q = c.prepare(
@@ -993,8 +999,8 @@ fn run_set(
     ));
     let map_yield = match map {
         Some(budget) => {
-            eprintln!("map yield at {budget} tokens");
-            let file = |p: &str| std::fs::read_to_string(base.join(p)).ok();
+            crate::soft::err_line(&format!("map yield at {budget} tokens"));
+            let file = |p: &str| crate::fsio::read_to_string(base.join(p)).ok();
             let y = map_yields(&rt, &store, &questions, budget, &ask, &file)?;
             text.push_str(&yield_table(&y));
             Some(y)
@@ -1019,7 +1025,7 @@ fn run_set(
     };
     if let Some(out) = out {
         let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
-        std::fs::write(&out, json).map_err(|e| format!("{}: {e}", out.display()))?;
+        crate::fsio::write(&out, json).map_err(|e| format!("{}: {e}", out.display()))?;
     }
     Ok(text)
 }
@@ -1059,7 +1065,7 @@ fn summary(model: &str, set: &str, r: &Report, chunks: u64, secs: f64) -> String
 
 fn compare_files(a: &Path, b: &Path, by: eval::Gate) -> Result<(String, bool), String> {
     let load = |p: &Path| -> Result<RunFile, String> {
-        let text = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let text = crate::fsio::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
         serde_json::from_str(&text).map_err(|e| format!("{}: {e}", p.display()))
     };
     let (fa, fb) = (load(a)?, load(b)?);
@@ -1090,12 +1096,12 @@ pub fn run(env: &runstav::paths::Env, cmd: EvalCommand) -> i32 {
         Ok(text) => {
             print!("{text}");
             if !text.ends_with('\n') {
-                println!();
+                crate::soft::out_line("");
             }
             0
         }
         Err(e) => {
-            eprintln!("ratatoskr search eval: {e}");
+            crate::soft::err_line(&format!("ratatoskr search eval: {e}"));
             1
         }
     };
@@ -1143,7 +1149,7 @@ pub fn run(env: &runstav::paths::Env, cmd: EvalCommand) -> i32 {
                 i32::from(!pass)
             }
             Err(e) => {
-                eprintln!("ratatoskr search eval: {e}");
+                crate::soft::err_line(&format!("ratatoskr search eval: {e}"));
                 1
             }
         },

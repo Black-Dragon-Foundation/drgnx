@@ -6,7 +6,7 @@ use std::path::Path;
 use verdandi::{Cause, Kind, OpId};
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args([
             "-c",
             "user.name=t",
@@ -39,7 +39,7 @@ fn fixture(files: &[(&str, &str)]) -> Fixture {
     for (p, t) in files {
         let f = repo.path().join(p);
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(f, t).unwrap();
+        crate::fsio::write(f, t).unwrap();
     }
     git(repo.path(), &["add", "."]);
     git(repo.path(), &["commit", "-q", "-m", "base"]);
@@ -159,7 +159,7 @@ fn a_consumer_of_file_version_reads_the_frozen_shape() {
 #[test]
 fn external_change_is_diffed_onto_disk_peer() {
     let f = fixture(&[("a.txt", "one\ntwo\n")]);
-    std::fs::write(f.repo.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    crate::fsio::write(f.repo.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
     let v = f.hub.on_disk_change(&f.tree, "a.txt", 11.0).unwrap();
     assert_eq!(v.len(), 1);
     assert_eq!(
@@ -174,8 +174,8 @@ fn external_change_is_diffed_onto_disk_peer() {
 fn git_checkout_is_one_external_git_record() {
     let f = fixture(&[("a.txt", "a1\n"), ("b.txt", "b1\n")]);
     let old = git(f.repo.path(), &["rev-parse", "HEAD"]);
-    std::fs::write(f.repo.path().join("a.txt"), "a2\n").unwrap();
-    std::fs::write(f.repo.path().join("b.txt"), "b2\n").unwrap();
+    crate::fsio::write(f.repo.path().join("a.txt"), "a2\n").unwrap();
+    crate::fsio::write(f.repo.path().join("b.txt"), "b2\n").unwrap();
     git(f.repo.path(), &["commit", "-q", "-am", "next"]);
     let new = git(f.repo.path(), &["rev-parse", "HEAD"]);
     let v = f
@@ -198,8 +198,8 @@ fn git_checkout_is_one_external_git_record() {
 #[test]
 fn a_trees_uncommitted_state_is_rescanned_once() {
     let f = fixture(&[("a.txt", "one\n"), ("same.txt", "x\n")]);
-    std::fs::write(f.repo.path().join("a.txt"), "one\nfrom-b\n").unwrap();
-    std::fs::write(f.repo.path().join("new.txt"), "n\n").unwrap();
+    crate::fsio::write(f.repo.path().join("a.txt"), "one\nfrom-b\n").unwrap();
+    crate::fsio::write(f.repo.path().join("new.txt"), "n\n").unwrap();
     let mut got: Vec<String> = f
         .hub
         .rescan_dirty(&f.tree, 10.0)
@@ -220,7 +220,7 @@ fn drgnx_write_is_not_recorded_twice() {
     f.hub
         .on_agent_write(&f.tree, "a.txt", bytes, "s1", cause("1"), 10.0)
         .unwrap();
-    std::fs::write(f.repo.path().join("a.txt"), bytes).unwrap();
+    crate::fsio::write(f.repo.path().join("a.txt"), bytes).unwrap();
     // the watcher's event and a step-boundary rescan about the hub's own write
     assert!(
         f.hub
@@ -263,7 +263,7 @@ fn the_same_path_in_two_trees_is_two_versions() {
         Some("one\ntwo\n")
     );
     // an outside change in the second tree after the first tree's write is not mistaken for the first tree's version
-    std::fs::write(other.repo.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    crate::fsio::write(other.repo.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
     let outside = f.hub.on_disk_change(&other.tree, "a.txt", 12.0).unwrap();
     assert_eq!(outside.len(), 1);
     assert_eq!(kind(&f, outside[0].op), Kind::External);
@@ -279,7 +279,7 @@ fn a_file_removed_after_a_hub_restart_empties_its_document() {
         hub,
         tree,
     } = fixture(&[("a.txt", "one\n")]);
-    std::fs::write(repo.path().join("new.txt"), "made by the agent\n").unwrap();
+    crate::fsio::write(repo.path().join("new.txt"), "made by the agent\n").unwrap();
     hub.on_agent_write(
         &tree,
         "new.txt",
@@ -309,7 +309,7 @@ fn an_agents_pure_deletion_keeps_its_line_mark_across_a_hub_restart() {
         hub,
         tree,
     } = fixture(&[("a.txt", "one\ntwo\nthree\n")]);
-    std::fs::write(repo.path().join("a.txt"), "one\nthree\n").unwrap();
+    crate::fsio::write(repo.path().join("a.txt"), "one\nthree\n").unwrap();
     hub.on_agent_write(&tree, "a.txt", b"one\nthree\n", "s1", cause("1"), 10.0)
         .unwrap();
     let by = |hub: &Hub| hub.lines_by(&tree, "a.txt").unwrap().unwrap();
@@ -331,7 +331,7 @@ fn an_agents_pure_deletion_keeps_its_line_mark_across_a_hub_restart() {
 fn crlf_file_blob_id_matches_git() {
     let f = fixture(&[("a.txt", "x\n")]);
     git(f.repo.path(), &["config", "core.autocrlf", "true"]);
-    std::fs::write(f.repo.path().join("a.txt"), "one\r\ntwo\r\n").unwrap();
+    crate::fsio::write(f.repo.path().join("a.txt"), "one\r\ntwo\r\n").unwrap();
     let v = f.hub.on_disk_change(&f.tree, "a.txt", 11.0).unwrap();
     let want = git(f.repo.path(), &["hash-object", "--path", "a.txt", "a.txt"]);
     let raw = git(f.repo.path(), &["hash-object", "--no-filters", "a.txt"]);
@@ -347,7 +347,7 @@ fn crlf_file_blob_id_matches_git() {
 #[test]
 fn lockfile_goes_to_snapshot_class() {
     let f = fixture(&[("Cargo.lock", "v1\n")]);
-    std::fs::write(f.repo.path().join("Cargo.lock"), "v2\n").unwrap();
+    crate::fsio::write(f.repo.path().join("Cargo.lock"), "v2\n").unwrap();
     let v = f.hub.on_disk_change(&f.tree, "Cargo.lock", 11.0).unwrap();
     assert_eq!(v.len(), 1);
     assert_eq!(v[0].class, Class::Snapshot);
@@ -362,7 +362,7 @@ fn a_big_file_has_a_version_per_change() {
     let f = fixture(&[("big.bin", "x\n")]);
     let path = f.repo.path().join("big.bin");
     let write = |fill: u8, len: usize, secs: u64| {
-        std::fs::write(&path, vec![fill; len]).unwrap();
+        crate::fsio::write(&path, vec![fill; len]).unwrap();
         let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + secs);
         std::fs::File::options()
             .write(true)
@@ -387,7 +387,7 @@ fn a_big_file_has_a_version_per_change() {
 #[test]
 fn agent_mv_is_a_rename_record() {
     let f = fixture(&[("a.txt", "one\ntwo\n")]);
-    std::fs::rename(f.repo.path().join("a.txt"), f.repo.path().join("b.txt")).unwrap();
+    crate::fsio::rename(f.repo.path().join("a.txt"), f.repo.path().join("b.txt")).unwrap();
     let v = f
         .hub
         .on_agent_rename(&f.tree, "a.txt", "b.txt", "s1", cause("2"), 10.0)
@@ -405,7 +405,7 @@ fn agent_mv_is_a_rename_record() {
 fn plant_link(f: &Fixture) -> std::path::PathBuf {
     let outside = tempfile::tempdir().unwrap();
     let secret = outside.path().join("secret.txt");
-    std::fs::write(&secret, "TOPSECRET\n").unwrap();
+    crate::fsio::write(&secret, "TOPSECRET\n").unwrap();
     std::fs::remove_file(f.repo.path().join("src/a.rs")).unwrap();
     std::os::unix::fs::symlink(&secret, f.repo.path().join("src/a.rs")).unwrap();
     std::mem::forget(outside);
@@ -421,7 +421,7 @@ fn link_is_recorded_as_a_link() {
     assert_eq!(v[0].class, Class::Snapshot);
     // git stores a link as a blob of its target's name
     let target = f.hist.path().join("target");
-    std::fs::write(&target, secret.to_string_lossy().as_bytes()).unwrap();
+    crate::fsio::write(&target, secret.to_string_lossy().as_bytes()).unwrap();
     let want = git(
         f.repo.path(),
         &["hash-object", "--no-filters", target.to_str().unwrap()],
@@ -485,8 +485,8 @@ fn a_watcher_event_waits_for_the_step_that_claims_it() {
     let attached = hub.attach_agent(&tree, flight.clone());
     // a shell call runs: it writes a.txt (the watcher sees it) and b.txt (not seen yet)
     flight.call.store(true, SeqCst);
-    std::fs::write(repo.path().join("a.txt"), "one\ntwo\n").unwrap();
-    std::fs::write(repo.path().join("b.txt"), "one\ntwo\n").unwrap();
+    crate::fsio::write(repo.path().join("a.txt"), "one\ntwo\n").unwrap();
+    crate::fsio::write(repo.path().join("b.txt"), "one\ntwo\n").unwrap();
     assert!(hub.on_disk_change(&tree, "a.txt", 10.0).unwrap().is_empty());
     assert!(
         hub.release_held(&tree, 99.0).unwrap().is_empty(),
@@ -508,13 +508,13 @@ fn a_watcher_event_waits_for_the_step_that_claims_it() {
     assert_eq!(hub.with(|h| h.op(OpId(v[0].op)).unwrap().cause), cause("4"));
     assert!(hub.release_held(&tree, 12.0).unwrap().is_empty(), "claimed");
     // idle: the user's edit in another editor is an outside change at once
-    std::fs::write(repo.path().join("c.txt"), "mine\n").unwrap();
+    crate::fsio::write(repo.path().join("c.txt"), "mine\n").unwrap();
     let out = hub.on_disk_change(&tree, "c.txt", 13.0).unwrap();
     assert_eq!(out.len(), 1);
     assert_eq!(kind_of(&hub, out[0].op), Kind::External);
     // a held event no step claims is released once the session ends
     flight.call.store(true, SeqCst);
-    std::fs::write(repo.path().join("c.txt"), "mine again\n").unwrap();
+    crate::fsio::write(repo.path().join("c.txt"), "mine again\n").unwrap();
     assert!(hub.on_disk_change(&tree, "c.txt", 14.0).unwrap().is_empty());
     drop(attached);
     let out = hub.release_held(&tree, 15.0).unwrap();

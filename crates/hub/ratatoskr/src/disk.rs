@@ -99,7 +99,10 @@ impl Ordered {
     /// Every write queued until now has landed (or failed).
     pub(crate) async fn written(&self) {
         let target = lock(&self.pending).queued;
-        let _ = self.done.subscribe().wait_for(|d| *d >= target).await;
+        crate::soft::done(
+            self.done.subscribe().wait_for(|d| *d >= target).await,
+            "disk",
+        );
     }
 }
 

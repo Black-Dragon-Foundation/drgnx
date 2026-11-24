@@ -16,7 +16,7 @@ use tokio::sync::oneshot;
 pub(crate) const FIVE: &str = "l1\nl2\nl3\nl4\nl5\n";
 
 pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])
         .args(args)
         .current_dir(dir)
@@ -64,7 +64,7 @@ pub(crate) async fn prompted(fx: &Fx, text: &'static str) -> Vec<serde_json::Val
     let path = fx.dir.path().join("a.log");
     crate::clock::blocking(move || {
         skuld::wait_until(&format!("the mock is prompted {text:?}"), 60, || {
-            let all: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+            let all: Vec<serde_json::Value> = crate::fsio::read_to_string(&path)
                 .unwrap_or_default()
                 .lines()
                 .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
@@ -106,7 +106,7 @@ impl Live {
         let fx = Fx::new();
         let wt = fx.work();
         git(&wt, &["init", "-q", "-b", "main"]);
-        std::fs::write(wt.join("a.txt"), FIVE).unwrap();
+        crate::fsio::write(wt.join("a.txt"), FIVE).unwrap();
         git(&wt, &["add", "-A"]);
         git(&wt, &["commit", "-q", "-m", "base"]);
         let sid = start(&fx, None).await;
@@ -151,7 +151,7 @@ impl Live {
                     .collect();
                 let root = self.fx.dir.path().join("hub").join("checkpoints");
                 let refs = snapshot::repo_of(&root, &self.wt());
-                let listed = std::process::Command::new("git")
+                let listed = crate::proc::Command::new("git")
                     .args(["for-each-ref"])
                     .current_dir(&refs)
                     .output()
@@ -221,11 +221,14 @@ impl Live {
             norn::store::CoordDb::spawn(p("work.db")),
         );
         f.settings.open(p("config"), self.fx.runtime.clone());
-        let _ = f.dirs.set(crate::graph::StoreDirs {
-            home: p("home"),
-            config: p("config"),
-            hub: p("hub"),
-        });
+        crate::soft::done(
+            f.dirs.set(crate::graph::StoreDirs {
+                home: p("home"),
+                config: p("config"),
+                hub: p("hub"),
+            }),
+            "live",
+        );
         f.core.agents.open_store(self.fx.runtime.clone());
         f.refresh_settings().await;
         f
@@ -250,7 +253,7 @@ impl Live {
 
 impl Fx {
     pub(crate) fn read(&self, rel: &str) -> String {
-        std::fs::read_to_string(self.work().join(rel)).unwrap_or_default()
+        crate::fsio::read_to_string(self.work().join(rel)).unwrap_or_default()
     }
 }
 
@@ -485,7 +488,7 @@ async fn an_out_of_band_edit_is_the_agents_step() {
     let fx = Fx::new();
     let wt = fx.work();
     git(&wt, &["init", "-q", "-b", "main"]);
-    std::fs::write(wt.join("a.txt"), FIVE).unwrap();
+    crate::fsio::write(wt.join("a.txt"), FIVE).unwrap();
     git(&wt, &["add", "-A"]);
     git(&wt, &["commit", "-q", "-m", "base"]);
     // a worker: a chat's project is read-only, so its `fs/write_text_file` is refused
@@ -579,7 +582,7 @@ async fn a_long_shell_step_is_its_own_edit() {
     let fx = Fx::new();
     let wt = fx.work();
     git(&wt, &["init", "-q", "-b", "main"]);
-    std::fs::write(wt.join("a.txt"), FIVE).unwrap();
+    crate::fsio::write(wt.join("a.txt"), FIVE).unwrap();
     git(&wt, &["add", "-A"]);
     git(&wt, &["commit", "-q", "-m", "base"]);
     let p: StartParams =
@@ -648,7 +651,7 @@ async fn manager_is_told() {
     let fx = Fx::new();
     let wt = fx.work();
     git(&wt, &["init", "-q", "-b", "main"]);
-    std::fs::write(wt.join("a.txt"), FIVE).unwrap();
+    crate::fsio::write(wt.join("a.txt"), FIVE).unwrap();
     git(&wt, &["add", "-A"]);
     git(&wt, &["commit", "-q", "-m", "base"]);
     let manager = start(&fx, None).await;

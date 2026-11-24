@@ -63,7 +63,7 @@ fn every_test_file_is_a_module_here_or_a_declared_binary() {
     // the group binaries' roots (tests/groups/*.rs) name their member files by `#[path = "../<file>.rs"]`
     let groups: String = std::fs::read_dir(dir.join("groups"))
         .unwrap()
-        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .map(|e| ratatoskr::fsio::read_to_string(e.unwrap().path()).unwrap())
         .collect();
     let mut unlisted = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap() {

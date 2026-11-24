@@ -117,6 +117,10 @@ serde_json.workspace = true
 rustix.workspace = true
 libc.workspace = true
 stund = { path = "../stund", version = "0.1.0" }  # the crates' timers read the hub's virtual clock through it
+saman.workspace = true   # tasks, locks and results the hub means to go on past (saman::spawn, saman::delivered)
+villa.workspace = true   # the error type of every public fallible function
+annall.workspace = true  # a command's lines on stdout and stderr (crate::soft)
+stig.workspace = true    # the user's directories, never a HOME read
 hlaup = { path = "../hlaup", version = "0.1.0" }  # files written or copied and then run, never busy (ETXTBSY)
 tracing.workspace = true
 tracing-subscriber.workspace = true

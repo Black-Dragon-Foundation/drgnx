@@ -215,7 +215,7 @@ mod tests {
     ) -> (PathBuf, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         let socket = dir.join("hub-x.sock");
         let cap = "ab".repeat(32);
-        std::fs::write(dir.join("hub-x.cap"), &cap).unwrap();
+        crate::fsio::write(dir.join("hub-x.cap"), &cap).unwrap();
         let listener = UnixListener::bind(&socket).unwrap();
         let taken = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = taken.clone();
@@ -227,10 +227,13 @@ mod tests {
                 std::thread::spawn(move || {
                     let mut w = s.try_clone().unwrap();
                     let hub_nonce = "c".repeat(32);
-                    let _ = writeln!(
-                        w,
-                        "{}",
-                        json!({"event": "challenge", "data": {"nonce": hub_nonce}})
+                    crate::soft::done(
+                        writeln!(
+                            w,
+                            "{}",
+                            json!({"event": "challenge", "data": {"nonce": hub_nonce}})
+                        ),
+                        "writeln",
                     );
                     for line in BufReader::new(s).lines().map_while(Result::ok) {
                         let v: Value = serde_json::from_str(&line).unwrap();
@@ -246,7 +249,7 @@ mod tests {
                             }
                             _ => json!({"id": v["id"], "result": {"pid": 7}}),
                         };
-                        let _ = writeln!(w, "{answer}");
+                        crate::soft::done(writeln!(w, "{answer}"), "writeln");
                     }
                 });
             }
@@ -345,7 +348,7 @@ mod tests {
         private(&dir);
         let (socket, taken) = stub(&dir, None);
         let elsewhere = root.path().join("elsewhere.cap");
-        std::fs::write(&elsewhere, "ab".repeat(32)).unwrap();
+        crate::fsio::write(&elsewhere, "ab".repeat(32)).unwrap();
         std::fs::remove_file(dir.join("hub-x.cap")).unwrap();
         std::os::unix::fs::symlink(&elsewhere, dir.join("hub-x.cap")).unwrap();
         assert!(Client::user_at(&socket, Duration::from_secs(2)).is_err());

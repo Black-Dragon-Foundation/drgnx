@@ -19,7 +19,7 @@ pub fn on_battery(root: &Path) -> bool {
         if root != Path::new(SYS) {
             return sysfs_on_battery(root);
         }
-        std::process::Command::new("pmset")
+        crate::proc::Command::new("pmset")
             .args(["-g", "ps"])
             .output()
             .is_ok_and(|o| pmset_on_battery(&String::from_utf8_lossy(&o.stdout)))
@@ -35,7 +35,7 @@ pub fn sysfs_on_battery(root: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(root.join("class/power_supply")) else {
         return false;
     };
-    let read = |p: &Path| std::fs::read_to_string(p).unwrap_or_default();
+    let read = |p: &Path| crate::fsio::read_to_string(p).unwrap_or_default();
     let (mut mains, mut online) = (false, false);
     for e in entries.flatten() {
         let dir = e.path();
@@ -61,9 +61,9 @@ mod tests {
     fn supply(root: &Path, name: &str, ty: &str, online: Option<&str>) {
         let d = root.join("class/power_supply").join(name);
         std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("type"), format!("{ty}\n")).unwrap();
+        crate::fsio::write(d.join("type"), format!("{ty}\n")).unwrap();
         if let Some(o) = online {
-            std::fs::write(d.join("online"), format!("{o}\n")).unwrap();
+            crate::fsio::write(d.join("online"), format!("{o}\n")).unwrap();
         }
     }
 

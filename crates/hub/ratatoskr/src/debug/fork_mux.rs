@@ -95,15 +95,15 @@ impl Mux {
                 let mut routes = routes.lock().unwrap_or_else(|e| e.into_inner());
                 if head.contains_key("drgnx-close") {
                     if let Some(tx) = routes.remove(&id) {
-                        let _ = tx.send(None);
+                        crate::soft::done(tx.send(None), "tx send");
                     }
                 } else if let Some(tx) = routes.get(&id) {
-                    let _ = tx.send(Some(body));
+                    crate::soft::done(tx.send(Some(body)), "tx send");
                 }
             }
             // the shim is gone: every connection ends
             for (_, tx) in routes.lock().unwrap_or_else(|e| e.into_inner()).drain() {
-                let _ = tx.send(None);
+                crate::soft::done(tx.send(None), "tx send");
             }
         });
         m
@@ -129,7 +129,7 @@ impl Mux {
                     return;
                 }
             }
-            let _ = mw.shutdown().await;
+            crate::soft::done(mw.shutdown().await, "fork_mux");
         });
         // the client's messages to the adapter, with the connection's id
         let write = self.write.clone();

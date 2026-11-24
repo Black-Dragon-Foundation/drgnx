@@ -407,9 +407,12 @@ pub async fn run(f: Arc<Front>) {
             }
             let text = digest_now(&f, &s.id, None).await;
             if !text.is_empty() {
-                let _ = s.prompt(
-                    format!("[graph changes since your last turn]\n{text}"),
-                    Origin::Hub,
+                crate::soft::done(
+                    s.prompt(
+                        format!("[graph changes since your last turn]\n{text}"),
+                        Origin::Hub,
+                    ),
+                    "manager",
                 );
             }
         }
@@ -1064,7 +1067,7 @@ async fn agent_start(
         let hits = f.core.budgets.set(&wscope, a.budget.0.clone());
         f.core.budgets.notify(hits);
     }
-    let _ = f.core.runs.git().touched(&tree.path).await;
+    crate::soft::done(f.core.runs.git().touched(&tree.path).await, "manager");
     f.core.manager.st().trees.insert(wsid.clone(), tree.clone());
     // the worker's record: the merge gate finds the user's acceptances through its worktree
     let cwd = tree.path.to_string_lossy().into_owned();
@@ -1095,7 +1098,7 @@ async fn agent_start(
             "[task {t} from your manager {sid}]\n\n{body}\n\nWork only in this directory (a git worktree of your \
              own). Commit your work and report when done."
         );
-        let _ = f.core.agents.prompt(&wsid, prompt, Origin::Hub);
+        crate::soft::done(f.core.agents.prompt(&wsid, prompt, Origin::Hub), "manager");
     }
     Ok(json!({"id": wsid, "branch": tree.branch, "cwd": tree.path}).to_string())
 }

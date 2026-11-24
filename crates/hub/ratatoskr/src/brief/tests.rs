@@ -13,9 +13,9 @@ async fn setup() -> (tempfile::TempDir, CoordDb, String) {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
-    std::fs::write(repo.join("AGENTS.md"), "# Rules\n\nbe kind\n").unwrap();
+    crate::fsio::write(repo.join("AGENTS.md"), "# Rules\n\nbe kind\n").unwrap();
     let plan = dir.path().join("plan.md");
-    std::fs::write(&plan, PLAN).unwrap();
+    crate::fsio::write(&plan, PLAN).unwrap();
     let db = CoordDb::spawn(dir.path().join("work.db"));
     let (p, r) = (
         plan.to_string_lossy().into_owned(),

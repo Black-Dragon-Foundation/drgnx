@@ -21,7 +21,7 @@ use crate::debug::ports::Block;
 /// The hub's variables a kernel inherits (a kernel is an ordinary session program, like the terminal's shell).
 const ENV_ALLOW: &[&str] = &[
     "PATH",
-    "HOME",
+    stig::HOME_VAR,
     "USER",
     "LOGNAME",
     "SHELL",
@@ -29,10 +29,10 @@ const ENV_ALLOW: &[&str] = &[
     "LANGUAGE",
     "TERM",
     "TMPDIR",
-    "XDG_RUNTIME_DIR",
-    "XDG_DATA_HOME",
-    "XDG_CONFIG_HOME",
-    "XDG_CACHE_HOME",
+    stig::SYSTEM_RUNTIME_VAR,
+    stig::Xdg::Data.var(),
+    stig::Xdg::Config.var(),
+    stig::Xdg::Cache.var(),
     "XDG_DATA_DIRS",
     "XDG_CONFIG_DIRS",
     "VIRTUAL_ENV",
@@ -284,7 +284,10 @@ impl Kernel {
         // a kernel's stdout is noise, but an unread pipe would stop it
         if let Some(mut out) = child.take_stdout() {
             crate::clock::spawn("notebook-kernel-stdout", async move {
-                let _ = tokio::io::copy(&mut out, &mut tokio::io::sink()).await;
+                crate::soft::done(
+                    tokio::io::copy(&mut out, &mut tokio::io::sink()).await,
+                    "tokio::io::copy",
+                );
             });
         }
         let (exit_tx, exit) = watch::channel::<Option<Exit>>(None);
@@ -293,11 +296,14 @@ impl Kernel {
             // the leader is gone: what it forked goes now, before anything can ask for it (the group id is still ours while a
             // member lives, and nothing signals it after the exit is known)
             kill_group_now(pid);
-            let _ = exit_tx.send(Some(Exit {
-                code: status.and_then(|s| s.code()),
-                signal: status.and_then(|s| s.signal()),
-                stderr: child.stderr_tail(),
-            }));
+            crate::soft::done(
+                exit_tx.send(Some(Exit {
+                    code: status.and_then(|s| s.code()),
+                    signal: status.and_then(|s| s.signal()),
+                    stderr: child.stderr_tail(),
+                })),
+                "exit_tx send",
+            );
         });
         let bring_up = async {
             wait_endpoints(&conn, pid, &mut exit.clone()).await?;
@@ -424,17 +430,21 @@ impl Kernel {
         if let Some(e) = exit.borrow().clone() {
             return e;
         }
-        let _ = self.request(
-            Channel::Control,
-            "shutdown_request",
-            json!({"restart": false}),
+        crate::soft::done(
+            self.request(
+                Channel::Control,
+                "shutdown_request",
+                json!({"restart": false}),
+            ),
+            "kernel",
         );
         if let Ok(e) = crate::clock::timeout(self.grace, exited(&mut exit)).await {
             // it went by itself, and the group went with it (see the wait task)
             return e;
         }
         // the leader is still there: the group is ours to take down
-        let _ = draugr::kill_group(self.pid, Duration::ZERO, &draugr::RealSignaller).await;
+
+        draugr::kill_group(self.pid, Duration::ZERO, &draugr::RealSignaller).await;
         self.bounded_exit().await
     }
 

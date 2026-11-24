@@ -367,7 +367,10 @@ impl Stages {
         let place = Arc::new(StagePlace::default());
         let p = place.clone();
         crate::clock::spawn("sessions:slow-open", async move {
-            let _ = crate::clock::real_timeout(SLOW_OPEN, std::future::pending::<()>()).await;
+            crate::soft::done(
+                crate::clock::real_timeout(SLOW_OPEN, std::future::pending::<()>()).await,
+                "crate::clock::real_timeout",
+            );
             if let Some(text) = p.late() {
                 let store = match db.as_ref().and_then(urdr::Handle::running) {
                     Some((at, age)) => format!(
@@ -762,7 +765,7 @@ impl Sessions {
     /// The front, once it is in its `Arc`: a session gets a `search.sock` when `drgnx-agents-mcp` holds `search`, and
     /// the socket's questions go to the front's search.
     pub fn bind_search(&self, front: &Arc<Front>) {
-        let _ = self.front.set(Arc::downgrade(front));
+        crate::soft::done(self.front.set(Arc::downgrade(front)), "sessions");
     }
 
     /// Whether a session started now with working folder CWD gets a `search.sock`: the setting holds `search` and the
@@ -1283,11 +1286,14 @@ impl Sessions {
             .chain(live.plugins.clone())
             .collect();
         let dir = live.dir.clone();
-        let _ = crate::clock::blocking(move || {
-            socks.iter().for_each(|s| remove_socket(s));
-            remove_dir(&dir);
-        })
-        .await;
+        crate::soft::done(
+            crate::clock::blocking(move || {
+                socks.iter().for_each(|s| remove_socket(s));
+                remove_dir(&dir);
+            })
+            .await,
+            "crate::clock::blocking",
+        );
         delete(&store.db, sid).await;
         tracing::info!(
             sid,

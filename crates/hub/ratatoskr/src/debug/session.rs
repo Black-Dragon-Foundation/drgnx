@@ -65,11 +65,14 @@ impl Proc for draugr::Child {
             Sig::Kill => libc::SIGKILL,
         };
         // the adapter's process group (its pid is the group's id)
-        let _ = draugr::Signaller::kill(&draugr::RealSignaller, -self.id(), s);
+        crate::soft::done(
+            draugr::Signaller::kill(&draugr::RealSignaller, -self.id(), s),
+            "draugr::Signaller::kill",
+        );
     }
     fn wait(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            let _ = draugr::Child::wait(self).await;
+            crate::soft::done(draugr::Child::wait(self).await, "draugr::Child::wait");
         })
     }
     fn stderr_tail(&self) -> String {
@@ -396,7 +399,7 @@ impl Session {
     }
 
     fn send(&self, u: Update) {
-        let _ = self.up.send(u);
+        crate::soft::done(self.up.send(u), "up send");
     }
 
     async fn run(mut self, mut cmds: mpsc::UnboundedReceiver<Cmd>) {
@@ -877,7 +880,7 @@ impl Session {
                 } else {
                     Err(format!("stop {epoch} is over; its variables are gone"))
                 };
-                let _ = reply.send(r);
+                crate::soft::done(reply.send(r), "reply send");
                 None
             }
             Cmd::MoreFrames {
@@ -907,7 +910,7 @@ impl Session {
                     }
                     _ => Err(format!("stop {epoch} is over")),
                 };
-                let _ = reply.send(r);
+                crate::soft::done(reply.send(r), "reply send");
                 None
             }
             Cmd::Request {
@@ -915,7 +918,10 @@ impl Session {
                 arguments,
                 reply,
             } => {
-                let _ = reply.send(self.client.request(&command, arguments).await.map_err(msg));
+                crate::soft::done(
+                    reply.send(self.client.request(&command, arguments).await.map_err(msg)),
+                    "reply send",
+                );
                 None
             }
         }
@@ -951,22 +957,22 @@ impl Session {
                         .request("restart", json!({"arguments": self.start.arguments}))
                         .await;
                     self.stop = None;
-                    let _ = reply.send(r.map(|_| ()).map_err(msg));
+                    crate::soft::done(reply.send(r.map(|_| ()).map_err(msg)), "reply send");
                     return None;
                 }
                 let mut e = self.stopping("restarting".into(), None);
                 if let Ending::Stop { restart, .. } = &mut e {
                     *restart = Some(Value::Null);
                 }
-                let _ = reply.send(Ok(()));
+                crate::soft::done(reply.send(Ok(())), "reply send");
                 return Some(e);
             }
             Op::Stop { kill_debuggee } => {
-                let _ = reply.send(Ok(()));
+                crate::soft::done(reply.send(Ok(())), "reply send");
                 return Some(self.stopping("stopped".into(), kill_debuggee));
             }
             Op::Disconnect => {
-                let _ = reply.send(Ok(()));
+                crate::soft::done(reply.send(Ok(())), "reply send");
                 return Some(Ending::Stop {
                     reason: "disconnected".into(),
                     terminate: false,
@@ -981,7 +987,7 @@ impl Session {
                     .as_ref()
                     .is_some_and(|s| t.is_none_or(|t| t == s.thread));
                 if !ok {
-                    let _ = reply.send(Err("not stopped there".into()));
+                    crate::soft::done(reply.send(Err("not stopped there".into())), "reply send");
                     return None;
                 }
                 let scopes = self.scopes(frame).await;
@@ -990,7 +996,7 @@ impl Session {
                     s.scopes = scopes;
                 }
                 self.publish();
-                let _ = reply.send(Ok(()));
+                crate::soft::done(reply.send(Ok(())), "reply send");
                 return None;
             }
         };
@@ -1005,10 +1011,10 @@ impl Session {
                             .unwrap_or(true);
                     self.running(t, all);
                 }
-                let _ = reply.send(Ok(()));
+                crate::soft::done(reply.send(Ok(())), "reply send");
             }
             Err(e) => {
-                let _ = reply.send(Err(msg(e)));
+                crate::soft::done(reply.send(Err(msg(e))), "reply send");
             }
         }
         None
@@ -1033,7 +1039,7 @@ impl Session {
                     }
                 }
             };
-            let _ = clock::timeout(POLITE, wait).await;
+            crate::soft::done(clock::timeout(POLITE, wait).await, "clock::timeout");
             drop(t);
         }
         // a JavaScript program that runs on: the heap graph's hidden map goes first (the user's ruling, 2026-11-13)
@@ -1045,7 +1051,7 @@ impl Session {
                 "evaluate",
                 json!({"expression": super::heap::JS_FORGET, "context": "repl"}),
             );
-            let _ = clock::timeout(POLITE, forget).await;
+            crate::soft::done(clock::timeout(POLITE, forget).await, "clock::timeout");
         }
         // disconnect, and 2 s for its answer and the process's exit; then SIGTERM, 1 s, SIGKILL
         let d = (!self.client.is_closed()).then(|| {

@@ -754,7 +754,7 @@ fn watcher(tx: Sender<Heard>) -> Option<notify::RecommendedWatcher> {
             },
             Err(_) => Heard::Rescan,
         };
-        let _ = tx.send(heard);
+        crate::soft::done(tx.send(heard), "tx send");
     })
     .ok()
 }
@@ -771,7 +771,7 @@ fn rewatch(
     use notify::{RecursiveMode, Watcher};
     let Some(w) = watcher.as_mut() else { return };
     for gone in watching.difference(&want) {
-        let _ = w.unwatch(gone);
+        crate::soft::done(w.unwatch(gone), "explorer");
     }
     watching.retain(|d| want.contains(d));
     aliases.retain(|_, d| want.contains(d));
@@ -954,7 +954,7 @@ struct Run {
 impl Run {
     fn end(&self) {
         self.cancel.store(true, Ordering::Relaxed);
-        let _ = self.stop.send(Heard::Stop);
+        crate::soft::done(self.stop.send(Heard::Stop), "stop send");
     }
 }
 

@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn history_db_is_copied_beside_work_db() {
         let (_d, hub, backup) = fx(&["p1"]);
-        std::fs::write(backup.join("work-20261107.db"), b"work").unwrap();
+        crate::fsio::write(backup.join("work-20261107.db"), b"work").unwrap();
         let got = copy_all(&hub, &backup);
         assert_eq!(got.len(), 1);
         assert!(got[0].ok && got[0].bytes > 0, "{got:?}");
@@ -86,9 +86,9 @@ mod tests {
     #[test]
     fn a_failed_history_copy_keeps_the_work_db_copy() {
         let (_d, hub, backup) = fx(&["p1", "p2"]);
-        std::fs::write(backup.join("work-20261107.db"), b"work").unwrap();
+        crate::fsio::write(backup.join("work-20261107.db"), b"work").unwrap();
         // p1's file is no database any more
-        std::fs::write(hub.join("history/p1/history.db"), b"not sqlite").unwrap();
+        crate::fsio::write(hub.join("history/p1/history.db"), b"not sqlite").unwrap();
         let got = copy_all(&hub, &backup);
         assert_eq!(got.len(), 2);
         assert!(!got[0].ok && got[0].bytes == 0, "{got:?}");

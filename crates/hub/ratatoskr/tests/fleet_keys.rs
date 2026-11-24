@@ -38,15 +38,16 @@ const QUIET_MACHINE: &str = r#"{"psi": {"mem_some10": 0.0, "cpu_some10": 0.0, "i
 "disk_free_gb": 100, "disk_total_gb": 200, "mem_available_mib": 8192}"#;
 
 fn ssh_config() -> String {
-    format!("{}/.ssh/config", std::env::var("HOME").unwrap())
+    format!("{}/.ssh/config", std::env::var(stig::HOME_VAR).unwrap())
 }
 
 /// SCRIPT's stdout on RUNNER; panics when it fails.
 fn sh(runner: &str, script: &str) -> String {
-    let out = Command::new("ssh")
+    let out = ratatoskr::proc::Command::new("ssh")
         .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
         .arg(script)
-        .output()
+        .output_async()
+        .await
         .expect("ssh");
     assert!(
         out.status.success(),
@@ -365,7 +366,7 @@ fn hold(q: &Queue, pairs: &[(&str, &str)]) {
 
 /// The hub's copy of job ID's log.
 fn hub_log(dir: &Path, id: &str) -> String {
-    std::fs::read_to_string(dir.join("exec").join(id).join("log")).unwrap_or_default()
+    ratatoskr::fsio::read_to_string(dir.join("exec").join(id).join("log")).unwrap_or_default()
 }
 
 /// The sha256 of V as `sha256sum` prints it.

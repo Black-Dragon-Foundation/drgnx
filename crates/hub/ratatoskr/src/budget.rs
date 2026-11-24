@@ -447,7 +447,7 @@ impl Budgets {
     /// Tell the consumer of HITS.
     pub fn notify(&self, hits: Vec<Hit>) {
         for h in hits {
-            let _ = self.0.tx.send(Note::Hit(h));
+            crate::soft::done(self.0.tx.send(Note::Hit(h)), "tx send");
         }
     }
 
@@ -461,7 +461,7 @@ impl Budgets {
                 Err(e) => tracing::warn!("the saved budgets do not read: {e}"),
             }
         }
-        let _ = self.0.db.set(db);
+        crate::soft::done(self.0.db.set(db), "budget");
     }
 
     /// Read S back; the number of entries migrated (an old state's per-job `plan` scopes, now `run`).
@@ -718,7 +718,7 @@ impl Budgets {
         }
         let mut sums: BTreeMap<Unit, f64> = BTreeMap::new();
         for (t, unit, amount) in ring.iter().filter(|(t, ..)| *t >= from) {
-            let _ = t;
+            let _only_when_used_elsewhere = &t;
             *sums.entry(*unit).or_default() += amount;
         }
         sums.into_iter()
@@ -989,7 +989,7 @@ impl Budgets {
             return Vec::new();
         };
         let hits = self.spend(&scope, Unit::Usd, amount);
-        let _ = self.0.tx.send(Note::Usd(job.to_string()));
+        crate::soft::done(self.0.tx.send(Note::Usd(job.to_string())), "tx send");
         hits
     }
 
@@ -1487,7 +1487,7 @@ async fn reached_limit(f: &Front, h: &Hit) {
         .collect();
     for sid in &sessions {
         // a session that has exited or is unknown is not paused
-        let _ = f.core.agents.cancel_after_tool(sid);
+        crate::soft::done(f.core.agents.cancel_after_tool(sid), "budget");
     }
     for sid in &sessions {
         for j in f.core.budgets.job_of(sid) {

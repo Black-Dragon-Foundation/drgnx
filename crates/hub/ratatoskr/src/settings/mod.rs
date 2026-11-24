@@ -822,7 +822,7 @@ impl Settings {
 
     /// Read from CONFIG_DIR, keeping the last good values in RUNTIME (`runtime.db`).
     pub fn open(&self, config_dir: PathBuf, runtime: urdr::Handle) {
-        let _ = self.store.set((config_dir, runtime));
+        crate::soft::done(self.store.set((config_dir, runtime)), "mod");
     }
 
     pub fn current(&self) -> Arc<Current> {

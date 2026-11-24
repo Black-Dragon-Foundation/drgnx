@@ -116,10 +116,9 @@ pub fn check(dir: &Path, base: &str, tip: &str, shared: &[String]) -> Result<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     fn run(dir: &Path, args: &[&str]) -> (bool, String) {
-        let out = Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -147,7 +146,7 @@ mod tests {
     fn commit(dir: &Path, file: &str, text: &str, message: &str) -> String {
         let p = dir.join(file);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, text).unwrap();
+        crate::fsio::write(p, text).unwrap();
         sh(dir, &["add", "-A"]);
         sh(dir, &["commit", "-q", "-m", message]);
         sh(dir, &["rev-parse", "HEAD"])
@@ -192,7 +191,7 @@ mod tests {
         let numerals = commit(p, "f.txt", &LINES.replace("3\n", "III\n"), "task: numerals");
         let (ok, _) = run(p, &["merge", "-q", "line"]);
         assert!(!ok, "the merge conflicts");
-        std::fs::write(p.join("f.txt"), LINES.replace("3\n", "III three\n")).unwrap();
+        crate::fsio::write(p.join("f.txt"), LINES.replace("3\n", "III three\n")).unwrap();
         sh(p, &["add", "-A"]);
         let s = Shas {
             base,

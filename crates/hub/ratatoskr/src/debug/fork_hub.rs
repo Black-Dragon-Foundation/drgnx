@@ -274,7 +274,7 @@ impl Forks {
                 if let Some(d) = at.parent() {
                     std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
                 }
-                std::fs::write(&at, bytes).map_err(|e| format!("{}: {e}", at.display()))?;
+                crate::fsio::write(&at, bytes).map_err(|e| format!("{}: {e}", at.display()))?;
             }
             let extra = env(&tree);
             let ask = Ask {
@@ -490,7 +490,7 @@ impl Forks {
                     if let Some(dir) = at.parent() {
                         std::fs::create_dir_all(dir).map_err(|e| format!("{rel}: {e}"))?;
                     }
-                    std::fs::write(&at, text).map_err(|e| format!("{rel}: {e}"))?;
+                    crate::fsio::write(&at, text).map_err(|e| format!("{rel}: {e}"))?;
                 }
                 me.run_in(&run_id, resolved, tree.clone(), watch, limit)
                     .await

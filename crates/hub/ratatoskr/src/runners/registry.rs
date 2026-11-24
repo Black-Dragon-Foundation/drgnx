@@ -605,18 +605,18 @@ impl Registry {
         let (mut tx, mut rx, err) = (control.tx, control.rx, control.err);
         let run = async {
             let write = async {
-                let _ = tx.write_all(stdin).await;
-                let _ = tx.shutdown().await;
+                crate::soft::done(tx.write_all(stdin).await, "registry");
+                crate::soft::done(tx.shutdown().await, "registry");
             };
             let read = async {
                 let mut out = Vec::new();
-                let _ = rx.read_to_end(&mut out).await;
+                crate::soft::done(rx.read_to_end(&mut out).await, "registry");
                 out
             };
             let read_err = async {
                 let mut out = Vec::new();
                 if let Some(mut e) = err {
-                    let _ = e.read_to_end(&mut out).await;
+                    crate::soft::done(e.read_to_end(&mut out).await, "registry");
                 }
                 out
             };
@@ -779,7 +779,7 @@ impl Registry {
         let staged = self.stage(&name, host, None, None, false, false).await;
         self.cfg.transport.stop(&name).await;
         let (rec, probe) = staged?;
-        let _ = rec;
+        let _only_when_used_elsewhere = &rec;
         Ok(match probe.facts {
             Some(f) if all_missing(&probe).is_empty() => Probed {
                 effective,
@@ -1056,7 +1056,7 @@ impl Registry {
         rec.checked = Some(crate::clock::wall_secs());
         self.cfg.store.put(rec).await.map_err(failed)?;
         if let Err(e) = self.connect(rec).await {
-            let _ = self.cfg.store.remove(&rec.name).await;
+            crate::soft::done(self.cfg.store.remove(&rec.name).await, "registry");
             return Err(e);
         }
         Ok(())
@@ -1427,7 +1427,7 @@ mod tests {
             ("echo hi; exit 3", "hi", 3),
             ("printf 'a\\nb'; false", "a\nb", 1),
         ] {
-            let o = std::process::Command::new("sh")
+            let o = crate::proc::Command::new("sh")
                 .args(["-c", &wrapped(script)])
                 .output()
                 .unwrap();

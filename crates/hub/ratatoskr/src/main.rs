@@ -18,9 +18,12 @@ fn code(c: i32) -> ExitCode {
 /// text; the first miss of each pack is logged. `DRGNX_PACK_LOCK` (a test run's libraries) is left as it is.
 fn install_grammars(env: &Env) {
     if std::env::var_os("DRGNX_PACK_LOCK").is_none() {
-        let _ = skald::registry::install_from(
-            &runstav::paths::config_dir(env).join("drgnx.lock.eld"),
-            &runstav::paths::data_dir(env).join("grammars"),
+        ratatoskr::soft::done(
+            skald::registry::install_from(
+                &runstav::paths::config_dir(env).join("drgnx.lock.eld"),
+                &runstav::paths::data_dir(env).join("grammars"),
+            ),
+            "skald::registry::install_from",
         );
     }
     hrafn::chunk::on_missing(|pack, why| {
@@ -39,14 +42,18 @@ fn main() -> ExitCode {
     let command = match cli::parse(std::env::args_os().skip(1)) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("ratatoskr: {e}\n{}", cli::USAGE);
+            ratatoskr::soft::err_line(&format!("ratatoskr: {e}\n{}", cli::USAGE));
             return ExitCode::from(Exit::Usage as u8);
         }
     };
     install_grammars(&Env::process());
     match command {
-        Command::Version { json: true } => println!("{}", version::json()),
-        Command::Version { json: false } => println!("{}", version::text()),
+        Command::Version { json: true } => {
+            ratatoskr::soft::out_line(&(version::json()).to_string())
+        }
+        Command::Version { json: false } => {
+            ratatoskr::soft::out_line(&(version::text()).to_string())
+        }
         Command::Methods { markdown: false } => {
             print!("{}", runstav::registry::methods_json_text())
         }
@@ -144,7 +151,9 @@ fn main() -> ExitCode {
             let runtime = match builder.build() {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("ratatoskr: cannot start: no async runtime: {e}");
+                    ratatoskr::soft::err_line(&format!(
+                        "ratatoskr: cannot start: no async runtime: {e}"
+                    ));
                     return ExitCode::from(Exit::CannotStart as u8);
                 }
             };
@@ -155,10 +164,10 @@ fn main() -> ExitCode {
                 (Exit::Restart, Supervisor::SelfDetached) => reexec(),
                 // launchd restarts on every non-zero exit, so only 75 and a crash may reach it
                 (Exit::CannotStart | Exit::Usage | Exit::AnotherHub, Supervisor::Launchd) => {
-                    eprintln!(
+                    ratatoskr::soft::err_line(&format!(
                         "ratatoskr: exit {} mapped to 0 for launchd (the reason is in the hub's log)",
                         exit as u8
-                    );
+                    ));
                     ExitCode::SUCCESS
                 }
                 _ => ExitCode::from(exit as u8),
@@ -172,13 +181,16 @@ fn main() -> ExitCode {
 /// across this call and goes with the exec (every descriptor is close-on-exec); only a failed exec returns.
 fn reexec() -> ExitCode {
     let Some(exe) = idle::start_exe() else {
-        eprintln!("ratatoskr: cannot restart: no resolved executable path");
+        ratatoskr::soft::err_line("ratatoskr: cannot restart: no resolved executable path");
         return ExitCode::from(Exit::CannotStart as u8);
     };
     let err = std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
         .env(ratatoskr::lock::RESTARTED, "1")
         .exec();
-    eprintln!("ratatoskr: cannot execute {} again: {err}", exe.display());
+    ratatoskr::soft::err_line(&format!(
+        "ratatoskr: cannot execute {} again: {err}",
+        exe.display()
+    ));
     ExitCode::from(Exit::CannotStart as u8)
 }

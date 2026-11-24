@@ -436,7 +436,7 @@ async fn untrusted_remote_never_receives_text() {
 // ---- Task 15: the chains of a project, one pass at a time
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = std::process::Command::new("git")
+    let st = ratatoskr::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -454,7 +454,7 @@ async fn project(n: usize) -> (tempfile::TempDir, tempfile::TempDir, Project) {
     std::fs::create_dir_all(root.join("core")).unwrap();
     git(&root, &["init", "-q"]);
     for i in 0..n {
-        std::fs::write(
+        ratatoskr::fsio::write(
             root.join(format!("core/f{i}.el")),
             format!(";;; f{i}.el\n(defun f{i}-run () \"Run number {i}.\" {i})\n"),
         )

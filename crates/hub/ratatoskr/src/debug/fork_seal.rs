@@ -59,12 +59,15 @@ pub fn sweep(root: &Path) {
         return;
     }
     let aside = root.with_extension(format!("swept-{}", std::process::id()));
-    if let Err(e) = std::fs::rename(root, &aside) {
+    if let Err(e) = crate::fsio::rename(root, &aside) {
         tracing::warn!(target: "drgnx::debug", "the forks' folder {} stays: {e}", root.display());
         return;
     }
     crate::clock::spawn("debug:fork-sweep", async move {
-        let _ = crate::clock::blocking(move || std::fs::remove_dir_all(aside)).await;
+        crate::soft::done(
+            crate::clock::blocking(move || std::fs::remove_dir_all(aside)).await,
+            "crate::clock::blocking",
+        );
     });
 }
 
@@ -199,7 +202,10 @@ impl Trees for DirTrees {
                 .filter(|d| d.starts_with(&self.root) && *d != self.root)
             {
                 let dir = dir.to_path_buf();
-                let _ = crate::clock::blocking(move || std::fs::remove_dir_all(dir)).await;
+                crate::soft::done(
+                    crate::clock::blocking(move || std::fs::remove_dir_all(dir)).await,
+                    "crate::clock::blocking",
+                );
             }
         })
     }
@@ -296,7 +302,7 @@ pub fn spec(s: &Shape<'_>, target: Target) -> Spec {
         run: None,
         env: vec![
             ("PATH".into(), s.path.clone()),
-            ("HOME".into(), tmp.clone()),
+            (stig::HOME_VAR.into(), tmp.clone()),
             ("TMPDIR".into(), tmp),
             ("PYTHONDONTWRITEBYTECODE".into(), "1".into()),
         ],
@@ -440,7 +446,8 @@ impl Sealer for Sealed {
         let argv: Vec<String> = match (adapter, &found) {
             ("debugpy", Found::Python(py)) => {
                 let shim = tmp.join("drgnx-debug-fork-shim.py");
-                std::fs::write(&shim, SHIM_PY).map_err(|e| format!("{}: {e}", shim.display()))?;
+                crate::fsio::write(&shim, SHIM_PY)
+                    .map_err(|e| format!("{}: {e}", shim.display()))?;
                 read.extend(prefix_of(py));
                 // the venv itself (its site-packages), besides the Python it links to
                 read.extend(py.parent().and_then(Path::parent).map(Path::to_path_buf));
@@ -456,7 +463,8 @@ impl Sealer for Sealed {
                     .find(|p| p.is_file())
                     .ok_or("node is not on PATH")?;
                 let shim = tmp.join("drgnx-debug-fork-shim.js");
-                std::fs::write(&shim, SHIM_JS).map_err(|e| format!("{}: {e}", shim.display()))?;
+                crate::fsio::write(&shim, SHIM_JS)
+                    .map_err(|e| format!("{}: {e}", shim.display()))?;
                 read.extend(prefix_of(&node));
                 // js-debug's whole release (src/ and its dependencies)
                 read.extend(
@@ -505,7 +513,7 @@ impl Sealer for Sealed {
         // empty files for the binds to land on (the tree never holds their text)
         for (_, dst) in &env_files {
             if !dst.exists() {
-                std::fs::write(dst, b"").map_err(|e| format!("{}: {e}", dst.display()))?;
+                crate::fsio::write(dst, b"").map_err(|e| format!("{}: {e}", dst.display()))?;
             }
         }
         let shape = Shape {
@@ -542,7 +550,7 @@ impl Sealed {
         let block = super::ports::machine().claim()?;
         let ports = block.ports();
         let preload = shape.tmp.join(super::blocked::PRELOAD_NAME);
-        std::fs::write(&preload, super::blocked::PRELOAD)
+        crate::fsio::write(&preload, super::blocked::PRELOAD)
             .map_err(|e| format!("{}: {e}", preload.display()))?;
         let env = adapters::Env {
             path: self.path.clone(),
@@ -618,7 +626,7 @@ impl Launcher for SealedLauncher {
                 if let Err(r) = r {
                     let tail = child.stderr_tail();
                     super::session::Proc::signal(&mut child, super::session::Sig::Kill);
-                    let _ = child.wait().await;
+                    crate::soft::done(child.wait().await, "fork_seal");
                     return Err(format!(
                         "the fork's sandbox did not start: {} {tail}",
                         r.message

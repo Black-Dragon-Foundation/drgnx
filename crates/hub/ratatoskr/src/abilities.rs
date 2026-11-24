@@ -232,7 +232,7 @@ async fn gate(
             Gate::Allow => return Ok(()),
             Gate::Never(why) => return Err(why),
             Gate::Ask(_) => {
-                let _ = (&mut wait.settled).await;
+                crate::soft::done((&mut wait.settled).await, "abilities");
             }
         }
     }

@@ -151,7 +151,7 @@ fn the_queue_is_capped() {
         texts(&b)
             .last()
             .unwrap()
-            .ends_with(&format!("{}", QUEUE_CAP / 1000 + 499))
+            .ends_with(&(QUEUE_CAP / 1000 + 499).to_string())
     );
 }
 

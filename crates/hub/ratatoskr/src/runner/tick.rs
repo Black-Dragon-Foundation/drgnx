@@ -669,7 +669,7 @@ async fn branch_tip(repo: &Path, name: &str) -> String {
     if let Ok(sha) = git(repo, &["rev-parse", "--verify", "-q", name]).await {
         return sha;
     }
-    let _ = git(repo, &["branch", name, "HEAD"]).await;
+    crate::soft::done(git(repo, &["branch", name, "HEAD"]).await, "git");
     git(repo, &["rev-parse", "--verify", "-q", name])
         .await
         .unwrap_or_else(|_| name.to_owned())
@@ -804,18 +804,19 @@ mod tests {
         // first task merged: its own merge was refused ever after
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
-        let ok = std::process::Command::new("git")
+        let ok = crate::proc::Command::new("git")
             .current_dir(repo)
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("HOME", repo)
+            .env(stig::HOME_VAR, repo)
             .args(["init", "-q"])
-            .status()
+            .status_async()
+            .await
             .unwrap()
             .success()
-            && std::process::Command::new("git")
+            && crate::proc::Command::new("git")
                 .current_dir(repo)
                 .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env("HOME", repo)
+                .env(stig::HOME_VAR, repo)
                 .args([
                     "-c",
                     "user.name=t",
@@ -827,7 +828,8 @@ mod tests {
                     "-m",
                     "i",
                 ])
-                .status()
+                .status_async()
+                .await
                 .unwrap()
                 .success();
         assert!(ok);

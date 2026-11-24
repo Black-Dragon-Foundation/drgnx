@@ -115,7 +115,7 @@ mod tests {
     fn path_rules_refuse_each_escape() {
         let d = root();
         let r = d.path();
-        std::fs::write(r.join("docs/specs/r/exists.md"), "x").unwrap();
+        crate::fsio::write(r.join("docs/specs/r/exists.md"), "x").unwrap();
         // a symlinked folder, and a nested repository
         std::fs::create_dir_all(r.join("elsewhere")).unwrap();
         std::os::unix::fs::symlink(r.join("elsewhere"), r.join("docs/specs/linked")).unwrap();
@@ -145,11 +145,11 @@ mod tests {
         assert!(planning_path(r, "docs/plans/fresh/new.md", RecordKind::Plans).is_ok());
         // a link planted between the check and the create: `create_new` fails and writes nothing
         let file = planning_path(r, "docs/specs/r/race.md", spec).unwrap();
-        std::fs::write(r.join("elsewhere/target.md"), "keep").unwrap();
+        crate::fsio::write(r.join("elsewhere/target.md"), "keep").unwrap();
         std::os::unix::fs::symlink(r.join("elsewhere/target.md"), &file).unwrap();
         assert!(create_new_file(r, &file, "text").is_err());
         assert_eq!(
-            std::fs::read_to_string(r.join("elsewhere/target.md")).unwrap(),
+            crate::fsio::read_to_string(r.join("elsewhere/target.md")).unwrap(),
             "keep"
         );
     }

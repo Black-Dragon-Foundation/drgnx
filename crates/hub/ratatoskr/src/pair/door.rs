@@ -397,7 +397,7 @@ impl Door {
             file: file.to_path_buf(),
             id,
         };
-        let _ = rx.await;
+        crate::soft::done(rx.await, "door");
         turn
     }
 
@@ -754,7 +754,7 @@ impl Door {
                             }
                         }
                         if let Some(tx) = p.reply.take() {
-                            let _ = tx.send((outcome, p.answer.take()));
+                            crate::soft::done(tx.send((outcome, p.answer.take())), "tx send");
                         }
                     }
                     Vec::new()
@@ -936,7 +936,7 @@ fn lines_of(served: Option<&Served>, real: &Path, kind: &WriteKind) -> Option<Ed
             if !small {
                 return None;
             }
-            disk = std::fs::read_to_string(real).ok()?;
+            disk = crate::fsio::read_to_string(real).ok()?;
             disk.as_str()
         }
     };
@@ -993,7 +993,7 @@ mod tests {
     async fn pair_off_tools_answer_with_the_hint() {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().canonicalize().unwrap();
-        std::fs::write(root.join("a.txt"), "a\n").unwrap();
+        crate::fsio::write(root.join("a.txt"), "a\n").unwrap();
         let editors = Arc::new(Editors::default());
         let out = Arc::new(Outbox::new(1));
         editors.subscribe(1, out.clone());
@@ -1024,7 +1024,7 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, PathBuf, Arc<Door>, Arc<Outbox>) {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().canonicalize().unwrap();
-        std::fs::write(root.join("a.txt"), "a\n").unwrap();
+        crate::fsio::write(root.join("a.txt"), "a\n").unwrap();
         let editors = Arc::new(Editors::default());
         let out = Arc::new(Outbox::new(1));
         editors.subscribe(1, out.clone());
@@ -1177,7 +1177,7 @@ mod tests {
         let gave_up = tokio::spawn(async move { d5.user_turn(&o5).await });
         tokio::task::yield_now().await;
         gave_up.abort();
-        let _ = gave_up.await;
+        crate::soft::done(gave_up.await, "door");
         drop(a);
         let d6 = door.clone();
         let next = tokio::spawn(async move { d6.user_turn(&other).await });
@@ -1319,7 +1319,7 @@ mod tests {
             .canonicalize()
             .unwrap()
             .join(format!("pair-out-{}", std::process::id()));
-        std::fs::write(&outside, "secret\n").unwrap();
+        crate::fsio::write(&outside, "secret\n").unwrap();
         std::os::unix::fs::symlink(root.join("a.txt"), root.join("in.txt")).unwrap();
         std::os::unix::fs::symlink(&outside, root.join("out.txt")).unwrap();
         std::os::unix::fs::symlink(root.join("nothing"), root.join("dangling.txt")).unwrap();
@@ -1335,7 +1335,10 @@ mod tests {
         door.write_with("s1", 0, &root, &eff, &link, whole("A\n"), Some(record))
             .await
             .unwrap();
-        assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "A\n");
+        assert_eq!(
+            crate::fsio::read_to_string(root.join("a.txt")).unwrap(),
+            "A\n"
+        );
         assert!(
             root.join("in.txt")
                 .symlink_metadata()
@@ -1344,7 +1347,7 @@ mod tests {
                 .is_symlink()
         );
         assert_eq!(
-            std::fs::read_to_string(root.join("hard.txt")).unwrap(),
+            crate::fsio::read_to_string(root.join("hard.txt")).unwrap(),
             "a\n",
             "the hard link is broken"
         );
@@ -1375,7 +1378,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(r.0.contains("names nothing"), "{r}");
-        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "secret\n");
+        assert_eq!(crate::fsio::read_to_string(&outside).unwrap(), "secret\n");
         assert!(!root.join("nothing").exists());
         std::fs::remove_file(&outside).unwrap();
         assert!(events(&out).is_empty(), "no editor was asked");
@@ -1392,9 +1395,9 @@ mod tests {
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o640)).unwrap();
         let user = rustix::fs::setxattr(&f, "user.drgnx", b"kept", rustix::fs::XattrFlags::empty());
         if let Err(e) = &user {
-            eprintln!(
+            crate::soft::err_line(&format!(
                 "user attributes are not supported here ({e}): the mode and the context are checked"
-            );
+            ));
         }
         let context = |p: &Path| {
             let mut v = vec![0u8; 256];
@@ -1416,7 +1419,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "b\n");
+        assert_eq!(crate::fsio::read_to_string(&f).unwrap(), "b\n");
         assert_eq!(f.metadata().unwrap().permissions().mode() & 0o777, 0o640);
         if user.is_ok() {
             let mut v = [0u8; 16];

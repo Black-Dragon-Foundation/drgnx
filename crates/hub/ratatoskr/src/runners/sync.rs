@@ -536,7 +536,7 @@ pub struct BundleFile {
 
 impl Drop for BundleFile {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        crate::soft::done(std::fs::remove_file(&self.path), "std::fs::remove_file");
     }
 }
 
@@ -576,7 +576,7 @@ pub fn make_bundle(
         )?;
         let mut alt = objects.into_os_string().into_vec();
         alt.push(b'\n');
-        std::fs::write(work.join("objects/info/alternates"), alt).map_err(|e| e.to_string())?;
+        crate::fsio::write(work.join("objects/info/alternates"), alt).map_err(|e| e.to_string())?;
         git_out(
             &bare,
             "name the commit",
@@ -598,7 +598,7 @@ pub fn make_bundle(
         git_out(&bare, "make the bundle", &args)?;
         Ok::<PathBuf, String>(file)
     })();
-    let _ = std::fs::remove_dir_all(&work);
+    crate::soft::done(std::fs::remove_dir_all(&work), "std::fs::remove_dir_all");
     let path = made?;
     let mut f = std::fs::File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut h = sha2::Sha256::new();
@@ -658,11 +658,10 @@ pub fn send_bundle(
 mod tests {
     use super::*;
     use sleipnir::proto::{Nonce, Sha256};
-    use std::process::Command;
 
     /// The user's git in DIR: no system or global config, a fixed identity.
     fn git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
+        let out = crate::proc::Command::new("git")
             .current_dir(dir)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -686,7 +685,7 @@ mod tests {
     }
 
     fn commit(dir: &Path, file: &str, text: &str) -> String {
-        std::fs::write(dir.join(file), text).unwrap();
+        crate::fsio::write(dir.join(file), text).unwrap();
         git(dir, &["add", "-A"]);
         git(dir, &["commit", "-qm", file]);
         git(dir, &["rev-parse", "HEAD"])
@@ -853,7 +852,7 @@ mod tests {
             (".claude/settings.json", "{}\n"),
             ("src/a.rs", "fn a() {}\n"),
         ] {
-            std::fs::write(work.join(f), text).unwrap();
+            crate::fsio::write(work.join(f), text).unwrap();
         }
         let blobs = t.path().join("blobs");
         let mut f = freeze(&work, &[], Visibility::Public, true, &blobs).unwrap();
@@ -870,7 +869,7 @@ mod tests {
         f = freeze(&work, &[], Visibility::Public, false, &blobs).unwrap();
         assert_eq!(overlay_for(&f, RunnerTrust::Shared).unwrap(), vec![]);
         // the bytes of every sent file are in the hub's store, under their hash
-        std::fs::write(work.join("src/a.rs"), "fn a() {}\n").unwrap();
+        crate::fsio::write(work.join("src/a.rs"), "fn a() {}\n").unwrap();
         f = freeze(&work, &[], Visibility::Public, true, &blobs).unwrap();
         let Some(ManifestEntry::File {
             sha256: Sha256(sha),
@@ -901,7 +900,7 @@ mod tests {
                 x as u8
             })
             .collect();
-        std::fs::write(work.join("noise"), &noise).unwrap();
+        crate::fsio::write(work.join("noise"), &noise).unwrap();
         git(&work, &["add", "-A"]);
         git(&work, &["commit", "-qm", "noise"]);
         let b = git(&work, &["rev-parse", "HEAD"]);

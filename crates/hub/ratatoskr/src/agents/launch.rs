@@ -323,7 +323,7 @@ pub fn launch_on(
         && let Some(d) = new_dir
     {
         // empty, as it was just made; one that something filled since is left
-        let _ = std::fs::remove_dir(d);
+        crate::soft::done(std::fs::remove_dir(d), "std::fs::remove_dir");
     }
     launched
 }

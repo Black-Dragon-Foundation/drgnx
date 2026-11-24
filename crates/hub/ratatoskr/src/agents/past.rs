@@ -452,7 +452,10 @@ impl History {
         for suffix in ["", "-journal", "-wal", "-shm"] {
             let mut p = db_path.as_os_str().to_owned();
             p.push(suffix);
-            let _ = std::fs::remove_file(PathBuf::from(p));
+            crate::soft::done(
+                std::fs::remove_file(PathBuf::from(p)),
+                "std::fs::remove_file",
+            );
         }
         drop(i);
         lock(&self.list).clear();
@@ -694,7 +697,7 @@ impl History {
             let Some(entries) = entries else {
                 return false;
             };
-            let _ = view;
+            let _only_when_used_elsewhere = &view;
             f.core
                 .views
                 .publish_built(f, key, |_, _| (transcript_rows(&entries), Vec::new()));
@@ -1296,7 +1299,7 @@ pub async fn scan_now(f: &Front) -> Result<u64, Error> {
 pub async fn follow(f: Arc<Front>) {
     loop {
         if f.dirs.get().is_some() {
-            let _ = scan_now(&f).await;
+            crate::soft::done(scan_now(&f).await, "scan_now");
         }
         crate::clock::sleep(std::time::Duration::from_secs(2)).await;
     }

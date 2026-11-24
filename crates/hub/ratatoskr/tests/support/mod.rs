@@ -34,12 +34,12 @@ impl Root {
     pub fn vars(&self) -> Vec<(String, String)> {
         let p = |s: &str| self.dir.path().join(s).to_string_lossy().into_owned();
         let mut v = vec![
-            ("HOME".to_string(), p("h")),
-            ("XDG_RUNTIME_DIR".into(), p("r")),
-            ("XDG_STATE_HOME".into(), p("s")),
-            ("XDG_DATA_HOME".into(), p("h/xd")),
-            ("XDG_CONFIG_HOME".into(), p("h/xc")),
-            ("XDG_CACHE_HOME".into(), p("h/xk")),
+            (stig::HOME_VAR.to_string(), p("h")),
+            (stig::SYSTEM_RUNTIME_VAR.into(), p("r")),
+            (stig::Xdg::State.var().into(), p("s")),
+            (stig::Xdg::Data.var().into(), p("h/xd")),
+            (stig::Xdg::Config.var().into(), p("h/xc")),
+            (stig::Xdg::Cache.var().into(), p("h/xk")),
             ("DRGNX_DATA_DIR".into(), p("d")),
             ("DRGNX_CONFIG_DIR".into(), p("h/c")),
             ("TMPDIR".into(), p("t")),
@@ -110,7 +110,7 @@ impl Hub {
         let pid = child.id();
         let (tx, ended) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(child.wait().unwrap());
+            ratatoskr::soft::done(tx.send(child.wait().unwrap()), "tx send");
         });
         Hub {
             pid,
@@ -162,7 +162,7 @@ impl Hub {
     }
 
     pub fn stderr_text(&self) -> String {
-        std::fs::read_to_string(&self.stderr).unwrap_or_default()
+        ratatoskr::fsio::read_to_string(&self.stderr).unwrap_or_default()
     }
 
     pub fn term(&mut self) {
@@ -178,7 +178,7 @@ impl Drop for Hub {
         if self.status.is_none() && self.ended.recv_timeout(FAILED_AFTER).is_err() {
             // it ignored SIGTERM: a failure of its own, and no process is left behind
             unsafe { libc::kill(self.pid() as i32, libc::SIGKILL) };
-            let _ = self.ended.recv_timeout(FAILED_AFTER);
+            ratatoskr::soft::done(self.ended.recv_timeout(FAILED_AFTER), "mod");
         }
     }
 }
@@ -263,7 +263,10 @@ pub fn ping(socket: &Path) -> bool {
     let Ok(stream) = UnixStream::connect(socket) else {
         return false;
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    ratatoskr::soft::done(
+        stream.set_read_timeout(Some(Duration::from_millis(500))),
+        "mod",
+    );
     let mut c = Client {
         reader: BufReader::new(stream.try_clone().unwrap()),
         stream,

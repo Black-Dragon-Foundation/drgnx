@@ -364,7 +364,7 @@ struct Work(PathBuf);
 
 impl Drop for Work {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        crate::soft::done(std::fs::remove_dir_all(&self.0), "std::fs::remove_dir_all");
     }
 }
 

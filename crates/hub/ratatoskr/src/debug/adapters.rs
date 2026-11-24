@@ -283,7 +283,7 @@ pub fn parts(adapter: &Adapter, tools: &Path) -> Vec<PartStatus> {
     let one = |v: &Value| -> Option<PartStatus> {
         let part = v.get("into")?.as_str()?.to_owned();
         let installed = tools.join(&part).is_dir().then(|| {
-            std::fs::read_to_string(tools.join(&part).join(super::install::INSTALLED_MARKER))
+            crate::fsio::read_to_string(tools.join(&part).join(super::install::INSTALLED_MARKER))
                 .ok()
                 .and_then(|t| t.lines().next().map(str::to_owned))
                 .unwrap_or_else(|| "unknown".into())
@@ -391,7 +391,7 @@ mod pack_tests {
         let dir = std::env::temp_dir().join(format!("fixture-dap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let prog = dir.join("fixture-dap");
-        std::fs::write(&prog, "#!/bin/sh\n").unwrap();
+        crate::fsio::write(&prog, "#!/bin/sh\n").unwrap();
         std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
         let env = Env {
             path: vec![dir.clone()],

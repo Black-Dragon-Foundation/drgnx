@@ -73,7 +73,7 @@ pub fn compose(f: &Facts) -> String {
 
 /// HEAD of the repository at CWD, `<short sha> <subject>`.
 fn head_of(cwd: &Path) -> Option<String> {
-    let o = std::process::Command::new("git")
+    let o = crate::proc::Command::new("git")
         .arg("-C")
         .arg(cwd)
         .args(["log", "-1", "--format=%h %s"])

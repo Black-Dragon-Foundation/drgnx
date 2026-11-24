@@ -38,7 +38,6 @@ use std::io;
 use std::os::fd::AsFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -102,7 +101,7 @@ pub struct TreeLive {
 
 /// The project of ROOT: its main checkout's real path and its id.
 pub fn project_id(root: &Path) -> io::Result<(PathBuf, String)> {
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
@@ -125,7 +124,7 @@ pub fn project_id(root: &Path) -> io::Result<(PathBuf, String)> {
 
 /// The files of ROOT by git recency: those changed by the newest commits first, each once (blocking: runs git).
 fn git_recency(root: &Path) -> io::Result<Vec<String>> {
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(root)
         .args([
@@ -482,7 +481,7 @@ impl Project {
             *h = Some(w);
         }
         if let Ok(mut b) = self.inner.watch_budget.lock() {
-            *b = std::fs::read_to_string(MAX_USER_WATCHES)
+            *b = crate::fsio::read_to_string(MAX_USER_WATCHES)
                 .ok()
                 .and_then(|t| t.trim().parse::<usize>().ok())
                 .map(|n| n / 2);
@@ -736,7 +735,7 @@ impl Project {
         let running = self.tier2.lock().ok().and_then(|mut t| t.take());
         if let Some(h) = running {
             h.abort();
-            let _ = h.await;
+            crate::soft::done(h.await, "project");
         }
         self.inner.publish(Tier2::Stopped);
         Ok(())
@@ -932,7 +931,7 @@ impl Project {
                 return;
             }
             for j in jobs {
-                let _ = j.await;
+                crate::soft::done(j.await, "project");
             }
         }
     }
@@ -1080,7 +1079,7 @@ fn tree_of(given: &Path, main: &Path) -> io::Result<Option<(PathBuf, PathBuf)>> 
 
 /// The worktrees `git worktree list --porcelain` names in the project at MAIN, and whether each is `locked`.
 fn worktree_list(main: &Path) -> io::Result<Vec<(PathBuf, bool)>> {
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(main)
         .args(["worktree", "list", "--porcelain"])
@@ -1226,7 +1225,10 @@ impl Inner {
         };
         if let Some(w) = self.watcher() {
             let (w2, k) = (w.clone(), lru.key.clone());
-            let _ = clock::blocking(move || w2.remove_tree(&k)).await;
+            crate::soft::done(
+                clock::blocking(move || w2.remove_tree(&k)).await,
+                "clock::blocking",
+            );
             if let Ok(mut s) = hrafn::Watch::shared_state(&*w).lock() {
                 s.unwatched.retain(|(k, _)| *k != lru.key);
                 s.unwatched.push((
@@ -1237,10 +1239,12 @@ impl Inner {
         }
         self.live(lru.id, |l| l.watched = false);
         if lru.state != hrafn::TreeState::Seeding {
-            let _ = self
-                .store
-                .tree_mark(lru.id, hrafn::TreeState::Unwatched)
-                .await;
+            crate::soft::done(
+                self.store
+                    .tree_mark(lru.id, hrafn::TreeState::Unwatched)
+                    .await,
+                "project",
+            );
         }
         true
     }
@@ -1251,7 +1255,10 @@ impl Inner {
         let _one = self.tier1.lock().await;
         if let Some(w) = self.watcher() {
             let (w2, k) = (w.clone(), r.key.clone());
-            let _ = clock::blocking(move || w2.remove_tree(&k)).await;
+            crate::soft::done(
+                clock::blocking(move || w2.remove_tree(&k)).await,
+                "clock::blocking",
+            );
             if let Ok(mut s) = hrafn::Watch::shared_state(&*w).lock() {
                 s.unwatched.retain(|(k, _)| *k != r.key);
             }

@@ -49,7 +49,10 @@ impl Launch for Plain {
         let t2 = tail.clone();
         std::thread::spawn(move || {
             let mut s = String::new();
-            let _ = std::io::Read::read_to_string(&mut stderr, &mut s);
+            ratatoskr::soft::done(
+                std::io::Read::read_to_string(&mut stderr, &mut s),
+                "std::io::Read::read_to_string",
+            );
             *t2.lock().unwrap() = s;
         });
         let stdout = c.stdout.take().ok_or("no stdout")?;
@@ -59,8 +62,8 @@ impl Launch for Plain {
             kill: Box::new(move || {
                 // SAFETY: killpg(2) of a process group this launcher made.
                 unsafe { libc::killpg(pid, libc::SIGKILL) };
-                let _ = c.kill();
-                let _ = c.wait();
+                ratatoskr::soft::done(c.kill(), "hrafn_parse");
+                ratatoskr::soft::done(c.wait(), "hrafn_parse");
             }),
             stderr: Box::new(move || tail.lock().unwrap().clone()),
         })
@@ -100,8 +103,8 @@ fn csharp_init() -> Init {
     let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packs/csharp/queries");
     Init::from_manifest(
         m,
-        std::fs::read_to_string(pack.join("chunks.scm")).unwrap(),
-        Some(std::fs::read_to_string(pack.join("tags.scm")).unwrap()),
+        ratatoskr::fsio::read_to_string(pack.join("chunks.scm")).unwrap(),
+        Some(ratatoskr::fsio::read_to_string(pack.join("tags.scm")).unwrap()),
     )
 }
 
@@ -135,7 +138,7 @@ fn worker(
 
 #[test]
 fn the_worker_chunks_a_file_exactly_as_the_in_process_chunker_does() {
-    let text = std::fs::read_to_string(
+    let text = ratatoskr::fsio::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../hrafn/tests/fixtures/langs/Cache.cs"),
     )
     .unwrap();
@@ -220,11 +223,11 @@ fn the_hub_finds_the_fetched_packs_in_active_eld() {
     let b = dir.path().to_str().unwrap().to_owned();
     let env = Env::new(
         &[
-            ("HOME", b.as_str()),
-            ("XDG_DATA_HOME", &format!("{b}/data")),
-            ("XDG_STATE_HOME", &format!("{b}/state")),
-            ("XDG_CONFIG_HOME", &format!("{b}/config")),
-            ("XDG_RUNTIME_DIR", &format!("{b}/run")),
+            (stig::HOME_VAR, b.as_str()),
+            (stig::Xdg::Data.var(), &format!("{b}/data")),
+            (stig::Xdg::State.var(), &format!("{b}/state")),
+            (stig::Xdg::Config.var(), &format!("{b}/config")),
+            (stig::SYSTEM_RUNTIME_VAR, &format!("{b}/run")),
         ],
         rustix::process::geteuid().as_raw(),
     );
@@ -235,7 +238,7 @@ fn the_hub_finds_the_fetched_packs_in_active_eld() {
     std::fs::create_dir_all(&libdir).unwrap();
     std::fs::copy(&real_lib, libdir.join(&lib_name)).unwrap();
     std::fs::create_dir_all(config_dir(&env)).unwrap();
-    std::fs::write(
+    ratatoskr::fsio::write(
         config_dir(&env).join("drgnx.lock.eld"),
         format!("(:grammars ((c-sharp :commit \"abc123\" :lib-sha256 \"{sha}\")))"),
     )
@@ -244,11 +247,11 @@ fn the_hub_finds_the_fetched_packs_in_active_eld() {
     let pack = dir.path().join("packs/csx");
     std::fs::create_dir_all(pack.join("queries")).unwrap();
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packs/csharp");
-    let manifest = std::fs::read_to_string(src.join("pack.eld"))
+    let manifest = ratatoskr::fsio::read_to_string(src.join("pack.eld"))
         .unwrap()
         .replace(":pack \"csharp\"", ":pack \"csx\"")
         .replace(":extensions (\"cs\")", ":extensions (\"xcs\")");
-    std::fs::write(pack.join("pack.eld"), manifest).unwrap();
+    ratatoskr::fsio::write(pack.join("pack.eld"), manifest).unwrap();
     for f in ["chunks.scm", "tags.scm"] {
         std::fs::copy(src.join("queries").join(f), pack.join("queries").join(f)).unwrap();
     }
@@ -262,7 +265,7 @@ fn the_hub_finds_the_fetched_packs_in_active_eld() {
         dir = dir.path().display(),
     );
     std::fs::create_dir_all(state_dir(&env).join("packs")).unwrap();
-    std::fs::write(state_dir(&env).join("packs/active.eld"), active).unwrap();
+    ratatoskr::fsio::write(state_dir(&env).join("packs/active.eld"), active).unwrap();
 
     let got = ratatoskr::parse_worker::fetched(&env);
     assert_eq!(got.len(), 1, "csharp is built in and gone has no folder");
@@ -303,7 +306,7 @@ fn the_library_loaded_is_the_one_hashed_whatever_the_path_becomes() {
     let swap = || {
         let tmp = dir.path().join("swap");
         std::fs::copy(&other, &tmp).unwrap();
-        std::fs::rename(&tmp, &path).unwrap();
+        ratatoskr::fsio::rename(&tmp, &path).unwrap();
     };
     let code = serve_with(&path, "c-sharp", &sha, &mut &input[..], &mut out, &swap);
     assert_eq!(code, 0, "the swapped file was loaded, not the hashed one");

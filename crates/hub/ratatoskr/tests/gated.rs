@@ -188,7 +188,7 @@ fn release_has_no_test_hooks() {
     assert!(a["result"]["pid"].is_number(), "{a}");
     assert_eq!(a["ignored"], json!(["__seq"]), "{a}");
     for flag in ["--test-clock", "--test-sequencer"] {
-        let out = Command::new(BIN)
+        let out = ratatoskr::proc::Command::new(BIN)
             .args(["serve", "--foreground", flag])
             .env_clear()
             .envs(root.vars())

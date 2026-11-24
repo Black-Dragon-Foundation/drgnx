@@ -182,20 +182,23 @@ pub fn main(args: BridgeArgs) -> u8 {
         ..defaults
     };
     // warnings (the hub went away, came back) on stderr, which MCP stdio leaves to the server's log
-    let _ = tracing_subscriber::fmt()
-        .with_ansi(false)
-        .without_time()
-        .with_target(false)
-        .with_writer(std::io::stderr)
-        .with_max_level(tracing::Level::WARN)
-        .try_init();
+    crate::soft::done(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(std::io::stderr)
+            .with_max_level(tracing::Level::WARN)
+            .try_init(),
+        "tracing_subscriber::fmt",
+    );
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("ratatoskr mcp-bridge: no async runtime: {e}");
+            crate::soft::err_line(&format!("ratatoskr mcp-bridge: no async runtime: {e}"));
             return 1;
         }
     };
@@ -203,7 +206,7 @@ pub fn main(args: BridgeArgs) -> u8 {
     let end = match args.target {
         BridgeTarget::Socket(socket) => {
             if let Err(why) = is_socket(&socket) {
-                eprintln!("ratatoskr mcp-bridge: {why}");
+                crate::soft::err_line(&format!("ratatoskr mcp-bridge: {why}"));
                 return 1;
             }
             runtime.block_on(mimir::bridge::run(Inside { socket }, stdin, stdout, opts))
@@ -221,7 +224,7 @@ pub fn main(args: BridgeArgs) -> u8 {
     // stdin's read runs on a blocking thread that cannot be cancelled: never wait for it
     runtime.shutdown_background();
     if let BridgeEnd::GaveUp(why) | BridgeEnd::Fatal(why) = &end {
-        eprintln!("ratatoskr mcp-bridge: {why}");
+        crate::soft::err_line(&format!("ratatoskr mcp-bridge: {why}"));
     }
     end.code()
 }
@@ -366,7 +369,7 @@ mod tests {
     fn the_socket_must_be_a_socket() {
         let root = private_dir();
         let file = root.path().join("mcp.sock");
-        std::fs::write(&file, "").unwrap();
+        crate::fsio::write(&file, "").unwrap();
         assert!(is_socket(&file).unwrap_err().ends_with("is not a socket"));
         assert!(is_socket(&root.path().join("none")).is_err());
         let socket = root.path().join("real.sock");

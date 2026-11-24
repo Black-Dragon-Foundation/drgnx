@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use std::process::Command;
 
 fn git(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = crate::proc::Command::new("git")
         .args([
             "-c",
             "user.name=t",
@@ -32,7 +32,7 @@ fn repo(dir: &Path, name: &str) -> PathBuf {
     let r = dir.join(name);
     std::fs::create_dir_all(&r).unwrap();
     git(&r, &["init", "-q", "-b", "main"]);
-    std::fs::write(r.join("README"), name).unwrap();
+    crate::fsio::write(r.join("README"), name).unwrap();
     git(&r, &["add", "."]);
     git(&r, &["commit", "-q", "-m", "first"]);
     std::fs::canonicalize(r).unwrap()
@@ -54,7 +54,7 @@ impl Drop for World {
     fn drop(&mut self) {
         for k in self.kids.get_mut().unwrap_or_else(|e| e.into_inner()) {
             if let Err(e) = k.kill().and_then(|()| k.wait().map(drop)) {
-                eprintln!("a bridge process: {e}");
+                crate::soft::err_line(&format!("a bridge process: {e}"));
             }
         }
     }
@@ -704,7 +704,7 @@ async fn records_write_on_a_users_spec_asks_and_writes_nothing() {
     let mine = w.project(&w.root).await;
     let (spec, version) = w.user_spec(&mine, "docs/specs/org/users.md").await;
     let file = w.root.join("docs/specs/org/users.md");
-    let before = std::fs::read_to_string(&file).unwrap();
+    let before = crate::fsio::read_to_string(&file).unwrap();
     w.bind("claude", &w.root, "worker").await;
     let a = w.attach(&w.root).await;
     let read = w
@@ -726,7 +726,7 @@ async fn records_write_on_a_users_spec_asks_and_writes_nothing() {
         "{e}"
     );
     assert_eq!(w.cards().await, 1);
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+    assert_eq!(crate::fsio::read_to_string(&file).unwrap(), before);
     let again = w
         .tool(&a.who, "records_read", json!({"record": spec}))
         .await

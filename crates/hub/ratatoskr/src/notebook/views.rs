@@ -543,16 +543,16 @@ impl NbViews {
 
     /// The notebooks and the stage the views read and write (once; the first wins).
     pub fn attach(&self, nb: &Arc<Notebooks>, front: Option<Weak<Front>>) {
-        let _ = self.nb.set(Arc::downgrade(nb));
+        crate::soft::done(self.nb.set(Arc::downgrade(nb)), "views");
         if let Some(f) = front {
-            let _ = self.stage.set(Arc::new(FrontStage(f)));
+            crate::soft::done(self.stage.set(Arc::new(FrontStage(f))), "views");
         }
     }
 
     /// [`NbViews::attach`] with a stage of the caller's.
     pub fn attach_stage(&self, nb: &Arc<Notebooks>, stage: Arc<dyn Stage>) {
-        let _ = self.nb.set(Arc::downgrade(nb));
-        let _ = self.stage.set(stage);
+        crate::soft::done(self.nb.set(Arc::downgrade(nb)), "views");
+        crate::soft::done(self.stage.set(stage), "views");
     }
 
     /// The editor on CONN wants a view of KIND of notebook ID (which it owns; CELL for a full output): the view's id.

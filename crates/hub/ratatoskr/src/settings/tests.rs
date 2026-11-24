@@ -13,7 +13,7 @@ fn config(entries: &str) -> tempfile::TempDir {
 
 fn write(dir: &Path, entries: &str) {
     let file = dir.join("settings.el");
-    std::fs::write(
+    crate::fsio::write(
         &file,
         format!(";;; settings.el\n(drgnx-settings\n :version 1\n{entries})\n"),
     )
@@ -349,7 +349,7 @@ fn a_broken_file_gives_strict_defaults_and_last_good() {
     assert!(good.values.agents_allow_unsandboxed);
     assert_eq!(ids(&good)[0], "mine");
     // the same file, broken: an unbalanced paren
-    std::fs::write(
+    crate::fsio::write(
         dir.path().join("settings.el"),
         "(drgnx-settings :version 1\n (drgnx-agents-allow-unsandboxed t)\n (drgnx-ai-providers ((other :kind openai :url \"https://o.example\")))\n",
     )
@@ -398,7 +398,7 @@ fn a_group_writable_file_is_refused() {
         l.problems[0].text
     );
     std::fs::remove_dir(&file).unwrap();
-    std::fs::write(&file, vec![b' '; (load::MAX_BYTES + 1) as usize]).unwrap();
+    crate::fsio::write(&file, vec![b' '; (load::MAX_BYTES + 1) as usize]).unwrap();
     let l = Settings::load(dir.path(), &Kv::default());
     assert!(
         l.problems[0].text.contains("over 1 MiB"),

@@ -147,7 +147,7 @@ fn read_launch(root: &str) -> (Option<LaunchFile>, Option<DebugFileError>) {
                 }),
             );
         }
-        Ok(_) => match std::fs::read_to_string(&path) {
+        Ok(_) => match crate::fsio::read_to_string(&path) {
             Ok(t) => t,
             Err(e) => {
                 return (
@@ -379,7 +379,10 @@ pub(super) fn vars(front: &Front, p: &DebugStart) -> Vars {
         .into_iter()
         .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
         .collect();
-    let home = env.get("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = env
+        .get(stig::HOME_VAR)
+        .map(PathBuf::from)
+        .unwrap_or_default();
     let config = launch::CONFIG_NAMES
         .iter()
         .filter_map(|(_, d)| {
@@ -397,10 +400,12 @@ pub(super) fn vars(front: &Front, p: &DebugStart) -> Vars {
         selection: p.selection.clone(),
         home,
         exec_path: std::env::current_exe().unwrap_or_default(),
-        default_build_task: std::fs::read_to_string(Path::new(&p.root).join(".vscode/tasks.json"))
-            .ok()
-            .and_then(|t| super::tasks::parse(&t).ok())
-            .and_then(|t| super::tasks::default_build_task(&t)),
+        default_build_task: crate::fsio::read_to_string(
+            Path::new(&p.root).join(".vscode/tasks.json"),
+        )
+        .ok()
+        .and_then(|t| super::tasks::parse(&t).ok())
+        .and_then(|t| super::tasks::default_build_task(&t)),
         env,
         config,
     }
@@ -625,14 +630,16 @@ async fn start_compound(
             }) => ids.push(id),
             other => {
                 for id in &ids {
-                    let _ = d
-                        .control(
+                    crate::soft::done(
+                        d.control(
                             id,
                             Op::Stop {
                                 kill_debuggee: None,
                             },
                         )
-                        .await;
+                        .await,
+                        "wire",
+                    );
                 }
                 return match other {
                     Err(e) => Err(e),
@@ -654,21 +661,23 @@ async fn start_compound(
                 let (d, id, tx) = (d.clone(), id.clone(), tx.clone());
                 crate::clock::spawn("debug:compound-member", async move {
                     d.wait_end(&id).await;
-                    let _ = tx.send(()).await;
+                    crate::soft::done(tx.send(()).await, "tx send");
                 });
             }
             drop(tx);
             // the first to end stops the rest
             if rx.recv().await.is_some() {
                 for id in &ids {
-                    let _ = d
-                        .control(
+                    crate::soft::done(
+                        d.control(
                             id,
                             Op::Stop {
                                 kill_debuggee: None,
                             },
                         )
-                        .await;
+                        .await,
+                        "wire",
+                    );
                 }
             }
         });
@@ -759,14 +768,16 @@ async fn trust(front: &Front, p: DebugTrust) -> Result<bool, Error> {
         .remove(&p.root);
     let d = front.debug.debug(front);
     for id in d.in_root(&p.root) {
-        let _ = d
-            .control(
+        crate::soft::done(
+            d.control(
                 &id,
                 Op::Stop {
                     kill_debuggee: None,
                 },
             )
-            .await;
+            .await,
+            "wire",
+        );
     }
     Ok(true)
 }
@@ -973,7 +984,7 @@ async fn disassemble(front: &Front, p: DebugDisassemble) -> Result<DebugDisassem
 /// Line LINE (1-based) of file PATH, read off the hub's workers; none when it cannot be read.
 async fn line_text(path: String, line: u32) -> Option<String> {
     crate::clock::blocking(move || {
-        let text = std::fs::read_to_string(&path).ok()?;
+        let text = crate::fsio::read_to_string(&path).ok()?;
         text.lines()
             .nth(line.saturating_sub(1) as usize)
             .map(str::to_owned)
@@ -1255,7 +1266,7 @@ impl Launcher for Spawned {
                     Ok(s) => Ok(over_tcp(s, Box::new(child))),
                     Err(e) => {
                         super::session::Proc::signal(&mut child, super::session::Sig::Kill);
-                        let _ = child.wait().await;
+                        crate::soft::done(child.wait().await, "wire");
                         Err(e)
                     }
                 };

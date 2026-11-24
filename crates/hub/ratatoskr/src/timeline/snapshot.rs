@@ -361,16 +361,16 @@ fn made(repo: &Path) -> Result<(), String> {
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let tmp = parent.join(name);
-    let _ = std::fs::remove_dir_all(&tmp);
+    crate::soft::done(std::fs::remove_dir_all(&tmp), "std::fs::remove_dir_all");
     let done = std::fs::create_dir(&tmp)
         .map_err(|e| format!("{}: {e}", tmp.display()))
         .and_then(|()| git(&tmp, None, None, &["init", "--bare", "-q", "."]))
-        .and_then(|_| match std::fs::rename(&tmp, repo) {
+        .and_then(|_| match crate::fsio::rename(&tmp, repo) {
             Ok(()) => Ok(()),
             Err(_) if repo.join("HEAD").exists() => Ok(()),
             Err(e) => Err(format!("{}: {e}", repo.display())),
         });
-    let _ = std::fs::remove_dir_all(&tmp);
+    crate::soft::done(std::fs::remove_dir_all(&tmp), "std::fs::remove_dir_all");
     done
 }
 
@@ -738,7 +738,10 @@ pub fn prune(repos: &[PathBuf], cap: u64, finished: &[String]) -> Pruned {
             for r in refs.lines().filter(|l| !l.is_empty()) {
                 any |= git(repo, None, None, &["update-ref", "-d", r]).is_ok();
             }
-            let _ = git(repo, None, None, &["update-ref", "-d", &turn_ref(sid)]);
+            crate::soft::done(
+                git(repo, None, None, &["update-ref", "-d", &turn_ref(sid)]),
+                "git",
+            );
             if let Ok(held) = git(
                 repo,
                 None,
@@ -746,17 +749,23 @@ pub fn prune(repos: &[PathBuf], cap: u64, finished: &[String]) -> Pruned {
                 &["for-each-ref", "--format=%(refname)", &write_refs(sid)],
             ) {
                 for r in held.lines().filter(|l| !l.is_empty()) {
-                    let _ = git(repo, None, None, &["update-ref", "-d", r]);
+                    crate::soft::done(git(repo, None, None, &["update-ref", "-d", r]), "git");
                 }
             }
-            let _ = std::fs::remove_file(repo.join(format!("index-{}", safe(sid))));
+            crate::soft::done(
+                std::fs::remove_file(repo.join(format!("index-{}", safe(sid)))),
+                "std::fs::remove_file",
+            );
             for key in [
                 format!("turn-{sid}"),
                 format!("write-{sid}"),
                 format!("wheel-{sid}"),
                 format!("diff-{sid}"),
             ] {
-                let _ = std::fs::remove_file(repo.join(format!("index-{}", safe(&key))));
+                crate::soft::done(
+                    std::fs::remove_file(repo.join(format!("index-{}", safe(&key)))),
+                    "std::fs::remove_file",
+                );
             }
         }
         if !any {
@@ -764,7 +773,7 @@ pub fn prune(repos: &[PathBuf], cap: u64, finished: &[String]) -> Pruned {
         }
         gone.push(sid.clone());
         for repo in repos {
-            let _ = git(repo, None, None, &["gc", "-q", "--prune=now"]);
+            crate::soft::done(git(repo, None, None, &["gc", "-q", "--prune=now"]), "git");
         }
         if size(repos) <= cap {
             return Pruned::Freed(gone);
@@ -809,9 +818,9 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
         std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(wt.join("a.txt"), "one").unwrap();
+        crate::fsio::write(wt.join("a.txt"), "one").unwrap();
         let t1 = take(&root, &wt, "s1", 1, &[]).unwrap();
-        std::fs::write(wt.join("a.txt"), "two").unwrap();
+        crate::fsio::write(wt.join("a.txt"), "two").unwrap();
         let t2 = take(&root, &wt, "s1", 2, &[]).unwrap();
         assert_ne!(t1, t2);
         let repo = repo_of(&root, &wt);
@@ -836,7 +845,7 @@ mod tests {
             let d = tempfile::tempdir().unwrap();
             let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
             std::fs::create_dir_all(&wt).unwrap();
-            std::fs::write(wt.join("a.txt"), "one").unwrap();
+            crate::fsio::write(wt.join("a.txt"), "one").unwrap();
             let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
             let takers: Vec<_> = (0..8)
                 .map(|i| {
@@ -865,7 +874,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
         std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(wt.join("a.txt"), "one\n").unwrap();
+        crate::fsio::write(wt.join("a.txt"), "one\n").unwrap();
         let base = take_base(&root, &wt, "job/1-1").unwrap();
         // the base is kept as a ref of its own, which a prune leaves alone
         let repo = repo_of(&root, &wt);
@@ -898,7 +907,7 @@ mod tests {
         ] {
             let p = wt.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(p, "x").unwrap();
+            crate::fsio::write(p, "x").unwrap();
         }
         let t = take(&root, &wt, "s1", 1, &["keep/own-secret.txt".into()]).unwrap();
         assert_eq!(listing(&repo_of(&root, &wt), &t), ["a.txt"]);
@@ -909,9 +918,9 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
         std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(wt.join("big"), noise(1, 60_000)).unwrap();
+        crate::fsio::write(wt.join("big"), noise(1, 60_000)).unwrap();
         take(&root, &wt, "old", 1, &[]).unwrap();
-        std::fs::write(wt.join("big"), noise(2, 60_000)).unwrap();
+        crate::fsio::write(wt.join("big"), noise(2, 60_000)).unwrap();
         take(&root, &wt, "live", 1, &[]).unwrap();
         let repos = vec![repo_of(&root, &wt)];
         let before = size(&repos);
@@ -933,7 +942,7 @@ mod tests {
 
     /// Plain git in DIR, for the fixtures only (never the code under test), with no outside config.
     fn fixture_git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
+        let out = crate::proc::Command::new("git")
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -957,7 +966,7 @@ mod tests {
     fn repo_with_a_commit(dir: &Path) -> String {
         std::fs::create_dir_all(dir).unwrap();
         fixture_git(dir, &["init", "-q", "."]);
-        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        crate::fsio::write(dir.join("a.txt"), "one\n").unwrap();
         fixture_git(dir, &["add", "a.txt"]);
         fixture_git(dir, &["commit", "-q", "-m", "one"]);
         fixture_git(dir, &["rev-parse", "HEAD"])
@@ -985,7 +994,7 @@ mod tests {
             "the ref is packed"
         );
         assert_eq!(head_of(&wt).as_deref(), Some(one.as_str()));
-        std::fs::write(wt.join("a.txt"), "two\n").unwrap();
+        crate::fsio::write(wt.join("a.txt"), "two\n").unwrap();
         fixture_git(&wt, &["commit", "-q", "-am", "two"]);
         let two = fixture_git(&wt, &["rev-parse", "HEAD"]);
         assert_eq!(head_of(&wt).as_deref(), Some(two.as_str()));
@@ -1004,7 +1013,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let wt = d.path().join("wt");
         let one = repo_with_a_commit(&wt);
-        let out = Command::new(std::env::current_exe().unwrap())
+        let out = crate::proc::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "timeline::snapshot::tests::head_of_in_a_child_without_path",
@@ -1029,7 +1038,10 @@ mod tests {
     fn head_of_in_a_child_without_path() {
         if let Some(wt) = std::env::var_os(CHILD) {
             assert_eq!(std::env::var_os("PATH").unwrap_or_default(), "");
-            println!("head={}", head_of(Path::new(&wt)).unwrap_or_default());
+            crate::soft::out_line(&format!(
+                "head={}",
+                head_of(Path::new(&wt)).unwrap_or_default()
+            ));
         }
     }
 
@@ -1052,7 +1064,7 @@ mod tests {
         symlink(good.join(".git/HEAD"), wt.join(".git/HEAD")).unwrap();
         assert_eq!(head_of(&wt), None, "HEAD a link");
         std::fs::remove_file(wt.join(".git/HEAD")).unwrap();
-        std::fs::write(wt.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        crate::fsio::write(wt.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
         std::fs::remove_file(wt.join(".git/refs/heads/main")).unwrap();
         symlink(
             good.join(".git/refs/heads/main"),
@@ -1085,7 +1097,7 @@ mod tests {
             &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()],
         );
         assert!(wt.join(".git").is_file());
-        std::fs::write(wt.join("b.txt"), "b\n").unwrap();
+        crate::fsio::write(wt.join("b.txt"), "b\n").unwrap();
         fixture_git(&wt, &["add", "b.txt"]);
         fixture_git(&wt, &["commit", "-q", "-m", "b"]);
         let feat = fixture_git(&wt, &["rev-parse", "HEAD"]);
@@ -1112,7 +1124,7 @@ mod tests {
             .unwrap()
             .join(".git/worktrees/wt");
         let up = pathdiff(&rel, &std::fs::canonicalize(&wt).unwrap());
-        std::fs::write(wt.join(".git"), format!("gitdir: {up}\n")).unwrap();
+        crate::fsio::write(wt.join(".git"), format!("gitdir: {up}\n")).unwrap();
         let link = d.path().join("link");
         std::os::unix::fs::symlink(d.path().join("real"), &link).unwrap();
         assert_eq!(head_of(&link.join("wt")).as_deref(), Some(one.as_str()));
@@ -1140,21 +1152,21 @@ mod tests {
     fn head_of_keeps_only_an_object_id() {
         let d = tempfile::tempdir().unwrap();
         let notes = d.path().join("notes.txt");
-        std::fs::write(&notes, "a private note\n").unwrap();
+        crate::fsio::write(&notes, "a private note\n").unwrap();
         let wt = d.path().join("wt");
         std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", notes.display())).unwrap();
+        crate::fsio::write(wt.join(".git"), format!("gitdir: {}\n", notes.display())).unwrap();
         assert_eq!(head_of(&wt), None, "gitdir a text file");
         let fake = d.path().join("fake");
         std::fs::create_dir_all(&fake).unwrap();
         std::fs::copy(&notes, fake.join("HEAD")).unwrap();
-        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", fake.display())).unwrap();
+        crate::fsio::write(wt.join(".git"), format!("gitdir: {}\n", fake.display())).unwrap();
         assert_eq!(head_of(&wt), None, "HEAD text");
         let r = d.path().join("r");
         let one = repo_with_a_commit(&r);
         // an object id where no ref may be, so only the name checks keep it out
-        std::fs::write(r.join(".git/sneaky"), format!("{one}\n")).unwrap();
-        std::fs::write(r.join(".git/refs/heads/text"), "a private note\n").unwrap();
+        crate::fsio::write(r.join(".git/sneaky"), format!("{one}\n")).unwrap();
+        crate::fsio::write(r.join(".git/refs/heads/text"), "a private note\n").unwrap();
         for head in [
             "ref: sneaky",
             "ref: refs/../sneaky",
@@ -1163,10 +1175,10 @@ mod tests {
             "ref: refs/heads/text",
             "0123abc",
         ] {
-            std::fs::write(r.join(".git/HEAD"), format!("{head}\n")).unwrap();
+            crate::fsio::write(r.join(".git/HEAD"), format!("{head}\n")).unwrap();
             assert_eq!(head_of(&r), None, "{head}");
         }
-        std::fs::write(r.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        crate::fsio::write(r.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
         assert_eq!(head_of(&r).as_deref(), Some(one.as_str()), "the control");
     }
 
@@ -1175,7 +1187,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
         std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(wt.join("big"), noise(3, 60_000)).unwrap();
+        crate::fsio::write(wt.join("big"), noise(3, 60_000)).unwrap();
         take(&root, &wt, "live", 1, &[]).unwrap();
         let repos = vec![repo_of(&root, &wt)];
         assert_eq!(prune(&repos, 1_000, &[]), Pruned::Stop);
@@ -1196,12 +1208,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
         std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(wt.join("a.txt"), "agent").unwrap();
+        crate::fsio::write(wt.join("a.txt"), "agent").unwrap();
         let t = write_tree_before(&root, &wt, "s1").unwrap();
         let repo = repo_of(&root, &wt);
         let refs = || git(&repo, None, None, &["for-each-ref", "--format=%(refname)"]).unwrap();
         assert_eq!(refs(), format!("refs/drgnx/write/s1/{t}"));
-        std::fs::write(wt.join("b.txt"), "next").unwrap();
+        crate::fsio::write(wt.join("b.txt"), "next").unwrap();
         put_write_tree(&root, &wt, "s1", 3, &t).unwrap();
         assert_eq!(refs(), "refs/drgnx/s/s1/3");
         assert_eq!(listing(&repo, &t), ["a.txt"], "taken before b.txt");
@@ -1223,17 +1235,19 @@ mod tests {
             for i in 0..n {
                 let p = wt.join(format!("d{}/f{i}.txt", i / 100));
                 std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-                std::fs::write(p, format!("line {i}\n")).unwrap();
+                crate::fsio::write(p, format!("line {i}\n")).unwrap();
             }
             write_tree_before(&root, &wt, "s1").unwrap();
             let runs = 20;
             let t = Instant::now();
             for i in 0..runs {
-                std::fs::write(wt.join("d0/f0.txt"), format!("write {i}\n")).unwrap();
+                crate::fsio::write(wt.join("d0/f0.txt"), format!("write {i}\n")).unwrap();
                 write_tree_before(&root, &wt, "s1").unwrap();
             }
             let ms = t.elapsed().as_secs_f64() * 1000.0 / f64::from(runs);
-            println!("COST tree before a write, {n} files: {ms:.2} ms per write");
+            crate::soft::out_line(&format!(
+                "COST tree before a write, {n} files: {ms:.2} ms per write"
+            ));
         }
     }
 
@@ -1245,13 +1259,13 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
         std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(wt.join("edit.txt"), "one").unwrap();
-        std::fs::write(wt.join("gone.txt"), "x").unwrap();
-        std::fs::write(wt.join("run.sh"), "echo").unwrap();
+        crate::fsio::write(wt.join("edit.txt"), "one").unwrap();
+        crate::fsio::write(wt.join("gone.txt"), "x").unwrap();
+        crate::fsio::write(wt.join("run.sh"), "echo").unwrap();
         let t1 = take(&root, &wt, "s1", 1, &[]).unwrap();
-        std::fs::write(wt.join("edit.txt"), "two").unwrap();
+        crate::fsio::write(wt.join("edit.txt"), "two").unwrap();
         std::fs::remove_file(wt.join("gone.txt")).unwrap();
-        std::fs::write(wt.join("new.txt"), "n").unwrap();
+        crate::fsio::write(wt.join("new.txt"), "n").unwrap();
         std::fs::set_permissions(wt.join("run.sh"), std::fs::Permissions::from_mode(0o755))
             .unwrap();
         std::os::unix::fs::symlink("edit.txt", wt.join("link")).unwrap();

@@ -120,7 +120,7 @@ async fn the_steps_run_in_order_and_the_first_failure_stops_the_rest() {
     ];
     tasks::run(&ok, &env).await.unwrap();
     assert_eq!(
-        std::fs::read_to_string(d.path().join("log")).unwrap(),
+        crate::fsio::read_to_string(d.path().join("log")).unwrap(),
         "one\ntwo 1\n"
     );
     let bad = vec![
@@ -133,7 +133,7 @@ async fn the_steps_run_in_order_and_the_first_failure_stops_the_rest() {
         "{e}"
     );
     assert!(
-        !std::fs::read_to_string(d.path().join("log"))
+        !crate::fsio::read_to_string(d.path().join("log"))
             .unwrap()
             .contains("after")
     );
@@ -143,7 +143,7 @@ async fn the_steps_run_in_order_and_the_first_failure_stops_the_rest() {
 async fn a_pre_launch_task_comes_from_the_roots_tasks_json() {
     let d = tempfile::tempdir().unwrap();
     std::fs::create_dir(d.path().join(".vscode")).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         d.path().join(".vscode/tasks.json"),
         r#"{"tasks": [{"label": "build", "type": "process", "command": "/bin/sh",
                         "args": ["-c", "echo built > out"], "options": {"cwd": "${workspaceFolder}/sub"}}]}"#,
@@ -179,7 +179,7 @@ async fn a_pre_launch_task_comes_from_the_roots_tasks_json() {
 fn a_post_debug_task_comes_from_the_same_file() {
     let d = tempfile::tempdir().unwrap();
     std::fs::create_dir(d.path().join(".vscode")).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         d.path().join(".vscode/tasks.json"),
         r#"{"tasks": [{"label": "clean", "type": "process", "command": "rm", "args": ["-f", "out"]}]}"#,
     )
@@ -188,7 +188,7 @@ fn a_post_debug_task_comes_from_the_same_file() {
     let steps = tasks::after_debug(d.path(), &config, Os::Linux, &|s| Ok(s.into())).unwrap();
     assert_eq!(steps[0].argv, ["rm", "-f", "out"]);
     // a background postDebugTask would be ended at once: refused
-    std::fs::write(
+    crate::fsio::write(
         d.path().join(".vscode/tasks.json"),
         r#"{"tasks": [{"label": "clean", "command": "w", "isBackground": true,
                        "problemMatcher": {"background": {"beginsPattern": "a", "endsPattern": "b"}}}]}"#,
@@ -385,19 +385,19 @@ async fn a_background_task_lets_the_start_go_at_its_end_pattern_and_ends_with_it
             .expect("the start went at the end pattern")
             .unwrap();
     assert_eq!(
-        std::fs::read_to_string(d.path().join("log")).unwrap(),
+        crate::fsio::read_to_string(d.path().join("log")).unwrap(),
         "after\n"
     );
     assert_eq!(watches.len(), 1);
     watches[0].listen(Box::new(move |line: &str| {
-        let _ = tx.send(line.to_owned());
+        crate::soft::done(tx.send(line.to_owned()), "tx send");
     }));
     let line = crate::clock::timeout(std::time::Duration::from_secs(20), rx.recv())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(line, "later");
-    let pid: i32 = std::fs::read_to_string(d.path().join("pid"))
+    let pid: i32 = crate::fsio::read_to_string(d.path().join("pid"))
         .unwrap()
         .trim()
         .parse()

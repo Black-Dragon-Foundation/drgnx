@@ -33,7 +33,7 @@ fn fake_worker(socket: &Path, proto: (u32, u32)) -> mpsc::UnboundedReceiver<In> 
         let mut line = String::new();
         while r.read_line(&mut line).await.unwrap_or(0) > 0 {
             if let Ok(m) = serde_json::from_str::<In>(&line) {
-                let _ = tx.send(m);
+                crate::soft::done(tx.send(m), "tx send");
             }
             line.clear();
         }
@@ -119,7 +119,7 @@ async fn adopts_by_pid_and_start_time_without_systemd() {
     }
     assert!(t.send("aa", &In::Text { text: "x".into() }));
     assert!(matches!(next(&mut rx).await, In::Text { .. }));
-    let _ = ev;
+    let _only_when_used_elsewhere = &ev;
 }
 
 #[tokio::test]
@@ -399,7 +399,7 @@ async fn a_clipboard_read_reaches_the_owner_and_its_answer_the_worker() {
         let mut line = String::new();
         while r.read_line(&mut line).await.unwrap_or(0) > 0 {
             if let Ok(m @ In::ClipboardReply { .. }) = serde_json::from_str::<In>(&line) {
-                let _ = heard_tx.send(m);
+                crate::soft::done(heard_tx.send(m), "heard_tx send");
             }
             line.clear();
         }
@@ -570,7 +570,10 @@ async fn wait_exit_gives_a_command_end_s_status_or_the_program_s_exit() {
     let got = crate::clock::timeout(Duration::from_secs(5), t.wait_exit("aa")).await;
     assert_eq!(got, Ok(None));
     drop(go);
-    let _ = crate::clock::timeout(Duration::from_secs(5), worker).await;
+    crate::soft::done(
+        crate::clock::timeout(Duration::from_secs(5), worker).await,
+        "crate::clock::timeout",
+    );
 }
 
 /// A fake worker on SOCKET that says hello, then goes away at the first status question without answering it (a
@@ -608,7 +611,7 @@ async fn a_worker_that_ends_unanswered_releases_the_list() {
     let (t, _ev) = open(tmp.path()).await;
     let st = t.list(Duration::from_secs(24 * 3600), None).await;
     assert!(st.iter().all(|s| s.id != "aa") || st[0].running, "{st:?}");
-    let _ = worker.await;
+    crate::soft::done(worker.await, "tests");
 }
 
 /// A fake worker on SOCKET whose program reads the clipboard at once: hello, then `clipboard-read` REQ; each line it
@@ -636,7 +639,7 @@ fn worker_reading_clipboard(socket: &Path, req: u64) -> mpsc::UnboundedReceiver<
         let mut line = String::new();
         while r.read_line(&mut line).await.unwrap_or(0) > 0 {
             if let Ok(m) = serde_json::from_str::<In>(&line) {
-                let _ = tx.send(m);
+                crate::soft::done(tx.send(m), "tx send");
             }
             line.clear();
         }

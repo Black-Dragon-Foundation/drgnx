@@ -483,8 +483,8 @@ mod hooks {
                 .map(|i| armed.remove(i))
         };
         if let Some((_, reached, wait)) = armed {
-            let _ = reached.send(());
-            let _ = wait.await;
+            crate::soft::done(reached.send(()), "reached send");
+            crate::soft::done(wait.await, "graph");
         }
     }
 }
@@ -2367,7 +2367,7 @@ mod tests {
             let config = dir.path().join("config");
             std::fs::create_dir_all(home.join("org")).unwrap();
             std::fs::create_dir_all(&config).unwrap();
-            std::fs::write(home.join("org/reading.org"), format!("* {CANARY}\n")).unwrap();
+            crate::fsio::write(home.join("org/reading.org"), format!("* {CANARY}\n")).unwrap();
             let file = dir.path().join("work.db");
             let db = CoordDb::spawn(&file);
             db.write(system(), |_| Ok(())).await.unwrap();
@@ -2405,7 +2405,7 @@ mod tests {
         }
 
         fn allow(&self, paths: &[&Path]) {
-            std::fs::write(
+            crate::fsio::write(
                 self.config.join(norn::deny::ALLOW_FILE),
                 json!({"version": 1, "paths": paths}).to_string(),
             )
@@ -2450,7 +2450,7 @@ mod tests {
         put_parsed(&race.w, &race.coord, p).await.unwrap();
         let backup = race.dir.path().join("backup/old.db");
         std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
-        std::fs::write(&backup, format!("row {CANARY} end")).unwrap();
+        crate::fsio::write(&backup, format!("row {CANARY} end")).unwrap();
         let dirs = StoreDirs {
             home: race.home.clone(),
             config: race.config.clone(),
@@ -2552,7 +2552,7 @@ mod tests {
         let (w, coord) = (race.w.clone(), race.coord.clone());
         let rec = tokio::spawn(async move { record(&w, &coord, &user(), p).await });
         reached.await.unwrap();
-        std::fs::write(
+        crate::fsio::write(
             race.config.join(norn::deny::DENY_FILE),
             json!({"version": 1, "entries": [{"kind": "folder", "path": repo}]}).to_string(),
         )
@@ -2880,8 +2880,8 @@ mod tests {
         std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
         std::fs::create_dir_all(&sessions).unwrap();
         let transcript = sessions.join("s1.jsonl");
-        std::fs::write(&backup, format!("row {TEXT} end")).unwrap();
-        std::fs::write(&transcript, format!("{{\"text\": \"{TEXT}\"}}\n")).unwrap();
+        crate::fsio::write(&backup, format!("row {TEXT} end")).unwrap();
+        crate::fsio::write(&transcript, format!("{{\"text\": \"{TEXT}\"}}\n")).unwrap();
         let mut p = json!({"target": id, "reason": "r"});
         p.as_object_mut()
             .unwrap()
@@ -2915,7 +2915,7 @@ mod tests {
         );
         assert_eq!(a["transcripts_holding"], json!([]), "{a}");
         assert!(!backup.exists());
-        let t = std::fs::read_to_string(&transcript).unwrap();
+        let t = crate::fsio::read_to_string(&transcript).unwrap();
         assert!(!t.contains("secret title"), "{t}");
     }
 
@@ -2936,11 +2936,11 @@ mod tests {
         );
         assert_eq!(a["transcripts_redacted"], json!([]), "{a}");
         assert_eq!(
-            std::fs::read_to_string(&backup).unwrap(),
+            crate::fsio::read_to_string(&backup).unwrap(),
             "row secret title of the task end"
         );
         assert!(
-            std::fs::read_to_string(&transcript)
+            crate::fsio::read_to_string(&transcript)
                 .unwrap()
                 .contains("secret title of the task")
         );

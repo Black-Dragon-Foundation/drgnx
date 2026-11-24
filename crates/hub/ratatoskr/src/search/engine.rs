@@ -48,7 +48,13 @@ const REQUEST_WAIT: Duration = Duration::from_secs(600);
 /// After a request broke off, how long the process has to be seen gone before the break counts as the engine's answer.
 const REAP_WAIT: Duration = Duration::from_secs(2);
 /// The hub's variables the engine gets: the loader's, and the GPU drivers' (Vulkan, Mesa, NVIDIA) and ggml's by prefix.
-const ENV: &[&str] = &["PATH", "HOME", "XDG_RUNTIME_DIR", "LANG", "LC_ALL"];
+const ENV: &[&str] = &[
+    "PATH",
+    stig::HOME_VAR,
+    stig::SYSTEM_RUNTIME_VAR,
+    "LANG",
+    "LC_ALL",
+];
 const ENV_PREFIXES: &[&str] = &["VK_", "MESA_", "GGML_", "RADV_", "__NV_", "__GLX_"];
 
 /// The text and the reference vector of the engine's self-check (`hrafn-embed/data/*.selfcheck.json`).
@@ -364,7 +370,7 @@ impl LocalEngine {
             let status = child.wait().await;
             gone.store(true, Ordering::SeqCst);
             tracing::debug!("search: the engine (pid {pid}) exited: {status:?}");
-            let _ = reaped_tx.send(true);
+            crate::soft::done(reaped_tx.send(true), "reaped_tx send");
         });
         let r = Running {
             port: 0,
@@ -635,7 +641,10 @@ impl LocalEngine {
 async fn end(shared: &Shared, mut r: Running) {
     // SAFETY: kill(2) on the engine's own process group (draugr made the engine the leader of a new one)
     unsafe { libc::kill(-r.pid, libc::SIGKILL) };
-    let _ = crate::clock::real(r.reaped.wait_for(|done| *done)).await;
+    crate::soft::done(
+        crate::clock::real(r.reaped.wait_for(|done| *done)).await,
+        "crate::clock::real",
+    );
     shared.set_pid(Some(r.pid), None);
 }
 

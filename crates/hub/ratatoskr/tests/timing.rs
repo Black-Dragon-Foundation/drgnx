@@ -231,19 +231,19 @@ async fn query_row(chunks: usize, budget: Duration) {
     let dir = tempfile::tempdir().unwrap();
     let built = Instant::now();
     let (store, cache) = synthetic(dir.path(), chunks, false).await;
-    println!("{chunks} chunks built in {:?}", built.elapsed());
+    ratatoskr::soft::out_line(&format!("{chunks} chunks built in {:?}", built.elapsed()));
     let keyword = ask((&store, &cache), hrafn::View::Base, false, 6).await;
     let full = ask((&store, &cache), hrafn::View::Base, true, 6).await;
     for (what, t) in [
         ("keyword and symbol only", &keyword),
         ("with vectors", &full),
     ] {
-        println!(
+        ratatoskr::soft::out_line(&format!(
             "{chunks} chunks, {what}: p50 {:?} p95 {:?} max {:?}",
             percentile(t, 0.5),
             percentile(t, 0.95),
             t.last().unwrap()
-        );
+        ));
     }
     assert!(
         percentile(&full, 0.95) <= budget,
@@ -304,10 +304,10 @@ async fn agent_tools_at_50k_chunks() {
         .read(|c| Ok(c.query_row("select sum(n) from ref", [], |r| r.get(0))?))
         .await
         .unwrap();
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "50000 chunks with {refs} references built in {:?}",
         built.elapsed()
-    );
+    ));
     let view = hrafn::View::Base;
     let ask = |budget: usize, focus: Vec<String>| MapAsk {
         budget,
@@ -320,13 +320,16 @@ async fn agent_tools_at_50k_chunks() {
     let m = repo_map(&store, view, &ask(2_000, vec![])).await.unwrap();
     let cold = started.elapsed();
     assert!(m.built && !m.files.is_empty());
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "map cold: {cold:?} ({} files, ~{} tokens)",
         m.files.len(),
         m.tokens
-    );
+    ));
     let cache = hrafn::graph::cache_bytes(&store);
-    println!("graph cache: {:.1} MB", cache as f64 / (1 << 20) as f64);
+    ratatoskr::soft::out_line(&format!(
+        "graph cache: {:.1} MB",
+        cache as f64 / (1 << 20) as f64
+    ));
 
     let budgets = [1_000, 2_000, 4_000, 8_000];
     let warm = timed(20, |r| {
@@ -386,12 +389,12 @@ async fn agent_tools_at_50k_chunks() {
         ("symbols", &syms),
         ("outline", &outlined),
     ] {
-        println!(
+        ratatoskr::soft::out_line(&format!(
             "{what}: p50 {:?} p95 {:?} max {:?}",
             percentile(t, 0.5),
             percentile(t, 0.95),
             t.last().unwrap()
-        );
+        ));
     }
     let over: Vec<String> = [
         ("map cold", cold, MAP_COLD),
@@ -503,17 +506,20 @@ async fn worktree_search_p95() {
         trees.push(t);
     }
     embed_all(&store, &cache, &mut 1_000_000).await;
-    println!("50,000 chunks and 10 trees built in {:?}", built.elapsed());
+    ratatoskr::soft::out_line(&format!(
+        "50,000 chunks and 10 trees built in {:?}",
+        built.elapsed()
+    ));
     let base = ask((&store, &cache), hrafn::View::Base, true, 6).await;
     let tree = ask((&store, &cache), hrafn::View::Tree(trees[7]), true, 6).await;
     let (b, t) = (percentile(&base, 0.95), percentile(&tree, 0.95));
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "base view: p50 {:?} p95 {b:?}; worktree view: p50 {:?} p95 {t:?}; ratio {:.2} (targets {WORKTREE_P95:?}, \
          {WORKTREE_RATIO})",
         percentile(&base, 0.5),
         percentile(&tree, 0.5),
         t.as_secs_f64() / b.as_secs_f64()
-    );
+    ));
 }
 
 /// The text files of drgnx's own checkout (this crate's workspace and the Lisp), as a project's listing.
@@ -604,11 +610,11 @@ async fn tier1_of_a_checkout_and_one_saved_file() {
     };
     let r = refresh(&store, &list, &read, &[]).await.unwrap();
     let full = started.elapsed();
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "tier 1 of {} files, {} chunks: {full:?}",
         list.len(),
         r.chunks_written
-    );
+    ));
     assert!(
         full <= TIER1_FULL_INDEX,
         "{full:?} over {TIER1_FULL_INDEX:?}"
@@ -651,7 +657,7 @@ async fn tier1_of_a_checkout_and_one_saved_file() {
     .await
     .unwrap();
     let saved = started.elapsed();
-    println!("one saved file, to its symbol found: {saved:?}");
+    ratatoskr::soft::out_line(&format!("one saved file, to its symbol found: {saved:?}"));
     assert_eq!(a.hits[0].path, target);
     assert!(
         saved <= ONE_FILE_SEARCHABLE,
@@ -673,10 +679,10 @@ async fn tier1_of_a_checkout_and_one_saved_file() {
         })
         .await
         .unwrap();
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "store {total} bytes, of which references {refs}: +{:.1} % over the rest",
         refs as f64 * 100.0 / (total - refs) as f64
-    );
+    ));
 }
 
 /// The hub's steps around a Symbol search's index lookup in a git project of 25,000 synthetic files (50,000 chunks,
@@ -692,7 +698,8 @@ async fn usages_steps_at_50k_chunks() {
     let root = dir.path().join("p");
     std::fs::create_dir_all(root.join("src")).unwrap();
     for f in 0..files {
-        std::fs::write(root.join(format!("src/m{f}.rs")), file_text(f, Some(files))).unwrap();
+        ratatoskr::fsio::write(root.join(format!("src/m{f}.rs")), file_text(f, Some(files)))
+            .unwrap();
     }
     for args in [
         &["init", "-q"][..],
@@ -708,7 +715,7 @@ async fn usages_steps_at_50k_chunks() {
             "one",
         ],
     ] {
-        let st = std::process::Command::new("git")
+        let st = ratatoskr::proc::Command::new("git")
             .arg("-C")
             .arg(&root)
             .args(args)
@@ -734,11 +741,11 @@ async fn usages_steps_at_50k_chunks() {
     .unwrap();
     let built = Instant::now();
     let r = p.refresh_now().await.unwrap();
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "tier 1: {} chunks in {:?}",
         r.chunks_written,
         built.elapsed()
-    );
+    ));
     let name = fn_name(0, 0);
     let rounds = 100;
     let fresh = timed(rounds, |_| async {
@@ -765,11 +772,11 @@ async fn usages_steps_at_50k_chunks() {
         ("usages", &lookup),
         ("lag", &lag),
     ] {
-        println!(
+        ratatoskr::soft::out_line(&format!(
             "{what}: p50 {:?} p95 {:?} max {:?}",
             percentile(t, 0.5),
             percentile(t, 0.95),
             t.last().unwrap()
-        );
+        ));
     }
 }

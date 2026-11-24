@@ -166,7 +166,7 @@ async fn an_error_answer_a_silent_server_and_a_server_that_exits_each_end_the_re
         c.request("initialize", json!({}), Duration::from_secs(60))
             .await
     });
-    let _ = sent(&mut server_in).await; // the abandoned request above, then this one
+    sent(&mut server_in).await; // the abandoned request above, then this one
     drop(server_out);
     let got = waiting.await.unwrap();
     assert!(matches!(got, Err(Failure::Closed(_))), "{got:?}");
@@ -185,7 +185,7 @@ async fn an_oversized_frame_in_the_middle_fails_the_waiting_request_without_read
     let ask = crate::clock::spawn("test:lsp-client", async move {
         c.request("m", json!({}), Duration::from_secs(60)).await
     });
-    let _ = sent(&mut server_in).await;
+    sent(&mut server_in).await;
     server_out
         .write_all(format!("Content-Length: {}\r\n\r\n", MAX_FRAME + 5).as_bytes())
         .await

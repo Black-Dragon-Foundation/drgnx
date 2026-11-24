@@ -770,7 +770,7 @@ async fn a_fix_is_run_in_a_fresh_tree_with_its_files() {
         (end.exit, end.exception_at, end.timed_out),
         (Some(0), None, false)
     );
-    assert_eq!(std::fs::read_to_string(&py).unwrap(), "fixed = True\n");
+    assert_eq!(crate::fsio::read_to_string(&py).unwrap(), "fixed = True\n");
     assert!(trees.removed.lock().unwrap().contains(&tree));
     let bad = vec![("../escape.py".to_owned(), "x".to_owned())];
     let e = f

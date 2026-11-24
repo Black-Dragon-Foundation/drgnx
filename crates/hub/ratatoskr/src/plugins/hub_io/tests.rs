@@ -126,14 +126,14 @@ fn plugin(host: &Host, r: &Rig, extra: Option<&str>) -> Plugin {
             let root = r.dir.path().join("plugins");
             let dir = root.join("http-ability");
             std::fs::create_dir_all(&dir).unwrap();
-            let manifest = std::fs::read_to_string(from.join("plugin.json"))
+            let manifest = crate::fsio::read_to_string(from.join("plugin.json"))
                 .unwrap()
                 .replace(
                     r#""hosts": ["api.example.com"]"#,
                     &format!(r#""hosts": ["api.example.com"], {extra}"#),
                 );
             assert!(manifest.contains(extra), "the fixture's manifest moved");
-            std::fs::write(dir.join("plugin.json"), manifest).unwrap();
+            crate::fsio::write(dir.join("plugin.json"), manifest).unwrap();
             std::fs::copy(from.join("plugin.wasm"), dir.join("plugin.wasm")).unwrap();
             root
         }
@@ -325,11 +325,14 @@ async fn server(
             }
             head.extend_from_slice(&b[..n]);
         }
-        let _ = tx.send(String::from_utf8_lossy(&head).into_owned());
+        crate::soft::done(
+            tx.send(String::from_utf8_lossy(&head).into_owned()),
+            "tx send",
+        );
         tls.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello")
             .await
             .unwrap();
-        let _ = tls.shutdown().await;
+        crate::soft::done(tls.shutdown().await, "tests");
     });
     (port, rx)
 }

@@ -98,7 +98,7 @@ impl Fx {
     }
 
     fn calls(&self) -> Vec<String> {
-        std::fs::read_to_string(self.dir.path().join("browser/calls"))
+        crate::fsio::read_to_string(self.dir.path().join("browser/calls"))
             .unwrap_or_default()
             .lines()
             .map(str::to_owned)
@@ -251,7 +251,10 @@ impl Client {
             .write_frame(Frame::close(1000, b"bye"))
             .await
             .unwrap();
-        let _ = tokio::time::timeout(Duration::from_secs(5), self.ws.read_frame()).await;
+        crate::soft::done(
+            tokio::time::timeout(Duration::from_secs(5), self.ws.read_frame()).await,
+            "tokio::time::timeout",
+        );
     }
 }
 

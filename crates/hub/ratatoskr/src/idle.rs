@@ -358,7 +358,7 @@ mod tests {
     fn version_program(dir: &Path, text: &str) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let p = dir.join("ratatoskr");
-        std::fs::write(&p, format!("#!/bin/sh\ncat <<'E'\n{text}\nE\n")).unwrap();
+        crate::fsio::write(&p, format!("#!/bin/sh\ncat <<'E'\n{text}\nE\n")).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p
     }

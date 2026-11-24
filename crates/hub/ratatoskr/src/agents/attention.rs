@@ -136,7 +136,8 @@ mod tests {
     #[test]
     fn an_exited_session_waits_on_nothing() {
         let mut a = Attention::default();
-        let _ = a.note("s-a", &snap("a", "busy", json!([{"id": 1, "title": "x"}])));
+
+        a.note("s-a", &snap("a", "busy", json!([{"id": 1, "title": "x"}])));
         let got = a
             .note("s-a", &snap("a", "exited", json!([])))
             .expect("changed");

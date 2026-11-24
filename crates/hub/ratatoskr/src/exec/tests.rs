@@ -314,7 +314,7 @@ fn exec_survives_a_hub_restart() {
         let r = open(d.path());
         assert_eq!(r.get(&id).unwrap().status, ExecStatus::Running);
         // opens the pipe once the job's shell is reading it
-        std::fs::write(&go, "go\n").unwrap();
+        crate::fsio::write_pipe(&go, "go\n").unwrap();
         let row = ended(&r, &id).await;
         assert_eq!(row.status, ExecStatus::Done);
         assert_eq!(row.summary.unwrap().lines, vec!["survived".to_string()]);
@@ -347,7 +347,7 @@ fn a_job_whose_process_is_gone_is_lost() {
         relay: None,
         keyed: false,
     };
-    std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+    crate::fsio::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         let r = open(d.path());
@@ -782,15 +782,15 @@ async fn exec_runs_in_the_starters_sandbox() {
         }
     }
     let _restore = Restore(
-        ["XDG_STATE_HOME", "TMPDIR", "XDG_RUNTIME_DIR"]
+        [stig::Xdg::State.var(), "TMPDIR", stig::SYSTEM_RUNTIME_VAR]
             .into_iter()
             .map(|k| (k, std::env::var_os(k)))
             .collect(),
     );
     unsafe {
-        std::env::set_var("XDG_STATE_HOME", d.path().join("state"));
+        std::env::set_var(stig::Xdg::State.var(), d.path().join("state"));
         std::env::set_var("TMPDIR", d.path());
-        std::env::remove_var("XDG_RUNTIME_DIR");
+        std::env::remove_var(stig::SYSTEM_RUNTIME_VAR);
     }
     let env = runstav::paths::Env::process();
     runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), "s1").unwrap();
@@ -1123,7 +1123,7 @@ async fn a_job_on_a_full_machine_is_queued_and_starts_when_a_slot_frees() {
     assert_eq!(r.get(&first).unwrap().status, ExecStatus::Running);
     assert_eq!(r.list(None, true).len(), 2, "queued counts as live");
     assert_eq!(r.live().ids("S1").len(), 2);
-    std::fs::write(&gate, "").unwrap();
+    crate::fsio::write(&gate, "").unwrap();
     assert_eq!(ended(&r, &first).await.status, ExecStatus::Done);
     let row = ended(&r, &second).await;
     assert_eq!(row.status, ExecStatus::Done);
@@ -1151,7 +1151,7 @@ async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
     let kept = r.start(agents(d.path(), "echo kept")).await.unwrap();
     assert_eq!(r.stop(&stopped).await.unwrap().status, ExecStatus::Stopped);
     // the next hub: its own runner on the same folder, the first job's slot free again
-    std::fs::write(&gate, "").unwrap();
+    crate::fsio::write(&gate, "").unwrap();
     assert_eq!(ended(&r, &first).await.status, ExecStatus::Done);
     assert_eq!(ended(&r, &kept).await.status, ExecStatus::Done);
     assert!(!d.path().join("ran-stopped").exists());
@@ -1180,14 +1180,14 @@ async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
         relay: None,
         keyed: false,
     };
-    std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+    crate::fsio::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let pending = Pending::of(&spec(
         Starter::User,
         d.path(),
         "echo late",
         Duration::from_secs(30),
     ));
-    std::fs::write(
+    crate::fsio::write(
         dir.join("pending.json"),
         serde_json::to_vec(&pending).unwrap(),
     )
@@ -1273,9 +1273,9 @@ async fn a_queued_pending_json_is_read_once() {
         relay: None,
         keyed: false,
     };
-    std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+    crate::fsio::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let pending = Pending::of(&agents(d.path(), "echo older"));
-    std::fs::write(
+    crate::fsio::write(
         dir.join("pending.json"),
         serde_json::to_vec(&pending).unwrap(),
     )
@@ -1382,7 +1382,7 @@ async fn a_log_that_is_not_text_is_read_with_replacements() {
     let r = open(d.path());
     let dir = d.path().join("exec/xbytes");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("log"), b"one\n\xff two\nthree\n").unwrap();
+    crate::fsio::write(dir.join("log"), b"one\n\xff two\nthree\n").unwrap();
     assert_eq!(r.log_slice("xbytes", 1, 5), ["\u{fffd} two", "three"]);
     assert_eq!(r.log_slice("xbytes", 0, 1), ["one"]);
     // its end too
@@ -1397,7 +1397,7 @@ async fn the_end_of_a_log_is_its_last_bytes() {
     let r = open(d.path());
     let dir = d.path().join("exec/xtail");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("log"), "one\ntwo\nthree\nh\u{e9}llo\n").unwrap();
+    crate::fsio::write(dir.join("log"), "one\ntwo\nthree\nh\u{e9}llo\n").unwrap();
     assert_eq!(
         r.log_tail("xtail", 1000),
         ["one", "two", "three", "h\u{e9}llo"]
@@ -1470,11 +1470,11 @@ fn info_net(version: &str, rootless: bool) -> String {
 fn net_hooks(d: &Path, info: &str) -> Hooks {
     let mut ready = Vec::new();
     ferja::frame::encode(&ferja::frame::Frame::ready(net::LISTEN), &mut ready);
-    std::fs::write(d.join("ready"), ready).unwrap();
+    crate::fsio::write(d.join("ready"), ready).unwrap();
     let px = d.join("px");
     std::fs::create_dir_all(&px).unwrap();
     for arch in ["amd64", "arm64"] {
-        std::fs::write(ferja::image::binary_for(&px, arch), b"px").unwrap();
+        crate::fsio::write(ferja::image::binary_for(&px, arch), b"px").unwrap();
     }
     let fake = d.join("podman");
     let d = d.display();
@@ -1501,7 +1501,7 @@ fn net_spec(cwd: &Path) -> ExecSpec {
 }
 
 fn ran(d: &Path) -> Vec<String> {
-    std::fs::read_to_string(d.join("ran"))
+    crate::fsio::read_to_string(d.join("ran"))
         .unwrap_or_default()
         .lines()
         .map(str::to_string)
@@ -1526,7 +1526,8 @@ async fn a_graceful_stop_ends_networked_jobs() {
     r.end_networked().await;
     let row = ended(&r, &networked).await;
     assert_eq!(row.status, ExecStatus::Infra);
-    let log = std::fs::read_to_string(d.path().join("exec").join(&networked).join("log")).unwrap();
+    let log =
+        crate::fsio::read_to_string(d.path().join("exec").join(&networked).join("log")).unwrap();
     assert!(log.contains("infra: proxy: the hub stopped"), "{log}");
     let job = container::name_of(&networked).unwrap();
     let rm = ran(d.path());
@@ -1547,7 +1548,7 @@ async fn a_graceful_stop_ends_networked_jobs() {
 #[tokio::test]
 async fn a_sidecar_exit_ends_the_job_infra() {
     let d = tempfile::tempdir().unwrap();
-    std::fs::write(d.path().join("die"), "").unwrap();
+    crate::fsio::write(d.path().join("die"), "").unwrap();
     let r = Runner::default();
     r.open(
         d.path().join("exec"),
@@ -1556,7 +1557,7 @@ async fn a_sidecar_exit_ends_the_job_infra() {
     let id = r.start(net_spec(d.path())).await.unwrap();
     let row = ended(&r, &id).await;
     assert_eq!(row.status, ExecStatus::Infra);
-    let log = std::fs::read_to_string(d.path().join("exec").join(&id).join("log")).unwrap();
+    let log = crate::fsio::read_to_string(d.path().join("exec").join(&id).join("log")).unwrap();
     assert!(log.contains("exited 4: the channel broke a rule"), "{log}");
     assert!(log.contains("bad frame"), "{log}");
 }
@@ -1622,7 +1623,7 @@ fn reattach_ends_a_networked_job() {
     ] {
         let dir = d.path().join("exec").join(&m.id);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        crate::fsio::write(dir.join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
     }
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -1630,7 +1631,7 @@ fn reattach_ends_a_networked_job() {
         r.open(d.path().join("exec"), hooks);
         let row = ended(&r, "xnet").await;
         assert_eq!(row.status, ExecStatus::Infra);
-        let log = std::fs::read_to_string(d.path().join("exec/xnet/log")).unwrap_or_default();
+        let log = crate::fsio::read_to_string(d.path().join("exec/xnet/log")).unwrap_or_default();
         assert!(log.contains(net::HUB_RESTARTED), "{log}");
         assert!(
             ran(d.path()).contains(&"rm drgnx-job-xnet".to_string()),
@@ -1639,8 +1640,8 @@ fn reattach_ends_a_networked_job() {
         );
         assert_eq!(r.get("xplain").unwrap().status, ExecStatus::Running);
     });
-    let _ = adopted.kill();
-    let _ = adopted.wait();
+    crate::soft::done(adopted.kill(), "tests");
+    crate::soft::done(adopted.wait(), "tests");
 }
 
 /// A meta written before `relay` existed reads, as a job without one.
@@ -1666,7 +1667,7 @@ async fn a_projects_own_runner_settings_reach_its_jobs_only() {
     for p in ["alpha", "beta"] {
         let at = d.path().join(p);
         std::fs::create_dir(&at).unwrap();
-        let ok = std::process::Command::new("git")
+        let ok = crate::proc::Command::new("git")
             .args(["init", "-q"])
             .current_dir(&at)
             .status()
@@ -1716,7 +1717,7 @@ async fn a_mac_job_needs_its_projects_homebrew_packages() {
     );
     let at = d.path().join("alpha");
     std::fs::create_dir(&at).unwrap();
-    let ok = std::process::Command::new("git")
+    let ok = crate::proc::Command::new("git")
         .args(["init", "-q"])
         .current_dir(&at)
         .status()
@@ -1787,7 +1788,7 @@ async fn a_mac_job_needs_its_projects_homebrew_packages() {
 
 /// The rows a job's `result.json` keeps, as JSON (`[{name, verdict, class?, symbols?}]`).
 fn result_rows(root: &Path, id: &str) -> Vec<serde_json::Value> {
-    let text = std::fs::read_to_string(root.join("exec").join(id).join("result.json")).unwrap();
+    let text = crate::fsio::read_to_string(root.join("exec").join(id).join("result.json")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     v["rows"].as_array().cloned().unwrap_or_default()
 }
@@ -1941,7 +1942,7 @@ async fn a_moved_job_names_the_files_that_changed() {
     let d = tempfile::tempdir().unwrap();
     let w = d.path().join("w");
     repo_with_a_commit(&w);
-    std::fs::write(w.join("a.txt"), "uncommitted\n").unwrap();
+    crate::fsio::write(w.join("a.txt"), "uncommitted\n").unwrap();
     let r = open(d.path());
     let writes = spec(
         Starter::User,
@@ -1969,7 +1970,7 @@ async fn a_moved_job_names_the_files_that_changed() {
 /// A git repository at DIR with one commit; answers its tree id.
 fn repo_with_a_commit(dir: &Path) -> String {
     let git = |args: &[&str]| {
-        let o = std::process::Command::new("git")
+        let o = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -1991,7 +1992,7 @@ fn repo_with_a_commit(dir: &Path) -> String {
     };
     std::fs::create_dir_all(dir).unwrap();
     git(&["init", "-q"]);
-    std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+    crate::fsio::write(dir.join("a.txt"), "a\n").unwrap();
     git(&["add", "a.txt"]);
     git(&["commit", "-q", "-m", "one"]);
     git(&["rev-parse", "HEAD^{tree}"])
@@ -2046,7 +2047,7 @@ async fn a_green_job_is_reused_and_a_red_one_never() {
     ended(&r, &b2).await;
 
     // uncommitted work is another tree key
-    std::fs::write(w.join("a.txt"), "changed\n").unwrap();
+    crate::fsio::write(w.join("a.txt"), "changed\n").unwrap();
     let (c, reused) = r.start_or_reuse(green.clone()).await.unwrap();
     assert!(!reused && c != a);
     ended(&r, &c).await;
@@ -2176,7 +2177,7 @@ async fn a_keyed_jobs_output_reaches_its_log_only_redacted() {
     let id = r.start(s).await.unwrap();
     let row = ended(&r, &id).await;
     assert_eq!(row.status, ExecStatus::Done);
-    let log = std::fs::read_to_string(d.path().join("exec").join(&id).join("log")).unwrap();
+    let log = crate::fsio::read_to_string(d.path().join("exec").join(&id).join("log")).unwrap();
     let mask = "*".repeat(value.len());
     assert!(log.contains("socket-there"), "{log}");
     assert!(!log.contains(value), "{log}");
@@ -2189,7 +2190,7 @@ async fn a_keyed_jobs_output_reaches_its_log_only_redacted() {
     }
     assert!(log.ends_with("end\n"), "{log}");
     let result =
-        std::fs::read_to_string(d.path().join("exec").join(&id).join("result.json")).unwrap();
+        crate::fsio::read_to_string(d.path().join("exec").join(&id).join("result.json")).unwrap();
     assert!(
         !result.contains(value) && result.contains(&mask),
         "{result}"
@@ -2231,7 +2232,7 @@ async fn a_keyed_container_job_reads_its_keys_through_its_sidecar() {
     let d = tempfile::tempdir().unwrap();
     let h = net_hooks(d.path(), &info_net("5.4.2", true));
     // podman's arguments recorded, then the stand-in
-    std::fs::rename(d.path().join("podman"), d.path().join("podman-real")).unwrap();
+    crate::fsio::rename(d.path().join("podman"), d.path().join("podman-real")).unwrap();
     let rec = d.path().join("podman");
     hlaup::write(
         &rec,
@@ -2252,12 +2253,12 @@ async fn a_keyed_container_job_reads_its_keys_through_its_sidecar() {
     let e = r.start(keyed()).await.unwrap_err();
     assert!(e.message.contains("static drgnx-key"), "{}", e.message);
     for arch in ["amd64", "arm64"] {
-        std::fs::write(px.join(keys::static_key_name(arch)), b"key").unwrap();
+        crate::fsio::write(px.join(keys::static_key_name(arch)), b"key").unwrap();
     }
     let id = r.start(keyed()).await.unwrap();
     let dir = d.path().join("exec").join(&id);
     assert_eq!(std::fs::read(dir.join("drgnx-key")).unwrap(), b"key");
-    let args = std::fs::read_to_string(d.path().join("args")).unwrap();
+    let args = crate::fsio::read_to_string(d.path().join("args")).unwrap();
     let sidecar = args
         .lines()
         .find(|l| l.starts_with("run -i"))
@@ -2266,7 +2267,7 @@ async fn a_keyed_container_job_reads_its_keys_through_its_sidecar() {
     // the job's own run comes from its wrapper's shell, after start answers
     let name = container::name_of(&id).unwrap();
     let job = skuld::wait_until_async("the job's run", 30, || {
-        let args = std::fs::read_to_string(d.path().join("args")).unwrap_or_default();
+        let args = crate::fsio::read_to_string(d.path().join("args")).unwrap_or_default();
         std::future::ready(
             args.lines()
                 .find(|l| l.contains(&name) && l.starts_with("run "))
@@ -2441,7 +2442,7 @@ fn idle_slice(root: &Path) -> PathBuf {
         ("io.stat", ""),
         ("memory.events", "oom 0\noom_kill 0\n"),
     ] {
-        std::fs::write(s.join(f), t).unwrap();
+        crate::fsio::write(s.join(f), t).unwrap();
     }
     s
 }
@@ -2459,12 +2460,12 @@ fn local_stuck(root: &Path, row: &ExecRow, id: &str, rule: &str) {
     assert_eq!(row.status, ExecStatus::Infra, "{row:?}");
     let dir = root.join("exec").join(id);
     assert_eq!(
-        std::fs::read_to_string(dir.join("why")).unwrap(),
+        crate::fsio::read_to_string(dir.join("why")).unwrap(),
         format!("infra: stuck ({rule})")
     );
-    let report = std::fs::read_to_string(dir.join("stuck.txt")).unwrap();
+    let report = crate::fsio::read_to_string(dir.join("stuck.txt")).unwrap();
     assert!(report.starts_with(&format!("stuck ({rule}): ")), "{report}");
-    let log = std::fs::read_to_string(dir.join("log")).unwrap();
+    let log = crate::fsio::read_to_string(dir.join("log")).unwrap();
     assert!(
         log.lines()
             .last()
@@ -2519,12 +2520,15 @@ fn paced_guard(root: &Path, more_output: bool) -> Runner {
                     let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
                     let at = len(&log);
                     // on a blocking thread: the wait is a poll on the log's size, and the runtime keeps running
-                    let _ = tokio::task::spawn_blocking(move || {
-                        skuld::wait_until("the job's next output", 60, || {
-                            (len(&log) > at).then_some(())
+                    crate::soft::done(
+                        tokio::task::spawn_blocking(move || {
+                            skuld::wait_until("the job's next output", 60, || {
+                                (len(&log) > at).then_some(())
+                            })
                         })
-                    })
-                    .await;
+                        .await,
+                        "tokio::task::spawn_blocking",
+                    );
                 })
             })),
             ..hooks()
@@ -2549,7 +2553,7 @@ async fn progress_local_printing_job_is_not_stopped() {
     assert_eq!(row.summary.unwrap().exit, Some(0));
     let dir = d.path().join("exec").join(&id);
     assert!(!dir.join("stuck.txt").exists());
-    let log = std::fs::read_to_string(dir.join("log")).unwrap();
+    let log = crate::fsio::read_to_string(dir.join("log")).unwrap();
     let deadline: f64 = log
         .lines()
         .find_map(|l| l.strip_prefix("deadline="))

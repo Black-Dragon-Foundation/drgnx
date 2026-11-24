@@ -76,7 +76,7 @@ impl Trusted {
             _ => return Err("holds more than one form".into()),
         };
         let raw: Raw = huginn::de::from_node(node).map_err(|e| format!("has a mistake: {e}"))?;
-        let _ = (&raw.allowed, &raw.denied);
+        let _only_when_used_elsewhere = (&raw.allowed, &raw.denied);
         if raw.version.is_some_and(|v| v > VERSION) {
             return Err("was written by a newer drgnx".into());
         }
@@ -188,7 +188,7 @@ mod tests {
 
     fn file(d: &Path, text: &str) -> PathBuf {
         let f = d.join("trusted-folders.eld");
-        std::fs::write(&f, text).unwrap();
+        crate::fsio::write(&f, text).unwrap();
         f
     }
 
@@ -293,7 +293,7 @@ mod tests {
         let (d, home, proj) = dirs();
         let f = file(d.path(), "(:version 2 :folders ())");
         assert!(!trusts(&f, &home, &proj).trusted);
-        std::fs::write(
+        crate::fsio::write(
             &f,
             format!("(:version 2 :folders (\"{}/\"))", proj.display()),
         )

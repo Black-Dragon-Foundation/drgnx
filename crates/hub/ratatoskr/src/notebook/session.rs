@@ -162,7 +162,10 @@ impl Session {
                             Ok(Err(e)) => e.to_string(),
                             Err(_) => "a send took too long".to_string(),
                         };
-                        let _ = events_tx2.send(Event::Closed { channel, why });
+                        crate::soft::done(
+                            events_tx2.send(Event::Closed { channel, why }),
+                            "events_tx2 send",
+                        );
                         return;
                     }
                 },
@@ -354,7 +357,7 @@ fn reader<R: Recv>(
             let frames = match socket.next().await {
                 Ok(f) => f,
                 Err(why) => {
-                    let _ = events.send(Event::Closed { channel, why });
+                    crate::soft::done(events.send(Event::Closed { channel, why }), "events send");
                     return;
                 }
             };
@@ -377,7 +380,7 @@ fn reader<R: Recv>(
                         message
                     };
                     if queued.fetch_add(bytes, Ordering::SeqCst) + bytes > limits.flood_bytes {
-                        let _ = events.send(Event::Flood);
+                        crate::soft::done(events.send(Event::Flood), "events send");
                         return;
                     }
                     if events
@@ -401,7 +404,7 @@ fn reader<R: Recv>(
                     bad.1 += 1;
                     bad.2 += bytes;
                     if bad.1 > limits.bad_count || bad.2 > limits.flood_bytes {
-                        let _ = events.send(Event::Flood);
+                        crate::soft::done(events.send(Event::Flood), "events send");
                         return;
                     }
                 }

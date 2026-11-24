@@ -5,15 +5,18 @@
 // Linux only: the reduced tier is Linux's (Android: no backend; fails closed). The command exists only with test-hooks.
 #![cfg(all(target_os = "linux", feature = "test-hooks"))]
 
+use ratatoskr::proc::Output;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 
 const RATATOSKR: &str = env!("CARGO_BIN_EXE_ratatoskr");
 
 fn abi_9(test: &str) -> bool {
     let abi = gleipnir::landlock::kernel_abi();
     if abi < 9 {
-        eprintln!("SKIP {test}: the kernel's Landlock ABI is {abi}, the reduced tier needs 9");
+        ratatoskr::soft::err_line(&format!(
+            "SKIP {test}: the kernel's Landlock ABI is {abi}, the reduced tier needs 9"
+        ));
     }
     abi >= 9
 }
@@ -51,14 +54,14 @@ impl Fx {
             "layers": {"landlock_min_abi": 9},
         });
         let f = self.p("spec.json");
-        std::fs::write(&f, spec.to_string()).unwrap();
+        ratatoskr::fsio::write(&f, spec.to_string()).unwrap();
         f
     }
 
     fn run(&self, spec: &Path, extra: &[&str], cmd: &[&str]) -> (Output, serde_json::Value) {
         let result = self.p("result.json");
-        let _ = std::fs::remove_file(&result);
-        let out = Command::new(RATATOSKR)
+        ratatoskr::soft::done(std::fs::remove_file(&result), "std::fs::remove_file");
+        let out = ratatoskr::proc::Command::new(RATATOSKR)
             .args(["sandbox", "run", "--tier", "reduced", "--spec"])
             .arg(spec)
             .arg("--result")
@@ -67,12 +70,12 @@ impl Fx {
             .arg("--")
             .args(cmd)
             .env_clear()
-            .env("HOME", self.p("home"))
+            .env(stig::HOME_VAR, self.p("home"))
             .env("PATH", "/usr/bin:/bin")
             .stdin(Stdio::null())
             .output()
             .unwrap();
-        let text = std::fs::read_to_string(&result).unwrap_or_else(|e| {
+        let text = ratatoskr::fsio::read_to_string(&result).unwrap_or_else(|e| {
             panic!(
                 "no result file ({e}); stderr: {}",
                 String::from_utf8_lossy(&out.stderr)
@@ -114,7 +117,10 @@ fn a_reduced_run_through_sandbox_run() {
     assert_eq!(lines[..3], ["hi", "out-refused", "udp-refused"], "{stdout}");
     // The program (the helper, exec'd) leads its own session: draugr started it with setsid (GL-T8-1).
     assert_eq!(lines[3], lines[4], "session id = pid: {stdout}");
-    assert_eq!(std::fs::read_to_string(fx.p("w/f")).unwrap(), "in\n");
+    assert_eq!(
+        ratatoskr::fsio::read_to_string(fx.p("w/f")).unwrap(),
+        "in\n"
+    );
     assert!(!fx.p("outside/f").exists());
 }
 
@@ -176,7 +182,7 @@ fn the_relay_carries_the_program_to_the_session_socket() {
         "layers": {"landlock_min_abi": 9},
     });
     let spec_file = fx.p("spec.json");
-    std::fs::write(&spec_file, spec.to_string()).unwrap();
+    ratatoskr::fsio::write(&spec_file, spec.to_string()).unwrap();
     // A live listener outside: unconfined, a connect to it would complete.
     let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let script = format!(
@@ -225,7 +231,7 @@ fn the_full_tier_without_bwrap_is_refused() {
     let fx = Fx::new();
     let spec = fx.spec(&fx.p("w"));
     let result = fx.p("result.json");
-    let out = Command::new(RATATOSKR)
+    let out = ratatoskr::proc::Command::new(RATATOSKR)
         .args(["sandbox", "run", "--tier", "full", "--bwrap"])
         .arg(fx.p("no-bwrap"))
         .arg("--spec")
@@ -234,12 +240,12 @@ fn the_full_tier_without_bwrap_is_refused() {
         .arg(&result)
         .args(["--", "/bin/true"])
         .env_clear()
-        .env("HOME", fx.p("home"))
+        .env(stig::HOME_VAR, fx.p("home"))
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(3));
     let r: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&result).unwrap()).unwrap();
+        serde_json::from_str(&ratatoskr::fsio::read_to_string(&result).unwrap()).unwrap();
     assert_eq!(r["refused"]["rule"], "Malformed", "{r}");
     assert!(
         r["refused"]["message"]
@@ -271,12 +277,21 @@ fn pause_before_spawn_waits_for_a_line() {
         .args(["--", "/bin/sh", "-c"])
         .arg(format!("touch {}", marker.display()))
         .env_clear()
-        .env("HOME", fx.p("home"))
+        .env(stig::HOME_VAR, fx.p("home"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .spawn()
         .unwrap();
-    let said = std::fs::read_to_string(&fifo).unwrap();
+    // the open of a pipe waits for the child's writer: a plain read, not eitri's (which refuses what is no regular file)
+    let said = {
+        use std::io::Read;
+        let mut text = String::new();
+        std::fs::File::open(&fifo)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        text
+    };
     assert_eq!(said, "opened\n");
     // The one window of this test: nothing must happen, and nothing marks that nothing did. A program that did not wait
     // would have touched its marker well inside it (a `touch` after a fork and an exec); a slow machine can only
@@ -287,7 +302,7 @@ fn pause_before_spawn_waits_for_a_line() {
         "the program touches its marker before the line came back",
     );
     assert!(!marker.exists(), "ran before the line came back");
-    std::fs::write(&fifo, "go\n").unwrap();
+    ratatoskr::fsio::write_pipe(&fifo, "go\n").unwrap();
     let out = child.wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(0));
     assert!(marker.exists());

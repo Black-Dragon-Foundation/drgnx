@@ -17,7 +17,7 @@ use runstav::wire::{Error, ErrorCode};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -278,7 +278,7 @@ impl Letters {
         lock(&self.statuses).retain(|(c, _), _| *c != conn);
         lock(&self.watches).retain(|(c, _), w| {
             if *c == conn {
-                let _ = w.tx.send(Heard::Stop);
+                crate::soft::done(w.tx.send(Heard::Stop), "tx send");
             }
             *c != conn
         });
@@ -298,7 +298,7 @@ impl Letters {
                     .iter()
                     .any(|p| p.starts_with(root) || root.starts_with(p))
             {
-                let _ = w.tx.send(Heard::Changed);
+                crate::soft::done(w.tx.send(Heard::Changed), "tx send");
             }
         }
     }
@@ -328,7 +328,7 @@ impl Letters {
         lock(&self.watches).retain(|(c, _), w| {
             let mine = *c == conn && w.view == view;
             if mine {
-                let _ = w.tx.send(Heard::Stop);
+                crate::soft::done(w.tx.send(Heard::Stop), "tx send");
             }
             !mine
         });
@@ -402,7 +402,7 @@ fn read_status(root: &std::path::Path) -> Result<Vec<u8>, String> {
         .collect(),
     };
     let (argv, env) = command(&call).map_err(|e| e.to_string())?;
-    let out = Command::new(&program.path)
+    let out = crate::proc::Command::new(&program.path)
         .args(argv)
         .envs(env)
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -474,7 +474,7 @@ pub fn letters(f: &Front, c: &Caller, p: LettersParams) -> Result<bool, Error> {
                     tx,
                 },
             ) {
-                let _ = old.tx.send(Heard::Stop);
+                crate::soft::done(old.tx.send(Heard::Stop), "tx send");
             }
         }
     }
@@ -545,9 +545,9 @@ pub(crate) fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
     if dot.is_dir() {
         return Some((dot.clone(), dot));
     }
-    let text = std::fs::read_to_string(&dot).ok()?;
+    let text = crate::fsio::read_to_string(&dot).ok()?;
     let gitdir = root.join(text.strip_prefix("gitdir:")?.trim());
-    let common = std::fs::read_to_string(gitdir.join("commondir"))
+    let common = crate::fsio::read_to_string(gitdir.join("commondir"))
         .map(|c| gitdir.join(c.trim()))
         .unwrap_or_else(|_| gitdir.clone());
     Some((gitdir, common))
@@ -581,7 +581,7 @@ pub(crate) fn watch_repo(
             };
             if let Some(held) = held {
                 for p in ev.paths.iter().filter(|p| is_lock(p)) {
-                    let _ = tx.send(Heard::Lock(p.clone(), held));
+                    crate::soft::done(tx.send(Heard::Lock(p.clone(), held)), "tx send");
                 }
             }
             let locks = !ev.paths.is_empty() && ev.paths.iter().all(is_lock);
@@ -589,15 +589,18 @@ pub(crate) fn watch_repo(
                 return;
             }
         }
-        let _ = tx.send(Heard::Changed);
+        crate::soft::done(tx.send(Heard::Changed), "tx send");
     })
     .ok();
     if let (Some(w), Some((gitdir, common))) = (watcher.as_mut(), git_dirs(root)) {
-        let _ = w.watch(&gitdir, RecursiveMode::NonRecursive);
+        crate::soft::done(w.watch(&gitdir, RecursiveMode::NonRecursive), "git");
         if common != gitdir {
-            let _ = w.watch(&common, RecursiveMode::NonRecursive);
+            crate::soft::done(w.watch(&common, RecursiveMode::NonRecursive), "git");
         }
-        let _ = w.watch(&common.join("refs"), RecursiveMode::Recursive);
+        crate::soft::done(
+            w.watch(&common.join("refs"), RecursiveMode::Recursive),
+            "git",
+        );
     }
     // the locks git holds now, as its events said (one inotify queue: in the order git took and let go of them)
     let mut held: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();

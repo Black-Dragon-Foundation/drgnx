@@ -13,7 +13,10 @@ async fn timed(create: bool) -> Result<super::runkey::Key, Unavailable> {
 #[tokio::test]
 #[ignore = "macOS CI: a throwaway keychain, unlocked (runtime.yml)"]
 async fn the_key_is_made_in_an_unlocked_keychain_and_reads_back() {
-    let _ = security_framework::passwords::delete_generic_password(SERVICE, ACCOUNT);
+    crate::soft::done(
+        security_framework::passwords::delete_generic_password(SERVICE, ACCOUNT),
+        "security_framework::passwords::delete_generic_password",
+    );
     assert!(matches!(timed(false).await, Err(Unavailable::Missing(_))));
     let made = timed(true).await.unwrap();
     let read = timed(false).await.unwrap();

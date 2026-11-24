@@ -228,7 +228,7 @@ async fn fetch_record(db: &CoordDb, id: &str) -> Result<Option<Record>, CoordErr
 fn text_of(r: &Record) -> String {
     r.file
         .as_ref()
-        .and_then(|f| std::fs::read_to_string(f).ok())
+        .and_then(|f| crate::fsio::read_to_string(f).ok())
         .map(|t| saga::view::strip_header(&t).to_owned())
         .unwrap_or_else(|| r.body.clone())
 }
@@ -430,7 +430,7 @@ pub async fn reanchor(db: &CoordDb, path: &Path) -> Result<usize, CoordError> {
     if rs.is_empty() {
         return Ok(0);
     }
-    let Ok(raw) = std::fs::read_to_string(path) else {
+    let Ok(raw) = crate::fsio::read_to_string(path) else {
         return Ok(0);
     };
     let paras = paragraphs(saga::view::strip_header(&raw));
@@ -659,7 +659,7 @@ pub async fn reply(f: &Front, _: &Caller, p: ReplyParams) -> Result<Comment, Err
                 deliver(&s, steer_text(&title, &t.anchor, &p.text, &root), &id);
             }
             None => {
-                let _ = send(f, &root, &t.record, &t.anchor, &p.text).await;
+                send(f, &root, &t.record, &t.anchor, &p.text).await;
             }
         }
     }
@@ -738,7 +738,7 @@ pub async fn deliver_waiting(f: &Front) {
     };
     for r in waiting {
         let text = r.data["text"].as_str().unwrap_or_default().to_owned();
-        let _ = send(f, &r.id, &r.record, &r.anchor, &text).await;
+        send(f, &r.id, &r.record, &r.anchor, &text).await;
     }
 }
 

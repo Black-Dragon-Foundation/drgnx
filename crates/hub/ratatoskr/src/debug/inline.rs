@@ -287,7 +287,7 @@ impl Inline {
             .collect();
         last.insert(session.to_owned(), now);
         drop(last);
-        let shown = match path.map(|p| (p, std::fs::read_to_string(p))) {
+        let shown = match path.map(|p| (p, crate::fsio::read_to_string(p))) {
             Some((p, Ok(text))) if line > 0 => self.lines(p, &text, line, &vars, before.as_ref()),
             _ => vec![],
         };

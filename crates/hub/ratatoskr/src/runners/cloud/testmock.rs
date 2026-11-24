@@ -17,8 +17,8 @@ pub struct Mock {
 
 impl Drop for Mock {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        crate::soft::done(self.child.kill(), "testmock");
+        crate::soft::done(self.child.wait(), "testmock");
     }
 }
 

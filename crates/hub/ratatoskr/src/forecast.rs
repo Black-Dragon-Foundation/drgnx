@@ -2086,7 +2086,7 @@ mod tests {
         }
         hits.sort();
         let hit = hits[(hits.len() * 95).div_ceil(100) - 1];
-        println!("forecast-plan: miss {miss:?}, hit p95 {hit:?}");
+        crate::soft::out_line(&format!("forecast-plan: miss {miss:?}, hit p95 {hit:?}"));
         assert!(
             miss < std::time::Duration::from_millis(300),
             "miss {miss:?}"
@@ -2217,7 +2217,7 @@ mod tests {
         let t = std::time::Instant::now();
         remaining_forecast(&f, "J", now).await.unwrap();
         let took = t.elapsed();
-        println!("forecast-remaining: {took:?}");
+        crate::soft::out_line(&format!("forecast-remaining: {took:?}"));
         assert!(took < std::time::Duration::from_millis(300), "{took:?}");
     }
 

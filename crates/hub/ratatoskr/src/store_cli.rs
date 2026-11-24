@@ -28,14 +28,14 @@ pub fn migrate_check(env: &Env, db: &Path, scratch: &Path, json: bool) -> i32 {
     match check(env, db, scratch) {
         Ok(report) => {
             if json {
-                println!("{report}");
+                crate::soft::out_line(&report.to_string());
             } else {
                 print!("{}", text(&report));
             }
             0
         }
         Err(e) => {
-            eprintln!("ratatoskr store migrate-check: {e}");
+            crate::soft::err_line(&format!("ratatoskr store migrate-check: {e}"));
             1
         }
     }
@@ -112,7 +112,7 @@ pub fn restore_pre7(env: &Env, yes: bool) -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("ratatoskr store restore-pre7: {e}");
+            crate::soft::err_line(&format!("ratatoskr store restore-pre7: {e}"));
             1
         }
     }
@@ -169,7 +169,7 @@ fn restore(env: &Env, yes: bool) -> Result<String, String> {
     };
     for s in &present {
         let to = with_suffix(&aside, s);
-        fs::rename(with_suffix(&live, s), &to).map_err(|e| {
+        crate::fsio::rename(with_suffix(&live, s), &to).map_err(|e| {
             format!(
                 "cannot move work.db{s} aside: {e} (the copy is {})",
                 tmp.display()
@@ -185,7 +185,7 @@ fn restore(env: &Env, yes: bool) -> Result<String, String> {
             ));
         }
     }
-    fs::rename(&tmp, &live).map_err(|e| format!("cannot put the copy in place: {e}"))?;
+    crate::fsio::rename(&tmp, &live).map_err(|e| format!("cannot put the copy in place: {e}"))?;
     fs::File::open(&data)
         .and_then(|d| d.sync_all())
         .map_err(|e| format!("{}: {e}", data.display()))?;
@@ -230,7 +230,7 @@ fn copy_checked(from: &Path, to: &Path) -> Result<(), String> {
     let copied = io::copy(&mut src, &mut dst).and_then(|_| dst.sync_all());
     drop(dst);
     if let Err(e) = copied {
-        let _ = fs::remove_file(to);
+        crate::soft::done(fs::remove_file(to), "fs::remove_file");
         return Err(e.to_string());
     }
     let report = urdr::graph::backup::check(to);
@@ -294,7 +294,7 @@ fn hub_running(env: &Env) -> Result<bool, String> {
 /// `HOME`, which the personal-notes deny-list is built from: absolute, or the command refuses.
 fn home(env: &Env) -> Result<PathBuf, String> {
     env.vars
-        .get("HOME")
+        .get(stig::HOME_VAR)
         .filter(|h| h.starts_with('/'))
         .map(PathBuf::from)
         .ok_or_else(|| "HOME is not set to an absolute path: the deny-list needs it".into())
@@ -333,11 +333,11 @@ mod tests {
         );
         let env = Env::new(
             &[
-                ("HOME", &h),
+                (stig::HOME_VAR, &h),
                 ("DRGNX_DATA_DIR", &da),
                 ("DRGNX_CONFIG_DIR", &c),
-                ("XDG_STATE_HOME", &st),
-                ("XDG_RUNTIME_DIR", &r),
+                (stig::Xdg::State.var(), &st),
+                (stig::SYSTEM_RUNTIME_VAR, &r),
             ],
             rustix::process::geteuid().as_raw(),
         );
@@ -447,7 +447,7 @@ mod tests {
         assert!(with_suffix(&live, "-shm").exists());
         // a broken newer copy is skipped, and kept as it was
         let broken = r.data.join("backup").join("work-pre7-9999999999.db");
-        fs::write(&broken, b"not a database").unwrap();
+        crate::fsio::write(&broken, b"not a database").unwrap();
         let later = skuld::host_now() + std::time::Duration::from_secs(60);
         fs::File::options()
             .write(true)

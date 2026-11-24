@@ -35,14 +35,14 @@ pub fn run(cmd: &RecordingCommand) -> i32 {
         match runstav::recording::lint_run(dir) {
             Ok(findings) => {
                 for f in &findings {
-                    println!("{}: {f}", dir.display());
+                    crate::soft::out_line(&format!("{}: {f}", dir.display()));
                 }
                 if !findings.is_empty() {
                     status = 1;
                 }
             }
             Err(e) => {
-                eprintln!("ratatoskr recording lint: {e}");
+                crate::soft::err_line(&format!("ratatoskr recording lint: {e}"));
                 status = 1;
             }
         }

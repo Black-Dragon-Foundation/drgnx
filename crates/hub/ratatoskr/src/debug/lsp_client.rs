@@ -205,9 +205,9 @@ impl Client {
                     Err(f) => break f,
                 }
             };
-            let _ = closed_tx.send(Some(end.clone()));
+            crate::soft::done(closed_tx.send(Some(end.clone())), "closed_tx send");
             for (_, tx) in lock(&pending).drain() {
-                let _ = tx.send(Err(end.clone()));
+                crate::soft::done(tx.send(Err(end.clone())), "tx send");
             }
         });
         client
@@ -235,15 +235,17 @@ impl Client {
                         }),
                         None => Ok(msg.get("result").cloned().unwrap_or(Value::Null)),
                     };
-                    let _ = tx.send(r);
+                    crate::soft::done(tx.send(r), "tx send");
                 }
             }
             // a request of the server's (`workspace/configuration`, `client/registerCapability`, progress): answered null,
             // so it never waits on us
             (Some(id), Some(_)) => {
-                let _ = self
-                    .send(&json!({"jsonrpc": "2.0", "id": id, "result": Value::Null}))
-                    .await;
+                crate::soft::done(
+                    self.send(&json!({"jsonrpc": "2.0", "id": id, "result": Value::Null}))
+                        .await,
+                    "self send",
+                );
             }
             // a notification
             (None, Some(method)) => {
@@ -259,7 +261,7 @@ impl Client {
                         }
                         if matches!(t, Some("ServiceReady" | "Started")) {
                             lock(&self.side).ready = true;
-                            let _ = ready.send(true);
+                            crate::soft::done(ready.send(true), "ready send");
                         }
                     }
                     "window/logMessage" | "window/showMessage" => {

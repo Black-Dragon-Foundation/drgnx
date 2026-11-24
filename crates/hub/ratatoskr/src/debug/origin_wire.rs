@@ -25,7 +25,7 @@ pub struct Origins {
 impl Origins {
     /// The replay trails use (D2's forks).
     pub fn set_replay(&self, r: Arc<dyn Replay>) {
-        let _ = self.replay.set(r);
+        crate::soft::done(self.replay.set(r), "origin_wire");
     }
 }
 

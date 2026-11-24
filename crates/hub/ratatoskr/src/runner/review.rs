@@ -591,7 +591,7 @@ impl PlanHooks {
             if !is_free(w) {
                 return self.review_wait(front, job, tid).await;
             }
-            let _ = front.core.agents.kill(&w.id).await;
+            crate::soft::done(front.core.agents.kill(&w.id).await, "review");
             front.core.runs.session_finished(front, &w.id);
         }
         self.st().since.remove(tid);
@@ -894,7 +894,7 @@ impl PlanHooks {
             return Ok(());
         }
         self.st().seen.insert(s.id.clone(), n);
-        let _ = front.core.agents.kill(&s.id).await;
+        crate::soft::done(front.core.agents.kill(&s.id).await, "review");
         self.st().reviewers.remove(tid);
         match end {
             Ended::Limit(why) => {
@@ -1750,7 +1750,7 @@ fn actions_of(kind: &str, data: &Value) -> Vec<String> {
 async fn end_task_sessions(front: &Front, job: &str, task: &str) {
     for s in front.core.agents.snapshots() {
         if s.job.as_deref() == Some(job) && s.task.as_deref() == Some(task) && is_alive(&s) {
-            let _ = front.core.agents.kill(&s.id).await;
+            crate::soft::done(front.core.agents.kill(&s.id).await, "review");
             front.core.runs.session_finished(front, &s.id);
         }
     }
@@ -1837,7 +1837,10 @@ async fn manager_hook_card(
         _ => String::new(),
     };
     if !text.is_empty() {
-        let _ = front.core.agents.prompt(manager, text, Origin::Hub);
+        crate::soft::done(
+            front.core.agents.prompt(manager, text, Origin::Hub),
+            "review",
+        );
     }
     serde_json::from_value(json!({"id": manager})).map_err(|e| invalid(e.to_string()))
 }
@@ -1904,30 +1907,36 @@ pub async fn card_act(front: &Front, caller: &Caller, p: CardParams) -> Result<J
     }
     if let Err(e) = act(front, caller, &l, &card, &action, &p.arg).await {
         // it did not happen: still the user's
-        let _ = front
-            .writer
-            .write(caller, "cards/settle", move |tx| {
-                card_set(
-                    tx,
-                    cid,
-                    CardSet {
-                        title: None,
-                        data: None,
-                        state: Some("open".into()),
-                    },
-                    now(),
-                )
-            })
-            .await;
+        crate::soft::done(
+            front
+                .writer
+                .write(caller, "cards/settle", move |tx| {
+                    card_set(
+                        tx,
+                        cid,
+                        CardSet {
+                            title: None,
+                            data: None,
+                            state: Some("open".into()),
+                        },
+                        now(),
+                    )
+                })
+                .await,
+            "review",
+        );
         return Err(e);
     }
     if let Some(m) = data.get("message").and_then(Value::as_i64) {
-        let _ = front
-            .writer
-            .write(caller, "messages/mark", move |tx| {
-                mark(tx, m, "acted", now())
-            })
-            .await;
+        crate::soft::done(
+            front
+                .writer
+                .write(caller, "messages/mark", move |tx| {
+                    mark(tx, m, "acted", now())
+                })
+                .await,
+            "review",
+        );
     }
     front.core.runs.wake();
     changed(front, &job).await;
@@ -2199,7 +2208,7 @@ async fn settle_clash(front: &Front, l: &Loaded, card: &Card, side: &str) -> Res
             .map_err(fail)?;
     }
     if let Some(sid) = d.get("reviewer").and_then(Value::as_str) {
-        let _ = front.core.agents.kill(sid).await;
+        crate::soft::done(front.core.agents.kill(sid).await, "review");
     }
     Ok(())
 }
@@ -2409,7 +2418,7 @@ mod tests {
     }
 
     fn sh(dir: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args(["-c", "user.name=t", "-c", "user.email=t@t"])
             .args(args)
             .current_dir(dir)

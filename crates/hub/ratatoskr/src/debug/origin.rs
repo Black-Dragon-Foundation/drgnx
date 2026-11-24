@@ -176,8 +176,8 @@ pub trait Replay: Send + Sync {
 /// The tracer's files written into DIR (`<tree>/.drgnx-origin`): the folder to put first on `PYTHONPATH`.
 pub fn write_tracer(dir: &Path) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
-    std::fs::write(dir.join("drgnx_origin.py"), TRACER)?;
-    std::fs::write(dir.join("sitecustomize.py"), SITECUSTOMIZE)?;
+    crate::fsio::write(dir.join("drgnx_origin.py"), TRACER)?;
+    crate::fsio::write(dir.join("sitecustomize.py"), SITECUSTOMIZE)?;
     Ok(dir.to_owned())
 }
 
@@ -199,7 +199,7 @@ pub fn trace_env(tree: &Path, watch: &[String]) -> Vec<(String, String)> {
 
 /// A replay's answer from its TREE: the tracer's records, their files named under ROOT (the project).
 pub fn read_trace(tree: &Path, root: &Path) -> Result<Traced, String> {
-    let text = std::fs::read_to_string(tree.join(DIR).join(OUT)).unwrap_or_default();
+    let text = crate::fsio::read_to_string(tree.join(DIR).join(OUT)).unwrap_or_default();
     Ok(match traced(&text)? {
         Traced::Records(mut r) => {
             rebase(&mut r, tree, root);

@@ -39,7 +39,7 @@ fn worker_bin() -> String {
 }
 
 fn systemctl(args: &[&str]) -> bool {
-    Command::new("systemctl")
+    ratatoskr::proc::Command::new("systemctl")
         .arg("--user")
         .args(args)
         .status()
@@ -72,7 +72,7 @@ async fn a_hub_that_opens_one_terminal() {
         .spawn_as(1, Some("s1".into()), spawn, true)
         .await
         .expect("the terminal starts");
-    std::fs::write(dir.join("ready"), &rec.id).unwrap();
+    ratatoskr::fsio::write(dir.join("ready"), &rec.id).unwrap();
     std::future::pending::<()>().await;
 }
 
@@ -90,13 +90,13 @@ async fn worker_survives_hub_restart_under_kill_mode_mixed() {
         ratatoskr::exec::unit::systemd_user(),
         "a user systemd (the fake runner's)"
     );
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let home = std::env::var(stig::HOME_VAR).unwrap_or_else(|_| "/tmp".into());
     let tmp = tempfile::tempdir_in(home).unwrap();
     let dir = tmp.path().to_path_buf();
     let unit = format!("drgnx-term-hub-{}", std::process::id());
     let me = std::env::current_exe().unwrap();
     let env = |k: &str| format!("{k}={}", std::env::var(k).unwrap_or_default());
-    let ok = Command::new("systemd-run")
+    let ok = ratatoskr::proc::Command::new("systemd-run")
         .args([
             "--user",
             "--quiet",
@@ -108,7 +108,7 @@ async fn worker_survives_hub_restart_under_kill_mode_mixed() {
         ])
         .arg(format!("--setenv=TERM_SCOPE_DIR={}", dir.display()))
         .arg(format!("--setenv=DRGNX_TERM_BIN={}", worker_bin()))
-        .arg(format!("--setenv={}", env("XDG_RUNTIME_DIR")))
+        .arg(format!("--setenv={}", env(stig::SYSTEM_RUNTIME_VAR)))
         .arg(format!("--setenv={}", env("DBUS_SESSION_BUS_ADDRESS")))
         .arg(format!("--setenv={}", env("PATH")))
         .arg("--")
@@ -126,7 +126,7 @@ async fn worker_survives_hub_restart_under_kill_mode_mixed() {
         String::from_utf8_lossy(&ok.stderr)
     );
     let id = skuld::wait_until("the first hub's terminal", WAIT, || {
-        std::fs::read_to_string(dir.join("ready")).ok()
+        ratatoskr::fsio::read_to_string(dir.join("ready")).ok()
     });
     let before = the_record(&dir);
     assert_eq!(before.id, id);
@@ -192,7 +192,7 @@ async fn cgroup_memory_limit_reaches_scope() {
         ratatoskr::exec::unit::systemd_user(),
         "a user systemd (the fake runner's)"
     );
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let home = std::env::var(stig::HOME_VAR).unwrap_or_else(|_| "/tmp".into());
     let tmp = tempfile::tempdir_in(home).unwrap();
     let terms = Terms::default();
     terms
@@ -204,7 +204,7 @@ async fn cgroup_memory_limit_reaches_scope() {
         command: vec!["/bin/sh".into()],
         env: vec![
             env("PATH"),
-            env("XDG_RUNTIME_DIR"),
+            env(stig::SYSTEM_RUNTIME_VAR),
             env("DBUS_SESSION_BUS_ADDRESS"),
         ],
         cols: 40,
@@ -223,7 +223,7 @@ async fn cgroup_memory_limit_reaches_scope() {
         .expect("the terminal starts");
     let scope = format!("drgnx-term-{}.scope", rec.id);
     let shown = skuld::wait_until("the scope's limits", WAIT, || {
-        let out = Command::new("systemctl")
+        let out = ratatoskr::proc::Command::new("systemctl")
             .args([
                 "--user",
                 "show",

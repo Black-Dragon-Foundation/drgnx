@@ -15,7 +15,7 @@ struct Fix {
 async fn fix() -> Fix {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("s.md");
-    std::fs::write(&file, SPEC).unwrap();
+    crate::fsio::write(&file, SPEC).unwrap();
     let db = CoordDb::spawn(dir.path().join("work.db"));
     let f = file.to_string_lossy().into_owned();
     db.write(hub_meta("test"), move |tx| {
@@ -138,7 +138,7 @@ async fn a_comment_survives_its_paragraph_being_rewritten() {
         "Comments are stored as record links and every one reaches the agent as a steer.",
         "Comments are stored as record links; each one reaches the writing agent as a steer.",
     );
-    std::fs::write(&f.file, &rewritten).unwrap();
+    crate::fsio::write(&f.file, &rewritten).unwrap();
     assert_eq!(reanchor(&f.db, &f.file).await.unwrap(), 1);
     let t = &threads(&f.db, "spec:s").await.unwrap()[0];
     assert_eq!(t.anchor.state, "moved");
@@ -169,7 +169,7 @@ async fn a_comment_survives_its_paragraph_being_deleted() {
         "Comments are stored as record links and every one reaches the agent as a steer.\n\n",
         "",
     );
-    std::fs::write(&f.file, deleted).unwrap();
+    crate::fsio::write(&f.file, deleted).unwrap();
     assert_eq!(reanchor(&f.db, &f.file).await.unwrap(), 1);
     let ts = threads(&f.db, "spec:s").await.unwrap();
     assert_eq!(ts.len(), 1, "never dropped");
@@ -177,7 +177,7 @@ async fn a_comment_survives_its_paragraph_being_deleted() {
     assert_eq!((&ts[0].anchor.quote, &ts[0].anchor.key), (&a.quote, &a.key));
     assert_eq!(ts[0].root.text, "drop this?");
     // the paragraph comes back: the thread is here again
-    std::fs::write(&f.file, SPEC).unwrap();
+    crate::fsio::write(&f.file, SPEC).unwrap();
     reanchor(&f.db, &f.file).await.unwrap();
     assert_eq!(
         threads(&f.db, "spec:s").await.unwrap()[0].anchor.state,

@@ -293,12 +293,12 @@ fn meta(id: &str, root: &str, ended_days_ago: Option<f64>, now: f64) -> RunMeta 
 
 fn put_run(dir: &Path, m: &RunMeta, bytes: usize) {
     std::fs::create_dir_all(dir).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         dir.join(format!("{}.json", m.id)),
         serde_json::to_string(m).unwrap(),
     )
     .unwrap();
-    std::fs::write(dir.join(format!("{}.drun", m.id)), vec![0u8; bytes]).unwrap();
+    crate::fsio::write(dir.join(format!("{}.drun", m.id)), vec![0u8; bytes]).unwrap();
 }
 
 #[tokio::test]
@@ -446,9 +446,9 @@ async fn a_run_is_recorded_against_the_files_that_ran() {
     let project = d.path().join("proj");
     std::fs::create_dir_all(&project).unwrap();
     let file = project.join("stock.py");
-    std::fs::write(&file, "shortfall = 16\nprint(shortfall)\nprint('done')\n").unwrap();
+    crate::fsio::write(&file, "shortfall = 16\nprint(shortfall)\nprint('done')\n").unwrap();
     let other = project.join("other.py");
-    std::fs::write(&other, "x = 1\n").unwrap();
+    crate::fsio::write(&other, "x = 1\n").unwrap();
     let root = project.to_string_lossy().into_owned();
     let path = file.to_string_lossy().into_owned();
 
@@ -464,7 +464,7 @@ async fn a_run_is_recorded_against_the_files_that_ran() {
             path: path.clone(),
             line: 1,
             expr: "shortfall".into(),
-            text: std::fs::read_to_string(&file).unwrap(),
+            text: crate::fsio::read_to_string(&file).unwrap(),
             lang: super::probes::Lang::Python,
         })
         .unwrap()
@@ -520,7 +520,7 @@ async fn a_run_is_recorded_against_the_files_that_ran() {
     rec.heap(&id, epoch, json!({"graph": "h1", "nodes": [], "n": 2}));
     rec.heap(&id, epoch, json!({"graph": "h2", "nodes": []}));
     // the file changes on disk after the launch: the run keeps the launch's text
-    std::fs::write(&file, "changed\n").unwrap();
+    crate::fsio::write(&file, "changed\n").unwrap();
     dbg.control(&id, Op::Next { thread: None }).await.unwrap();
     until("the step stop", || {
         dbg.stop_of(&id).is_some_and(|s| s.reason == "step")
@@ -626,60 +626,7 @@ async fn an_unknown_run_is_refused() {
     assert!(rec.run("nope").is_none());
 }
 
-/// The FIFO's reader, at the end (or a failed assert): the write waiting on it goes on, and every later one.
-struct ReadAtEnd(std::path::PathBuf);
-
-impl Drop for ReadAtEnd {
-    fn drop(&mut self) {
-        // every writer from here on: each open of the run file is a writer of its own, and each close an end of
-        // file; the loop ends with the test's directory (the process ends with the test)
-        let p = self.0.clone();
-        std::thread::spawn(move || while std::fs::read(&p).is_ok() {});
-    }
-}
-
-/// The FIFO's reader, once let go, reads every writer that opens it after, not only the first: a run file is opened
-/// again for each write, and a writer left without a reader would hold the blocking pool (and the runtime's
-/// shutdown) for good.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_fifos_reader_reads_every_writer() {
-    use std::io::Write;
-    let d = tempfile::tempdir().unwrap();
-    let fifo = d.path().join("run.drun");
-    let made = std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .unwrap();
-    assert!(made.success());
-    drop(ReadAtEnd(fifo.clone()));
-    // writers on threads of their own: one left waiting for a reader holds nothing the test waits on
-    let write = |p: std::path::PathBuf| {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        std::thread::spawn(move || {
-            let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
-            f.write_all(b"frame").unwrap();
-            let _ = tx.send(());
-        });
-        rx
-    };
-    let within = Duration::from_secs(5);
-    assert!(
-        crate::clock::timeout(within, write(fifo.clone()))
-            .await
-            .is_ok(),
-        "the first writer is read"
-    );
-    // the first writer's close is the reader's end of file; the next opens after it
-    crate::clock::sleep(Duration::from_millis(100)).await;
-    assert!(
-        crate::clock::timeout(within, write(fifo.clone()))
-            .await
-            .is_ok(),
-        "a writer that opens after the first is read too"
-    );
-}
-
-/// A stop's write that waits on the disk (here the run file swapped for a FIFO nobody reads) holds no async worker
+/// A stop's write that waits on the disk (here the run file held: `fsio::disk`) holds no async worker
 /// and no lock the session's events wait for: the step's frame is still published.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_run_write_that_waits_on_the_disk_holds_no_worker() {
@@ -687,7 +634,7 @@ async fn a_run_write_that_waits_on_the_disk_holds_no_worker() {
     let project = d.path().join("proj");
     std::fs::create_dir_all(&project).unwrap();
     let file = project.join("app.py");
-    std::fs::write(&file, "a = 1\nb = 2\nc = 3\nd = 4\n").unwrap();
+    crate::fsio::write(&file, "a = 1\nb = 2\nc = 3\nd = 4\n").unwrap();
     let root = project.to_string_lossy().into_owned();
     let path = file.to_string_lossy().into_owned();
     let ev = Arc::new(Events::default());
@@ -736,21 +683,15 @@ async fn a_run_write_that_waits_on_the_disk_holds_no_worker() {
     .await;
     let run = rec.list(&root)[0].id.clone();
     let drun = runs.join(format!("{run}.drun"));
-    std::fs::remove_file(&drun).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(&drun)
-        .status()
-        .unwrap();
-    assert!(made.success());
-    let _unblock = ReadAtEnd(drun.clone());
-    // the step's stop is written to the run file, which waits for a reader
+    let slow = crate::fsio::disk::slow(&drun);
+    // the step's stop is written to the run file, which waits for the disk
     dbg.control(&id, Op::Next { thread: None }).await.unwrap();
     until(
         "the step's frame published while its record waits on the disk",
         || ev.named("debug-frame").iter().any(|f| f["line"] == 4),
     )
     .await;
-    drop(_unblock);
+    slow.release();
     dbg.control(
         &id,
         Op::Stop {

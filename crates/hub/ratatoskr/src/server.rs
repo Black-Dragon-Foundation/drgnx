@@ -78,16 +78,18 @@ pub async fn run(args: ServeArgs) -> Exit {
     }
     // the executable's path, once, while it still names the file on disk (restart-when-idle, re-exec)
     if let Err(e) = idle::resolve_exe() {
-        eprintln!("ratatoskr: cannot resolve its own path ({e}): restart-when-idle is off");
+        crate::soft::err_line(&format!(
+            "ratatoskr: cannot resolve its own path ({e}): restart-when-idle is off"
+        ));
     }
     if let Err(e) = urdr::check_floor(SQLITE_FLOOR) {
         let have = urdr::sqlite_version_number();
-        eprintln!(
+        crate::soft::err_line(&format!(
             "ratatoskr: cannot start: SQLite {}.{}.{} is below 3.51.3 ({e})",
             have / 1_000_000,
             have / 1000 % 1000,
             have % 1000
-        );
+        ));
         return Exit::CannotStart;
     }
     let env = Env::process();
@@ -100,7 +102,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         &log_dir,
     ] {
         if let Err(e) = paths::private_dir(dir) {
-            eprintln!("ratatoskr: cannot start: {e}");
+            crate::soft::err_line(&format!("ratatoskr: cannot start: {e}"));
             return Exit::CannotStart;
         }
     }
@@ -110,10 +112,10 @@ pub async fn run(args: ServeArgs) -> Exit {
     let _log = match log::init(&log_dir) {
         Ok(g) => g,
         Err(e) => {
-            eprintln!(
+            crate::soft::err_line(&format!(
                 "ratatoskr: cannot start: the log in {}: {e}",
                 log_dir.display()
-            );
+            ));
             return Exit::CannotStart;
         }
     };
@@ -230,11 +232,14 @@ pub async fn run(args: ServeArgs) -> Exit {
     // what the browser sessions' web proxies never reach: the host's addresses and the hub's loopback ports, kept
     // live from now on (the gateway's port is added once it listens)
     front.browser_nevers.start();
-    let _ = front.dirs.set(crate::graph::StoreDirs {
-        home,
-        config: paths::config_dir(&env),
-        hub: hub_dir.clone(),
-    });
+    crate::soft::done(
+        front.dirs.set(crate::graph::StoreDirs {
+            home,
+            config: paths::config_dir(&env),
+            hub: hub_dir.clone(),
+        }),
+        "server",
+    );
     front.extensions.configure(&env);
     front.search.bind(&front);
     front.debug.bind(&front);
@@ -707,7 +712,7 @@ async fn stop_threads(mut threads: Vec<Stopping>, term: &mut Signal, int: &mut S
         }
         let all = async {
             for t in threads.iter_mut() {
-                let _ = (&mut t.join).await;
+                crate::soft::done((&mut t.join).await, "server");
             }
         };
         let signal = tokio::select! {
@@ -754,9 +759,9 @@ async fn hold_store(db: &urdr::Handle) {
     let (release, released) = std::sync::mpsc::channel::<()>();
     let h = db.clone();
     crate::clock::spawn("server:hold-store", async move {
-        let _ = h
-            .read(move |_| {
-                let _ = held.send(());
+        crate::soft::done(
+            h.read(move |_| {
+                crate::soft::done(held.send(()), "held send");
                 // only SIGUSR1 releases it: a runtime that ends (the sender dropped) leaves it held, as a hung job
                 if released.recv().is_err() {
                     loop {
@@ -765,21 +770,25 @@ async fn hold_store(db: &urdr::Handle) {
                 }
                 Ok(())
             })
-            .await;
+            .await,
+            "held send",
+        );
     });
-    let _ = holding.await;
+    crate::soft::done(holding.await, "server");
     // queued now, behind the job holding the thread: its first poll sends it on the channel
     let h = db.clone();
     let mut queued = Box::pin(async move {
-        let _ = h
-            .write(|c| {
+        crate::soft::done(
+            h.write(|c| {
                 c.execute(
                     "insert or replace into meta(key, value) values ('test-hold-store', 'written')",
                     [],
                 )?;
                 Ok(())
             })
-            .await;
+            .await,
+            "server",
+        );
     });
     let done =
         std::future::poll_fn(|cx| std::task::Poll::Ready(queued.as_mut().poll(cx).is_ready()))
@@ -789,7 +798,7 @@ async fn hold_store(db: &urdr::Handle) {
     }
     crate::clock::spawn("server:hold-store", async move {
         usr1.recv().await;
-        let _ = release.send(());
+        crate::soft::done(release.send(()), "release send");
     });
 }
 
@@ -834,7 +843,7 @@ async fn open_store(
         .map_err(|e| format!("{}: {e}", data.display()))?;
     let home = env
         .vars
-        .get("HOME")
+        .get(stig::HOME_VAR)
         .filter(|h| Path::new(h).is_absolute())
         .map(PathBuf::from)
         .ok_or("HOME is not set to an absolute path: the personal-notes deny-list needs it")?;
@@ -901,7 +910,10 @@ async fn watch_schema(front: Arc<Front>) {
             front.note_migration(report.as_deref());
         }
         let db = front.writer.db.clone();
-        let _ = crate::clock::blocking(move || db.tick()).await;
+        crate::soft::done(
+            crate::clock::blocking(move || db.tick()).await,
+            "crate::clock::blocking",
+        );
         // the personal-notes opt-ins: applied when their file changed (norn::privacy, Task 9b)
         if let (Some(g), Some(d)) = (front.tools.graph(), front.dirs.get())
             && let Some(r) =
@@ -979,7 +991,10 @@ fn embed_idle(front: &Arc<Front>) {
         // a server's vectors are keyed by the fingerprint it proves: each provider states its model before the chain
         // is built, and one that does not answer stays `unprobed:<provider>` (it embeds nothing)
         for p in &providers {
-            let _ = crate::search::DocEmbedder::probe(p).await;
+            crate::soft::done(
+                crate::search::DocEmbedder::probe(p).await,
+                "crate::search::DocEmbedder::probe",
+            );
         }
         // the local engine, when the role names it and it may run (its download consented and in place)
         let engine = front
@@ -1131,7 +1146,7 @@ fn write_private(file: &Path, text: &[u8]) -> std::io::Result<()> {
     let mut name = file.as_os_str().to_owned();
     name.push(format!(".tmp-{}", std::process::id()));
     let tmp = PathBuf::from(name);
-    let _ = std::fs::remove_file(&tmp);
+    crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     let written = (|| {
         let mut f = std::fs::OpenOptions::new()
             .write(true)
@@ -1141,10 +1156,10 @@ fn write_private(file: &Path, text: &[u8]) -> std::io::Result<()> {
             .open(&tmp)?;
         f.write_all(text)?;
         f.sync_all()?;
-        std::fs::rename(&tmp, file)
+        crate::fsio::rename(&tmp, file)
     })();
     if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     }
     written
 }
@@ -1167,7 +1182,7 @@ mod tests {
     /// Whether this process has `CAP_SYS_PTRACE` (bit 19 of `CapEff`), which reads a non-dumpable process anyway.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     fn has_cap_sys_ptrace() -> bool {
-        std::fs::read_to_string("/proc/self/status")
+        crate::fsio::read_to_string("/proc/self/status")
             .ok()
             .and_then(|s| {
                 s.lines()
@@ -1192,7 +1207,7 @@ mod tests {
         let pid = unsafe { libc::fork() };
         assert!(pid >= 0, "fork failed");
         if pid == 0 {
-            let _ = harden(); // what it did is read back below
+            crate::soft::done(harden(), "harden"); // what it did is read back below
             // SAFETY: prctl(PR_GET_DUMPABLE) takes no pointer
             let d = unsafe { libc::prctl(libc::PR_GET_DUMPABLE) } as u8;
             // SAFETY: one byte from a live buffer to the pipe's write end
@@ -1227,8 +1242,8 @@ mod tests {
         r.read_exact(&mut d).unwrap();
         assert_eq!(d[0], 0, "the child is not dumpable after harden");
         if has_cap_sys_ptrace() {
-            eprintln!(
-                "skipped: CAP_SYS_PTRACE is effective here, so /proc/PID/exe of a non-dumpable process reads"
+            crate::soft::err_line(
+                "skipped: CAP_SYS_PTRACE is effective here, so /proc/PID/exe of a non-dumpable process reads",
             );
         } else {
             assert!(
@@ -1291,7 +1306,7 @@ mod tests {
             "a test thread",
             || 1,
             move || {
-                let _ = released.recv();
+                crate::soft::done(released.recv(), "server");
                 d.store(true, Ordering::SeqCst);
             },
         )];

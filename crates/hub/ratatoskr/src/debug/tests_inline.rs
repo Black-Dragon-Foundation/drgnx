@@ -291,7 +291,7 @@ fn a_stop_gives_its_event_with_the_changes_since_the_last_stop() {
     let dir = std::env::temp_dir().join(format!("drgnx-inline-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("s.py");
-    std::fs::write(&path, "def f():\n    a = 1\n    a = 2\n    return a\n").unwrap();
+    crate::fsio::write(&path, "def f():\n    a = 1\n    a = 2\n    return a\n").unwrap();
     let stop = |epoch: u64, line: i64, a: &str| Stop {
         epoch,
         thread: 1,

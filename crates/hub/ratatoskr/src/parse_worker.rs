@@ -176,15 +176,19 @@ impl Launch for Sandboxed {
                 stdout,
                 kill: Box::new(move || {
                     // the group: the worker and anything it started; then reap it
-                    let _ = runtime().block_on(draugr::kill_group(
+
+                    runtime().block_on(draugr::kill_group(
                         pid,
                         draugr::reap::GRACE,
                         &draugr::RealSignaller,
                     ));
                     let mut c = ender.lock().unwrap_or_else(|e| e.into_inner());
-                    let _ = runtime().block_on(async {
-                        crate::clock::timeout(Duration::from_secs(5), c.wait()).await
-                    });
+                    crate::soft::done(
+                        runtime().block_on(async {
+                            crate::clock::timeout(Duration::from_secs(5), c.wait()).await
+                        }),
+                        "runtime",
+                    );
                 }),
                 stderr: Box::new(move || {
                     tail.lock().unwrap_or_else(|e| e.into_inner()).stderr_tail()
@@ -230,14 +234,15 @@ pub fn fetched(env: &runstav::paths::Env) -> Vec<hrafn::chunk::worker::Fetched> 
             continue;
         };
         let (Ok(chunks_scm), true) = (
-            std::fs::read_to_string(dir.join(chunks)),
+            crate::fsio::read_to_string(dir.join(chunks)),
             entry.lib.is_file(),
         ) else {
             continue;
         };
         // the references' queries are `queries/tags.scm` unless the manifest names another file; a pack may have none
         let tags_scm =
-            std::fs::read_to_string(dir.join(h.tags.as_deref().unwrap_or("queries/tags.scm"))).ok();
+            crate::fsio::read_to_string(dir.join(h.tags.as_deref().unwrap_or("queries/tags.scm")))
+                .ok();
         out.push(Fetched {
             spec: hrafn::chunk::worker::WorkerSpec {
                 pack: p.name.clone(),
@@ -247,7 +252,7 @@ pub fn fetched(env: &runstav::paths::Env) -> Vec<hrafn::chunk::worker::Fetched> 
             },
             init: Init {
                 // the fold ranges' query is `queries/folds.scm` when the pack has one, else its `tags.scm`'s definitions
-                folds_scm: std::fs::read_to_string(dir.join("queries/folds.scm")).ok(),
+                folds_scm: crate::fsio::read_to_string(dir.join("queries/folds.scm")).ok(),
                 ..Init::from_manifest(&m, chunks_scm, tags_scm)
             },
             extensions: m.files.extensions.clone(),
@@ -344,7 +349,7 @@ pub mod fixture {
             .expect("c-sharp is in the lock");
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packs/csharp");
         let m = skald::builtin::get("csharp").expect("the csharp pack");
-        let read = |f: &str| std::fs::read_to_string(dir.join(f)).unwrap();
+        let read = |f: &str| crate::fsio::read_to_string(dir.join(f)).unwrap();
         hrafn::chunk::worker::install(
             vec![Fetched {
                 spec: WorkerSpec {

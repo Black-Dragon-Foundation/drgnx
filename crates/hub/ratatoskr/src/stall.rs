@@ -197,7 +197,7 @@ fn kernel(tid: i64) -> String {
         return "no kernel view off Linux".into();
     }
     let read = |f: &str| {
-        std::fs::read_to_string(format!("/proc/self/task/{tid}/{f}"))
+        crate::fsio::read_to_string(format!("/proc/self/task/{tid}/{f}"))
             .map(|s| s.trim().to_owned())
             .unwrap_or_default()
     };
@@ -220,12 +220,11 @@ fn also_to(line: &str) {
         return;
     };
     let at = crate::clock::wall_secs();
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        let _ = writeln!(f, "{at:.3} pid {} {line}", std::process::id());
+    if let Ok(mut f) = crate::fsio::append(path, true) {
+        crate::soft::done(
+            writeln!(f, "{at:.3} pid {} {line}", std::process::id()),
+            "writeln",
+        );
     }
 }
 
@@ -260,7 +259,7 @@ impl Drop for Watchdog {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::Relaxed);
         if let Some(t) = self.thread.take() {
-            let _ = t.join();
+            crate::soft::done(t.join(), "stall");
         }
     }
 }

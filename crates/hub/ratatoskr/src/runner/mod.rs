@@ -359,11 +359,11 @@ impl Runs {
 
     /// The git of the runner (Task 17 gives `HubGit`); until then [`tick::BasicGit`] makes worktrees only.
     pub fn set_git(&self, git: Arc<dyn RunGit>) {
-        let _ = self.git.set(git);
+        crate::soft::done(self.git.set(git), "mod");
     }
 
     pub fn set_hooks(&self, hooks: Arc<dyn Hooks>) {
-        let _ = self.hooks.set(hooks);
+        crate::soft::done(self.hooks.set(hooks), "mod");
     }
 
     pub fn git(&self) -> Arc<dyn RunGit> {
@@ -1901,7 +1901,7 @@ pub async fn stop(front: &Front, caller: &Caller, p: ById) -> Result<JobSummary,
     if let Some(h) = front.core.runs.hooks() {
         // the hooks take the shared front; the handler has a reference, the server an Arc: 16b's merges end on the
         // next tick, which sees the job stopped
-        let _ = h;
+        let _only_when_used_elsewhere = &h;
     }
     changed(front, id).await;
     summary(front, id, false).await
@@ -1913,7 +1913,7 @@ pub(crate) async fn end_sessions(front: &Front, id: &str) {
         if s.job.as_deref() == Some(id)
             && s.status != Some(runstav::methods::agents::SessionStatus::Exited)
         {
-            let _ = front.core.agents.kill(&s.id).await;
+            crate::soft::done(front.core.agents.kill(&s.id).await, "mod");
         }
     }
 }
@@ -2483,12 +2483,12 @@ pub(crate) mod graph_plan_tests {
         )
         .await;
         std::fs::create_dir(dir.path().join("procedures")).unwrap();
-        std::fs::write(
+        crate::fsio::write(
             dir.path().join("procedures/red-first.md"),
             "Write the failing test first.\n",
         )
         .unwrap();
-        std::fs::write(
+        crate::fsio::write(
             dir.path().join("pack.eld"),
             "(:name \"t\" :version 1 :rules ((:id \"red-first\" :kind \"enforced\" :doc \"d\"))
               :models ((:role \"implement\" :profiles (\"sonnet\" \"opus\"))
@@ -2507,7 +2507,7 @@ pub(crate) mod graph_plan_tests {
             let dir = dir.path().to_owned();
             async move {
                 let file = dir.join("plan.md");
-                std::fs::write(&file, text).unwrap();
+                crate::fsio::write(&file, text).unwrap();
                 let p: ProposeParams = serde_json::from_value(
                     json!({"plan": file.to_string_lossy(), "repo": dir.to_string_lossy()}),
                 )

@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn models_live_under_the_cache() {
-        let env = Env::new(&[("HOME", "/hm")], 1);
+        let env = Env::new(&[(stig::HOME_VAR, "/hm")], 1);
         assert_eq!(
             models_root(&env),
             Path::new("/hm/.cache/drgnx/models"),

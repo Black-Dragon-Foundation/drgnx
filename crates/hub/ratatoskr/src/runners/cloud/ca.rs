@@ -106,7 +106,7 @@ impl PublicKey {
     /// The raw 32-byte ed25519 key.
     fn raw(&self) -> &[u8] {
         let mut w = Wire(&self.blob);
-        let _ = w.string();
+        w.string();
         w.string().unwrap_or_default()
     }
 }
@@ -363,8 +363,8 @@ impl Agent {
         let mut r = io::BufReader::new(out);
         r.read_line(&mut first)?;
         if !first.starts_with("SSH_AUTH_SOCK=") {
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::soft::done(child.kill(), "ca");
+            crate::soft::done(child.wait(), "ca");
             return Err(io::Error::other("ssh-agent did not start"));
         }
         Ok(Agent {
@@ -407,9 +407,9 @@ impl Agent {
 
 impl Drop for Agent {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.sock);
+        crate::soft::done(self.child.kill(), "ca");
+        crate::soft::done(self.child.wait(), "ca");
+        crate::soft::done(std::fs::remove_file(&self.sock), "std::fs::remove_file");
     }
 }
 

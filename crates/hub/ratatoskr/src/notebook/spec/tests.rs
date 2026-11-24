@@ -5,7 +5,7 @@ use super::*;
 
 fn put(dir: &Path, name: &str, json: &str) {
     fs::create_dir_all(dir.join(name)).unwrap();
-    fs::write(dir.join(name).join("kernel.json"), json).unwrap();
+    crate::fsio::write(dir.join(name).join("kernel.json"), json).unwrap();
 }
 
 const PY: &str = r#"{"argv":["python3","-m","ipykernel_launcher","-f","{connection_file}"],"display_name":"Python 3","language":"python","env":{"A":"1"}}"#;
@@ -84,7 +84,7 @@ fn a_bad_kernelspec_is_skipped_not_fatal() {
     );
     put(d, ".hidden", PY);
     put(d, "has space", PY);
-    fs::write(d.join("a-file"), "x").unwrap();
+    crate::fsio::write(d.join("a-file"), "x").unwrap();
     fs::create_dir_all(d.join("no-json")).unwrap();
     put(
         d,
@@ -93,7 +93,7 @@ fn a_bad_kernelspec_is_skipped_not_fatal() {
     );
     // a kernel.json that is a link out of the folder is not followed
     fs::create_dir_all(d.join("linked")).unwrap();
-    fs::write(t.path().join("elsewhere.json"), PY).unwrap();
+    crate::fsio::write(t.path().join("elsewhere.json"), PY).unwrap();
     symlink(
         t.path().join("elsewhere.json"),
         d.join("linked/kernel.json"),
@@ -193,7 +193,7 @@ fn the_private_folder_is_made_0700_and_a_loose_or_foreign_one_is_refused() {
     assert!(private_folder(&link).unwrap_err().contains("link"));
     // a file is refused
     let f = t.path().join("file");
-    fs::write(&f, "").unwrap();
+    crate::fsio::write(&f, "").unwrap();
     assert!(private_folder(&f).is_err());
 }
 
@@ -289,7 +289,7 @@ fn the_ipc_socket_files_a_kernel_left_go_with_the_connection() {
     let c = Connection::create(&folder, "k1", "python3").unwrap();
     let socks: Vec<PathBuf> = CHANNELS.iter().filter_map(|ch| c.socket(ch)).collect();
     for s in &socks {
-        fs::write(s, b"").unwrap();
+        crate::fsio::write(s, b"").unwrap();
     }
     drop(c);
     assert!(socks.iter().all(|s| !s.exists()), "a socket file is left");
@@ -329,9 +329,9 @@ fn the_sweep_removes_only_connection_files_of_kernels_that_are_gone() {
     let folder = private_folder(&t.path().join("s")).unwrap();
     let live = Connection::create(&folder, "live", "p").unwrap();
     let dead = folder.join("kernel-dead.json");
-    fs::write(&dead, "{}").unwrap();
+    crate::fsio::write(&dead, "{}").unwrap();
     let other = folder.join("notes.txt");
-    fs::write(&other, "keep").unwrap();
+    crate::fsio::write(&other, "keep").unwrap();
     let dir = folder.join("kernel-dir.json");
     fs::create_dir(&dir).unwrap();
     assert_eq!(sweep(&folder, std::slice::from_ref(&live.path)), 1);
@@ -439,7 +439,7 @@ fn kernel_json_is_opened_without_waiting_on_a_fifo_and_without_following_a_link(
     let why = skuld::wait_until("the open to come back", 30, || done.lock().unwrap().take());
     assert_eq!(why.as_deref(), Some("kernel.json is not a regular file"));
     let real = t.path().join("real.json");
-    fs::write(&real, PY).unwrap();
+    crate::fsio::write(&real, PY).unwrap();
     let link = t.path().join("link.json");
     symlink(&real, &link).unwrap();
     assert!(open_spec_file(&link).is_err());

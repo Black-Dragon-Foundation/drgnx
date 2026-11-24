@@ -85,7 +85,7 @@ fn listeners() -> Vec<u16> {
     let owned = owned_sockets();
     let mut out = vec![];
     for f in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        let Ok(t) = std::fs::read_to_string(f) else {
+        let Ok(t) = crate::fsio::read_to_string(f) else {
             continue;
         };
         for line in t.lines().skip(1) {
@@ -144,7 +144,7 @@ async fn ended(ev: &Events) {
 
 fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
     let p = dir.join(name);
-    std::fs::write(&p, text).unwrap();
+    crate::fsio::write(&p, text).unwrap();
     p
 }
 
@@ -170,7 +170,7 @@ async fn run(
     let tmp = dir.join("tmp");
     std::fs::create_dir_all(&tmp).unwrap();
     let preload = tmp.join(blocked::PRELOAD_NAME);
-    std::fs::write(&preload, blocked::PRELOAD).unwrap();
+    crate::fsio::write(&preload, blocked::PRELOAD).unwrap();
     let env = Env {
         path: vec![],
         tools: dir.to_path_buf(),
@@ -373,7 +373,7 @@ async fn a_child_past_the_blocks_ports_runs_without_the_debugger_and_says_so() {
         "{ports:?}: {held:?}"
     );
     // the second child ran, with no inspector, and said why
-    assert_eq!(std::fs::read_to_string(&out).unwrap(), "undefined");
+    assert_eq!(crate::fsio::read_to_string(&out).unwrap(), "undefined");
     let refused: Vec<String> = std::fs::read_dir(tmp.join(blocked::CLAIMS_DIR))
         .unwrap()
         .flatten()

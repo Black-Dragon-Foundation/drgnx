@@ -55,7 +55,7 @@ impl Policy {
 
 /// FILE at REV in REPO; empty when REV has no such file.
 fn show(repo: &Path, rev: &str, file: &str) -> Result<String, String> {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(["show", &format!("{rev}:{file}")])
@@ -65,7 +65,7 @@ fn show(repo: &Path, rev: &str, file: &str) -> Result<String, String> {
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
     // a missing path is "no rows"; a missing revision is an error
-    let has_rev = std::process::Command::new("git")
+    let has_rev = crate::proc::Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(["cat-file", "-e", &format!("{rev}^{{commit}}")])

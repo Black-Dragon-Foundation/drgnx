@@ -52,14 +52,14 @@ pub fn podman_env(shell: &ShellEnv) -> Vec<(OsString, OsString)> {
     shell.build(
         &[
             "PATH",
-            "HOME",
+            stig::HOME_VAR,
             "USER",
             "LOGNAME",
             "LANG",
-            "XDG_RUNTIME_DIR",
+            stig::SYSTEM_RUNTIME_VAR,
             "DBUS_SESSION_BUS_ADDRESS",
-            "XDG_DATA_HOME",
-            "XDG_CONFIG_HOME",
+            stig::Xdg::Data.var(),
+            stig::Xdg::Config.var(),
             "CONTAINERS_CONF",
             "CONTAINERS_STORAGE_CONF",
             "CONTAINERS_REGISTRIES_CONF",
@@ -133,8 +133,8 @@ fn run_limited(
     podman: &Path,
     args: &[&str],
     limit: Duration,
-) -> Result<std::process::Output, Refusal> {
-    podman::run_limited(podman, args, &podman_env(shell), limit).map_err(setup)
+) -> Result<sleipnir::tool::Output, Refusal> {
+    podman::run_limited(podman, args, &podman_env(shell), limit).map_err(|e| setup(e.to_string()))
 }
 
 /// Make sure REF (an image pinned by digest) is in the local store: the hub pulls it, a job never does.  A pull that
@@ -172,7 +172,7 @@ pub fn check_limits(
     podman: &Path,
     limit: Duration,
 ) -> Result<serde_json::Value, Refusal> {
-    podman::check_limits(podman, &podman_env(shell), limit).map_err(setup)
+    podman::check_limits(podman, &podman_env(shell), limit).map_err(|e| setup(e.to_string()))
 }
 
 /// At hub start: remove what this hub (OWNER, its tag) left behind (a podman client killed with the hub leaves its
@@ -217,7 +217,10 @@ pub fn remove_leftovers(
     {
         for tag in podman::old_px_tags(&images, current) {
             // an image a sibling hub's sidecar still runs from stays: `rmi` without force refuses it
-            let _ = run_limited(shell, podman, &["rmi", &tag], limit);
+            crate::soft::done(
+                run_limited(shell, podman, &["rmi", &tag], limit),
+                "run_limited",
+            );
         }
     }
     n
@@ -431,7 +434,10 @@ mod name_and_pull_tests {
             let stop = stop.clone();
             std::thread::spawn(move || {
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    let _ = std::process::Command::new("true").status();
+                    crate::soft::done(
+                        crate::proc::Command::new("true").status(),
+                        "std::process::Command::new",
+                    );
                 }
             })
         };
@@ -440,7 +446,7 @@ mod name_and_pull_tests {
             let dir = d.path().join(i.to_string());
             std::fs::create_dir(&dir).unwrap();
             let p = script(&dir, "echo ok");
-            if let Err(e) = std::process::Command::new(&p).output() {
+            if let Err(e) = crate::proc::Command::new(&p).output() {
                 busy.push(e.to_string());
             }
         }
@@ -515,7 +521,7 @@ mod name_and_pull_tests {
             Some("localhost/drgnx-px:11bb"),
         );
         assert_eq!(n, 2);
-        let said = std::fs::read_to_string(&log).unwrap();
+        let said = crate::fsio::read_to_string(&log).unwrap();
         assert!(
             said.contains("ps -a --filter label=drgnx.owner=aaaa1111"),
             "{said}"

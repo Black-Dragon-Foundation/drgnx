@@ -284,7 +284,7 @@ where
         .await
         .map_err(|e| format!("HTTP: {e}"))?;
     let conn = crate::clock::spawn("search:vectors", async move {
-        let _ = conn.await;
+        crate::soft::done(conn.await, "remote");
     });
     let resp = crate::clock::real(sender.send_request(req))
         .await

@@ -1101,7 +1101,7 @@ pub async fn record_conclusion_fallback(
 // ---- commits and decisions --------------------------------------------------------------------------------------
 
 pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args(args)
         .current_dir(dir)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -1542,7 +1542,7 @@ pub(crate) mod tests {
     use runstav::types::Bounded;
 
     fn sh(dir: &Path, args: &[&str]) {
-        let ok = std::process::Command::new("git")
+        let ok = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -1566,7 +1566,7 @@ pub(crate) mod tests {
     }
 
     fn commit(dir: &Path, file: &str, text: &str, msg: &str) -> String {
-        std::fs::write(dir.join(file), text).unwrap();
+        crate::fsio::write(dir.join(file), text).unwrap();
         sh(dir, &["add", "."]);
         sh(dir, &["commit", "-q", "-m", msg]);
         git(dir, &["rev-parse", "HEAD"]).unwrap().trim().to_owned()
@@ -2326,7 +2326,7 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(found_base.as_deref(), Some(base.as_str()));
         assert_eq!(linked, vec!["chat decision".to_owned()]);
-        let _ = first;
+        let _only_when_used_elsewhere = &first;
     }
 
     #[test]
