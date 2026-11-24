@@ -499,7 +499,7 @@ mod tests {
             .collect();
         assert_eq!(
             methods.len(),
-            7,
+            3,
             "the view/ methods: {:?}",
             methods.iter().map(|m| m.name).collect::<Vec<_>>()
         );

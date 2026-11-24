@@ -284,7 +284,7 @@ fn the_history_methods_are_the_users_alone() {
         .iter()
         .filter(|m| m.name.starts_with("agents/history/"))
         .collect();
-    assert_eq!(ours.len(), 6);
+    assert_eq!(ours.len(), 5);
     for m in ours {
         assert_eq!(m.classes, [runstav::registry::Class::User], "{}", m.name);
     }

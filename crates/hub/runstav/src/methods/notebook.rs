@@ -476,8 +476,6 @@ mod tests {
             "input",
             "tail",
             "output",
-            "view",
-            "focus",
             "log",
             "clear",
             "close",
@@ -512,15 +510,7 @@ mod tests {
             json!({"id": "nb1", "request": "r", "value": "x"})
         ));
         assert!(ok("notebook/clear", json!({"id": "nb1"})));
-        assert!(ok("notebook/view", json!({"id": "nb1", "kind": "outline"})));
-        assert!(ok(
-            "notebook/view",
-            json!({"id": "nb1", "kind": "output", "cell": "a"})
-        ));
-        assert!(ok("notebook/view", json!({"id": "nb1", "kind": "log"})));
         assert!(ok("notebook/log", json!({"id": "nb1"})));
-        assert!(ok("notebook/focus", json!({"id": "nb1"})));
-        assert!(ok("notebook/focus", json!({"id": "nb1", "cell": "a"})));
         assert!(ok("notebook/log", json!({"id": "nb1", "since": 4})));
         assert!(ok("notebook/tail", json!({"id": "nb1", "cell": "a"})));
     }
@@ -569,35 +559,9 @@ mod tests {
         );
         assert!(err("notebook/tail", json!({"id": "nb1"})).path.is_some());
         assert!(
-            err("notebook/view", json!({"id": "nb1", "kind": "chart"}))
-                .path
-                .is_some()
-        );
-        assert!(
             err("notebook/log", json!({"id": "nb1", "since": -1}))
                 .path
                 .is_some()
-        );
-        assert_eq!(
-            err("notebook/focus", json!({"id": "nb1", "cell": ""}))
-                .path
-                .as_deref(),
-            Some("cell")
-        );
-        assert_eq!(
-            err("notebook/view", json!({"id": "nb1", "kind": "output"}))
-                .path
-                .as_deref(),
-            Some("cell")
-        );
-        assert_eq!(
-            err(
-                "notebook/view",
-                json!({"id": "nb1", "kind": "outline", "cell": "a"})
-            )
-            .path
-            .as_deref(),
-            Some("cell")
         );
         assert!(err("notebook/shutdown", json!({})).path.is_some());
     }

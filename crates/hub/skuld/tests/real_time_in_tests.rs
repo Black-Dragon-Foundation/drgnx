@@ -553,7 +553,9 @@ fn find(runtime: &Path) -> Vec<String> {
 #[test]
 fn rust_files_skips_replaced_folders() {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("replaced-walk");
-    fs::remove_dir_all(&root).ok();
+    if root.exists() {
+        fs::remove_dir_all(&root).unwrap();
+    }
     let gone = root.join("src/gone");
     fs::create_dir_all(&gone).unwrap();
     let put = |p: &Path, text: &str| eitri::replace_file(p, text.as_bytes()).unwrap();

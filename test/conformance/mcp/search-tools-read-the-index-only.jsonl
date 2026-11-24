@@ -10,7 +10,7 @@
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
 {"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}}
-{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "find_usages"}, {"name": "index_list"}, {"name": "index_status"}, {"name": "outline"}, {"name": "repo_map"}, {"name": "search"}, {"name": "search_results"}, {"name": "symbols"}]}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "find_usages"}, {"name": "index_list"}, {"name": "index_status"}, {"name": "outline"}, {"name": "repo_map"}, {"name": "search"}, {"name": "symbols"}]}}}
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "index_status", "arguments": {}}}}
 {"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": {"$text": ["paused: no embedder", " files, ", "tier 2 "]}}], "isError": "$absent"}}, "within_ms": 20000}
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "index_list", "arguments": {}}}}
