@@ -80,6 +80,12 @@ pub fn cli_out(line: &str) -> villa::Result<()> {
     writeln!(std::io::stdout().lock(), "{line}").map_err(villa::Error::from)
 }
 
+/// The process's stdout as a writer, for a command whose output is bytes and not lines (a wire protocol's frames, a
+/// key on a pipe): what is written arrives as it is, with nothing added.
+pub fn raw_out() -> impl std::io::Write + Send {
+    std::io::stdout()
+}
+
 /// LINE and a newline on stderr: a command's diagnostics.
 pub fn cli_err(line: &str) -> villa::Result<()> {
     writeln!(std::io::stderr().lock(), "{line}").map_err(villa::Error::from)

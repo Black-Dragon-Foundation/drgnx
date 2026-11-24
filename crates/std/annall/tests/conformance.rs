@@ -97,3 +97,25 @@ fn the_stderr_sink_writes_json_lines_to_stderr_and_makes_no_file() {
         "the stderr sink makes no log file"
     );
 }
+
+#[test]
+fn raw_out_writes_the_bytes_it_is_given_and_nothing_else() {
+    use std::io::{Read, Write};
+    use std::os::fd::FromRawFd;
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: pipe(2) fills two descriptors; dup2(2) points descriptor 1 at the write end, as a hub does for a worker
+    let mut read = unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert!(libc::dup2(fds[1], 1) >= 0);
+        libc::close(fds[1]);
+        std::fs::File::from_raw_fd(fds[0])
+    };
+    let mut out = annall::raw_out();
+    out.write_all(b"\x00key\xff").unwrap();
+    out.flush().unwrap();
+    // SAFETY: closing descriptor 1 (the pipe's write end) ends the stream for the reader
+    unsafe { libc::close(1) };
+    let mut bytes = Vec::new();
+    read.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"\x00key\xff", "no newline, no encoding");
+}

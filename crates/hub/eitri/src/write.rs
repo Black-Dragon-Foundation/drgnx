@@ -390,6 +390,35 @@ pub fn write_in_place(abs: &Path, bytes: &[u8]) -> Result<(), FsError> {
     Ok(())
 }
 
+/// Opens the existing regular file at the absolute path `abs` for reading and writing without blocking, and keeps it
+/// open: a kernel trigger file (`/proc/pressure/memory`, a cgroup's `memory.pressure`), which is armed by a write and
+/// then polled on the same descriptor, or a file another step made that is filled or touched in place. The parent is opened with `open_path` (a link in any component is refused); the
+/// open is `O_NOFOLLOW`, so a link at `abs` is `Link`, a file that is not there is an `Io` error of kind `NotFound`, and
+/// anything that is not a regular file is `NotRegular`. Nothing is created or truncated.
+pub fn open_existing(abs: &Path) -> Result<std::fs::File, FsError> {
+    let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) else {
+        return Err(invalid("the path names no file"));
+    };
+    let parent = open_path(parent, Kind::Dir)?;
+    let flags =
+        OFlags::RDWR | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
+    let fd = match openat(parent.fd.as_fd(), name, flags, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(Errno::LOOP) => {
+            return Err(FsError::Link {
+                path: abs.to_path_buf(),
+            });
+        }
+        // a directory refuses a write open before any type check can name it
+        Err(Errno::ISDIR) => return Err(FsError::NotRegular),
+        Err(e) => return Err(e.into()),
+    };
+    if FileType::from_raw_mode(rustix::fs::fstat(&fd)?.st_mode) != FileType::RegularFile {
+        return Err(FsError::NotRegular);
+    }
+    Ok(std::fs::File::from(fd))
+}
+
 /// `from` renamed to `to` when `from` is itself of type WANT (else a link is `Link` and any other type REFUSED).
 fn rename_entry(from: &Path, to: &Path, want: FileType, refused: FsError) -> Result<(), FsError> {
     let (Some(from_parent), Some(from_name), Some(to_parent), Some(to_name)) =

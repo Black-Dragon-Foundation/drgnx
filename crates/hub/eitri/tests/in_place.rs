@@ -5,7 +5,9 @@ use std::os::unix::net::UnixListener;
 
 use std::io::Write;
 
-use eitri::{FsError, open_append, rename_file, rename_socket, replace_via, write_in_place};
+use eitri::{
+    FsError, open_append, open_existing, rename_file, rename_socket, replace_via, write_in_place,
+};
 
 #[test]
 fn a_write_in_place_keeps_the_file_and_never_makes_one() {
@@ -118,4 +120,30 @@ fn replace_via_writes_the_named_temporary_and_renames_it_over_the_file() {
         Err(FsError::Link { .. })
     ));
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "kept");
+}
+
+#[test]
+fn an_existing_file_opens_for_both_ways_and_keeps_its_content_a_link_or_a_directory_is_refused() {
+    use std::io::Read;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("memory.pressure");
+    std::fs::write(&file, "kept").unwrap();
+    let mut f = open_existing(&file).unwrap();
+    let mut got = String::new();
+    f.read_to_string(&mut got).unwrap();
+    assert_eq!(got, "kept", "not truncated");
+    f.write_all(b"!").unwrap();
+    let e = open_existing(&dir.path().join("absent")).unwrap_err();
+    assert!(
+        matches!(&e, FsError::Io(io) if io.kind() == std::io::ErrorKind::NotFound),
+        "{e:?}"
+    );
+    assert!(!dir.path().join("absent").exists(), "never created");
+    let link = dir.path().join("link");
+    symlink(&file, &link).unwrap();
+    assert!(matches!(open_existing(&link), Err(FsError::Link { .. })));
+    assert!(matches!(
+        open_existing(dir.path()),
+        Err(FsError::NotRegular)
+    ));
 }

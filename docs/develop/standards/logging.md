@@ -11,6 +11,7 @@ tracing::info!(files = n, "project indexed");
 annall::log_error(&err);                                   // kind, sentence, detail and source chain
 tracing::info!(token = annall::redact(&secret), "signed in");
 annall::cli_out("3 files changed")?;                       // a command's output
+annall::raw_out().write_all(&frame)?;                      // a command's output that is bytes, not lines
 ```
 
 - The log is `<stig::state()>/log/drgnx.log`, one JSON object per line. Dropping the guard flushes it.
