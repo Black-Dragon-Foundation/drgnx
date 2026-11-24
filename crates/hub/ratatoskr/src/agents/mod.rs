@@ -233,11 +233,15 @@ impl Hub {
         self.steps.0.clone()
     }
 
-    /// The turns running now (restart-when-idle waits for these only; an idle chat does not hold an update).
+    /// The turns running now, and the sessions whose last step is not written yet (restart-when-idle waits for these
+    /// only; an idle chat does not hold an update).
     pub fn busy_count(&self) -> u64 {
         lock(&self.sessions)
             .values()
-            .filter(|s| matches!(s.status(), SessionStatus::Busy | SessionStatus::Starting))
+            .filter(|s| {
+                matches!(s.status(), SessionStatus::Busy | SessionStatus::Starting)
+                    || s.steps_pending()
+            })
             .count() as u64
     }
 

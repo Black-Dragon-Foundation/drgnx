@@ -5655,6 +5655,13 @@ impl Session {
         lock(&self.state).core.status()
     }
 
+    /// A closed step is still to be written: handed to the step writer (or about to be) with its row not yet in the
+    /// `step` table.  A hub that ends now loses its anchors, so restart-when-idle counts the session busy.
+    pub(crate) fn steps_pending(&self) -> bool {
+        self.flow.sent.load(Ordering::SeqCst) > *self.flow.written.borrow()
+            || !lock(&self.state).closed.is_empty()
+    }
+
     /// The job this session works for.
     pub(crate) fn job_id(&self) -> Option<&str> {
         self.job.as_deref()
