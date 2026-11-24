@@ -1711,3 +1711,72 @@ fn a_request_is_in_flight_until_its_event_is_sent() {
         assert_eq!(in_flight.get(), 0);
     });
 }
+
+/// The same missing key is named again once a minute has passed on the clock, not before and not never.
+#[test]
+fn a_missing_key_is_named_again_after_a_minute() {
+    let clock = stund::Manual::default();
+    stund::install(Arc::new(clock.clone()));
+    saman::Executor::new(2).unwrap().block_on(async {
+        let mut gw = Gw::start(
+            vec![provider(
+                "nokey",
+                Kind::Anthropic,
+                &dead_url(),
+                Auth::Bearer,
+            )],
+            vec![(AGENT, agent(&["nokey"], None))],
+            &[],
+            0.0,
+        )
+        .await;
+        let named = |events: Vec<GatewayEvent>| {
+            events
+                .into_iter()
+                .filter(|e| matches!(e, GatewayEvent::NeedKeys { .. }))
+                .count()
+        };
+        assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 502);
+        assert_eq!(named(gw.pending()), 1);
+        clock.advance(bifrost::engine::NEED_KEYS_EVERY - Duration::from_secs(1));
+        assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 502);
+        assert_eq!(named(gw.pending()), 0, "named again within the minute");
+        clock.advance(Duration::from_secs(2));
+        assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 502);
+        assert_eq!(named(gw.pending()), 1, "not named again after the minute");
+    });
+}
+
+/// A refused request whose body stalls is answered, then the connection is held open for the drain's time and no
+/// longer: the clock decides when it ends.
+#[test]
+fn a_refused_body_that_stalls_is_drained_for_two_seconds_only() {
+    let clock = stund::Manual::default();
+    stund::install(Arc::new(clock.clone()));
+    saman::Executor::new(2).unwrap().block_on(async {
+        let gw = Gw::start(vec![], vec![], &[], 0.0).await;
+        let mut s = TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap();
+        let head = format!(
+            "POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer not-a-token\r\n\
+             Content-Type: application/json\r\nContent-Length: 60000\r\n\r\nxxxx",
+            gw.port
+        );
+        s.write_all(head.as_bytes()).await.unwrap();
+        let reader = saman::spawn("test-client", async move {
+            let mut answer = Vec::new();
+            let read = s.read_to_end(&mut answer).await;
+            (read.is_ok(), String::from_utf8_lossy(&answer).into_owned())
+        });
+        skuld::wait_until("the drain's timer waits", 30, || {
+            (clock.sleepers() > 0).then_some(())
+        });
+        assert!(!reader.is_finished(), "the drain ended before its time");
+        clock.advance(bifrost::engine::DRAIN_FOR);
+        let (ok, answer) = tokio::time::timeout(Duration::from_secs(30), reader)
+            .await
+            .expect("the gateway closes within 30 s of the drain's end")
+            .unwrap();
+        assert!(ok);
+        assert!(answer.starts_with("HTTP/1.1 401"), "{answer}");
+    });
+}

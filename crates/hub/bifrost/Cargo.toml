@@ -42,6 +42,7 @@ tempfile.workspace = true
 proptest.workspace = true
 eitri.workspace = true
 raun.workspace = true   # the mock's child process
+stund = { workspace = true, features = ["test-hooks"] }   # the throttle and drain tests move a `stund::Manual` clock by hand
 # The TLS tests (tests/tls.rs, tests/common): certificates made at run time, an in-test TLS server.
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
