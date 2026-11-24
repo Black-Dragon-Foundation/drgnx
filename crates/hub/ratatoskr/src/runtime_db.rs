@@ -206,7 +206,11 @@ mod tests {
             "{names:?}"
         );
         let fresh = urdr::open_readonly(&file).unwrap();
-        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("12"));
+        let newest = MIGRATIONS.last().expect("a migration").0.to_string();
+        assert_eq!(
+            urdr::meta(&fresh, "schema").unwrap().as_deref(),
+            Some(newest.as_str())
+        );
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600
