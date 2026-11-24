@@ -25,6 +25,7 @@ fn quiet(deny: Option<libc::c_long>) -> Opts {
 }
 
 /// `uname` asks the kernel for `uname(2)`: the same program ends 0 without the filter and not 0 with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_denied_syscall_fails_in_the_child_and_only_there() {
     let plain = spawn_std(&spec("uname"), &quiet(None))
@@ -39,10 +40,19 @@ fn a_denied_syscall_fails_in_the_child_and_only_there() {
     assert!(!denied.success(), "uname under the filter: {denied:?}");
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_syscall_number_out_of_range_is_refused_before_the_fork() {
     let err = spawn_std(&spec("uname"), &quiet(Some(-1))).expect_err("a refusal");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{err}");
+}
+
+/// Outside Linux there is no seccomp: a filter is refused before the fork, never silently dropped.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn a_filter_is_refused_where_there_is_no_seccomp() {
+    let err = spawn_std(&spec("uname"), &quiet(Some(1))).expect_err("a refusal");
+    assert_eq!(err.kind(), std::io::ErrorKind::Unsupported, "{err}");
 }
 
 /// `Opts::inherit_group`: the child is in the parent's group, not a group of its own.

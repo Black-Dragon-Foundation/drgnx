@@ -391,19 +391,7 @@ fn launch<C>(
                     return Err(io::Error::last_os_error());
                 }
                 if let Some(f) = &filter {
-                    let prog = libc::sock_fprog {
-                        len: f.len() as libc::c_ushort,
-                        filter: f.as_ptr().cast_mut(),
-                    };
-                    if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
-                        || libc::prctl(
-                            libc::PR_SET_SECCOMP,
-                            libc::SECCOMP_MODE_FILTER,
-                            &prog as *const libc::sock_fprog,
-                        ) != 0
-                    {
-                        return Err(io::Error::last_os_error());
-                    }
+                    install_filter(f)?;
                 }
                 Ok(())
             });
@@ -420,8 +408,51 @@ fn launch<C>(
     }
 }
 
+/// A built [`Opts::deny_syscall`] filter. seccomp is Linux's: elsewhere there is none to build.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+type Filter = Vec<libc::sock_filter>;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+type Filter = std::convert::Infallible;
+
+/// In the forked child: `no_new_privs`, then the filter. Only async-signal-safe calls (prctl(2)).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn install_filter(f: &Filter) -> io::Result<()> {
+    let prog = libc::sock_fprog {
+        len: f.len() as libc::c_ushort,
+        filter: f.as_ptr().cast_mut(),
+    };
+    // SAFETY: prctl(2) with a filter that `prog` points at, alive for the call.
+    let failed = unsafe {
+        libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+            || libc::prctl(
+                libc::PR_SET_SECCOMP,
+                libc::SECCOMP_MODE_FILTER,
+                &prog as *const libc::sock_fprog,
+            ) != 0
+    };
+    if failed {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn install_filter(f: &Filter) -> io::Result<()> {
+    match *f {}
+}
+
+/// Outside Linux a filter is refused before the fork: the harness asked for something this system cannot do.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn deny_filter(_nr: libc::c_long) -> io::Result<Filter> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "a seccomp filter needs Linux",
+    ))
+}
+
 /// A filter that answers `nr` with EPERM and allows everything else (no architecture check).
-fn deny_filter(nr: libc::c_long) -> io::Result<Vec<libc::sock_filter>> {
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn deny_filter(nr: libc::c_long) -> io::Result<Filter> {
     const LD_W_ABS: u16 = 0x20; // BPF_LD | BPF_W | BPF_ABS
     const JEQ_K: u16 = 0x15; // BPF_JMP | BPF_JEQ | BPF_K
     const RET_K: u16 = 0x06; // BPF_RET | BPF_K
