@@ -734,7 +734,9 @@ schema 7 is made, migrated or found, so schema 6 and a fresh file arrive at 8 to
   note or report), `narrows` (grant to grant); `implements` now also reaches a `decision`.
 - **`run` and `stream`** (`norn::kinds`): a `run` is a recorded run (a merge-gate check, a live recording; later agent
   or training runs) and is written only by the hub (`Class::System`: an agent, an outside agent or the user is refused
-  with `runs are the hub's`); it is linked `ran_for` a task, a commit or a plan. A `stream` (id `stream:<n>`, data
+  with `runs are the hub's`); it is linked `ran_for` a task, a commit or a plan. `graph/import` (only the user may
+  call it) writes as the system and so restores runs from an export: a restore keeps the run history, while no agent
+  and no live edit can forge one. A `stream` (id `stream:<n>`, data
   `{store_id, branch?, task?}`) is linked `stream_of` a task. Neither link changes readiness.
 - **`step`** (one row per unit of an agent's timeline): `id, session, task, plan, project, agent, provider, seq, class,
   start, end, tool, tool_kind, message_id, turn_id, snapshot, log_version, tokens_in, tokens_out, cache_read,

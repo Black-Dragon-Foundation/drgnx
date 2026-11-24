@@ -1529,6 +1529,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(made.id, "run:made");
+        // `graph/import` (the user's own restore of an export) writes as the system, so a backup keeps its runs
+        let restored = write(
+            &mut conn,
+            TxMeta::new("import", Class::System, "import"),
+            |tx| entity::create(tx, run("run:restored")),
+        )
+        .unwrap();
+        assert_eq!(restored.id, "run:restored");
     }
 
     /// Every way a write of kind `grant` (or a `setting:` key) reaches the store, from every class: only `User`
