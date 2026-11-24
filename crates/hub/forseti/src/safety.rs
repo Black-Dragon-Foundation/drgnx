@@ -335,7 +335,9 @@ mod tests {
         assert_eq!(at(base, 0.0, 0.0), Level::Tight);
         assert_eq!(at(base - 1, 0.0, 0.0), Level::Danger);
         assert_eq!(at(20_000, 2.5, 0.0), Level::Tight);
-        assert_eq!(at(20_000, 0.0, 1.5), Level::Tight);
+        // the apps' limit is 2 % on a workstation (§4.8's app gate)
+        assert_eq!(at(20_000, 0.0, 2.0), Level::Normal);
+        assert_eq!(at(20_000, 0.0, 2.5), Level::Tight);
         assert_eq!(at(20_000, 0.0, 5.0), Level::Tight);
         assert_eq!(at(20_000, 0.0, 5.1), Level::Danger);
     }
