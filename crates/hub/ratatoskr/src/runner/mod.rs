@@ -51,7 +51,7 @@ use runstav::methods::matrix::{Limit, Unit};
 use runstav::methods::timeline::BudgetScope;
 use runstav::registry::Class;
 use runstav::types::{Bounded, Id};
-use runstav::wire::{Error, ErrorCode};
+use runstav::wire::Error;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::future::Future;
@@ -600,21 +600,7 @@ pub(crate) fn now() -> f64 {
     crate::clock::wall_secs()
 }
 
-pub(crate) fn invalid(message: impl ToString) -> Error {
-    Error {
-        code: ErrorCode::InvalidParams,
-        message: message.to_string(),
-        path: None,
-    }
-}
-
-pub(crate) fn internal(message: impl ToString) -> Error {
-    Error {
-        code: ErrorCode::Internal,
-        message: message.to_string(),
-        path: None,
-    }
-}
+pub(crate) use stofn::errors::{internal, invalid};
 
 /// The hub itself as a caller: the tick's writes (actor `hub`, class `system`).
 pub(crate) fn service() -> Caller {

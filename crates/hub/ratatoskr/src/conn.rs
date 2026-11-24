@@ -40,11 +40,7 @@ pub const MAX_QUEUED: usize = 16 << 20;
 /// A client is dropped when a write to it makes no progress for this long.
 pub const STUCK_AFTER: Duration = Duration::from_secs(10);
 
-/// May a peer of PEER_UID talk to a hub running as OWN_UID?  Only the same uid: another user (root included) is
-/// closed at once.
-pub fn peer_allowed(peer_uid: u32, own_uid: u32) -> bool {
-    peer_uid == own_uid
-}
+pub use stofn::caller::peer_allowed;
 
 /// The lines waiting for one client.  Pushing never waits: a line that would put more than [`MAX_QUEUED`] in the
 /// queue closes the connection instead.

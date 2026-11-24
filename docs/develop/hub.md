@@ -2,6 +2,16 @@
 
 User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-the-gateway).
 
+## Crates of the hub
+
+`ratatoskr` is being split into crates, one wave at a time (plan: the ratatoskr split). A crate depends only on the
+crates above it in this table, and `standards.toml` (`[[layer]]`) fails a back-edge, a dev-dependency back-edge too.
+`ratatoskr` re-exports each moved module under its old path (`ratatoskr::fsio`, `crate::soft`), so callers did not change.
+
+| Crate | What | Depends on |
+|---|---|---|
+| `stofn` | the standards shims (`soft`, `fsio`, `proc`), `shell_env`, the wire error helpers, `Origin`, `Caller` and `peer_allowed`, a checkout's git folders (`gitdirs`), the running executable's path (`exe`), a debug session's port blocks (`ports`), the archive unpacker (`unpack`); nothing that needs a clock | `annall`, `draugr`, `eitri`, `runstav`, `saman`, `stig`, `villa` |
+
 ## Processes
 
 - **The client** (`core/drgnx-hub-client.el`, feature `drgnx-hub-client`): everything an editor, the CLI or the
@@ -19,7 +29,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   and never a provider key (`drgnx-hub-ensure` unsets every provider's `:key-env` for the start). Keys come over the
   socket instead (`gateway/keys`, below). Its `PATH` is the starting Emacs's, until an Emacs that read the user's
   login shell (`core/drgnx-shell-env.el`, at start and Shell: Reload Environment) finds `PATH`
-  changed and sends `env/set`. The front serves `env/set` itself (`ratatoskr/src/shell_env.rs`): the variables
+  changed and sends `env/set`. The front serves `env/set` itself (`stofn/src/shell_env.rs`): the variables
   are an overlay in the hub's memory (`ShellEnv`), and every process the hub starts next (agent sessions, jobs, podman,
   git for plan runs) takes its environment from the process's with the overlay applied, so `PATH` is the login
   shell's directories, then the hub's own that the shell's do not name. The hub's own environment is never changed.

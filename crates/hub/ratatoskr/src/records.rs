@@ -697,13 +697,7 @@ async fn sync_bodies(db: &CoordDb, path: &Path) -> Result<bool, Error> {
     Ok(true)
 }
 
-/// TEXT to PATH: a temporary file beside it, synced, then a rename (the old file is never truncated, so an editor's
-/// own atomic save cannot interleave with half of ours).
-pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".drgnx-tmp");
-    crate::fsio::write_via(PathBuf::from(tmp), path, text)
-}
+pub use stofn::fsio::write_atomic;
 
 /// What the records tell the editors.
 #[derive(Debug, Clone, PartialEq)]

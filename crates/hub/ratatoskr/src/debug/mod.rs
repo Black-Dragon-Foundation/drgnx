@@ -35,7 +35,7 @@ pub mod lsp_command;
 pub mod lsp_mock;
 pub mod origin;
 pub mod origin_wire;
-pub mod ports;
+pub use stofn::ports;
 pub mod probes;
 pub mod record;
 pub mod runfile;

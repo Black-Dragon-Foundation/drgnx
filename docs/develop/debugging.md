@@ -822,7 +822,7 @@ runs showed, and the hub keeps to:
 Under macOS's Seatbelt a session's adapter and program may use only the loopback ports its profile names
 (`mac_loopback_ports`), and debugpy's and js-debug's launch modes bind ephemeral ports of their own. So a sandboxed
 session gets a block of ports and its launch configuration becomes an attach the hub sets up
-(`debug/ports.rs`, `debug/blocked.rs`):
+(`stofn/src/ports.rs`, `debug/blocked.rs`):
 
 - **The block** (`ports::Blocks`): 8 ports cut from 47000–48999, below macOS's ephemeral range (49152), so the system
   never hands one out for an outgoing connection. A block is claimed machine-wide: an exclusive `flock` on

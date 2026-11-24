@@ -83,33 +83,13 @@ fn now_ms() -> u64 {
     (now() * 1000.0) as u64
 }
 
-pub(crate) fn refuse(message: &str) -> Error {
-    Error {
-        code: ErrorCode::NotAllowed,
-        message: message.into(),
-        path: None,
-    }
-}
+pub(crate) use stofn::errors::refuse;
 
 pub(crate) fn no_session(id: &str) -> Error {
     invalid("id", format!("no session {id}"))
 }
 
-pub(crate) fn invalid(path: &str, message: impl ToString) -> Error {
-    Error {
-        code: ErrorCode::InvalidParams,
-        message: message.to_string(),
-        path: Some(path.into()),
-    }
-}
-
-pub(crate) fn internal(message: impl ToString) -> Error {
-    Error {
-        code: ErrorCode::Internal,
-        message: message.to_string(),
-        path: None,
-    }
-}
+pub(crate) use stofn::errors::{internal, invalid_at as invalid};
 
 /// A permission request the agent waits on.
 struct Pending {
