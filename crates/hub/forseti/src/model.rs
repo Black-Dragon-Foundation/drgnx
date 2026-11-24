@@ -315,6 +315,23 @@ pub struct Derived {
     /// The memory one unit of the job's work takes, MiB ([`crate::admit::jobs_for`]); none: the default.
     #[serde(default)]
     pub unit_mib: Option<u64>,
+    /// The identity of the job's toolchain: its image's platform digest ([`crate::artifact::toolchain_identity`]). It
+    /// is in the keys that name the toolchain, the env stamp and the slot family; none: the job names no toolchain.
+    #[serde(default)]
+    pub toolchain: Option<String>,
+    /// The caches the job uses ([`crate::caches::CacheSpec`]).
+    #[serde(default)]
+    pub caches: Vec<crate::caches::CacheSpec>,
+    /// An artifact job: what it builds. The runner builds it itself and commits the result ([`ArtifactBuild`]).
+    #[serde(default)]
+    pub build: Option<crate::artifact::ArtifactBuild>,
+    /// The job came from a pack: its argv and `env` carry placeholders (`{src}`, `{art:NAME}`, `{jobs}` …) that the
+    /// runner expands. A job without it runs its argv as written, so a literal `{x}` in it is never read as one.
+    #[serde(default)]
+    pub expand: bool,
+    /// The job's own variables, placeholders unexpanded (a value that is exactly `{key:NAME}` is the key NAME).
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
 }
 
 /// The history class of a tree of BYTES: `floor(log2(MiB))`, 0 below 2 MiB.
@@ -548,6 +565,9 @@ pub enum WaitReason {
     /// Its tree is in no registered project (or its clone is shallow, or matches two): no runner takes it. The text
     /// says why and what to do (`jobs/project-add`, `git fetch --unshallow`).
     NotRegistered(String),
+    /// A digest the job pulls is on no allow-list of its project; the text names it and the command that allows it
+    /// (`drgnx jobs allow PROJECT image DIGEST`).
+    NotAllowed(String),
     /// The running jobs' expected IO, with this one's, is more than the runner's disk can move.
     IoBandwidth {
         need_mbps: f64,

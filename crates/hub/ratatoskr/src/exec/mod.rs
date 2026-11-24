@@ -830,6 +830,28 @@ impl Runner {
             if hooks.systemd && hooks.admission == crate::runners::local::Admission::Live {
                 queue.read_local_use(crate::runners::local::local_use());
             }
+            // the allow-lists, as `runtime.db` keeps them
+            if let Some(handle) = hooks.runtime.clone() {
+                let q = queue.clone();
+                crate::clock::spawn("runners:allow-load", async move {
+                    let rows = handle
+                        .read(|c| {
+                            let mut s =
+                                c.prepare("select key, value from kv where key like 'allow/%'")?;
+                            let rows = s
+                                .query_map([], |r| {
+                                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                                })?
+                                .collect::<Result<Vec<_>, _>>()?;
+                            Ok(rows)
+                        })
+                        .await;
+                    match rows {
+                        Ok(rows) => q.load_allow(rows),
+                        Err(e) => tracing::warn!("runners: the allow-lists in runtime.db: {e}"),
+                    }
+                });
+            }
             let inner = Arc::new(Inner {
                 root,
                 hooks,
@@ -1908,7 +1930,7 @@ impl Inner {
             .map_err(|_| refusal("the job's folder is outside its worktree"))?;
         let req = container::ContainerReq {
             features: vec![],
-            image: job.image.clone(),
+            image: job.image.as_str().into(),
             argv: spec.argv.clone(),
             worktree,
             subdir,

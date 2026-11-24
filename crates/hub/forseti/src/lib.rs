@@ -9,6 +9,7 @@ pub mod artifact;
 pub mod backfill;
 pub mod bisect;
 pub mod cachekey;
+pub mod caches;
 pub mod classify;
 pub mod cost;
 pub mod dialect;
@@ -33,7 +34,11 @@ pub mod split;
 mod testkit;
 
 pub use admit::{Budget, admit, budget, head_protection, jobs_for, oom_rerun, size};
-pub use artifact::{ArtifactKey, Canon, KeyInputs, SCHEDULING_ONLY, artifact_key};
+pub use artifact::{
+    ArtifactBuild, ArtifactKey, Canon, ImageBuild, Keep, KeyInputs, SCHEDULING_ONLY, artifact_key,
+    toolchain_identity,
+};
+pub use caches::{CacheSpec, Sharing};
 pub use dialect::{Dialect, DialectSpec};
 pub use row::{Row, RowClass, RowVerdict};
 // `backfill::Reservation` stays in its module: at the root it would shadow the two schedulers' `Reservation`.

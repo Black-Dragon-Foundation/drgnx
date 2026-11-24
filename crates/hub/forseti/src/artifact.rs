@@ -251,6 +251,91 @@ fn segment(p: &[u8], s: &[u8]) -> bool {
     }
 }
 
+/// The disk register's id of artifact KEY of PROJECT built in ROLE: `artifact:<role>:<project>:<key>`. The runner
+/// registers a committed artifact under it, and the hub's pins name it, so a key a queued or running job needs is never
+/// evicted. The role and the project are in the id because the key is not (a gate's build and an author's of one key are
+/// two folders, and so are two projects').
+pub fn item_id(role: crate::Role, project: &str, key: &ArtifactKey) -> String {
+    format!("artifact:{}:{project}:{}", role.name(), key.0)
+}
+
+/// The register ids a job of PROJECT that uses KEY keeps: both roles' (an author's job may be served from the gate's
+/// build).
+pub fn item_ids(project: &str, key: &ArtifactKey) -> [String; 2] {
+    [
+        item_id(crate::Role::Author, project, key),
+        item_id(crate::Role::Gate, project, key),
+    ]
+}
+
+/// What a toolchain is, for the keys that name it: the image's platform digest (`sha256:<64 hex>`), never the index's:
+/// an index lists one manifest per platform, so its digest would change when another platform's image does. A bare 64
+/// hex is taken as a platform digest; anything else is refused.
+pub fn toolchain_identity(platform_digest: &str) -> villa::Result<String> {
+    let hex = platform_digest
+        .strip_prefix("sha256:")
+        .unwrap_or(platform_digest);
+    if hex.len() == 64
+        && hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        Ok(format!("sha256:{hex}"))
+    } else {
+        Err(villa::Error::invalid(format!(
+            "a toolchain's identity is its image's platform digest (sha256:<64 hex>), not {platform_digest:?}"
+        )))
+    }
+}
+
+/// What an artifact job builds: the hub sets it in the job's [`crate::Derived`] when it makes the job for a pack's
+/// artifact entry, and the runner builds it itself (an `image` with `podman build` or `pull`, a `command` in a container
+/// job whose `{out}` it then commits).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactBuild {
+    /// `image` or `command`.
+    pub kind: String,
+    pub key: ArtifactKey,
+    /// The pack's name for it.
+    pub name: String,
+    /// A `command`'s steps, run in order inside the job's container; the first non-zero stops the rest and nothing is
+    /// committed.
+    #[serde(default)]
+    pub steps: Vec<Vec<String>>,
+    /// A `command`'s `keep`: only these paths of a folder are copied into `{out}`.
+    #[serde(default)]
+    pub keep: Option<Keep>,
+    /// An `image`'s recipe.
+    #[serde(default)]
+    pub image: Option<ImageBuild>,
+}
+
+/// `keep = { from = DIR, paths = [GLOB…] }`: the folder `{out}` is made from, and the paths (globs, relative to `from`)
+/// that are copied.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Keep {
+    pub from: String,
+    pub paths: Vec<String>,
+}
+
+/// An `image` artifact's recipe, and the hub's decision: with `digest` the registry has the image for this key and the
+/// runner pulls it; without, the runner builds it from the tree.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageBuild {
+    pub containerfile: String,
+    pub context: String,
+    /// The registry repository the image lives in (`host/name`), checked against the project's allow-list.
+    pub repo: String,
+    #[serde(default)]
+    pub digest: Option<String>,
+    /// The registry's index digest that lists `digest` for the platforms (an allow-list entry of the index allows it).
+    #[serde(default)]
+    pub index: Option<String>,
+    /// The repositories the project's image allow-list holds: a pull is checked against them on the runner too.
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,5 +590,57 @@ mod tests {
         assert_eq!(key(&image, &base), key(&image, &src_edit));
         assert_ne!(key(&build, &base), key(&build, &src_edit));
         assert_ne!(key(&image, &base), key(&image, &tree("l1", "t1", "c2")));
+    }
+
+    #[test]
+    fn a_toolchain_change_changes_every_key_that_names_it() {
+        // [D] pure: the identity is in the key; an entry that names no toolchain keeps its key
+        let d1 = format!("sha256:{}", "a".repeat(64));
+        let d2 = format!("sha256:{}", "b".repeat(64));
+        let key = |entry: &Canon, id: &str| {
+            artifact_key(&KeyInputs {
+                entry: entry.clone(),
+                toolchain: id.into(),
+                blobs: vec![],
+                overlay: vec![],
+                used: vec![],
+                inputs: vec![],
+                recipe_files: vec![],
+            })
+        };
+        let (id1, id2) = (
+            toolchain_identity(&d1).unwrap(),
+            toolchain_identity(&d2).unwrap(),
+        );
+        for entry in [
+            pl(&[("toolchain", s("gcc")), ("run", s("make"))]),
+            pl(&[("toolchain", s("gcc")), ("run", s("make test"))]),
+        ] {
+            assert_ne!(key(&entry, &id1), key(&entry, &id2));
+        }
+        // a bare 64-hex digest is the same identity as its prefixed form
+        assert_eq!(toolchain_identity(&"a".repeat(64)).unwrap(), id1);
+        // the identity is a platform digest: anything else is refused
+        for bad in ["", "latest", "sha256:abc", "sha512:aaaa", &"g".repeat(64)] {
+            assert!(toolchain_identity(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_needed_key_has_one_register_id_per_role() {
+        // [D] pure: the guard and the hub's pins name an artifact by the same id
+        let k = ArtifactKey("c".repeat(64));
+        assert_eq!(
+            item_id(crate::Role::Gate, "p1", &k),
+            format!("artifact:gate:p1:{}", k.0)
+        );
+        assert_eq!(
+            item_ids("p1", &k),
+            [
+                format!("artifact:author:p1:{}", k.0),
+                format!("artifact:gate:p1:{}", k.0)
+            ]
+        );
+        assert_ne!(item_ids("p1", &k), item_ids("p2", &k));
     }
 }

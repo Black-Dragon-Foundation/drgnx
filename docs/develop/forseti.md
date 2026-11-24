@@ -447,6 +447,12 @@ reads. `artifact::FIELDS` lists every field name an entry may have; `vordr::jobs
 field is added in one place. The order of lists and of table keys never matters; a list inside the entry (steps, argv)
 keeps its order. The role is not in the key: it only decides whose build a consumer may use (hub: `runners::artifacts`).
 
+`artifact::toolchain_identity` is the platform digest a toolchain image is named by (`sha256:` and 64 hex, nothing else);
+`item_id`/`item_ids` give the disk register's ids (`artifact:<role>:<project>:<key>`); `ArtifactBuild`, `Keep` and
+`ImageBuild` are what the runner builds from. `caches::CacheSpec` is a named cache (`Sharing`: `shared`, `locked` or
+`private`; a budget in GiB; `compiler` kind defaults to 15; `env` and `readonly_env`), `locked_state` the folders a
+`locked` cache holds. `WaitReason::NotAllowed` is a pull of a digest on no allow-list of the job's project.
+
 ## Rows (`row`)
 
 `Row { name, verdict, class, missing, excerpt }`. A verdict is `Pass < Skip < Fail`; `class` is the failure's kind

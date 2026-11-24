@@ -418,15 +418,21 @@ fn serve_flags(r: &Record) -> Vec<String> {
 /// is a plain word (it travels in a `--feature PROJECT:FEATURE` argument).
 fn set_feature(
     enabled: &mut BTreeSet<(Feature, ProjectId)>,
+    trust: Trust,
     project: &str,
     feature: &str,
     on: bool,
 ) -> Result<(), RegError> {
     let Some(feature) = Feature::parse(feature) else {
         return Err(refused(format!(
-            "{feature:?} is not a runner feature: sandbox, udmabuf, render, kvm or build-net"
+            "{feature:?} is not a runner feature: sandbox, udmabuf, render, kvm, build-net or ptrace"
         )));
     };
+    if feature == Feature::Ptrace && on && trust != Trust::Mine {
+        return Err(refused(
+            "ptrace lets a job trace the processes of its container: it is allowed only on a `mine` runner, never on a shared or my-cloud one",
+        ));
+    }
     if project.is_empty()
         || !project
             .bytes()
@@ -1302,6 +1308,7 @@ impl Registry {
         let mut rec = self.record(p.name.as_str()).await?;
         set_feature(
             &mut rec.enabled,
+            rec.trust,
             p.project.as_str(),
             p.feature.as_str(),
             p.on,
@@ -1527,11 +1534,11 @@ mod tests {
     #[test]
     fn features_are_set_per_project() {
         let mut e = BTreeSet::new();
-        set_feature(&mut e, "drgnx", "render", true).unwrap();
-        set_feature(&mut e, "drgnx", "render", true).unwrap();
-        set_feature(&mut e, "other", "render", true).unwrap();
+        set_feature(&mut e, Trust::Mine, "drgnx", "render", true).unwrap();
+        set_feature(&mut e, Trust::Mine, "drgnx", "render", true).unwrap();
+        set_feature(&mut e, Trust::Mine, "other", "render", true).unwrap();
         assert_eq!(e.len(), 2, "{e:?}");
-        set_feature(&mut e, "drgnx", "render", false).unwrap();
+        set_feature(&mut e, Trust::Mine, "drgnx", "render", false).unwrap();
         assert_eq!(e, [(Feature::Render, ProjectId::from("other"))].into());
         for (p, f) in [
             ("drgnx", "gpu"),
@@ -1540,11 +1547,35 @@ mod tests {
             ("a:b", "kvm"),
         ] {
             assert!(
-                matches!(set_feature(&mut e, p, f, true), Err(RegError::Refused(_))),
+                matches!(
+                    set_feature(&mut e, Trust::Mine, p, f, true),
+                    Err(RegError::Refused(_))
+                ),
                 "{p} {f}"
             );
         }
         assert_eq!(e.len(), 1);
+    }
+
+    // [D] pure: ptrace is a `mine` runner's opt-in for one project; shared and my-cloud runners refuse it with the reason
+    #[test]
+    fn ptrace_maps_only_on_mine_for_its_project() {
+        let mut e = BTreeSet::new();
+        set_feature(&mut e, Trust::Mine, "drgnx", "ptrace", true).unwrap();
+        assert_eq!(e, [(Feature::Ptrace, ProjectId::from("drgnx"))].into());
+        for t in [Trust::Shared, Trust::MyCloud] {
+            let mut e = BTreeSet::new();
+            let err = set_feature(&mut e, t, "drgnx", "ptrace", true).unwrap_err();
+            assert!(
+                matches!(err, RegError::Refused(ref m) if m.contains("only on a `mine`")),
+                "{err:?}"
+            );
+            assert!(e.is_empty());
+        }
+        // turning it off is always allowed
+        let mut e: BTreeSet<_> = [(Feature::Ptrace, ProjectId::from("drgnx"))].into();
+        set_feature(&mut e, Trust::Shared, "drgnx", "ptrace", false).unwrap();
+        assert!(e.is_empty());
     }
 
     // [D] pure: a reserve is a workstation's, of at least 1024 MiB; anything else is refused at add and set

@@ -296,6 +296,7 @@ pub async fn serve(
         }
         Params::RunnersUnbench(p) => arm!(answer(runners::methods::unbench(f, c, p).await)),
         Params::RunnersFeature(p) => arm!(answer(runners::methods::feature(f, c, p).await)),
+        Params::JobsAllow(p) => arm!(answer(runners::methods::allow(f, c, p).await)),
         Params::JobsProjectAdd(p) => arm!(answer(runners::methods::project_add(f, c, p).await)),
         Params::JobsProjectList(p) => arm!(answer(runners::methods::project_list(f, c, p).await)),
         Params::JobsProjectRemove(p) => {

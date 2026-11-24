@@ -296,6 +296,41 @@ fn a_write_that_waits_on_the_disk_holds_no_worker() {
     })
 }
 
+/// A turn counts as busy until its last step is written: restart-when-idle asks [`Agents::busy_count`], and a restart that
+/// began while the step writer still held a closed step lost its anchors ("the store is closed").  A step handed to the
+/// writer and not yet written (`sent` ahead of `written`) is busy; once the row is written the session is idle again.
+#[test]
+fn a_session_is_busy_until_its_last_step_is_written() {
+    saman::block_on_current(async move {
+        let fx = Fx::new();
+        let p: runstav::methods::agents::StartParams =
+            serde_json::from_value(json!({"profile": "mock-claude", "cwd": fx.work()})).unwrap();
+        let agents = &fx.front.core.agents;
+        let sid = agents
+            .start(&fx.front, p, &crate::runner::user())
+            .await
+            .expect("a session")
+            .id;
+        let s = agents.find(&sid).unwrap();
+        s.steps_written().await;
+        assert_eq!(
+            agents.busy_count(),
+            0,
+            "an idle session with its steps written"
+        );
+        // a step closed and handed to the writer, its row not yet written
+        s.flow.sent.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(
+            agents.busy_count(),
+            1,
+            "the last step is still to be written"
+        );
+        // the writer wrote it
+        s.flow.written.send_modify(|w| *w += 1);
+        assert_eq!(agents.busy_count(), 0, "written: idle again");
+    })
+}
+
 /// A resume whose files wait on the disk holds no thread of the runtime: the closed session's meta file is held
 /// ([`crate::fsio::disk`]) until the runtime has run another task, on a runtime of one thread.  A read done in the
 /// resume's task held that thread, so the other task never ran and the disk never went on: the test hung here.

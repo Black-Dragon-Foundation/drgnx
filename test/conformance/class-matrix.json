@@ -183,6 +183,7 @@
   "job/status": ["user"],
   "job/stop": ["user"],
   "job/unblock": ["user"],
+  "jobs/allow": ["user"],
   "jobs/project-add": ["user"],
   "jobs/project-list": ["user"],
   "jobs/project-remove": ["user"],

@@ -439,7 +439,7 @@ mod tests {
             "runners/unbench",
         ]);
         // the project registry's changes
-        want.extend(["jobs/project-add", "jobs/project-remove"]);
+        want.extend(["jobs/allow", "jobs/project-add", "jobs/project-remove"]);
         // paragraph comments: a thread, a reply, a resolve
         want.extend(["comments/add", "comments/reply", "comments/resolve"]);
         // say's: a planning session, the proposal it writes, its end
@@ -951,6 +951,20 @@ mod tests {
             .expect("a call without a project is refused");
         assert_eq!(e.code, ErrorCode::InvalidParams);
         assert_eq!(e.path.as_deref(), Some("project"));
+    }
+
+    // `host` (and every allow class) is the user's alone: no agent or service connection may allow or read a list
+    #[test]
+    fn an_agent_cannot_allow_host() {
+        let m = find("jobs/allow").unwrap();
+        assert!(m.allows(Class::User));
+        assert!(!m.allows(Class::Agent) && !m.allows(Class::Service));
+        assert!(
+            (m.decode)(&json!({"project": "p1", "class": "host", "value": "make-docs"})).is_ok()
+        );
+        // a read needs no value; an unknown member is refused
+        assert!((m.decode)(&json!({"project": "p1", "class": "image"})).is_ok());
+        assert!((m.decode)(&json!({"project": "p1", "class": "host", "bogus": 1})).is_err());
     }
 
     #[test]

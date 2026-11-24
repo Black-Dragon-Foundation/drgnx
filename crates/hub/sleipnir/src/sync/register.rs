@@ -23,7 +23,7 @@ const LOCK: &str = "register.lock";
 const VERSION: u32 = 1;
 
 /// The folders under the runner folder whose children are items, and the cache folders' depth below `cache/`
-/// (`cache/<project>/<trust>/<name>`). A child of one of these that the register does not know is `unknown`.
+/// (`cache/<project>/<trust>/<role>/<name>`). A child of one of these that the register does not know is `unknown`.
 const ITEM_PARENTS: [&str; 6] = [
     "jobs",
     "artifacts",
@@ -32,7 +32,7 @@ const ITEM_PARENTS: [&str; 6] = [
     "slots-git",
     "slots-target",
 ];
-const CACHE_DEPTH: usize = 3;
+const CACHE_DEPTH: usize = 4;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Entry {
@@ -478,7 +478,7 @@ mod tests {
             "jobs/stray.1",
             "slots/s1",
             "slots-git/s1",
-            "cache/p/public/cargo",
+            "cache/p/public/gate/cargo",
             "bin/v1",
         ] {
             fs::create_dir_all(root.join(d)).unwrap();
@@ -502,7 +502,7 @@ mod tests {
             unknown,
             [
                 PathBuf::from("jobs/stray.1"),
-                PathBuf::from("cache/p/public/cargo")
+                PathBuf::from("cache/p/public/gate/cargo")
             ]
         );
         assert_eq!(r.take_gone(), ["jobs/went.1"]);
