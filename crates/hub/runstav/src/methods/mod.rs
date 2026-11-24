@@ -535,6 +535,8 @@ params! {
     // a runner's disk (runners W1, §4.8)
     RunnersDisk(runners::DiskParams),
     RunnersReclaim(runners::ReclaimParams),
+    RunnersTelemetrySubscribe(runners::TelemetrySubscribe),
+    RunnersTelemetryRange(runners::TelemetryRange),
     RunnersPin(runners::PinParams),
 }
 

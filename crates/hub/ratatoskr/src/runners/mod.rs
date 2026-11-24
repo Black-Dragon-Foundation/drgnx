@@ -33,6 +33,7 @@ pub mod registry;
 pub mod returned;
 pub mod ssh_config;
 pub mod sync;
+pub mod telemetry;
 pub mod transport;
 
 /// The longest runner name: it names the runner's folder under `$XDG_RUNTIME_DIR/drgnx-runners/`, which holds the

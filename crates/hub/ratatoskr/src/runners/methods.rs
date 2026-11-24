@@ -11,7 +11,8 @@ use runstav::methods::jobs_q::{Project, ProjectAddParams, ProjectRemoveParams, P
 use runstav::methods::runners::{
     AddParams, Audit, AuditParams, ByName, DiskClass, DiskEntry, DiskParams, Disks, FeatureParams,
     KeyNames, KeysParams, MachineDisk, PinParams, ProbeParams, Probed, ReclaimParams, Reclaimed,
-    RemoveParams, Removed, Runner, Runners, SetParams,
+    RemoveParams, Removed, Runner, Runners, SetParams, TelemetryHistory, TelemetryRange,
+    TelemetrySubscribe, TelemetryWatching,
 };
 use runstav::wire::{Error, ErrorCode};
 #[cfg(all(unix, not(target_os = "android")))]
@@ -473,6 +474,72 @@ pub async fn pin(f: &Front, _: &Caller, p: PinParams) -> Result<bool, Error> {
     q.disk_pin(p.name.as_str(), p.id.as_str(), p.on)
         .map_err(disk_error)?;
     Ok(true)
+}
+
+/// The level a wire word names (the registry's check has refused any other).
+fn telemetry_level(word: &str) -> Result<sleipnir::proto::telemetry::Level, Error> {
+    sleipnir::proto::telemetry::Level::parse(word)
+        .ok_or_else(|| error(ErrorCode::InvalidParams, format!("no level {word}")))
+}
+
+/// `runners/telemetry/subscribe`: the caller's connection hears RUNNER's LEVEL samples as `runners-telemetry` events
+/// until it goes; the runner keeps one sampler for all its viewers, at the fastest rate any of them asked.
+pub async fn telemetry_subscribe(
+    f: &Front,
+    c: &Caller,
+    p: TelemetrySubscribe,
+) -> Result<TelemetryWatching, Error> {
+    let q = crate::exec::queue(f)?;
+    let level = telemetry_level(&p.level)?;
+    let editors = f.editors.clone();
+    let conn = c.conn_id;
+    let sink: crate::runners::telemetry::Sink =
+        Box::new(move |data| editors.send_to(conn, "runners-telemetry", data));
+    let watch = q
+        .telemetry_watch(p.runner.as_str(), level, p.ids.clone(), p.every_ms, sink)
+        .map_err(disk_error)?;
+    Ok(TelemetryWatching {
+        watch,
+        runner: p.runner,
+        level: p.level,
+        every_ms: p.every_ms,
+    })
+}
+
+/// How long a runner has to answer a range.
+const RANGE_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// `runners/telemetry/range`: RUNNER's stored history, asked of the runner (it keeps it).
+pub async fn telemetry_range(
+    f: &Front,
+    _: &Caller,
+    p: TelemetryRange,
+) -> Result<TelemetryHistory, Error> {
+    let q = crate::exec::queue(f)?;
+    let level = telemetry_level(&p.level)?;
+    let rx = q
+        .telemetry_range(
+            p.runner.as_str(),
+            sleipnir::proto::telemetry::Range {
+                level,
+                ids: p.ids,
+                from: p.from,
+                to: p.to,
+                step_ms: p.step_ms,
+            },
+        )
+        .map_err(disk_error)?;
+    match stund::timeout(RANGE_WITHIN, rx).await {
+        Ok(Ok(h)) => Ok(h),
+        Ok(Err(_)) => Err(error(
+            ErrorCode::Internal,
+            format!("the link to {} ended before it answered", p.runner.as_str()),
+        )),
+        Err(_) => Err(error(
+            ErrorCode::Internal,
+            format!("{} did not answer within 30 s", p.runner.as_str()),
+        )),
+    }
 }
 
 /// `runners/keys`: job keys to the hub's memory, nowhere else (refused, taking nothing, while the hub can't keep other

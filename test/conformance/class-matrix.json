@@ -292,6 +292,8 @@
   "runners/reclaim": ["user"],
   "runners/remove": ["user"],
   "runners/set": ["user"],
+  "runners/telemetry/range": ["user"],
+  "runners/telemetry/subscribe": ["user"],
   "runners/unbench": ["user"],
   "say/end": ["user"],
   "say/revise": ["user"],

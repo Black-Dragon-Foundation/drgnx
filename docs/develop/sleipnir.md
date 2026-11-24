@@ -812,6 +812,9 @@ does not parse.
 | `disk` | runner → hub | `forseti::disk::DiskReport`: free and total bytes, what drgnx keeps, the owner's quota, btrfs's unallocated bytes, the use per kind, the items changed since the last report and the ids gone; after `hello-ok` (all items) and after every guard pass |
 | `pins` | hub → runner | `forseti::disk::Pins`: what is in use (active) and what queued jobs and the user keep (pinned); the runner keeps the last in `pins.json` and plans with it while no hub speaks to it |
 | `evict` / `evicted` | hub → runner / back | an eviction order: its number, the item ids, why; each outcome (`Evicted`), with the order's number, or none for the runner's own pass |
+| `telemetry-watch` / `telemetry-unwatch` | hub → runner | a viewer's stream: its id, the level (`runner`, `slot`, `reservation`, `job`), the ids (none: all) and the rate asked, ms; the viewer under an id is gone |
+| `telemetry` | runner → hub | a batch for stream ID: the rate the runner settled on, the samples (`{at_ms, level, id, values}`) and the markers (`{at_ms, id, kind, detail}`) since the last batch, batched per 16 ms |
+| `telemetry-range` / `telemetry-ranged` | hub → runner / back | the stored history of a level between two epoch-ms times in `step_ms` points (0: as stored); the series (`{level, id, metric, points[{t, min, max, mean, last}]}`) and the markers |
 | `ping` / `pong` | both | every 10 s |
 | `bye` | both | a clean end: an EOF without it is `link-lost` |
 
@@ -844,6 +847,34 @@ at every start) the work slice gets every CPU back. It lives on stdin and stdout
 after 45 s without a frame (the hub pings every 10 s, and so does `serve`). Nothing is installed or enabled: between
 connections the runner has its folder and, with linger, the attempts still running in their own units. It is blocking
 and threaded (one thread reads frames, the main loop handles them and ticks every 100 ms); no async runtime.
+
+### Resource telemetry (`serve::telemetry`, `serve::telemetry_store`, `serve::telemetry_link`)
+
+A thread of its own samples the runner (started at the first `hello` on a platform with the files; a Mac has none yet:
+no series, and a `telemetry-range` is answered with nothing, never an error).
+
+- **What it reads.** The machine: `/proc/meminfo`, `/proc/pressure/{cpu,memory,io}`, `/proc/stat`, `/proc/diskstats`
+  (whole disks only), `/proc/net/dev` (the loopback aside), the free space of the runner folder (statvfs, every
+  `disk_every_s`), admission's headroom line (`forseti::admit::budget`: `avail − floor − reserve − what the running
+  jobs hold beyond use`), and a GPU where a reader exists (an amdgpu card's sysfs; none is no series). Each job: its
+  cgroup's `cpu.stat`, `memory.current`, `memory.peak`, `memory.swap.current`, the three pressure files and `io.stat`.
+  Each slot with jobs on it: the sum of theirs. Each job's reservation: reserved and used MiB. The files are held open
+  and read at offset 0 each tick into one buffer; a rate (CPU, IO, network) is the difference of two readings over
+  the seconds between. The frames a tick makes allocate; the reading does not. The slow files (the pressure averages,
+  which the kernel updates every 2 s, a cgroup's peak and its swap) are read once a second, not at every tick, so a
+  5 ms stream reads three files of each cgroup, not eight.
+- **Rates** (`runner.conf`, `[telemetry]`, re-read every second and applied at once): `store_ms = 1000`,
+  `live_min_ms = 5`, `keep_days = 14`, `disk_every_s = 60`, `gpu = true`. With nobody watching the sampler ticks at
+  `store_ms`; a viewer asking `every_ms` gets `max(every_ms, live_min_ms)`; several viewers share one sampler at the
+  fastest rate asked, each hearing at its own.
+- **Storage** (`<runner root>/telemetry/YYYY-MM-DD.bin`, no migration). 96-byte records, one file a day, pruned at
+  `keep_days`: a bucket (min, max, mean, last and the sample count of one metric of one id over one `store_ms`
+  window, so a 20 ms spike is still in the 1 s history) or a marker. A range merges buckets into wider windows with
+  the min of the mins, the max of the maxes, the count-weighted mean and the latest last. The disk register's
+  `telemetry` item (folder size, evictable with its days) is Task 28's with the disk adapters.
+- **Markers** share the timeline: `admitted`, `waited` (once per wait, with the reason), `paused`, `resumed`,
+  `killed`, `evicted` (a disk guard removal). `stage-start` and `stage-end` come with Task 32's job-exec stages.
+- **Budget.** At 5 ms with ten cgroups a tick costs under 2 % of the interval (`sampler_cost_at_5ms_under_budget`).
 
 ### The disk guard in serve (`serve::disk`)
 

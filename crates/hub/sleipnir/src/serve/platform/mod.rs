@@ -177,4 +177,18 @@ pub trait Platform {
     fn io_device_mbps(&self) -> Option<f64> {
         None
     }
+    /// Where resource telemetry reads (the machine's files, its cgroup tree) and its GPU reader, where there is one;
+    /// none on a platform that has no such files (no series there, and no error).
+    fn telemetry_source(
+        &self,
+    ) -> Option<(
+        crate::serve::telemetry::Roots,
+        Option<Box<dyn crate::serve::telemetry::GpuReader>>,
+    )> {
+        None
+    }
+    /// Job ID's cgroup directory, where it has one.
+    fn job_cgroup(&self, _id: &str) -> Option<std::path::PathBuf> {
+        None
+    }
 }
