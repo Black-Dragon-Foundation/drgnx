@@ -6,8 +6,8 @@
 //!   inode, which a rename-replace leaves alone, so it never changes.
 //! - A changed stamp makes `<path> version --json` run (5 s deadline).  Only an answer with another `commit` counts;
 //!   a missing, half-written or failing file is logged and looked at again at the next tick.
-//! - Then the `notice` event goes out, and the hub exits 75 as soon as it is idle: none of its sessions runs a turn.
-//!   A hub is never restarted while anything is busy.
+//! - Then the `notice` event goes out, and the hub exits 75 as soon as it is idle: none of its sessions runs a turn, and none has a
+//!   closed step still to be written.  A hub is never restarted while anything is busy.
 
 use crate::front::Front;
 use serde_json::{Value, json};

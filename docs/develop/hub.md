@@ -216,7 +216,9 @@ build, becomes the baseline). Once another build is confirmed, the `notice` even
 `{source: "hub", severity: "warn", id: "restart-when-idle", life: "condition", text: "drgnx was updated; the hub
 restarts when its N running turns finish", command: "hub-restart-now"}` is sent (again when N changes), and the hub
 exits 75 the first time nothing is busy: **idle** is none of the hub's own sessions running a turn (an idle chat does
-not count), so a busy hub is never restarted.
+not count) and none with a closed step still to be written (`Session::steps_pending`: handed to the step writer, its
+row not yet in the `step` table), so a busy hub is never restarted and a restart never loses a turn's last anchors. A
+shutdown the user starts is unchanged: it does not wait.
 
 ### Ratatoskr's children (`draugr`)
 
