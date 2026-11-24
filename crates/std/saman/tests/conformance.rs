@@ -170,6 +170,20 @@ fn a_spawned_thread_has_its_name_and_gives_its_result() {
 }
 
 #[test]
+fn a_pool_ended_with_a_timeout_has_dropped_its_tasks() {
+    let ex = Executor::new(1).unwrap();
+    let held = std::sync::Arc::new(());
+    let mine = held.clone();
+    ex.spawn("holder", async move {
+        let _held = mine;
+        std::future::pending::<()>().await;
+    })
+    .detach("the test ends the pool itself");
+    ex.shutdown_timeout(std::time::Duration::from_secs(5));
+    assert_eq!(std::sync::Arc::strong_count(&held), 1);
+}
+
+#[test]
 fn a_thread_gets_the_stack_it_asked_for() {
     // 8 MiB of frame does not fit the default 2 MiB stack of a spawned thread, and does in 16 MiB
     let t = saman::spawn_thread_with_stack("saman-test-stack", Some(16 << 20), || {

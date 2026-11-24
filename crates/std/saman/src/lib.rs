@@ -121,6 +121,12 @@ impl Executor {
     pub fn shutdown_background(self) {
         self.rt.shutdown_background();
     }
+
+    /// End the pool, waiting at most WITHIN for its tasks to stop (a task that never yields is left on its thread):
+    /// for a test that must see the pool's threads gone.
+    pub fn shutdown_timeout(self, within: std::time::Duration) {
+        self.rt.shutdown_timeout(within);
+    }
 }
 
 /// A way to spawn on one pool from outside it: the pool the caller was started on ([`Handle::current`]) or one's

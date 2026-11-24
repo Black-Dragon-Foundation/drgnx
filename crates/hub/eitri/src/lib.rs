@@ -27,8 +27,9 @@ pub use trusted::{
     TrustedProgram, pin_system_owned_file, root_only_file, system_owned_file, trusted_program,
 };
 pub use write::{
-    create_new, open_append, open_existing, open_lock, remove_beneath, rename_dir, rename_file,
-    rename_socket, replace_file, replace_via, symlink_beneath, write_in_place, write_regular,
+    create_exclusive, create_new, open_append, open_existing, open_following, open_lock, open_read,
+    remove_beneath, rename_dir, rename_file, rename_socket, replace_file, replace_file_mode,
+    replace_via, symlink_beneath, write_in_place, write_regular,
 };
 
 /// Why an eitri call refused or failed. Nothing here is ever retried by resolving the path another way.

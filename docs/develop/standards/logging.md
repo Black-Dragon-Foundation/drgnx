@@ -12,6 +12,7 @@ annall::log_error(&err);                                   // kind, sentence, de
 tracing::info!(token = annall::redact(&secret), "signed in");
 annall::cli_out("3 files changed")?;                       // a command's output
 annall::raw_out().write_all(&frame)?;                      // a command's output that is bytes, not lines
+annall::raw_err().write_all(b"Proceed? [y/N] ")?;          // a diagnostic that is not a line (a prompt), or a log sink's writer
 ```
 
 - The log is `<stig::state()>/log/drgnx.log`, one JSON object per line. Dropping the guard flushes it.

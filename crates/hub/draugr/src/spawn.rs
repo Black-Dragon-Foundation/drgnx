@@ -78,6 +78,10 @@ pub struct Opts {
     /// The child keeps the descriptors it inherits (3 and up are not closed at its exec): only for a harness that tests
     /// what a sandbox does with descriptors it was handed. Everything else gets 0–2 and its `pass_fds`.
     pub inherit_fds: bool,
+    /// An outer seccomp filter on the child (after `no_new_privs`) that answers this syscall number with `EPERM` and
+    /// allows the rest, with no architecture check: only for a harness that tests what a sandbox does when the
+    /// system refuses a call it needs.
+    pub deny_syscall: Option<libc::c_long>,
     /// Keep all of the child's stderr, not its tail ([`StderrTail::get_all`]): for a check that must see every byte.
     pub stderr_all: bool,
 }
@@ -349,6 +353,7 @@ fn launch<C>(
         let pairs = moved.pairs.clone();
         let guarded = !expect.is_empty();
         let inherit = opts.inherit_fds;
+        let filter = opts.deny_syscall.map(deny_filter).transpose()?;
         let (nice, tty) = (
             opts.nice,
             opts.controlling_tty.as_ref().map(|f| f.as_raw_fd()),
@@ -381,6 +386,21 @@ fn launch<C>(
                 {
                     return Err(io::Error::last_os_error());
                 }
+                if let Some(f) = &filter {
+                    let prog = libc::sock_fprog {
+                        len: f.len() as libc::c_ushort,
+                        filter: f.as_ptr().cast_mut(),
+                    };
+                    if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                        || libc::prctl(
+                            libc::PR_SET_SECCOMP,
+                            libc::SECCOMP_MODE_FILTER,
+                            &prog as *const libc::sock_fprog,
+                        ) != 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                }
                 Ok(())
             });
         }
@@ -394,6 +414,23 @@ fn launch<C>(
             r => return r,
         }
     }
+}
+
+/// A filter that answers `nr` with EPERM and allows everything else (no architecture check).
+fn deny_filter(nr: libc::c_long) -> io::Result<Vec<libc::sock_filter>> {
+    const LD_W_ABS: u16 = 0x20; // BPF_LD | BPF_W | BPF_ABS
+    const JEQ_K: u16 = 0x15; // BPF_JMP | BPF_JEQ | BPF_K
+    const RET_K: u16 = 0x06; // BPF_RET | BPF_K
+    let nr = u32::try_from(nr).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidInput, "a syscall number out of range")
+    })?;
+    let f = |code, jt, jf, k| libc::sock_filter { code, jt, jf, k };
+    Ok(vec![
+        f(LD_W_ABS, 0, 0, 0),
+        f(JEQ_K, 0, 1, nr),
+        f(RET_K, 0, 0, libc::SECCOMP_RET_ERRNO | libc::EPERM as u32),
+        f(RET_K, 0, 0, libc::SECCOMP_RET_ALLOW),
+    ])
 }
 
 /// The parent's side of passing descriptors: each source moved above the highest target, and the free numbers from

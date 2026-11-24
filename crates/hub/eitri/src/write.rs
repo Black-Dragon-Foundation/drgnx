@@ -167,6 +167,82 @@ pub fn replace_file(abs: &Path, bytes: &[u8]) -> Result<(), FsError> {
     write_regular(dir, Path::new(name), bytes, mode)
 }
 
+/// [`replace_file`] for a file that must not be readable by others (a token, a key, a private config): the new file has
+/// exactly `mode` (less the umask), whatever the old one had. `mode` above 0o777 is refused.
+pub fn replace_file_mode(abs: &Path, bytes: &[u8], mode: u32) -> Result<(), FsError> {
+    let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) else {
+        return Err(invalid("the path names no file"));
+    };
+    let parent = open_path(parent, Kind::Dir)?;
+    write_regular(parent.fd.as_fd(), Path::new(name), bytes, mode)
+}
+
+/// Makes the regular file at the absolute path `abs` with `mode` (less the umask) and opens it for writing: for a file
+/// the caller streams into (an archive's member, a copy). The parent is opened with `open_path` (a link in any
+/// component is refused); the file is made with `O_CREAT | O_EXCL | O_NOFOLLOW`, so a name that exists, a link
+/// included, is `Io` of kind `AlreadyExists` and is not touched. `mode` above 0o777 is refused.
+pub fn create_exclusive(abs: &Path, mode: u32) -> Result<std::fs::File, FsError> {
+    if mode & !0o777 != 0 {
+        return Err(invalid("a mode beyond 0o777"));
+    }
+    let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) else {
+        return Err(invalid("the path names no file"));
+    };
+    let parent = open_path(parent, Kind::Dir)?;
+    let flags = OFlags::WRONLY
+        | OFlags::CREATE
+        | OFlags::EXCL
+        | OFlags::NOFOLLOW
+        | OFlags::CLOEXEC
+        | OFlags::NOCTTY;
+    let fd = openat(
+        parent.fd.as_fd(),
+        name,
+        flags,
+        Mode::from_raw_mode(mode as RawMode),
+    )?;
+    Ok(std::fs::File::from(fd))
+}
+
+/// Opens the regular file at the absolute path `abs` for reading, and keeps it open. The parent is opened with
+/// `open_path` (a link in any component is refused); the open is `O_NOFOLLOW`, so a link at `abs` is `Link`, a file
+/// that is not there is an `Io` error of kind `NotFound`, and anything that is not a regular file is `NotRegular`.
+pub fn open_read(abs: &Path) -> Result<std::fs::File, FsError> {
+    let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) else {
+        return Err(invalid("the path names no file"));
+    };
+    let parent = open_path(parent, Kind::Dir)?;
+    let flags =
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
+    let fd = match openat(parent.fd.as_fd(), name, flags, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(Errno::LOOP) => {
+            return Err(FsError::Link {
+                path: abs.to_path_buf(),
+            });
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if FileType::from_raw_mode(rustix::fs::fstat(&fd)?.st_mode) != FileType::RegularFile {
+        return Err(FsError::NotRegular);
+    }
+    Ok(std::fs::File::from(fd))
+}
+
+/// Opens the file at `path` for reading without waiting, following links: for a file the user links on purpose (a
+/// settings file kept in a dotfiles repository, a notebook). What it opened may be a FIFO or a device (it is not
+/// waited for): the caller looks at `metadata()` of the open file and refuses what it will not read.
+pub fn open_following(path: &Path) -> Result<std::fs::File, FsError> {
+    let abs = std::path::absolute(path)?;
+    let fd = openat(
+        rustix::fs::CWD,
+        &abs,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
+        Mode::empty(),
+    )?;
+    Ok(std::fs::File::from(fd))
+}
+
 /// Creates the empty regular file at the absolute path `abs` with exactly `mode` (the umask does not narrow it; the
 /// file is born with that mode, never widened first), for a file another program fills (a database). The parent is
 /// opened with `open_path` (a link in any component is refused); the file is made with `O_CREAT | O_EXCL | O_NOFOLLOW`.

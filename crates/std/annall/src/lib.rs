@@ -86,6 +86,12 @@ pub fn raw_out() -> impl std::io::Write + Send {
     std::io::stdout()
 }
 
+/// The process's stderr as a writer: for a diagnostic that is not a line (a prompt waiting for the answer, a log sink
+/// handed a writer): what is written arrives as it is, with nothing added.
+pub fn raw_err() -> std::io::Stderr {
+    std::io::stderr()
+}
+
 /// LINE and a newline on stderr: a command's diagnostics.
 pub fn cli_err(line: &str) -> villa::Result<()> {
     writeln!(std::io::stderr().lock(), "{line}").map_err(villa::Error::from)

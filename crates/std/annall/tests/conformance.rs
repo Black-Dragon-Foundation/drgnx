@@ -99,6 +99,28 @@ fn the_stderr_sink_writes_json_lines_to_stderr_and_makes_no_file() {
 }
 
 #[test]
+fn raw_err_writes_the_bytes_it_is_given_and_nothing_else() {
+    use std::io::{Read, Write};
+    use std::os::fd::FromRawFd;
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: pipe(2) fills two descriptors; dup2(2) points descriptor 2 at the write end
+    let mut read = unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert!(libc::dup2(fds[1], 2) >= 0);
+        libc::close(fds[1]);
+        std::fs::File::from_raw_fd(fds[0])
+    };
+    let mut err = annall::raw_err();
+    err.write_all(b"\x00ask?\xff").unwrap();
+    err.flush().unwrap();
+    // SAFETY: closing descriptor 2 (the pipe's write end) ends the stream for the reader
+    unsafe { libc::close(2) };
+    let mut bytes = Vec::new();
+    read.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"\x00ask?\xff", "no newline, no encoding");
+}
+
+#[test]
 fn raw_out_writes_the_bytes_it_is_given_and_nothing_else() {
     use std::io::{Read, Write};
     use std::os::fd::FromRawFd;

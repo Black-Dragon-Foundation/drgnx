@@ -22,6 +22,12 @@ eitri::replace_file(&stig::state().join("session.json"), &bytes)?;
   `true` when made, `false` when the name was taken (not touched, a link not followed).
 - `eitri::open_lock(abs, mode)` opens (making it with `mode` when absent, never truncating) the regular file a lock is
   taken on (`File::try_lock`); a link at the name or in a parent is refused.
+- `eitri::replace_file_mode(abs, bytes, mode)` is `replace_file` for a private file (a token, a key): the new file has
+  `mode`, whatever the old one had. `eitri::create_exclusive(abs, mode)` makes a new file and opens it for the caller
+  to stream into (an existing name, a link included, is `AlreadyExists` and not touched).
+- `eitri::open_read(abs)` opens a regular file for reading (a link anywhere, or a FIFO, is refused);
+  `eitri::open_following(path)` opens for reading without waiting and follows links, for a file the user links on
+  purpose (a settings file in a dotfiles repository, a notebook): the caller checks `metadata()` of what it opened.
 - A file read goes through `eitri::read_file(abs, cap)` / `eitri::read_string(abs, cap)` (an absolute path, at most
   `cap` bytes, regular files only, a link in any component refused: `/proc/self` is a link, so a process reads
   `/proc/<its pid>/…`). A test that needs a file other code will write to makes it with `tempfile`.
