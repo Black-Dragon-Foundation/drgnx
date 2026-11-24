@@ -578,7 +578,9 @@ a seccomp or Landlock install that an outer filter makes fail, and the reduced r
 `a_browser_host_is_ready_before_exec`: the host holds the hub's end at fd 3 (what it writes reaches the test's end),
 writes its own dir, and is ready before the program; three host failures, a version-1 spec with a browser and a
 missing fd 5 each refuse the run. The `#[ignore]` `a_browser_child_is_layered_before_it_runs` (the VM; it needs
-`gleipnir-probe` beside `ratatoskr`) runs the escape probe as the host: `connect-unix` to `hub.sock` blocked (the
+`gleipnir-probe` beside `ratatoskr`; the probe's raw attempts are `gleipnir::probe`, raw on purpose: a probe must reach
+the kernel without the owner crates' guards, while the bin around it uses villa, annall, eitri and stund) runs the
+escape probe as the host: `connect-unix` to `hub.sock` blocked (the
 agent reaches it), `create` in the agent's write root blocked, `create` in its own dir reached. `inner::tests` and
 `backend::tests` cover the wire form (`v1_spec_still_parses`, `v2_browser_roundtrip`,
 `status_without_browser_is_refused_when_asked`, `browser_plan_for_a_full_spec`) and the fds

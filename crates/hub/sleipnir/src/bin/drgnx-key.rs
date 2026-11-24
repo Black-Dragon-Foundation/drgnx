@@ -129,7 +129,6 @@ fn exec(args: &[String]) -> ExitCode {
                 return fail(&Error::invalid(format!("key {name}: a NUL in it")));
             }
             Ok(v) => {
-                env.retain(|(k, _)| k != var);
                 env.push((OsString::from(var), OsString::from_vec(v)));
             }
             Err(e) => return fail(&e),
