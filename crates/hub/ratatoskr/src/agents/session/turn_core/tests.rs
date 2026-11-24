@@ -12,7 +12,7 @@
 //! holds; and a free session starts a turn with the next prompt.  At the end of each order, every turn the agent
 //! answered while the session was up has ended, once.
 
-use super::{KillWhy, QueueEdit, TurnCore, TurnEffect, TurnEvent};
+use super::{HoldSource, KillWhy, QueueEdit, TurnCore, TurnEffect, TurnEvent};
 use crate::agents::queue::{Origin, Queued};
 use runstav::methods::agents::SessionStatus;
 use skuld::{Bound, Core, Mode, Partial, every_order};
@@ -543,7 +543,9 @@ impl Shell {
     /// The user pauses after the tool call (with no turn running, the queue is held).
     fn pause(&mut self) {
         if !self
-            .feed(TurnEvent::Stop { after_tool: true })
+            .feed(TurnEvent::PauseAfterTool {
+                source: HoldSource::User,
+            })
             .contains(&TurnEffect::Exited)
         {
             self.held = true;
@@ -629,7 +631,7 @@ impl Core for Shell {
         match ev {
             StopEv::Send(t) => self.send(t),
             StopEv::Stop => {
-                self.feed(TurnEvent::Stop { after_tool: false });
+                self.feed(TurnEvent::Stop);
             }
             StopEv::Deliver => self.deliver(),
             StopEv::Done => self.done(),
@@ -1263,7 +1265,7 @@ impl Core for GapStopShell {
         match ev {
             GapStopEv::Send(t) => s.send(t),
             GapStopEv::Stop => {
-                s.feed(TurnEvent::Stop { after_tool: false });
+                s.feed(TurnEvent::Stop);
             }
             GapStopEv::Deliver => s.deliver(),
             GapStopEv::Prompt => s.send_prompt(),
@@ -1544,7 +1546,7 @@ impl Core for PermShell {
                 s.feed(TurnEvent::PermissionAnswered { request });
             }
             PermEv::Stop => {
-                s.feed(TurnEvent::Stop { after_tool: false });
+                s.feed(TurnEvent::Stop);
             }
             PermEv::Pause => s.pause(),
             PermEv::ToolCompleted => {
@@ -1659,7 +1661,7 @@ impl Core for CardShell {
         match ev {
             CardEv::Send => self.s.send("u1"),
             CardEv::Stop => {
-                self.s.feed(TurnEvent::Stop { after_tool: false });
+                self.s.feed(TurnEvent::Stop);
             }
             // the agent asks only while it works on a turn; the reader stamps that turn
             CardEv::Request(request) => {
@@ -1897,12 +1899,63 @@ fn only_an_idle_unheld_session_with_nothing_queued_is_free() {
     });
     assert!(!c.is_free(), "a job's result is awaited");
     c.ready(false);
-    c.step(TurnEvent::Stop { after_tool: true });
+    c.step(TurnEvent::PauseAfterTool {
+        source: HoldSource::User,
+    });
     assert!(!c.is_free(), "a pause holds it");
     c.step(TurnEvent::QueueEdited(QueueEdit::Deliver));
     assert!(c.is_free());
     c.queue_mut().push("waiting".into(), Origin::User, false);
     assert!(!c.is_free(), "a message is queued");
+}
+
+/// A turn running with a pause after its tool call asked by SOURCES, then CLEARED lifted: whether the next tool call
+/// ends the turn and holds the queue.
+fn a_tool_call_ends_the_turn(sources: &[HoldSource], cleared: &[HoldSource]) -> bool {
+    let mut c = TurnCore::new();
+    c.ready(false);
+    c.step(send("a"));
+    for source in sources {
+        c.step(TurnEvent::PauseAfterTool { source: *source });
+    }
+    for source in cleared {
+        c.step(TurnEvent::ClearHold { source: *source });
+    }
+    c.step(TurnEvent::ToolCompleted);
+    c.paused()
+}
+
+#[test]
+fn a_budget_raise_lifts_the_budgets_hold_on_a_running_turn() {
+    assert!(
+        a_tool_call_ends_the_turn(&[HoldSource::Budget], &[]),
+        "the hold pauses at the tool call"
+    );
+    assert!(
+        !a_tool_call_ends_the_turn(&[HoldSource::Budget], &[HoldSource::Budget]),
+        "the raise lifted it: the turn goes on past the tool call"
+    );
+}
+
+#[test]
+fn a_budget_raise_leaves_every_other_sources_hold() {
+    for other in [
+        HoldSource::Supervisor,
+        HoldSource::Manager,
+        HoldSource::Revert,
+        HoldSource::Wheel,
+        HoldSource::User,
+        HoldSource::Move,
+    ] {
+        assert!(
+            a_tool_call_ends_the_turn(&[other], &[HoldSource::Budget]),
+            "{other:?}'s hold stays"
+        );
+        assert!(
+            a_tool_call_ends_the_turn(&[HoldSource::Budget, other], &[HoldSource::Budget]),
+            "{other:?}'s hold stays beside the budget's"
+        );
+    }
 }
 
 #[test]
@@ -2129,7 +2182,7 @@ impl SwapShell {
                 if self.conv == 0 {
                     self.stopped_early = true;
                 }
-                let fx = self.feed(TurnEvent::Stop { after_tool: false });
+                let fx = self.feed(TurnEvent::Stop);
                 if fx.contains(&TurnEffect::NotRunning) {
                     self.note("a Stop ended the session".into());
                 }

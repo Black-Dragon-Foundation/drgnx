@@ -850,6 +850,62 @@ async fn a_status_done_grant_lets_an_outside_agent_mark_done_under_it() {
     assert_eq!(e, "task.done is never allowed here");
 }
 
+/// `my_grants` answers an outside agent the active grants that apply to it (its kind's, any outside agent's) and no
+/// other: not another kind's, not a session's, not a revoked one.
+#[tokio::test(flavor = "multi_thread")]
+async fn my_grants_lists_only_the_callers_own() {
+    use norn::grants::{self, What, Who};
+    let w = world();
+    w.bind("claude", &w.root, "manager").await;
+    let a = w.attach(&w.root).await;
+    let none = w.tool(&a.who, "my_grants", json!({})).await.unwrap();
+    assert!(none.contains("no grants apply"), "{none}");
+    let written = w
+        .tool(&a.who, "plan_write", w.new_plan("docs/plans/org/one.md"))
+        .await
+        .unwrap();
+    let plan = serde_json::from_str::<Value>(&written).unwrap()["plan"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let make = |who: Who, ops: &[&str]| {
+        let (what, ops) = (
+            What::Plan(plan.clone()),
+            ops.iter().map(|o| (*o).to_owned()).collect::<Vec<_>>(),
+        );
+        let writer = w.f.writer.clone();
+        async move {
+            writer
+                .write(&user(), "graph/grants", move |tx| {
+                    Ok(grants::create_task_write(tx, who, what, ops, None)?)
+                })
+                .await
+                .unwrap()
+                .id
+        }
+    };
+    let mine = make(Who::Kind("claude".into()), &["note"]).await;
+    let anyone = make(Who::AnyOutside, &["status.done"]).await;
+    let other_kind = make(Who::Kind("codex".into()), &["note"]).await;
+    let a_session = make(Who::Session("s-other".into()), &["note"]).await;
+    let revoked = make(Who::Kind("claude".into()), &["claim"]).await;
+    let id = revoked.clone();
+    w.f.writer
+        .write(&user(), "graph/grants", move |tx| {
+            Ok(grants::revoke(tx, &id)?)
+        })
+        .await
+        .unwrap();
+    let text = w.tool(&a.who, "my_grants", json!({})).await.unwrap();
+    for own in [&mine, &anyone] {
+        assert!(text.contains(own.as_str()), "{own} in {text}");
+    }
+    for not in [&other_kind, &a_session, &revoked] {
+        assert!(!text.contains(not.as_str()), "{not} in {text}");
+    }
+    assert!(text.starts_with("2 grants apply to you"), "{text}");
+}
+
 /// [MP-2] An outside agent never marks a task done nor approves a record, whatever its role.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_outside_agent_never_marks_done() {

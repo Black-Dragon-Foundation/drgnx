@@ -50,13 +50,14 @@ impl Default for ToolSets {
     }
 }
 
-/// The five tools the `tracker` set adds.
-pub const TRACKER_TOOLS: [&str; 5] = [
+/// The six tools the `tracker` set adds.
+pub const TRACKER_TOOLS: [&str; 6] = [
     "task_read",
     "task_write",
     "note_add",
     "graph_read",
     "access_request",
+    "my_grants",
 ];
 
 /// The most rows a list carries.

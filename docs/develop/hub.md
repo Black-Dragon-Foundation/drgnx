@@ -943,8 +943,11 @@ fails the hook open on a timeout, so the snapshot lists those kinds under `hooke
 The hub keeps each live session as a row of `runtime.db`'s `asession` table ([Sessions](#sessions)). A hub that
 starts, once it serves, resumes each (`Hub::resume_all`: ACP `session/resume`, else `session/load`) under its own id
 and name (messages and spend follow them): the agent replays the history into the transcript and the session is idle;
-an editor that reconnects fetches it again (`agents/get`). A session whose agent cannot resume or load it is restarted
-as described below, or ends and says why. What was in flight is gone: a turn that was running, a pending permission or
+an editor that reconnects fetches it again (`agents/get`). The hub serves while they come back, one after the other: a
+client that lists at once sees the ones that are back so far, and each other one follows as an `agent` event (a
+test-hooks hub started with `RATATOSKR_TEST_RESUME_INSERT_DELAY_MS=N` puts each back in the table N ms after its agent
+resumed or loaded it). A session whose agent cannot resume or load it is restarted as described below, or ends and
+says why. What was in flight is gone: a turn that was running, a pending permission or
 edit.
 
 **Everything kept across a restart (Task 24).** The hub starts in this order: the jobs a hub before this one left running
@@ -1488,7 +1491,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `graph/entity` | user | `{as_of?: natnum, id: string, include?: ["links" \| "notes" \| "history"]}` | `EntityAnswer` | no |
 | `graph/excise` | user | `{fields?: ["title" \| "status" \| "body" \| "assignee" \| "data"], reason: Text, rotate_backups?: boolean, target: ExciseTarget, transcripts?: boolean}` | `ExciseAnswer` | yes |
 | `graph/export` | user | `{history?: boolean, out?: AbsPath, project?: string, since?: natnum, with_activity?: boolean}` | `PortAnswer` | no |
-| `graph/grants` | user | `{edit?: {clear_expires?: boolean, expires?: number, id: string, ops?: [string]}, grant?: {access: "read" \| "edit-user-tasks" \| "options" \| "task-write", expires?: number, names?: [string], ops?: [string], what: string, who: string}, list?: {active?: boolean, effective_for?: string, who?: string}, revoke?: string}` | `{edited?: boolean, grant?: GrantView, grants?: [GrantView], revoked?: boolean}` | yes |
+| `graph/grants` | user | `{edit?: {clear_expires?: boolean, expires?: number, id: string, ops?: [string]}, grant?: {access: "read" \| "edit-user-tasks" \| "options" \| "task-write", expires?: number, names?: [string], ops?: [string], what: string, who: string}, list?: {active?: boolean, effective_for?: string, profile?: string, project?: string, who?: string}, revoke?: string}` | `{edited?: boolean, grant?: GrantView, grants?: [GrantView], revoked?: boolean}` | yes |
 | `graph/history` | user | `{id: string, since?: natnum}` | `{versions?: [any]}` | no |
 | `graph/import` | user | `{dir: AbsPath}` | `PortAnswer` | yes |
 | `graph/neighbors` | user | `{as_of?: natnum, depth?: natnum, direction?: "out" \| "in" \| "both", id: string, kinds?: [string]}` | `{hidden: natnum, links?: [any], nodes?: [any], truncated?: string}` | no |

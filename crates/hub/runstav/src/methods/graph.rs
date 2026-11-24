@@ -486,9 +486,16 @@ pub struct GrantsList {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<bool>,
     /// An actor (`ext:KIND:ID`, an agent or session id): only the active grants that apply to it (its effective
-    /// rights; a project or profile grant cannot be matched without the actor's project).
+    /// rights; a project or profile grant is matched only with the actor's `project` or `profile`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_for: Option<GrantWho>,
+    /// With `effective_for`: the project the actor works in (`project:ID`, a slug or its number), so a grant that names
+    /// the project applies to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<GrantWho>,
+    /// With `effective_for`: the actor's profile name, so a grant that names the profile applies to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<GrantWho>,
 }
 
 /// An operation of a `task-write` grant: `create`, `update.title|body|acceptance|priority|labels`, `status.<status>`,

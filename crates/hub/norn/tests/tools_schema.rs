@@ -92,8 +92,9 @@ fn listing(mut all: Vec<Box<dyn Tool<Ctx>>>) -> Value {
 /// Task 32: 15,564 and 8,930 bytes) plus 10 %, at most 40,000 bytes (call 10).
 /// Re-measured 17,295 when `links` joined every tracker tool, `task_read` took `kind` and `work_status` took its paging
 /// arguments (174 bytes over the old figure); 17,365 when `task_write` named the states accepted, superseded and parked
-/// and a plan task took a status `reason` (user doors, Task 3b: 70 bytes).
-const BUDGET_BYTES: usize = 17_365;
+/// and a plan task took a status `reason` (user doors, Task 3b: 70 bytes); 17,686 when `my_grants` joined the tracker
+/// set (hub flakes: 321 bytes).
+const BUDGET_BYTES: usize = 17_686;
 /// Re-measured 10,047 when `work_status` took its paging arguments (224 bytes over 9,823).
 const BUDGET_BYTES_16: usize = 10_047;
 /// The four job tools (agent system part 1, Task 15) on top of the 18; the whole list stays under 40,000 bytes.

@@ -14,6 +14,21 @@
 use super::super::queue::{Origin, Queue, Queued};
 use runstav::methods::agents::SessionStatus;
 
+/// Who asked a pause after the tool call: each source's hold on a running turn lifts by that source only (a budget
+/// raise must not lift the supervisor's pause).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HoldSource {
+    Budget,
+    Supervisor,
+    Manager,
+    Revert,
+    Wheel,
+    /// `agents/pause`.
+    User,
+    /// A move to another profile.
+    Move,
+}
+
 /// What happens to a session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TurnEvent {
@@ -41,9 +56,14 @@ pub(crate) enum TurnEvent {
     /// The new conversation is live: TOLD (a summary, the user's message) goes ahead of the queue, as
     /// [`TurnCore::resume`]'s does; then, unless the queue is held, the next prompt starts.
     Reattach { told: Option<String> },
-    /// The user's Stop (or the refused waits'); AFTER_TOOL: the pause, which cancels once the running tool call
-    /// completes (`Hub::cancel_after_tool`).
-    Stop { after_tool: bool },
+    /// The user's Stop (or the refused waits').
+    Stop,
+    /// The pause, which cancels once the running tool call completes (`Hub::cancel_after_tool`); with no turn running
+    /// it holds the queue.  SOURCE is who asked: each source's hold is its own.
+    PauseAfterTool { source: HoldSource },
+    /// SOURCE's hold on the turn running lifts (a budget raise lifts the budget's only): a turn that no other source
+    /// holds goes on past its next tool call.
+    ClearHold { source: HoldSource },
     /// The agent's process is to end.
     Kill { why: KillWhy },
     /// The matrix asks the user about permission request REQUEST, which the agent sent during TURN, through matrix
@@ -161,8 +181,8 @@ pub(crate) struct TurnCore {
     queue: Queue,
     /// The queue is held (a Stop, an error, the pause after a tool call) until delivered or something new is sent.
     paused: bool,
-    /// Cancel once the running tool call completes.
-    hold: bool,
+    /// Cancel once the running tool call completes: who asked (a source's hold is lifted by that source only).
+    hold: Vec<HoldSource>,
     /// The turn running, counting from 1.
     turn: u64,
     /// The prompt of the turn running while the shell has not handed it to the agent.
@@ -199,7 +219,7 @@ impl Default for TurnCore {
             status: SessionStatus::Starting,
             queue: Queue::default(),
             paused: false,
-            hold: false,
+            hold: Vec::new(),
             turn: 0,
             unsent: None,
             cancelling: false,
@@ -285,7 +305,7 @@ impl TurnCore {
                     self.abandoned.push(self.turn);
                     self.status = SessionStatus::Idle;
                 }
-                self.hold = false;
+                self.hold.clear();
                 fx.extend([E::Persist, E::Announce]);
                 fx
             }
@@ -304,20 +324,28 @@ impl TurnCore {
                 fx.push(E::Announce);
                 fx
             }
-            TurnEvent::Stop { .. } if self.detached => {
+            TurnEvent::Stop | TurnEvent::PauseAfterTool { .. } if self.detached => {
                 // no turn runs while detached: the Stop holds what waits
                 self.paused = true;
                 vec![E::Persist, E::Announce]
             }
-            TurnEvent::Stop { after_tool: true } => {
+            TurnEvent::PauseAfterTool { source } => {
                 match self.status {
                     SessionStatus::Exited => return vec![E::Exited],
-                    SessionStatus::Busy => self.hold = true,
+                    SessionStatus::Busy => {
+                        if !self.hold.contains(&source) {
+                            self.hold.push(source);
+                        }
+                    }
                     _ => self.paused = true,
                 }
                 vec![E::Persist, E::Announce]
             }
-            TurnEvent::Stop { after_tool: false } => {
+            TurnEvent::ClearHold { source } => {
+                self.hold.retain(|s| *s != source);
+                Vec::new()
+            }
+            TurnEvent::Stop => {
                 if self.status != SessionStatus::Busy {
                     return vec![E::NotRunning];
                 }
@@ -327,7 +355,7 @@ impl TurnCore {
                     self.queue.push_front(item);
                     self.status = SessionStatus::Idle;
                     self.paused = true;
-                    self.hold = false;
+                    self.hold.clear();
                     return vec![E::PutBack { turn: self.turn }, E::Persist, E::Announce];
                 }
                 if self.stopped {
@@ -335,7 +363,7 @@ impl TurnCore {
                     return Vec::new();
                 }
                 self.paused = true;
-                self.hold = false;
+                self.hold.clear();
                 self.stopped = true;
                 let mut fx = self.cancel();
                 fx.extend([E::Persist, E::Announce]);
@@ -442,11 +470,11 @@ impl TurnCore {
                 }
             }
             TurnEvent::ToolCompleted => {
-                if !self.hold {
+                if self.hold.is_empty() {
                     return Vec::new();
                 }
                 // the pause after a tool call: the turn ends here, the queue waits
-                self.hold = false;
+                self.hold.clear();
                 self.paused = true;
                 let mut fx = self.cancel();
                 fx.push(E::Persist);
@@ -576,10 +604,10 @@ impl TurnCore {
     /// The turn's end.  PAUSE: its end holds the queue (cancelled, or an error).
     fn finish(&mut self, pause: bool, jobs: bool) -> Vec<TurnEffect> {
         // a pause asked for during the turn (a budget limit) holds the queue though no tool call ended it
-        if (self.hold && !self.ending) || pause {
+        if (!self.hold.is_empty() && !self.ending) || pause {
             self.paused = true;
         }
-        self.hold = false;
+        self.hold.clear();
         // the turn is over: nobody answers what it still asked
         let mut fx = self.cancel_held();
         if self.status == SessionStatus::Busy {
