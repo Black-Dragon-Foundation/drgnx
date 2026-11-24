@@ -177,17 +177,17 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "pair/open", PairOpen(OpenParams) -> bool,
             classes: [User], writes: false,
-            doc: "the editor has a file open now (normal, large or remote): a pair write of it goes to this editor",
+            doc: "Emacs-era, re-decide at B1: the editor has a file open now (normal, large or remote): a pair write of it goes to this editor",
         ),
         method!(
             "pair/closed", PairClosed(ClosedParams) -> bool,
             classes: [User], writes: false,
-            doc: "the editor no longer has a file open",
+            doc: "Emacs-era, re-decide at B1: the editor no longer has a file open",
         ),
         method!(
             "pair/open-set", PairOpenSet(OpenSetParams) -> bool,
             classes: [User], writes: false,
-            doc: "every file the editor has open, at its setup and on every connection: it replaces what the hub held for that editor",
+            doc: "Emacs-era, re-decide at B1: every file the editor has open, at its setup and on every connection: it replaces what the hub held for that editor",
         ),
         method!(
             "agents/pair", AgentsPair(PairToggle) -> bool,
@@ -197,12 +197,12 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "pair/answer", PairAnswer(PairAnswer) -> bool,
             classes: [User], writes: false,
-            doc: "the editor's answer to a pair-apply or pair-reconcile: applied (version, saved), refused (reason, lines) or dropped; true when the hub was waiting for it",
+            doc: "Emacs-era, re-decide at B1: the editor's answer to a pair-apply or pair-reconcile: applied (version, saved), refused (reason, lines) or dropped; true when the hub was waiting for it",
         ),
         method!(
             "pair/read-answer", PairReadAnswer(PairReadAnswer) -> bool,
             classes: [User], writes: false,
-            doc: "the editor's answer to a pair-read: the buffer's text and version, or why not; true when the hub was waiting for it",
+            doc: "Emacs-era, re-decide at B1: the editor's answer to a pair-read: the buffer's text and version, or why not; true when the hub was waiting for it",
         ),
     ]
 }

@@ -492,23 +492,13 @@ mod tests {
         assert_eq!(writes, want);
     }
 
-    /// The methods the front writes work.db for: the editor's five and the Lisp job runner's seam (Task 9).
-    const FRONT_WRITES: [&str; 29] = [
+    /// The methods the front writes work.db for: the editor's five and the graph store's.
+    const FRONT_WRITES: [&str; 19] = [
         "cards/settle",
         "messages/send",
         "messages/mark",
         "events/add",
         "review/mark",
-        "coord/job-create",
-        "coord/job-set",
-        "coord/task-status",
-        "coord/leases",
-        "coord/decide",
-        "coord/agent",
-        "coord/card-create",
-        "coord/card-set",
-        "coord/held",
-        "coord/prune",
         // the graph store's (Urdr Task 15a): the tracker scan's door
         "graph/put-parsed",
         "graph/record",
@@ -552,6 +542,73 @@ mod tests {
         "work/target/set",
     ];
 
+    /// The Lisp job runner's `coord/*` writes are gone (`coord/notify` stays), and each method a client with buffers
+    /// used is marked for B1's design, none deleted.
+    #[test]
+    fn the_coord_seam_is_gone_and_the_emacs_era_is_marked() {
+        for name in [
+            "coord/job-create",
+            "coord/job-set",
+            "coord/task-status",
+            "coord/leases",
+            "coord/decide",
+            "coord/agent",
+            "coord/card-create",
+            "coord/card-set",
+            "coord/held",
+            "coord/prune",
+        ] {
+            assert!(find(name).is_none(), "{name} is gone");
+        }
+        assert_eq!(
+            registry()
+                .iter()
+                .filter(|m| m.name.starts_with("coord/"))
+                .map(|m| m.name)
+                .collect::<Vec<_>>(),
+            ["coord/notify"]
+        );
+        for name in EMACS_ERA {
+            let m = find(name).unwrap_or_else(|| panic!("{name} stays until B1 decides"));
+            assert!(
+                m.doc.starts_with(EMACS_ERA_MARK),
+                "{name}'s doc says {EMACS_ERA_MARK:?}"
+            );
+        }
+        let marked: Vec<&str> = registry()
+            .iter()
+            .filter(|m| m.doc.starts_with(EMACS_ERA_MARK))
+            .map(|m| m.name)
+            .collect();
+        let mut want = EMACS_ERA.to_vec();
+        want.sort();
+        assert_eq!(marked, want, "no other method carries the mark");
+    }
+
+    /// What the doc of a method that served the Emacs client starts with.
+    const EMACS_ERA_MARK: &str = "Emacs-era, re-decide at B1: ";
+
+    /// The methods that served a client with buffers (the audit's section 5): kept, and marked.
+    const EMACS_ERA: [&str; 17] = [
+        "buffers/set",
+        "config/changed",
+        "config/settings",
+        "env/set",
+        "events/add",
+        "folds/load",
+        "folds/save",
+        "history/hunks/head",
+        "pair/answer",
+        "pair/closed",
+        "pair/open",
+        "pair/open-set",
+        "pair/read-answer",
+        "review/mark",
+        "settings/confirm",
+        "settings/explained",
+        "settings/record",
+    ];
+
     /// Every method is the hub's own: each name decodes to a `Params` variant of its own, and every variant is some
     /// method's.  The front's `serve` matches `Params` with no catch-all arm, so a variant it does not serve does not
     /// compile; together, no method can be listed without a handler.
@@ -582,7 +639,7 @@ mod tests {
             ("job/stop", json!({"id": "j"})),
             ("agents/list", json!({})),
             ("graph/backup", json!({})),
-            ("coord/prune", json!({})),
+            ("coord/notify", json!({})),
         ] {
             let m = find(name).unwrap();
             let (p, _) = (m.decode)(&params).unwrap();
@@ -714,7 +771,6 @@ mod tests {
             let req = required(&schema);
             if [
                 "agents/presence/subscribe",
-                "coord/agent",
                 "debug/heap",
                 "graph/revert",
                 "graph/grants",

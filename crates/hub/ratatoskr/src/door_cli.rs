@@ -5,6 +5,7 @@
 //!
 //! - `card list [--open]` reads the cards (`graph/sql`), `card settle CARD CHOICE` answers one (`cards/settle`).
 //! - `message send TO TEXT` and `message reply ID TEXT` write as the user (`messages/send`).
+//! - `task list`, `task ready` and `task show ID` read the tracker (`tasks/find`, `tasks/ready`, `graph/entity`).
 //! - `task status ID STATUS` sets a tracker task's status (`tasks/write update`, at the version just read).
 //! - `plan status PLAN TASK STATUS` sets a plan task's status (`plans/write`), the one way into a task of an imported
 //!   plan file; `done` ticks the task's steps too, so the file and the graph agree.
@@ -32,6 +33,9 @@ pub const USAGE: &str = "usage: ratatoskr card list [--open] [--json]\n\
     \x20      ratatoskr card settle CARD CHOICE [--json]\n\
     \x20      ratatoskr message send TO TEXT [--json]\n\
     \x20      ratatoskr message reply ID TEXT [--json]\n\
+    \x20      ratatoskr task list [--query WORDS] [--status S] [--assignee A] [--label L]... [--project P] [--cursor N] [--json]\n\
+    \x20      ratatoskr task ready [--label L]... [--project P] [--limit N] [--json]\n\
+    \x20      ratatoskr task show ID [--history] [--json]\n\
     \x20      ratatoskr task status ID STATUS [--reason TEXT] [--json]\n\
     \x20      ratatoskr plan status PLAN TASK STATUS [--reason TEXT] [--json]\n\
     \x20      ratatoskr records status [PATH] [--json]\n\
@@ -60,6 +64,26 @@ pub enum Sub {
     MessageReply {
         id: u64,
         text: String,
+    },
+    /// Tracker tasks by words, status, assignee, labels and project (`tasks/find`), a page.
+    TaskList {
+        query: Option<String>,
+        status: Option<String>,
+        assignee: Option<String>,
+        labels: Vec<String>,
+        project: Option<String>,
+        cursor: Option<u64>,
+    },
+    /// The ready tracker tasks (`tasks/ready`).
+    TaskReady {
+        labels: Vec<String>,
+        project: Option<String>,
+        limit: Option<u64>,
+    },
+    /// One entity with its links and notes (`graph/entity`).
+    TaskShow {
+        id: String,
+        history: bool,
     },
     TaskStatus {
         id: String,
@@ -101,6 +125,29 @@ fn status_word(s: &str) -> villa::Result<String> {
     }
 }
 
+/// The flags of `task list|ready` that take a value.
+const TASK_OPTS: [&str; 7] = [
+    "query", "status", "assignee", "label", "project", "cursor", "limit",
+];
+
+/// The value of the flag NAME given once (the last wins), taken out of OPTS.
+fn take_opt(opts: &mut Vec<(String, String)>, name: &str) -> Option<String> {
+    let all = take_all(opts, name);
+    all.into_iter().next_back()
+}
+
+/// Every value of the flag NAME, in order, taken out of OPTS.
+fn take_all(opts: &mut Vec<(String, String)>, name: &str) -> Vec<String> {
+    let (mine, rest): (Vec<_>, Vec<_>) = opts.drain(..).partition(|(n, _)| n == name);
+    *opts = rest;
+    mine.into_iter().map(|(_, v)| v).collect()
+}
+
+fn whole(v: &str, what: &str) -> villa::Result<u64> {
+    v.parse::<u64>()
+        .map_err(|_| villa::Error::invalid(format!("{what} takes a whole number, not {v:?}")))
+}
+
 /// The arguments after GROUP (`card`, `message`, `task`, `plan` or `records`).
 pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> villa::Result<DoorCommand> {
     use lexopt::Arg::{Long, Value as Word};
@@ -111,9 +158,15 @@ pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> villa::Re
     let mut words: Vec<String> = Vec::new();
     let mut reason: Option<String> = None;
     let mut keep: Option<String> = None;
+    let mut opts: Vec<(String, String)> = Vec::new();
+    let mut history = false;
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
             Long("json") => json = true,
+            Long(name) if group == "task" && TASK_OPTS.contains(&name) => {
+                opts.push((name.to_owned(), p.value().map_err(e)?.string().map_err(e)?))
+            }
+            Long("history") if group == "task" => history = true,
             Long("open") if group == "card" => open = true,
             Long("reason") if group == "plan" || group == "task" => {
                 reason = Some(p.value().map_err(e)?.string().map_err(e)?)
@@ -143,6 +196,29 @@ pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> villa::Re
         ("message", ["reply", id, text]) => Sub::MessageReply {
             id: id_num(id, "a message")?,
             text: (*text).into(),
+        },
+        ("task", ["list"]) => Sub::TaskList {
+            query: take_opt(&mut opts, "query"),
+            status: take_opt(&mut opts, "status")
+                .map(|s| status_word(&s))
+                .transpose()?,
+            assignee: take_opt(&mut opts, "assignee"),
+            labels: take_all(&mut opts, "label"),
+            project: take_opt(&mut opts, "project"),
+            cursor: take_opt(&mut opts, "cursor")
+                .map(|c| whole(&c, "--cursor"))
+                .transpose()?,
+        },
+        ("task", ["ready"]) => Sub::TaskReady {
+            labels: take_all(&mut opts, "label"),
+            project: take_opt(&mut opts, "project"),
+            limit: take_opt(&mut opts, "limit")
+                .map(|l| whole(&l, "--limit"))
+                .transpose()?,
+        },
+        ("task", ["show", id]) => Sub::TaskShow {
+            id: (*id).into(),
+            history: std::mem::take(&mut history),
         },
         ("task", ["status", id, status]) => Sub::TaskStatus {
             id: (*id).into(),
@@ -179,6 +255,14 @@ pub fn parse(group: &str, args: impl IntoIterator<Item = OsString>) -> villa::Re
     };
     if keep.is_some() {
         return Err(villa::Error::invalid("--keep goes with records resolve"));
+    }
+    if let Some((name, _)) = opts.first() {
+        return Err(villa::Error::invalid(format!(
+            "--{name} does not go with this command"
+        )));
+    }
+    if history {
+        return Err(villa::Error::invalid("--history goes with task show"));
     }
     if open && !matches!(sub, Sub::CardList { .. }) {
         return Err(villa::Error::invalid("--open goes with card list"));
@@ -257,6 +341,60 @@ pub fn execute(sub: &Sub, hub: &mut Hub<'_>) -> villa::Result<(String, Value, bo
             }
             let a = hub("messages/send", p)?;
             Ok(sent(&a))
+        }
+        Sub::TaskList {
+            query,
+            status,
+            assignee,
+            labels,
+            project,
+            cursor,
+        } => {
+            let mut p = json!({});
+            for (k, v) in [
+                ("query", query),
+                ("status", status),
+                ("assignee", assignee),
+                ("project", project),
+            ] {
+                if let Some(v) = v {
+                    p[k] = json!(v);
+                }
+            }
+            if !labels.is_empty() {
+                p["labels"] = json!(labels);
+            }
+            if let Some(c) = cursor {
+                p["cursor"] = json!(c);
+            }
+            let a = hub("tasks/find", p)?;
+            Ok((task_rows(&a), a, true))
+        }
+        Sub::TaskReady {
+            labels,
+            project,
+            limit,
+        } => {
+            let mut p = json!({});
+            if !labels.is_empty() {
+                p["labels"] = json!(labels);
+            }
+            if let Some(v) = project {
+                p["project"] = json!(v);
+            }
+            if let Some(l) = limit {
+                p["limit"] = json!(l);
+            }
+            let a = hub("tasks/ready", p)?;
+            Ok((task_rows(&a), a, true))
+        }
+        Sub::TaskShow { id, history } => {
+            let mut include = vec!["links", "notes"];
+            if *history {
+                include.push("history");
+            }
+            let a = hub("graph/entity", json!({"id": id, "include": include}))?;
+            Ok((entity_text(id, &a), a, true))
         }
         Sub::TaskStatus { id, status, reason } => {
             let e = hub("graph/entity", json!({"id": id}))?;
@@ -387,6 +525,61 @@ fn sent(a: &Value) -> (String, Value, bool) {
         );
         (t, a.clone(), true)
     }
+}
+
+/// A page of tasks as lines `ID  STATUS  TITLE  @ASSIGNEE`, and where the next page starts.
+fn task_rows(a: &Value) -> String {
+    let mut out = String::new();
+    for t in a["tasks"].as_array().into_iter().flatten() {
+        let word = |k: &str| t[k].as_str().unwrap_or("");
+        out.push_str(&format!(
+            "{}  {}  {}",
+            word("id"),
+            word("status"),
+            word("title")
+        ));
+        if let Some(who) = t["assignee"].as_str() {
+            out.push_str(&format!("  @{who}"));
+        }
+        out.push('\n');
+    }
+    if out.is_empty() {
+        out.push_str("no tasks\n");
+    }
+    if let Some(c) = a["cursor"].as_u64() {
+        out.push_str(&format!("more: --cursor {c}\n"));
+    }
+    out
+}
+
+/// One entity as text: its header, body, links, notes and history, each of the last three one JSON line an item.
+fn entity_text(id: &str, a: &Value) -> String {
+    let e = &a["entity"];
+    let word = |k: &str| e[k].as_str().unwrap_or("");
+    let mut out = format!(
+        "{}  {}  {}  {}\n",
+        e["id"].as_str().unwrap_or(id),
+        word("kind"),
+        word("status"),
+        word("title")
+    );
+    out.push_str(&format!(
+        "project {}  ver {}\n",
+        word("project"),
+        e["ver"].as_i64().unwrap_or(0)
+    ));
+    if let Some(b) = e["body"].as_str().filter(|b| !b.is_empty()) {
+        out.push_str(&format!("{b}\n"));
+    }
+    for name in ["links", "notes", "history"] {
+        if let Some(items) = a[name].as_array().filter(|i| !i.is_empty()) {
+            out.push_str(&format!("{name}:\n"));
+            for i in items {
+                out.push_str(&format!("  {i}\n"));
+            }
+        }
+    }
+    out
 }
 
 fn task_answer(id: &str, status: &str, a: Value) -> (String, Value, bool) {
@@ -727,6 +920,106 @@ mod tests {
                 json!({"op": "note", "id": "task:aa-1", "note": "x"})
             )
         );
+    }
+
+    #[test]
+    fn task_readers_call_the_hubs_methods() {
+        // list: only what was asked goes to tasks/find
+        let l = p(
+            "task",
+            &[
+                "list", "--query", "doors", "--status", "open", "--label", "a", "--label", "b",
+                "--cursor", "50",
+            ],
+        )
+        .unwrap();
+        let page = json!({"tasks": [
+            {"id": "task:aa-1", "title": "first", "status": "open", "assignee": "agent:s-1"},
+            {"id": "task:aa-2", "title": "second", "status": "open", "assignee": null}],
+            "cursor": 100});
+        let (r, seen) = run_fake(&l.sub, vec![Ok(page)]);
+        assert_eq!(
+            seen,
+            [(
+                "tasks/find".into(),
+                json!({"query": "doors", "status": "open", "labels": ["a", "b"], "cursor": 50})
+            )]
+        );
+        let (t, _, ok) = r.unwrap();
+        assert_eq!(
+            t,
+            "task:aa-1  open  first  @agent:s-1\ntask:aa-2  open  second\nmore: --cursor 100\n"
+        );
+        assert!(ok);
+        let bare = p("task", &["list"]).unwrap();
+        let (r, seen) = run_fake(&bare.sub, vec![Ok(json!({"tasks": []}))]);
+        assert_eq!(seen, [("tasks/find".into(), json!({}))]);
+        assert_eq!(r.unwrap().0, "no tasks\n");
+        // ready
+        let rd = p(
+            "task",
+            &["ready", "--label", "x", "--project", "proj", "--limit", "5"],
+        )
+        .unwrap();
+        let (r, seen) = run_fake(
+            &rd.sub,
+            vec![Ok(
+                json!({"tasks": [{"id": "task:aa-3", "title": "go", "status": "open"}]}),
+            )],
+        );
+        assert_eq!(
+            seen,
+            [(
+                "tasks/ready".into(),
+                json!({"labels": ["x"], "project": "proj", "limit": 5})
+            )]
+        );
+        assert_eq!(r.unwrap().0, "task:aa-3  open  go\n");
+        // show: the entity with its links and notes; --history asks for the versions too
+        let s = p("task", &["show", "task:aa-1"]).unwrap();
+        let ent = json!({"entity": {"id": "task:aa-1", "kind": "task", "status": "open", "title": "first",
+            "project": "proj", "ver": 3, "body": "do it"},
+            "by": {}, "links": [{"kind": "blocks", "src": "task:aa-1", "dst": "task:aa-2"}],
+            "notes": [{"text": "hello"}]});
+        let (r, seen) = run_fake(&s.sub, vec![Ok(ent.clone())]);
+        assert_eq!(
+            seen,
+            [(
+                "graph/entity".into(),
+                json!({"id": "task:aa-1", "include": ["links", "notes"]})
+            )]
+        );
+        let (t, _, ok) = r.unwrap();
+        assert!(ok);
+        for want in [
+            "task:aa-1  task  open  first\n",
+            "project proj  ver 3\n",
+            "do it\n",
+            "links:\n  {\"kind\":\"blocks\",\"src\":\"task:aa-1\",\"dst\":\"task:aa-2\"}\n",
+            "notes:\n  {\"text\":\"hello\"}\n",
+        ] {
+            assert!(t.contains(want), "{want:?} in {t:?}");
+        }
+        let h = p("task", &["show", "task:aa-1", "--history"]).unwrap();
+        let (_, seen) = run_fake(&h.sub, vec![Ok(ent)]);
+        assert_eq!(seen[0].1["include"], json!(["links", "notes", "history"]));
+    }
+
+    #[test]
+    fn task_reader_flags_go_with_their_commands() {
+        for (g, bad) in [
+            ("task", &["list", "--cursor", "x"][..]),
+            ("task", &["list", "--limit", "5"]),
+            ("task", &["ready", "--query", "x"]),
+            ("task", &["ready", "--limit", "-1"]),
+            ("task", &["list", "--history"]),
+            ("task", &["show"]),
+            ("task", &["show", "a", "b"]),
+            ("task", &["status", "t", "done", "--label", "x"]),
+            ("card", &["list", "--query", "x"]),
+        ] {
+            assert!(p(g, bad).is_err(), "{g} {bad:?} should not parse");
+        }
     }
 
     #[test]

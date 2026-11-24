@@ -48,6 +48,7 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20          (the outside agents you bind to a role in a project)\n\
     \x20      ratatoskr card list [--open] | settle CARD CHOICE   (answer what agents ask: ask_user, escalate, access, changes)\n\
     \x20      ratatoskr message send TO TEXT | reply ID TEXT   (write to an agent as the user)\n\
+    \x20      ratatoskr task list|ready|show ...   (read the tracker's tasks)\n\
     \x20      ratatoskr task status ID STATUS | plan status PLAN TASK STATUS   (set a task's status: the user closes tasks)\n\
     \x20      ratatoskr embed-worker --model ID --dir D --device auto|cpu --device-cache FILE [--threads N] [--idle-ms N]\n\
     \x20          (Hrafn's embed worker; run by the hub only)\n\

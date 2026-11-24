@@ -3,15 +3,12 @@
 //!
 //! - `coord/notify`: a coordination server wrote; the front's events go out and delivery runs (coalesced);
 //! - the editor's five writes: `cards/settle`, `messages/send`, `messages/mark`, `events/add`, `review/mark`;
-//! - the seam (`coord/*`): the job runner's writes and its housekeeping, each one transaction of the hub's
-//!   writer.
 //!
 //! Params mirror the Lisp writers' keywords; results are the Lisp answers, typed.
 
 use super::{Empty, method};
 use crate::registry::Method;
-use crate::types::{AgentName, Bounded, Id, JsonObject, Status, TaskRef, Text, null_as_empty};
-use crate::wire::{Error, ErrorCode};
+use crate::types::{AgentName, Bounded, Id, JsonObject, TaskRef, Text};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -247,266 +244,6 @@ pub struct ReviewMarkParams {
     pub event: Option<ReviewEvent>,
 }
 
-// ---- the seam: the Lisp job runner's writes until phase 6 ----
-
-/// One task of a new job: without `deps` it starts `ready`, else `pending`.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct NewTask {
-    pub n: u64,
-    pub title: Text,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<Bounded<String, 64>>,
-    /// The numbers of the job's tasks this one waits on.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deps: Option<Bounded<Vec<u64>, 1000>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct JobCreateParams {
-    pub id: Id,
-    pub title: Text,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan: Option<Bounded<String, 4096>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repo: Option<Bounded<String, 4096>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tasks: Option<Bounded<Vec<NewTask>, 1000>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<JsonObject>,
-}
-
-/// The id of what was made: a job's.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct JobCreated {
-    pub id: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct JobSetParams {
-    pub id: Id,
-    /// A change leaves a `job` event.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<Status>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<JsonObject>,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct TaskStatusParams {
-    pub task: TaskRef,
-    pub status: Status,
-    /// The holder; `null` (or none) leaves the task without one.
-    #[serde(default)]
-    pub agent: Option<AgentName>,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct LeasesParams {
-    /// These agents are alive: each one's claims are renewed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub renew: Option<Bounded<Vec<AgentName>, 1000>>,
-    /// Then the claims whose lease ran out are released.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub release_stale: Option<bool>,
-}
-
-/// A claim whose lease ran out, released.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Released {
-    pub task: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub job: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Leases {
-    #[serde(default, deserialize_with = "null_as_empty")]
-    pub released: Vec<Released>,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct DecideParams {
-    /// `build`, `wait`, `wont-build` or `replaces`.
-    pub kind: Bounded<String, 32>,
-    pub subject: Text,
-    pub author: AgentName,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task: Option<TaskRef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub paths: Option<Text>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<Text>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seen: Option<u64>,
-    /// A decision's number, marked replaced when this one is current.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replaces: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub job: Option<Id>,
-}
-
-/// `coord/decide`'s answer (`drgnx-coord-decide`): `{ok, n, status, version}`, `{held, version, changes}` or `{error}`.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Decided {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ok: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub n: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub held: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub changes: Option<Vec<Decision>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-/// An agent's field `clear` sets to null.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum AgentField {
-    Kind,
-    Name,
-    Cwd,
-    Worktree,
-    Branch,
-    Base,
-    Plan,
-    Task,
-    Pid,
-}
-
-impl AgentField {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AgentField::Kind => "kind",
-            AgentField::Name => "name",
-            AgentField::Cwd => "cwd",
-            AgentField::Worktree => "worktree",
-            AgentField::Branch => "branch",
-            AgentField::Base => "base",
-            AgentField::Plan => "plan",
-            AgentField::Task => "task",
-            AgentField::Pid => "pid",
-        }
-    }
-}
-
-/// An agent that works (again): what is given is stored, what is not is kept.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct AgentRow {
-    pub id: AgentName,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<Bounded<String, 64>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<Bounded<String, 256>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<Bounded<String, 4096>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<Bounded<String, 4096>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub branch: Option<Bounded<String, 256>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base: Option<Bounded<String, 256>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan: Option<Bounded<String, 4096>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task: Option<TaskRef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pid: Option<u64>,
-    /// Fields set to null after the rest is stored.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clear: Option<Bounded<Vec<AgentField>, 9>>,
-}
-
-/// `{register: AgentRow}` or `{seen: AgentName}`: one of the two.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct AgentParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub register: Option<AgentRow>,
-    /// This agent is alive now: stamped (telemetry: a busy work.db answers `{}`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seen: Option<AgentName>,
-}
-
-fn check_agent(p: &AgentParams) -> Result<(), Error> {
-    match (&p.register, &p.seen) {
-        (Some(_), None) | (None, Some(_)) => Ok(()),
-        _ => Err(Error {
-            code: ErrorCode::InvalidParams,
-            message: "coord/agent takes one of register or seen".into(),
-            path: None,
-        }),
-    }
-}
-
-/// `coord/agent`'s answer: the registered agent's `id`, or the `seen` stamp (none when it was never registered).
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AgentResult {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seen: Option<f64>,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct CardCreateParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub job: Option<Id>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task: Option<TaskRef>,
-    /// `ask` makes it a question to the user.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<Bounded<String, 64>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<Text>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<JsonObject>,
-}
-
-/// The id of what was made: a card's.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CardCreated {
-    pub id: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct CardSetParams {
-    pub id: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<Text>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<JsonObject>,
-    /// A change (a reopened card) leaves a `card` event.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state: Option<Status>,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct HeldParams {
-    pub agent: AgentName,
-    /// The agent's write was held (its count goes up by one), or went through (the count is 0).
-    pub held: bool,
-}
-
-/// `coord/prune`'s answer: whether the daily prune ran (the cap is held either way).
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Pruned {
-    pub pruned: bool,
-}
-
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct RetractParams {
     /// The message's id.
@@ -551,63 +288,12 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "events/add", EventsAdd(AddEventParams) -> Added,
             classes: [User], writes: true,
-            doc: "an event in the log (drgnx-coord-event-add; best_effort: a busy work.db is no error)",
+            doc: "Emacs-era, re-decide at B1: an event in the log (drgnx-coord-event-add; best_effort: a busy work.db is no error)",
         ),
         method!(
             "review/mark", ReviewMark(ReviewMarkParams) -> bool,
             classes: [User], writes: true,
-            doc: "a review mark on an agent's change, and its event, in one transaction (drgnx-coord-review-mark)",
-        ),
-        method!(
-            "coord/job-create", CoordJobCreate(JobCreateParams) -> JobCreated,
-            classes: [User], writes: true,
-            doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-job-create)",
-        ),
-        method!(
-            "coord/job-set", CoordJobSet(JobSetParams) -> bool,
-            classes: [User], writes: true,
-            doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-job-set)",
-        ),
-        method!(
-            "coord/task-status", CoordTaskStatus(TaskStatusParams) -> bool,
-            classes: [User], writes: true,
-            doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-force-status)",
-        ),
-        method!(
-            "coord/leases", CoordLeases(LeasesParams) -> Leases,
-            classes: [User], writes: true,
-            doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-renew, drgnx-coord-release-stale)",
-        ),
-        method!(
-            "coord/decide", CoordDecide(DecideParams) -> Decided,
-            classes: [User], writes: true,
-            doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-decide)",
-        ),
-        method!(
-            "coord/agent", CoordAgent(AgentParams) -> AgentResult,
-            classes: [User], writes: true,
-            doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-agent-register, drgnx-coord-agent-seen)",
-            check: check_agent,
-        ),
-        method!(
-            "coord/card-create", CoordCardCreate(CardCreateParams) -> CardCreated,
-            classes: [User], writes: true,
-            doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-card-create)",
-        ),
-        method!(
-            "coord/card-set", CoordCardSet(CardSetParams) -> bool,
-            classes: [User], writes: true,
-            doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-card-set)",
-        ),
-        method!(
-            "coord/held", CoordHeld(HeldParams) -> bool,
-            classes: [User], writes: true,
-            doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-note-held)",
-        ),
-        method!(
-            "coord/prune", CoordPrune(Empty) -> Pruned,
-            classes: [User], writes: true,
-            doc: "seam: the Lisp job runner's writes until phase 6 (drgnx-coord-events-prune-daily; never fails)",
+            doc: "Emacs-era, re-decide at B1: a review mark on an agent's change, and its event, in one transaction (drgnx-coord-review-mark)",
         ),
     ]
 }
@@ -616,17 +302,6 @@ pub(crate) fn methods() -> Vec<Method> {
 mod tests {
     use crate::registry::find;
     use serde_json::json;
-
-    #[test]
-    fn coord_agent_takes_one_of_register_or_seen() {
-        let m = find("coord/agent").unwrap();
-        assert!((m.decode)(&json!({"seen": "a1"})).is_ok());
-        assert!((m.decode)(&json!({"register": {"id": "a1", "clear": ["pid"]}})).is_ok());
-        for bad in [json!({}), json!({"seen": "a1", "register": {"id": "a1"}})] {
-            let e = (m.decode)(&bad).err().unwrap();
-            assert!(e.message.contains("one of register or seen"), "{e:?}");
-        }
-    }
 
     #[test]
     fn a_long_typed_answer_settles_a_card() {
@@ -642,17 +317,6 @@ mod tests {
     }
 
     #[test]
-    fn task_status_agent_may_be_null() {
-        let m = find("coord/task-status").unwrap();
-        let (p, _) = (m.decode)(&json!({"task": "j#1", "status": "ready", "agent": null})).unwrap();
-        assert_eq!(
-            p.to_value(),
-            json!({"task": "j#1", "status": "ready", "agent": null})
-        );
-        assert!((m.decode)(&json!({"task": "j#1", "status": "Ready"})).is_err());
-    }
-
-    #[test]
     fn results_encode_as_the_lisp_answers() {
         let send = find("messages/send").unwrap();
         let held =
@@ -660,13 +324,5 @@ mod tests {
         assert_eq!((send.check_result)(&held).unwrap(), held);
         let ok = json!({"ok": true, "id": 7, "state": "queued"});
         assert_eq!((send.check_result)(&ok).unwrap(), ok);
-        let decide = find("coord/decide").unwrap();
-        let e = json!({"error": "too many decisions in a minute (6): wait, or ask the user"});
-        assert_eq!((decide.check_result)(&e).unwrap(), e);
-        let leases = find("coord/leases").unwrap();
-        assert_eq!(
-            (leases.check_result)(&json!({"released": null})).unwrap(),
-            json!({"released": []})
-        );
     }
 }
