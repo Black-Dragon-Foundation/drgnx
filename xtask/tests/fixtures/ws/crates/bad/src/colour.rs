@@ -16,3 +16,8 @@ pub fn hexes() {
 }
 
 pub const TINT_COLOUR: u32 = 0xff8800aa;
+
+// a palette index is no colour literal; not flagged
+pub fn indexed() {
+    let _i = Colour::Ansi(1);
+}

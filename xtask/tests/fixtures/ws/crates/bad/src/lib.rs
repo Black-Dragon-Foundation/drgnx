@@ -8,6 +8,7 @@ mod dequant;
 mod home;
 mod keys;
 mod luau;
+mod open;
 mod print;
 mod secret;
 mod strings;

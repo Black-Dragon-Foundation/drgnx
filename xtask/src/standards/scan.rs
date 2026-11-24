@@ -786,6 +786,48 @@ fn derives_debug(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+/// Whether E is a chain of calls that starts at `OpenOptions::new()` or `File::options()`.
+fn opens_by_options(e: &Expr) -> bool {
+    match e {
+        Expr::MethodCall(m) => opens_by_options(&m.receiver),
+        Expr::Call(c) => match &*c.func {
+            Expr::Path(p) => {
+                let segs: Vec<String> = p
+                    .path
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect();
+                matches!(
+                    segs.as_slice(),
+                    [.., t, f] if (t == "OpenOptions" && f == "new") || (t == "File" && f == "options")
+                )
+            }
+            _ => false,
+        },
+        Expr::Paren(p) => opens_by_options(&p.expr),
+        _ => false,
+    }
+}
+
+/// A number, a flag or a character, or a tuple or array of them.
+fn is_number_type(ty: &syn::Type) -> bool {
+    const SCALARS: &[&str] = &[
+        "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
+        "f32", "f64", "bool", "char",
+    ];
+    match ty {
+        syn::Type::Path(p) => {
+            p.qself.is_none()
+                && p.path.segments.len() == 1
+                && SCALARS.contains(&p.path.segments[0].ident.to_string().as_str())
+        }
+        syn::Type::Tuple(t) => !t.elems.is_empty() && t.elems.iter().all(is_number_type),
+        syn::Type::Array(a) => is_number_type(&a.elem),
+        _ => false,
+    }
+}
+
 fn is_secret_type(ty: &syn::Type) -> bool {
     matches!(ty, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Secret"))
 }
@@ -847,8 +889,10 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
             let of_colour_type =
                 ty.is_some_and(|t| COLOUR_TYPES.contains(&t.ident.to_string().as_str()));
             let made = COLOUR_FNS.contains(&last.as_str()) || of_colour_type;
-            let literal_numbers =
-                !c.args.is_empty() && c.args.iter().all(|a| matches!(a, Expr::Lit(_)));
+            // a colour's channels are three or four numbers: one number is a palette index (`Colour::Ansi(1)`)
+            let literal_numbers = !c.args.is_empty()
+                && c.args.iter().all(|a| matches!(a, Expr::Lit(_)))
+                && (c.args.len() >= 3 || !of_colour_type);
             let hex_colour =
                 (names_colour(&last) || of_colour_type) && c.args.iter().any(is_hex_colour_int);
             if (made && literal_numbers) || hex_colour {
@@ -866,6 +910,23 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
 
     fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
         self.check_sink(&m.method.to_string(), &m.args);
+        // `OpenOptions::new()….open(path)`: a method of a value, so no path names it, but clippy's disallowed-methods
+        // lint does; the two agree here
+        if m.method == "open"
+            && opens_by_options(&m.receiver)
+            && let Some((id, owner)) = self
+                .rules
+                .methods
+                .get("std::fs::OpenOptions::open")
+                .cloned()
+        {
+            self.hit(
+                m.method.span(),
+                &id,
+                "disallowed-path",
+                format!("`std::fs::OpenOptions::open` is reached only through `{owner}`"),
+            );
+        }
         if names_colour(&m.method.to_string())
             && m.args.iter().any(is_hex_colour_int)
             && let Some(id) = self.rule("no-colour-literal")
@@ -924,7 +985,9 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
 
     fn visit_item_struct(&mut self, s: &'ast syn::ItemStruct) {
         let all_secret = !s.fields.is_empty() && s.fields.iter().all(|f| is_secret_type(&f.ty));
-        self.check_secret(&s.ident, &s.attrs, all_secret);
+        // numbers and flags only (a cache key, an id) hold no secret whatever the type is called
+        let numbers = !s.fields.is_empty() && s.fields.iter().all(|f| is_number_type(&f.ty));
+        self.check_secret(&s.ident, &s.attrs, all_secret || numbers);
         visit::visit_item_struct(self, s);
     }
 

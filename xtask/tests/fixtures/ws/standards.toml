@@ -11,7 +11,7 @@ reactive = { clean = true, ui = true }
 [[standard]]
 id = "processes"
 owner = "owner"
-clippy = ["std::process::Command::new"]
+clippy = ["std::process::Command::new", "std::fs::OpenOptions::open"]
 conformance = "crates/owner/tests/conformance.rs"
 
 [[standard]]
