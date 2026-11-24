@@ -269,12 +269,12 @@ warm, disk_gib }` (`disk_gib`: its build dir plus outputs, measured by the runne
 - **`disk_need_gib(rows, declared)`**: the p95 of `disk_gib` over the last 5 undisturbed runs that measured it, else
   the declared need: history replaces the pack's value once it has a measurement.
 
-- **`history_key(spec)`**: the kind, then the suite (a check's stage), the class of the rows selected
-  (`selector_class`: `all`, `prefix` for one `^name/` or `^name-`, `alt` for an alternation, `other`) and the tree's
+- **`history_key(spec)`**: the kind, then the suite (a check's stage), the dialect and the class of the rows selected
+  (`dialect::class_of`: `all`, `prefix`, `alt`, `other`; two dialects never share a key) and the tree's
   size bucket (`Derived::tree_bucket`, `floor(log2(MiB))` of the frozen tree, set by the hub at submit); or else the
   command with paths normalised (the job's tree and any `.claude/worktrees/<name>` path become `{tree}`, a
-  `.claude/tmp` path `{tmp}`), so one command run from two worktrees has one history. `ert=^drgnx-fold/` and
-  `ert=^drgnx-marks/` share an expected time and memory; a tree ten times bigger keeps its own.
+  `.claude/tmp` path `{tmp}`), so one command run from two worktrees has one history. Two selections of one class
+  share an expected time and memory; a tree ten times bigger keeps its own.
 - **`expected(rows, other, speed_ratio, suite_default)`**: the median time of the last 5 undisturbed runs on this
   machine, with their mean CPU and the p95 of their peak memory; else the same from other machines' rows, the time ×
   the static speed ratio; else the suite's default; else 10 minutes. The last two know no CPU or memory.
@@ -365,8 +365,8 @@ A suite's listed rows are cut by `chunks(rows, set_minutes, overhead_s, quiet_pa
 - **the rest** in `chunk_count` near-equal contiguous chunks: `clamp(set_minutes / max(8 min, 4 × overhead), 1, rows)`,
   raised to the free parallel capacity when the machine is quiet, and to what 40 names a chunk needs.
 
-`Chunk::selector` is `^\(a\|b\)$` with each name `regexp-quote`d (Emacs alternation is `\|`, never `|`). Every row is in
-exactly one chunk (`split_covers_every_row_exactly_once`).
+`Chunk::selector(dialect)` is the dialect's argv items for the chunk's names (see "Dialects"), at most 40 names a chunk.
+Every row is in exactly one chunk (`split_covers_every_row_exactly_once`).
 
 Only a `crash` verdict splits (`splits`): an eviction, an OOM and an oomd kill are the machine's. `split_on_crash(chunk,
 done_rows, listed)` names the suspect, the first listed row of the chunk without a result, and the rest after it
@@ -421,3 +421,25 @@ Tests [D]: the properties `projected_spend_never_passes_the_cap` (starts through
 projected, time between the requests) and `the_bound_holds_hub_up_and_down` (machines that overrun, the guard every
 60 s; then the hub gone and every machine ending by its own layer), and `the_bound_is_the_designs` (the design's
 "2 machines × 2 h = about $1.64").
+
+## Artifact keys (`artifact`)
+
+An artifact is a job's output that other jobs use (a build, an image). Its key is a SHA-256 (schema `artifact/3`) over:
+the resolved entry (toolchain and caches inlined; the 16 `SCHEDULING_ONLY` fields, among them `class`, are left out),
+the image's platform digest, the tree's files that match the entry's `inputs` (path and git blob id), the overlay's
+uncommitted files that match (path and sha256), the keys of the artifacts it uses, and the pack-overlay recipe files it
+reads. `artifact::FIELDS` lists every field name an entry may have; `vordr::jobs` takes its allowed keys from it, so a
+field is added in one place. The order of lists and of table keys never matters; a list inside the entry (steps, argv)
+keeps its order. The role is not in the key: it only decides whose build a consumer may use (hub: `runners::artifacts`).
+
+## Rows (`row`)
+
+`Row { name, verdict, class, missing, excerpt }`. A verdict is `Pass < Skip < Fail`; `class` is the failure's kind
+(`error` for a JUnit `<error>`). `stage_verdict(rc)` maps an exit code to a stage's verdict: `0` pass, a number red, and
+`no-result` or an empty result infra.
+
+## Dialects (`dialect`)
+
+A dialect turns a set of row names into the argv items that select them: `libtest-exact`, `nextest` and
+`args:TEMPLATE` (resolved by `dialect::by_name`). There is no default: a job without a dialect cannot select rows, and a
+requeue runs it whole. `{rows}` must be a whole argv item; it is replaced by the selector's items.

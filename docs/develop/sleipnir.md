@@ -460,10 +460,16 @@ are the job slice's (`cpu.stat`, `memory.peak`).
 
 | Parser | Reads |
 |---|---|
-| `ert` | ERT's batch lines (`passed`, `FAILED`, `skipped`, `failed` for an expected failure, with `N/M`) and `Ran N tests`; `Running N tests` with no `Ran` line is one crash |
-| `cargo-test` | libtest's `test NAME ... ok / FAILED / ignored`; a test binary that died on a signal is a crash |
-| `plist` | one row per line, `(:name "NAME" :verdict pass\|fail\|skip\|crash …)` |
 | `exit` | no rows: the exit code decides |
+| `regex:PATTERN` | one row per match; the pattern's named groups `name` and `verdict` (`pass`, `fail`, `skip`, `crash`) |
+| `tap` | TAP's `ok` / `not ok` lines, `# SKIP` and `# TODO` directives; `Bail out!` is one anonymous crash, never a pass |
+| `junit` | JUnit XML (nextest, pytest, gotestsum, Gradle, CTest): the row is `classname::name`; `<failure>` fails, `<error>` is a failure of class `error`, `<skipped>` skips; `flakyFailure` and `rerunFailure` give no verdict, and a flaky pass keeps its excerpt |
+| `libtest` | libtest's `test NAME ... ok / FAILED / ignored`; a test binary that died on a signal is a crash |
+| `libtest-json` | libtest's JSON events (`--format json`); cargo's own lines are skipped |
+
+The parser is a name, never a default: a job without one has none. A row repeated inside one report keeps its worst
+verdict; the same row from two sources (`merge`) is an error. The fixtures are written in the tools' shapes
+(`parse/fixtures/`), not captured from a run.
 
 `judge(parsed, expect)`: a failed row is red, a crashed one a crash; fewer rows than `expect.min_ran`, or more skips
 than `expect.max_skipped`, is `suspect` (a set that silently ran nothing never passes), and the `exit` parser can't

@@ -1442,7 +1442,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no |
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
-| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", lane?: "work" \| "timing", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, needs?: [Id], network?: boolean, nice?: integer, no_timebox?: boolean, os?: "linux" \| "macos", priority?: natnum, rows?: {listed: [string], parser: string}, silent_s?: natnum, stall_s?: natnum, timebox_s?: natnum, whole_machine?: boolean, writes?: [string]}` | `{id: string, text: string}` | yes |
+| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", lane?: "work" \| "timing", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, needs?: [Id], network?: boolean, nice?: integer, no_timebox?: boolean, os?: "linux" \| "macos", priority?: natnum, rows?: {dialect?: string, listed: [string], parser: string}, silent_s?: natnum, stall_s?: natnum, timebox_s?: natnum, whole_machine?: boolean, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
@@ -4628,8 +4628,9 @@ verdict stands. When the rows came from more than one attempt the result carries
 words ("rows 1–212 on desktop (attempt 1), 213–240 on laptop (attempt 2)"), which the job layer puts first in the
 summary (the job folder's `split` file).
 
-`exec/start` takes the suite as `rows: {parser, listed}` (`StartParams.rows`, at most 20000 rows): the job's
-`Placement.suite`. A run on this machine runs once, whole: `{rows}` becomes the selector of every listed row.
+`exec/start` takes the suite as `rows: {parser, dialect?, listed}` (`StartParams.rows`, at most 20000 rows): the job's
+`Placement.suite`. A run on this machine runs once, whole: the argv item `{rows}` becomes the dialect's selector of every
+listed row.
 
 **Learned placement** (`forseti::learn`). A runner's `Pass` or `Red`, undisturbed and not a run of only some rows, is a
 history row (`rq_history`: key `forseti::history_key`, machine, wall, CPU, peak memory, verdict, time, and `warm` when
@@ -5584,3 +5585,19 @@ planning stopped: say it again", and a proposal it made stays a job with its car
 | `say/end` | user | true, or false for a session that is not a planning session |
 
 Events: `say-proposal {id, job, started}`, `say-message {id, text}` (agent-written), `say-failed {id, why}`.
+
+## The artifact index (`runners::artifacts`) and the job pack (`runners::jobpack`)
+
+`runtime.db` table `artifacts` (migration 14) has one row per `(key, role)`: kind (`image` or `command`), use, the runner
+that holds it, the job that builds it, `building` or `present`, size, last use and pins. The queue holds the index under
+its own lock, so `want` is lock-then-recheck: a consumer submitted with an artifact use gets `Present` (affinity: the
+runner that holds it lacks no bytes), `Building` (it needs that job) or `Create` (the queue makes the build job, from the
+use's `build` spec, and the consumer needs it). Two submits of one key make one job.
+
+- **Roles**: a gate consumer matches only gate rows; an author consumer prefers a gate build. An artifact job takes its
+  consumer's role.
+- **A build that fails or is cancelled** clears its `building` row and fails its consumers through `needs` as
+  `infra: artifact KIND KEY12 failed (job J)`. A restart clears a `building` row whose job is gone.
+- **The pack** (`jobpack::discover`): an author's run reads `.drgnx/jobs.toml` from the frozen tree, a gate from the
+  base commit; then the overlay. A job from the overlay (`Placement::pack_overlay`) is held off every runner that is not
+  `mine`: "its overlay stays on your own runners". `jobpack::key_inputs` assembles an entry's key inputs.

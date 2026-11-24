@@ -310,6 +310,7 @@ fn job(id: &str, script: &str, keys: &[&str], image: &str) -> Submit {
         local_only: false,
         writes: vec![],
         derived: Default::default(),
+        artifacts: vec![],
         os: Default::default(),
     };
     Submit {

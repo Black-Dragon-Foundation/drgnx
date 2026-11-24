@@ -17,10 +17,12 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub mod artifacts;
 pub mod attempts;
 pub mod cloud;
 pub mod disk;
 pub mod health;
+pub mod jobpack;
 pub mod keys;
 pub mod link;
 pub mod local;

@@ -8,6 +8,7 @@
 //! writes why it waits. A runner's frames come back through [`Queue::on_link`]; its verdicts, losses and late results
 //! go to the job layer as [`Outcome`]s.
 
+use super::artifacts::{self, ArtifactIndex};
 use super::attempts::{self, Effect, Event as AEvent, Listed, Rows};
 use super::health::{self, Facts, StrikeCtx, Strikes};
 use super::keys::{self, Keys};
@@ -167,18 +168,47 @@ pub struct Placement {
     /// none: it is in one, `JobSpec.project`. A runner never takes such a job: it runs here, or waits as
     /// [`WaitReason::NotRegistered`].
     pub unregistered: Option<String>,
+    /// The job reads the pack overlay's files (`jobs-overlay`): they stay on the user's own runners, so only a `mine`
+    /// runner takes it (`its overlay stays on your own runners`).
+    pub pack_overlay: bool,
 }
 
-/// What a command takes in place of the selector of the rows an attempt runs (`forseti::split::selector`, an Emacs
-/// regexp read from a string: `^\(a\|b\)$`).
+/// The argv item that stands for the selector of the rows an attempt runs: the whole item is replaced by the dialect's
+/// items (`forseti::dialect`), never text inside an item, so a row name is never read by a shell.
 pub const ROWS: &str = "{rows}";
 
-/// A test job whose suite supports row selection: the row parser that reads its log (`ert`, `cargo-test`, `plist`),
-/// and its rows in listing order. Its command holds [`ROWS`] where the selector goes.
+/// A test job whose suite supports row selection: the row parser that reads its log (`forseti`'s registry names:
+/// `libtest`, `junit`, `tap`, …), the selector dialect that renders a selection (none: it cannot select rows), and its
+/// rows in listing order. Its command holds [`ROWS`] as one item where the selector goes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Suite {
     pub parser: String,
+    #[serde(default)]
+    pub dialect: Option<String>,
     pub listed: Vec<String>,
+}
+
+impl Suite {
+    /// COMMAND with [`ROWS`] replaced by the selector of ROWS' names (every listed row on a first attempt).
+    pub fn expand(
+        &self,
+        command: &[String],
+        rows: &[String],
+    ) -> villa::Result<(Vec<String>, String)> {
+        let Some(name) = self.dialect.as_deref() else {
+            return Err(villa::Error::invalid("the suite names no selector dialect"));
+        };
+        let items = forseti::dialect::by_name(name)?.selector(rows)?;
+        let mut out = Vec::with_capacity(command.len() + items.len());
+        for a in command {
+            if a == ROWS {
+                out.extend(items.iter().cloned());
+            } else {
+                out.push(a.clone());
+            }
+        }
+        Ok((out, items.join(" ")))
+    }
 }
 
 impl Default for Placement {
@@ -206,6 +236,7 @@ impl Default for Placement {
             needs: vec![],
             lane: forseti::Lane::Work,
             unregistered: None,
+            pack_overlay: false,
         }
     }
 }
@@ -259,6 +290,7 @@ pub fn blank_spec(name: &str) -> JobSpec {
         local_only: false,
         writes: vec![],
         derived: Default::default(),
+        artifacts: vec![],
     }
 }
 
@@ -579,6 +611,8 @@ struct St {
     drain_off: BTreeMap<String, u64>,
     drain_gave_up: BTreeSet<String>,
     drain_evicted: BTreeSet<String>,
+    /// The artifacts that exist or are being built (`artifacts`, migration 14).
+    artifacts: ArtifactIndex,
 }
 
 impl St {
@@ -612,6 +646,16 @@ impl St {
             return;
         }
         self.ended_seq += 1;
+        // an artifact job that passed is present where it ran; any other end clears its build
+        self.artifacts.job_ended(
+            &JobId(id.to_string()),
+            matches!(
+                verdict,
+                forseti::Verdict::Pass | forseti::Verdict::Cached(_)
+            ),
+            0,
+            crate::clock::wall_secs() as u64,
+        );
         self.ended.insert(id.to_string(), (self.ended_seq, verdict));
         while self.ended.len() > ENDED_KEPT {
             let Some(oldest) = self
@@ -670,21 +714,24 @@ pub fn attempt_spec(spec: &JobSpec, suite: Option<&Suite>, rows: Option<&Rows>) 
         return out;
     };
     let done = rows.map(Rows::done).unwrap_or_default();
-    let sel = forseti::split::selector(&forseti::split::remaining_rows(&suite.listed, &done));
-    for a in &mut out.command {
-        *a = a.replace(ROWS, &sel);
-    }
-    out.select = Some(sel);
+    let remaining = forseti::split::remaining_rows(&suite.listed, &done);
+    // a name no dialect can render was refused at submit; if one gets here the job runs as it is
+    let Ok((command, select)) = suite.expand(&spec.command, &remaining) else {
+        return out;
+    };
+    out.command = command;
+    out.select = Some(select);
     out
 }
 
-/// Whether a job's suite supports row selection: a parser that reads rows, listed rows, and a command that takes the
-/// selector.
+/// Whether a job's suite supports row selection: a parser that reads rows, a dialect that renders the selection, listed
+/// rows, and a command with [`ROWS`] as one item.
 pub fn selects_rows(spec: &JobSpec, suite: Option<&Suite>) -> bool {
     suite.is_some_and(|s| {
         !matches!(s.parser.as_str(), "" | "exit")
+            && s.dialect.is_some()
             && !s.listed.is_empty()
-            && spec.command.iter().any(|a| a.contains(ROWS))
+            && spec.command.iter().any(|a| a == ROWS)
     })
 }
 
@@ -753,9 +800,11 @@ pub struct Kept {
     pub history: Vec<HistRow>,
     /// The machine the user moved each recorded session's next jobs to (`asession.machine`): (session, machine).
     pub prefs: Vec<(String, String)>,
+    /// The artifact index's rows (`artifacts`).
+    pub artifacts: Vec<artifacts::Row>,
 }
 
-/// What `rq_rows` and `rq_history` hold.
+/// What `rq_rows`, `rq_history` and `artifacts` hold.
 pub async fn kept(db: &urdr::Handle) -> Kept {
     let rows = db
         .read(|c| {
@@ -835,10 +884,72 @@ pub async fn kept(db: &urdr::Handle) -> Kept {
             tracing::warn!("runners: the sessions' machines in runtime.db: {e}");
             vec![]
         });
+    let artifacts = db
+        .read(|c| {
+            let mut st = c.prepare(
+                "select key, role, project, kind, use_, route, runner, job, state, size, made, last_used, pins \
+                 from artifacts",
+            )?;
+            let rows = st
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, Option<String>>(6)?,
+                        r.get::<_, Option<String>>(7)?,
+                        r.get::<_, String>(8)?,
+                        r.get::<_, i64>(9)?,
+                        r.get::<_, i64>(10)?,
+                        r.get::<_, i64>(11)?,
+                        r.get::<_, String>(12)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("runners: the artifacts in runtime.db: {e}");
+            vec![]
+        })
+        .into_iter()
+        .filter_map(
+            |(key, role, project, kind, use_, route, runner, job, state, size, made, used, pins)| {
+                Some(artifacts::Row {
+                    key: forseti::ArtifactKey(key),
+                    role: match role.as_str() {
+                        "gate" => forseti::Role::Gate,
+                        "author" => forseti::Role::Author,
+                        _ => return None,
+                    },
+                    project: forseti::ProjectId(project),
+                    kind,
+                    use_,
+                    route,
+                    runner,
+                    job: job.map(JobId),
+                    state: artifacts::State::from_name(&state)?,
+                    size: size.max(0) as u64,
+                    made: made.max(0) as u64,
+                    last_used: used.max(0) as u64,
+                    pins: pins
+                        .split('\n')
+                        .filter(|p| !p.is_empty())
+                        .map(String::from)
+                        .collect(),
+                })
+            },
+        )
+        .collect();
     Kept {
         rows,
         history,
         prefs,
+        artifacts,
     }
 }
 
@@ -1671,18 +1782,17 @@ impl Queue {
             },
             a.runner.clone(),
         );
-        let Ok(parser) = serde_json::from_value::<parse::Parser>(Value::String(parser.into()))
-        else {
+        let Ok(parser) = parse::Parser::from_name(parser) else {
             return;
         };
         let mut log = std::fs::read(path).unwrap_or_default();
         log.truncate(log.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1));
-        for (name, v) in parse::parse(parser, &log).rows {
-            let verdict = serde_json::to_value(v)
+        for row in parse::parse(&parser, &log).rows {
+            let verdict = serde_json::to_value(parse::RowVerdict::of(&row))
                 .ok()
                 .and_then(|v| v.as_str().map(String::from))
                 .unwrap_or_default();
-            self.record_row(st, &r, &name, &verdict, &runner);
+            self.record_row(st, &r, &row.name, &verdict, &runner);
         }
     }
 
@@ -1729,6 +1839,11 @@ impl Queue {
         for (sid, machine) in k.prefs {
             st.prefs.insert(sid, Machine::parse(Some(&machine)));
         }
+        // a build whose job did not come back with the hub is cleared; one whose job did keeps its row
+        let live: Vec<JobId> = st.jobs.keys().map(|k| JobId(k.clone())).collect();
+        st.artifacts = ArtifactIndex::load(k.artifacts);
+        st.artifacts.restore(&live);
+        self.flush_artifacts(&mut st);
     }
 
     /// The cores job ID was granted here, while it runs here.
@@ -1839,9 +1954,89 @@ impl Queue {
             s.spec.derived.tree_bucket = Some(forseti::tree_bucket(f.tree_bytes));
             self.put_input(f, now);
         }
+        // each artifact the job uses: present, building (the job needs that job) or to make (a job of its own, which the
+        // job needs): looked up and claimed in one step under the queue's lock, so two consumers of one key make one job
+        let mut builds: Vec<Submit> = vec![];
+        {
+            let mut st = self.lock();
+            for u in s.spec.artifacts.clone() {
+                match st
+                    .artifacts
+                    .want(&u.key, &s.spec.project, s.spec.role, &u.kind, &u.use_, now)
+                {
+                    artifacts::Want::Present { .. } => {}
+                    artifacts::Want::Building { job } => s.spec.needs.push(job),
+                    artifacts::Want::Create { job } => {
+                        s.spec.needs.push(job.clone());
+                        match u.build {
+                            Some(b) => {
+                                let mut spec = *b;
+                                spec.role = s.spec.role;
+                                spec.name = job.0.clone();
+                                builds.push(Submit {
+                                    id: job.0.clone(),
+                                    session: s.session.clone(),
+                                    own: s.own,
+                                    spec,
+                                    place: s.place.clone(),
+                                    pending: Value::Null,
+                                    inputs: s.inputs.clone(),
+                                });
+                            }
+                            // nothing says how to build it: the consumer ends as infra, naming the artifact
+                            None => st.ended(&job.0, forseti::Verdict::Cancelled),
+                        }
+                    }
+                }
+            }
+            self.flush_artifacts(&mut st);
+        }
         let j = QJob::new(s, now, QState::Queued, 0);
         self.put_job(&j, j.s.own);
         self.lock().jobs.insert(j.s.id.clone(), j);
+        for b in builds {
+            self.enter(b, now);
+        }
+    }
+
+    /// Writes what the artifact index changed to `runtime.db`.
+    fn flush_artifacts(&self, st: &mut St) {
+        for change in st.artifacts.take_changes() {
+            self.persist(Box::new(move |c| {
+                match change {
+                    artifacts::Change::Put(r) => {
+                        let pins: Vec<&str> = r.pins.iter().map(String::as_str).collect();
+                        c.execute(
+                            "insert or replace into artifacts(key, role, project, kind, use_, route, runner, job, \
+                             state, size, made, last_used, pins) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
+                             ?11, ?12, ?13)",
+                            (
+                                r.key.0,
+                                r.role.name(),
+                                r.project.0,
+                                r.kind,
+                                r.use_,
+                                r.route,
+                                r.runner,
+                                r.job.map(|j| j.0),
+                                r.state.name(),
+                                r.size as i64,
+                                r.made as i64,
+                                r.last_used as i64,
+                                pins.join("\n"),
+                            ),
+                        )?;
+                    }
+                    artifacts::Change::Delete(key, role) => {
+                        c.execute(
+                            "delete from artifacts where key = ?1 and role = ?2",
+                            (key.0, role.name()),
+                        )?;
+                    }
+                }
+                Ok(())
+            }));
+        }
     }
 
     /// Wakes the queue's tick: a job may wait.
@@ -2231,6 +2426,8 @@ impl Queue {
         let mut t = Ticked::default();
         // what the jobs here use now, from their slices: admission's budget and eviction read it
         self.count_local_use(&mut st);
+        // what the jobs that ended since the last tick did to the artifact index
+        self.flush_artifacts(&mut st);
         for (job, attempt) in st.attempts.graces_due(now) {
             let effects = st.attempts.step(
                 now,
@@ -2260,7 +2457,11 @@ impl Queue {
             }
         }
         for (id, attempt, need) in failed {
-            let verdict = forseti::Verdict::Infra(format!("needed job {need} failed"));
+            // a consumer of an artifact that did not build names the artifact, as well as the job
+            let verdict = forseti::Verdict::Infra(match st.artifacts.of_job(&need) {
+                Some((kind, key)) => artifacts::failure_text(&kind, &key, &need),
+                None => format!("needed job {need} failed"),
+            });
             st.jobs.remove(&id);
             st.attempts.forget(&id);
             st.ended(&id, verdict.clone());
@@ -2590,7 +2791,8 @@ impl Queue {
             state: RunnerState::Ready,
             accept: Accept::All,
             link_bps: None,
-            missing_bytes: 0,
+            // an artifact built on a runner is bytes this machine lacks
+            missing_bytes: artifact_gap(st, job, LOCAL),
             start_s: 0.0,
             wait_s: 0.0,
             speed: 1.0,
@@ -2610,6 +2812,15 @@ impl Queue {
                 held_off.get_or_insert_with(|| why.clone());
                 continue;
             }
+            // the pack overlay's files go to the user's own runners only, never to a cloud machine or a shared one
+            if q.s.place.pack_overlay && r.r.trust != RunnerTrust::Mine {
+                held_off.get_or_insert_with(|| {
+                    wait_text(&WaitReason::Trust(
+                        "its overlay stays on your own runners".into(),
+                    ))
+                });
+                continue;
+            }
             if fit
                 && let Some(rd) = &r.ready
                 && !fits(&need, &rd.budget)
@@ -2623,7 +2834,7 @@ impl Queue {
             let missing_bytes = match &q.s.inputs {
                 Some(f) if !r.synced.contains(&f.input_key) => overlay_bytes(f),
                 _ => 0,
-            };
+            } + artifact_gap(st, job, name);
             cands.push(Candidate {
                 name: name.clone(),
                 local: false,
@@ -2783,6 +2994,7 @@ impl Queue {
                     at: Some(now),
                     small: forseti::admit::small(&st.expected_on(&job.spec, LOCAL)),
                 };
+                st.artifacts.running_on(&JobId(id.clone()), LOCAL);
                 self.put_job(&j, eff);
                 starts.push(id);
             }
@@ -2884,6 +3096,7 @@ impl Queue {
         q.machine = Some(name.into());
         q.waiting = None;
         let j = q.clone();
+        st.artifacts.running_on(&JobId(id.clone()), name);
         st.attempts.step(
             now,
             AEvent::Placed {
@@ -4240,6 +4453,17 @@ fn fits(need: &forseti::Need, b: &forseti::Budget) -> bool {
     b.mem_mib >= need.mem_mib as i64 && b.cpu >= need.cpu
 }
 
+/// The bytes of the artifacts JOB uses that are present on a runner other than ON: what ON lacks for them.
+fn artifact_gap(st: &St, job: &Job, on: &str) -> u64 {
+    job.spec
+        .artifacts
+        .iter()
+        .filter_map(|a| st.artifacts.present_on(&a.key))
+        .filter(|(runner, _)| runner != on)
+        .map(|(_, size)| size)
+        .sum()
+}
+
 /// The bytes of F's overlay and extras: what a runner that never synced these inputs lacks at least.
 fn overlay_bytes(f: &Frozen) -> u64 {
     f.manifest
@@ -4425,33 +4649,42 @@ mod tests {
     #[test]
     fn a_requeue_runs_only_the_rows_without_a_result() {
         let mut spec = blank_spec("x1");
-        spec.command = vec!["sh".into(), "-c".into(), format!("run '{ROWS}'")];
+        spec.command = vec!["run".into(), ROWS.into()];
         let listed: Vec<String> = (1..=5).map(|i| format!("t{i}")).collect();
         let suite = Suite {
-            parser: "plist".into(),
+            parser: "libtest".into(),
+            dialect: Some("libtest-exact".into()),
             listed: listed.clone(),
         };
-        let all = forseti::split::selector(&listed);
         let first = attempt_spec(&spec, Some(&suite), None);
-        assert_eq!(first.command[2], format!("run '{all}'"));
-        assert_eq!(first.select.as_deref(), Some(all.as_str()));
+        assert_eq!(
+            first.command,
+            ["run", "--exact", "t1", "t2", "t3", "t4", "t5"]
+        );
+        assert_eq!(first.select.as_deref(), Some("--exact t1 t2 t3 t4 t5"));
         let mut rows = Rows::default();
         rows.record(1, "t1", "pass", "desktop");
         rows.record(1, "t3", "fail", "desktop");
-        let rest = forseti::split::selector(&["t2".into(), "t4".into(), "t5".into()]);
         let second = attempt_spec(&spec, Some(&suite), Some(&rows));
-        assert_eq!(second.command[2], format!("run '{rest}'"));
-        assert_eq!(second.select.as_deref(), Some(rest.as_str()));
-        // the whole job again, as it is: no place for the selector, a parser that reads no rows, or no suite
+        assert_eq!(second.command, ["run", "--exact", "t2", "t4", "t5"]);
+        assert_eq!(second.select.as_deref(), Some("--exact t2 t4 t5"));
+        // the whole job again, as it is: no place for the selector (a placeholder inside an item is no place), a parser
+        // that reads no rows, no dialect, or no suite
         let mut no_place = spec.clone();
-        no_place.command[2] = "run all".into();
+        no_place.command[1] = format!("all-{ROWS}");
         let exit = Suite {
             parser: "exit".into(),
-            listed,
+            dialect: Some("libtest-exact".into()),
+            listed: listed.clone(),
+        };
+        let no_dialect = Suite {
+            dialect: None,
+            ..suite.clone()
         };
         for (s, su) in [
             (&no_place, Some(&suite)),
             (&spec, Some(&exit)),
+            (&spec, Some(&no_dialect)),
             (&spec, None),
         ] {
             assert!(!selects_rows(s, su));
@@ -4525,7 +4758,8 @@ mod tests {
                     place: Placement {
                         heavy: true,
                         suite: Some(Suite {
-                            parser: "plist".into(),
+                            parser: "libtest".into(),
+                            dialect: Some("libtest-exact".into()),
                             listed,
                         }),
                         ..Placement::default()
@@ -4539,7 +4773,7 @@ mod tests {
             assert_eq!(q.row("x1").and_then(|r| r.machine), Some("r1".into()));
             // every listed row reached the hub's copy before the link was lost
             std::fs::create_dir_all(dir.path().join("x1")).unwrap();
-            let rows = "(:name \"t1\" :verdict pass)\n(:name \"t2\" :verdict skip)\n(:name \"t3\" :verdict pass)\n";
+            let rows = "test t1 ... ok\ntest t2 ... ignored\ntest t3 ... ok\n";
             crate::fsio::write(dir.path().join("x1/log"), rows).unwrap();
             let out = q.on_link(
                 LinkEvent::Lost {
@@ -5699,6 +5933,7 @@ mod tests {
             extras: vec![],
             input_key: key.into(),
             blobs: PathBuf::from("/nonexistent"),
+            pack_overlay: vec![],
             origin_url: None,
             not_on_origin: 0,
             visibility: sync::Visibility::Private,

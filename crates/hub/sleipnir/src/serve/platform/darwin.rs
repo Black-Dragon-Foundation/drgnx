@@ -205,13 +205,8 @@ impl Platform for DarwinPlatform {
                     .map_err(|e| villa::Error::unavailable(format!("the job's proxy port: {e}")))?,
             )
         };
-        let parser: Parser =
-            serde_json::from_value(serde_json::Value::String(if req.parser.is_empty() {
-                "exit".into()
-            } else {
-                req.parser.to_string()
-            }))
-            .map_err(|_| villa::Error::unavailable(format!("no row parser {:?}", req.parser)))?;
+        let parser =
+            Parser::from_name(req.parser).map_err(|e| villa::Error::unavailable(e.message()))?;
         let (home, tmp) = sandbox::home_tmp(dir);
         for d in [&home, &tmp] {
             fs::create_dir_all(d)

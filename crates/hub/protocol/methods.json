@@ -18656,8 +18656,16 @@
           },
           "RowsParam": {
             "additionalProperties": false,
-            "description": "`exec/start`'s `rows`: the parser that reads the rows from the job's log, and the rows in listing order.",
+            "description": "`exec/start`'s `rows`: the parser that reads the rows from the job's log, the dialect that renders a selection, and\nthe rows in listing order.",
             "properties": {
+              "dialect": {
+                "description": "The selector dialect (`libtest-exact`, `nextest`, `args:TEMPLATE`); none: the job cannot select rows, and a\nrequeue runs it whole.",
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "listed": {
                 "description": "The rows' names (at most 20000, each at most 512 characters).",
                 "items": {
@@ -18668,8 +18676,8 @@
                 "type": "array"
               },
               "parser": {
-                "description": "`ert`, `cargo-test` or `plist`.",
-                "maxLength": 16,
+                "description": "One of `exit`, `regex:PATTERN`, `tap`, `junit`, `libtest`, `libtest-json`.",
+                "maxLength": 256,
                 "type": "string"
               }
             },
@@ -18868,7 +18876,7 @@
                 "type": "null"
               }
             ],
-            "description": "A test job whose suite selects rows: its argv holds `{rows}` where the selector of the rows to run goes (an\nEmacs regexp of the names). Every row runs at first; a job a lost runner sends back runs only the rows that have\nno result yet."
+            "description": "A test job whose suite selects rows: one argv item is exactly `{rows}`, and the selector's items (the dialect's\nsyntax) take its place. Every row runs at first; a job a lost runner sends back runs only the rows that have no\nresult yet."
           },
           "silent_s": {
             "description": "The progress guard's silent limit: seconds with no output, whatever the CPU, before the job ends\n`infra: stuck (silent)` (1 to 86400; default 2700).",

@@ -9,7 +9,7 @@
 //! killed the job (written before the kill; `evicted` for an eviction), `disturbed` when the scheduler paused or
 //! evicted it (its red is then `Suspect`), and `result.json`.
 
-use super::parse::{self, Parser, RowVerdict};
+use super::parse::{self, Parser};
 use super::podman::DEADLINE_ENV;
 use super::probe::CgroupStat;
 use super::progress::{self, GuardLimits, Tracker};
@@ -483,7 +483,7 @@ fn judge_run(
     after: &CgroupStat,
     wall: Duration,
 ) -> ResultJson {
-    let parsed = parse::parse(spec.parser, &read_log(&spec.log));
+    let parsed = parse::parse(&spec.parser, &read_log(&spec.log));
     let reason = read_kill_reason(dir);
     // a key that never came is the runner's failure, known from the helper's record, never from the exit code alone
     let key_missed = dir.join(KEY_TIMEOUT).exists();
@@ -522,23 +522,13 @@ fn judge_run(
     let rows: Vec<RowResult> = parsed
         .rows
         .iter()
-        .map(|(name, v)| RowResult {
-            name: name.clone(),
-            verdict: *v,
-            attempt: spec.attempt,
-            machine: spec.machine.clone(),
-        })
+        .map(|r| RowResult::of(r, spec.attempt, &spec.machine))
         .collect();
     ResultJson {
         verdict,
         infra,
         counts: parsed.counts,
-        failing: parsed
-            .rows
-            .iter()
-            .filter(|(_, v)| matches!(v, RowVerdict::Fail | RowVerdict::Crash))
-            .map(|(n, _)| n.clone())
-            .collect(),
+        failing: parsed.failing(),
         rows,
         machine: spec.machine.clone(),
         grant: spec.grant,
@@ -567,7 +557,7 @@ mod tests {
             log: log.to_path_buf(),
             state_logs: vec![],
             keyed: false,
-            parser: Parser::CargoTest,
+            parser: Parser::Libtest,
             expect: Expect::default(),
             grant: Grant {
                 cores: 1,

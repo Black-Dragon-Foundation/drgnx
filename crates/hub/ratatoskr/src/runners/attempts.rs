@@ -717,7 +717,6 @@ pub fn union_result(latest: &Value, rows: &Rows, expect: &forseti::Expect) -> Va
         listed.push(
             json!({"name": name, "verdict": r.verdict, "attempt": r.attempt, "machine": r.machine}),
         );
-        p.rows.push((name, v));
     }
     let mut out = latest.clone();
     let Some(o) = out.as_object_mut() else {

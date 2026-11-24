@@ -490,6 +490,7 @@ impl Drill {
             local_only: false,
             writes: vec![],
             derived: Default::default(),
+            artifacts: vec![],
             os: Default::default(),
         };
         Submit {

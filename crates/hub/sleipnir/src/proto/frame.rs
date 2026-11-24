@@ -440,7 +440,8 @@ pub enum Frame {
         /// `drgnx-sandbox-proxy-pinned-addresses`); an older hub sends none.
         #[serde(default)]
         pins: Vec<(String, std::net::IpAddr)>,
-        /// The row parser (`ert`, `cargo-test`, `plist`, `exit`).
+        /// The row parser (`sleipnir::linux::parse::PARSERS`: `exit`, `regex:PATTERN`, `tap`, `junit`, `libtest`,
+        /// `libtest-json`).
         #[serde(default)]
         parser: String,
     },

@@ -529,13 +529,14 @@ impl ExecSpec {
             .collect();
         // a test job whose parser counts rows passes only if it ran some: a run of 0 tests (a selector that matched
         // nothing) proves nothing
-        if self
-            .place
-            .suite
-            .as_ref()
-            .is_some_and(|x| matches!(x.parser.as_str(), "ert" | "cargo-test"))
-        {
-            s.expect.min_ran = Some(1);
+        if let Some(x) = &self.place.suite {
+            if !matches!(x.parser.as_str(), "" | "exit") {
+                s.expect.min_ran = Some(1);
+            }
+            s.derived.dialect = x
+                .dialect
+                .as_deref()
+                .map(|d| d.split_once(':').map_or(d, |(n, _)| n).to_string());
         }
         s
     }
@@ -3324,6 +3325,7 @@ async fn placement(
             .collect(),
         lane: lane_of(p)?,
         unregistered: None,
+        pack_overlay: false,
     })
 }
 
@@ -3383,18 +3385,19 @@ fn pinned_host(hosts: &[String], pins: &[(String, std::net::IpAddr)]) -> Option<
 fn suite_of(p: &StartParams) -> Option<queue::Suite> {
     p.rows.as_ref().map(|r| queue::Suite {
         parser: r.parser.to_string(),
+        dialect: r.dialect.as_ref().map(|d| d.to_string()),
         listed: r.listed.iter().map(|l| l.to_string()).collect(),
     })
 }
 
 /// ARGV as a run on this machine takes it: [`queue::ROWS`] becomes the selector of every row of SUITE (a job here
-/// runs once, whole).
+/// runs once, whole). A suite with no dialect, or a name its dialect refuses, leaves ARGV as it is.
 fn local_argv(argv: &[String], suite: Option<&queue::Suite>) -> Vec<String> {
     let Some(s) = suite else {
         return argv.to_vec();
     };
-    let all = forseti::split::selector(&s.listed);
-    argv.iter().map(|a| a.replace(queue::ROWS, &all)).collect()
+    s.expand(argv, &s.listed)
+        .map_or_else(|_| argv.to_vec(), |(argv, _)| argv)
 }
 
 /// The keys REQUESTED by name, when each is on the project's `drgnx-runners-job-keys` list and, for a session's job,

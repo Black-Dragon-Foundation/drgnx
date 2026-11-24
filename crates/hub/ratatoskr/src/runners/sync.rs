@@ -201,6 +201,11 @@ pub struct Frozen {
     /// (`forseti::tree_bucket`).
     #[serde(default)]
     pub tree_bytes: u64,
+    /// The pack overlay's files (the project's `jobs-overlay` folder, `jobs.toml` and recipe files), frozen as an input
+    /// tree beside the overlay. They are never committed, never in the mirror, a bundle or a push, and only a `mine`
+    /// runner gets them ([`pack_overlay_for`]); they enter every artifact key that reads them.
+    #[serde(default)]
+    pub pack_overlay: Vec<ManifestEntry>,
 }
 
 /// The bytes of the blobs of TREE in the repository of GIT (`git ls-tree -r -l`).
@@ -305,7 +310,126 @@ pub fn freeze(
         not_on_origin,
         visibility,
         shared_overlay,
+        pack_overlay: vec![],
     })
+}
+
+/// The most files a pack overlay holds, and the most bytes of one.
+const OVERLAY_FILES: usize = 256;
+const OVERLAY_FILE_BYTES: u64 = 4 << 20;
+
+/// The files under DIR (the project's `jobs-overlay` folder) frozen into the blob store BLOBS: regular files only (a
+/// link, a socket or a device is refused), sorted by their path under DIR.
+pub fn freeze_pack_overlay(dir: &Path, blobs: &Path) -> villa::Result<Vec<ManifestEntry>> {
+    let store = sleipnir::sync::blobs::Store::open(blobs).map_err(|e| {
+        villa::Error::invalid(format!("the hub's blob store {}: {e}", blobs.display()))
+    })?;
+    let mut out = vec![];
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        let read = std::fs::read_dir(&d)
+            .map_err(|e| villa::Error::io(format!("the overlay folder {}: {e}", d.display())))?;
+        for e in read {
+            let e = e.map_err(|e| villa::Error::io(format!("{}: {e}", d.display())))?;
+            let path = e.path();
+            let meta = std::fs::symlink_metadata(&path)
+                .map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
+            if meta.is_dir() {
+                todo.push(path);
+                continue;
+            }
+            if !meta.is_file() {
+                return Err(villa::Error::invalid(format!(
+                    "{}: the pack overlay holds regular files only",
+                    path.display()
+                )));
+            }
+            if meta.len() > OVERLAY_FILE_BYTES || out.len() >= OVERLAY_FILES {
+                return Err(villa::Error::invalid(format!(
+                    "{}: the pack overlay holds at most {OVERLAY_FILES} files of {} MiB",
+                    path.display(),
+                    OVERLAY_FILE_BYTES >> 20
+                )));
+            }
+            let bytes = std::fs::read(&path)
+                .map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
+            let sha: [u8; 32] = sha2::Sha256::digest(&bytes).into();
+            store
+                .put(&sha, &bytes)
+                .map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
+            let rel = path.strip_prefix(dir).unwrap_or(&path);
+            out.push(ManifestEntry::File {
+                path: rel.as_os_str().as_bytes().to_vec(),
+                mode: 0o644,
+                sha256: Sha256(sha),
+                size: bytes.len() as u64,
+            });
+        }
+    }
+    out.sort_by(|a, b| entry_path(a).cmp(entry_path(b)));
+    Ok(out)
+}
+
+fn entry_path(e: &ManifestEntry) -> &[u8] {
+    match e {
+        ManifestEntry::File { path, .. } | ManifestEntry::Deleted { path } => path,
+    }
+}
+
+/// What of JOB's pack overlay a runner of trust RUNNER gets: all of it on a `mine` runner, and never anything on a
+/// `my-cloud` or `shared` one: the job waits as `its overlay stays on your own runners`.
+pub fn pack_overlay_for(job: &Frozen, runner: RunnerTrust) -> villa::Result<Vec<ManifestEntry>> {
+    if job.pack_overlay.is_empty() || runner == RunnerTrust::Mine {
+        return Ok(job.pack_overlay.clone());
+    }
+    Err(villa::Error::refused(
+        "its overlay stays on your own runners",
+    ))
+}
+
+/// The files of TREE as `(path, blob id)`, from `git ls-tree -r`: what an artifact's `inputs` globs are matched on.
+pub fn tree_listing(top: &Path, tree: &str) -> villa::Result<Vec<(String, String)>> {
+    if !oid(tree) {
+        return Err(villa::Error::invalid(format!(
+            "{tree:?} is not an object id"
+        )));
+    }
+    let out = git_out(
+        &user_git(top)?,
+        "list the tree",
+        &["ls-tree", "-r", "-z", "--full-tree", tree],
+    )?;
+    Ok(out
+        .split(|b| *b == 0)
+        .filter_map(|rec| {
+            // `<mode> <type> <object>\t<path>`; a submodule is a `commit`, not a blob
+            let rec = String::from_utf8_lossy(rec);
+            let (meta, path) = rec.split_once('\t')?;
+            let mut w = meta.split(' ');
+            let (_mode, kind, id) = (w.next()?, w.next()?, w.next()?);
+            (kind == "blob").then(|| (path.to_string(), id.to_string()))
+        })
+        .collect())
+}
+
+/// The text of PATH at COMMIT (`git show COMMIT:PATH`), or none when the commit has no such file.
+pub fn show_file(top: &Path, commit: &str, path: &str) -> villa::Result<Option<String>> {
+    if !oid(commit) {
+        return Err(villa::Error::invalid(format!(
+            "{commit:?} is not an object id"
+        )));
+    }
+    let git = user_git(top)?;
+    let spec = format!("{commit}:{path}");
+    let exists = draugr::run(git.cmd(["cat-file", "-e", &spec]), GIT_LIMIT)
+        .map_err(|e| villa::Error::invalid(format!("git (look for {path}): {e}")))?;
+    if !exists.status.success() {
+        return Ok(None);
+    }
+    let bytes = git_out(&git, "read the file", &["show", &spec])?;
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| villa::Error::invalid(format!("{path} is not text")))
 }
 
 /// A capture entry as the protocol carries it.
@@ -741,6 +865,7 @@ mod tests {
             extras: vec![],
             input_key: "k".into(),
             blobs: PathBuf::from("/blobs"),
+            pack_overlay: vec![],
             origin_url: Some("https://example.invalid/p.git".into()),
             not_on_origin,
             visibility,
