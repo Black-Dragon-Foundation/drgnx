@@ -108,7 +108,8 @@ fn exec_gives_the_key_to_the_command_and_keeps_the_rest_of_its_environment() {
             "-c",
             "printf '%s|%s' \"$VAR\" \"$KEEP\"",
         ],
-        &[("KEEP", OsStr::new("kept"))],
+        // VAR is already set: the key replaces it, it is never listed twice
+        &[("KEEP", OsStr::new("kept")), ("VAR", OsStr::new("old"))],
     );
     assert_eq!(out.status.code(), Some(0), "{}", out.stderr);
     assert_eq!(String::from_utf8(out.stdout).unwrap(), "abc|kept");
