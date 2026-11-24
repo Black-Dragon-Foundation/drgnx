@@ -62,6 +62,12 @@ pub fn open_existing(path: impl AsRef<Path>) -> io::Result<std::fs::File> {
     eitri::open_existing(path.as_ref()).map_err(io_error)
 }
 
+/// The regular file at PATH, open for reading and kept open (a kernel file read again and again at offset 0); a link
+/// at PATH is refused.
+pub fn open_read(path: impl AsRef<Path>) -> io::Result<std::fs::File> {
+    eitri::open_read(path.as_ref()).map_err(io_error)
+}
+
 /// A new file at PATH (mode MODE exactly), open for writing; `AlreadyExists` when the name is taken.
 pub fn create_new(path: impl AsRef<Path>, mode: u32) -> io::Result<std::fs::File> {
     if !eitri::create_new(path.as_ref(), mode).map_err(io_error)? {

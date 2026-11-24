@@ -638,6 +638,27 @@ impl Platform for LinuxPlatform {
     fn io_device_mbps(&self) -> Option<f64> {
         self.io_device_mbps
     }
+
+    fn telemetry_source(
+        &self,
+    ) -> Option<(
+        crate::serve::telemetry::Roots,
+        Option<Box<dyn crate::serve::telemetry::GpuReader>>,
+    )> {
+        let roots = crate::serve::telemetry::Roots {
+            proc: self.probe.proc_root.clone(),
+            cgroup: self.probe.manager.clone(),
+            folder: self.root.clone(),
+        };
+        let gpu = crate::serve::telemetry::SysfsGpu::find(&self.probe.sys_root)
+            .map(|g| Box::new(g) as Box<dyn crate::serve::telemetry::GpuReader>);
+        Some((roots, gpu))
+    }
+
+    fn job_cgroup(&self, id: &str) -> Option<std::path::PathBuf> {
+        let slice = self.slice_of(id).ok()?;
+        Some(self.probe.slice_dir(&slice))
+    }
 }
 
 /// The file system type and source of the mount FOLDER is on, from MOUNTINFO (`/proc/self/mountinfo`): the longest

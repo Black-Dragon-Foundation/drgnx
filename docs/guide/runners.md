@@ -42,6 +42,29 @@ See and steer it from a terminal:
 A folder in the runner's folder that drgnx didn't make or record is listed and kept. On a btrfs disk `runner disk`
 also shows the unallocated space, since the free space it reports may not all be usable.
 
+## Watching a runner
+
+Every runner samples itself: its CPU, memory, pressure, disk and network, and each running job's CPU, memory and IO,
+once a second (kept 14 days), and as fast as every 5 ms while you watch.
+
+| Command | What it does |
+|---|---|
+| `drgnx runner top [NAME] [--every MS]` | a live view of the machine, its slots and its jobs, redrawn until you end it (the first ready runner without a name) |
+| `drgnx runner telemetry NAME [--since 1h] [--level runner\|slot\|reservation\|job] [--ids A,B] [--step MS] [--json]` | the stored history, with each window's lowest and highest value kept so a short spike still shows; `--json` for scripts |
+
+To change the rates, put this in the runner's `runner.conf`; it applies within a second, with no restart:
+
+```toml
+[telemetry]
+store_ms = 1000      # the width of a stored point
+live_min_ms = 5      # the fastest a viewer may ask
+keep_days = 14
+disk_every_s = 60
+gpu = true           # off: the GPU is not read
+```
+
+A runner with no GPU reader, or a Mac (not yet), shows no GPU or job series and says nothing is wrong.
+
 ## Projects
 
 A runner takes only jobs of a **registered project**. You register a repository once, through the hub's methods:

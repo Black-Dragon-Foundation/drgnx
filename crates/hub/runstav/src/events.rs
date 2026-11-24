@@ -264,6 +264,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "the runners changed (one added, removed, benched or back in rotation, its trust or state, its load): the whole list"
         ),
         event!(
+            "runners-telemetry",
+            crate::methods::runners::TelemetryBatch,
+            "a runner's resource samples and markers for a stream the connection subscribed to (runners/telemetry/subscribe), batched per 16 ms of the runner's clock"
+        ),
+        event!(
             "plugin",
             crate::methods::plugins::PluginChanged,
             "a plugin's state changed (installed, approved, changed on disk, disabled, broken or removed): its name and new state"
@@ -545,6 +550,7 @@ mod tests {
                     // agent system part 2
                     "machines-changed",
                     "runners-changed",
+                    "runners-telemetry",
                     "plugin",
                     "runners/need-keys",
                     "agent-presence",

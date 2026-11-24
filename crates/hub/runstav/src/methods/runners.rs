@@ -386,6 +386,157 @@ pub struct PinParams {
     pub on: bool,
 }
 
+/// The levels a series is about, from the whole machine down to one job (`sleipnir::proto::telemetry::Level`).
+pub const TELEMETRY_LEVELS: [&str; 4] = ["runner", "slot", "reservation", "job"];
+/// The widest span `runners/telemetry/range` answers.
+pub const TELEMETRY_SPAN_MS: u64 = 366 * 86_400_000;
+
+/// `runners/telemetry/subscribe`'s params: this connection hears LEVEL's samples of runner RUNNER (IDS: only those
+/// ids, none: all) every EVERY_MS at most (0: the runner's store rate; never below its `live_min_ms`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetrySubscribe {
+    pub runner: Id,
+    pub level: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub ids: Vec<String>,
+    #[serde(default)]
+    pub every_ms: u64,
+}
+
+/// `runners/telemetry/subscribe`'s answer: the stream's id, which every `runners-telemetry` event carries.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryWatching {
+    pub watch: u64,
+    pub runner: Id,
+    pub level: String,
+    pub every_ms: u64,
+}
+
+/// `runners/telemetry/range`'s params: runner RUNNER's stored history of LEVEL (IDS, none: all) from FROM to TO (epoch
+/// ms), in STEP_MS points (0: as stored).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryRange {
+    pub runner: Id,
+    pub level: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub ids: Vec<String>,
+    pub from: u64,
+    pub to: u64,
+    #[serde(default)]
+    pub step_ms: u64,
+}
+
+/// One metric's value in a reading.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryValue {
+    /// `cpu`, `mem_mib`, `psi_mem`, `headroom_mib`, …
+    pub metric: String,
+    pub value: f64,
+}
+
+/// One reading: the values of one id at one level at one instant.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetrySample {
+    pub at_ms: u64,
+    pub level: String,
+    pub id: String,
+    pub values: Vec<TelemetryValue>,
+}
+
+/// A moment on the timeline: `admitted`, `waited`, `paused`, `resumed`, `killed`, `stage-start`, `stage-end`, `evicted`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryMarker {
+    pub at_ms: u64,
+    pub id: String,
+    pub kind: String,
+    pub detail: String,
+}
+
+/// One stored point: the window starting at T, with every sample's extremes kept.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryPoint {
+    pub t: u64,
+    pub min: f64,
+    pub max: f64,
+    pub mean: f64,
+    pub last: f64,
+}
+
+/// One metric of one id over time.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetrySeries {
+    pub level: String,
+    pub id: String,
+    pub metric: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub points: Vec<TelemetryPoint>,
+}
+
+/// `runners/telemetry/range`'s answer.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryHistory {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub series: Vec<TelemetrySeries>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub markers: Vec<TelemetryMarker>,
+}
+
+/// The event `runners-telemetry`: a batch of a stream's samples and markers.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryBatch {
+    pub watch: u64,
+    pub runner: Id,
+    /// The rate the runner settled on.
+    pub every_ms: u64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub samples: Vec<TelemetrySample>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub markers: Vec<TelemetryMarker>,
+}
+
+fn check_level(level: &str) -> Result<(), Error> {
+    if TELEMETRY_LEVELS.contains(&level) {
+        Ok(())
+    } else {
+        Err(invalid("level", "runner, slot, reservation or job"))
+    }
+}
+
+fn check_telemetry_subscribe(p: &TelemetrySubscribe) -> Result<(), Error> {
+    check_level(&p.level)?;
+    if p.every_ms > 3_600_000 {
+        return Err(invalid("every_ms", "at most an hour"));
+    }
+    if p.ids.len() > 256 {
+        return Err(invalid("ids", "at most 256 ids"));
+    }
+    Ok(())
+}
+
+fn check_telemetry_range(p: &TelemetryRange) -> Result<(), Error> {
+    check_level(&p.level)?;
+    if p.from >= p.to {
+        return Err(invalid("to", "after from"));
+    }
+    if p.to - p.from > TELEMETRY_SPAN_MS {
+        return Err(invalid("to", "at most 366 days after from"));
+    }
+    if p.ids.len() > 256 {
+        return Err(invalid("ids", "at most 256 ids"));
+    }
+    Ok(())
+}
+
 fn check_remove(p: &RemoveParams) -> Result<(), Error> {
     if p.confirm {
         Ok(())
@@ -445,6 +596,18 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "an item on a runner's disk kept (on) or let go: a pinned item goes only to the owner's quota",
         ),
         method!(
+            "runners/telemetry/subscribe", RunnersTelemetrySubscribe(TelemetrySubscribe) -> TelemetryWatching,
+            classes: [User], writes: false,
+            doc: "this connection hears a runner's resource samples (runner, slot, reservation or job level) as `runners-telemetry` events, every every_ms at most and never faster than the runner's live_min_ms, while it stays connected",
+            check: check_telemetry_subscribe,
+        ),
+        method!(
+            "runners/telemetry/range", RunnersTelemetryRange(TelemetryRange) -> TelemetryHistory,
+            classes: [User], writes: false,
+            doc: "a runner's stored resource history of one level between two times, in points that keep each window's min, max, mean and last, with the markers (admitted, waited, paused, killed, evicted) on the same timeline",
+            check: check_telemetry_range,
+        ),
+        method!(
             "runners/feature", RunnersFeature(FeatureParams) -> Runner,
             classes: [User], writes: true,
             doc: "a container feature (sandbox, udmabuf, render, kvm) allowed or not on a runner, for one project's jobs; offered only while the runner is mine",
@@ -476,4 +639,45 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "the keys sent to jobs (key_sent) and their reads as runners report them (key_use): names, jobs, attempts, runners, times",
         ),
     ]
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+
+    fn range(level: &str, from: u64, to: u64) -> TelemetryRange {
+        TelemetryRange {
+            runner: serde_json::from_value(serde_json::json!("r1")).unwrap(),
+            level: level.into(),
+            ids: vec![],
+            from,
+            to,
+            step_ms: 0,
+        }
+    }
+
+    /// [D] pure: a range asks for a level that exists, a span that runs forward and is at most 366 days.
+    #[test]
+    fn a_telemetry_range_is_checked() {
+        assert!(check_telemetry_range(&range("job", 1, 2)).is_ok());
+        assert!(check_telemetry_range(&range("disk", 1, 2)).is_err());
+        assert!(check_telemetry_range(&range("job", 2, 2)).is_err());
+        assert!(check_telemetry_range(&range("job", 0, TELEMETRY_SPAN_MS)).is_ok());
+        assert!(check_telemetry_range(&range("job", 0, TELEMETRY_SPAN_MS + 1)).is_err());
+    }
+
+    /// [D] pure: a subscription asks for a level that exists and a rate within an hour.
+    #[test]
+    fn a_telemetry_subscription_is_checked() {
+        let sub = |level: &str, every_ms: u64| TelemetrySubscribe {
+            runner: serde_json::from_value(serde_json::json!("r1")).unwrap(),
+            level: level.into(),
+            ids: vec![],
+            every_ms,
+        };
+        assert!(check_telemetry_subscribe(&sub("slot", 5)).is_ok());
+        assert!(check_telemetry_subscribe(&sub("slot", 0)).is_ok());
+        assert!(check_telemetry_subscribe(&sub("nope", 5)).is_err());
+        assert!(check_telemetry_subscribe(&sub("slot", 3_600_001)).is_err());
+    }
 }

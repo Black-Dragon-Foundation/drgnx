@@ -458,6 +458,125 @@ mod health {
     }
 }
 
+mod telemetry {
+    use super::*;
+    use ratatoskr::runners::telemetry::Sink;
+    use runstav::methods::runners::TelemetryBatch;
+    use sleipnir::proto::telemetry::Level;
+    use std::sync::Mutex;
+
+    /// A sink that keeps every batch it is given.
+    fn keeping() -> (Sink, Arc<Mutex<Vec<TelemetryBatch>>>) {
+        let kept: Arc<Mutex<Vec<TelemetryBatch>>> = Arc::default();
+        let k = kept.clone();
+        (
+            Box::new(move |v| {
+                if let Ok(b) = serde_json::from_value(v) {
+                    k.lock().unwrap().push(b);
+                }
+                true
+            }),
+            kept,
+        )
+    }
+
+    /// [C] A job runs on r1 while a viewer watches its job level and the runner's: the stream shows the job's memory
+    /// and CPU series under its id and the machine's memory and headroom, within the wait, and a range over the last
+    /// minute finds the job's series in the runner's own history.
+    #[test]
+    #[ignore = "fleet"]
+    fn fleet_runner_top_shows_a_running_job() {
+        saman::block_on_current(async move {
+            let (prefix, hub) = ("fltop", "hubtop");
+            let root = root("r1", "fl-top");
+            let img = image("r1");
+            let dir = tempfile::tempdir().unwrap();
+            let (q, mut events, _child) = queue_with_r1(dir.path(), &root, prefix, hub, &img);
+            let mut outcomes = vec![];
+            let (jobs, job_batches) = keeping();
+            let (machine, machine_batches) = keeping();
+            let w1 = q
+                .telemetry_watch("r1", Level::Job, vec![], 50, jobs)
+                .expect("watch the jobs");
+            let w2 = q
+                .telemetry_watch("r1", Level::Runner, vec![], 50, machine)
+                .expect("watch the machine");
+            assert_ne!(w1, w2);
+            let mut s = spec("sleep 20");
+            s.weight = Weight::Heavy;
+            q.release("xbusy");
+            q.submit(
+                Submit {
+                    id: "xtop".into(),
+                    session: Some("s1".into()),
+                    own: Priority::P3,
+                    spec: s,
+                    place: Placement {
+                        heavy: true,
+                        send: SendMode::Heavy,
+                        image: Some(img.clone()),
+                        ..Placement::default()
+                    },
+                    pending: serde_json::Value::Null,
+                    inputs: None,
+                },
+                now(),
+            );
+            drive(
+                &q,
+                &mut events,
+                &mut outcomes,
+                "the job's memory seen",
+                |_, _| {
+                    job_batches
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .flat_map(|b| b.samples.iter())
+                        .find(|s| s.id == "xtop" && s.values.iter().any(|v| v.metric == "mem_mib"))
+                        .cloned()
+                },
+            )
+            .await;
+            let machine_seen = machine_batches
+                .lock()
+                .unwrap()
+                .iter()
+                .flat_map(|b| b.samples.iter())
+                .any(|s| s.id == "runner" && s.values.iter().any(|v| v.metric == "mem_avail_mib"));
+            assert!(machine_seen, "the machine's series came too");
+            let at = stund::wall()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            let mut rx = q
+                .telemetry_range(
+                    "r1",
+                    sleipnir::proto::telemetry::Range {
+                        level: Level::Job,
+                        ids: vec!["xtop".into()],
+                        from: at - 60_000,
+                        to: at + 1000,
+                        step_ms: 0,
+                    },
+                )
+                .expect("ask the history");
+            let h = drive(&q, &mut events, &mut outcomes, "the history", |_, _| {
+                rx.try_recv().ok()
+            })
+            .await;
+            assert!(
+                h.series
+                    .iter()
+                    .any(|s| s.id == "xtop" && s.metric == "mem_mib"),
+                "{h:?}"
+            );
+            q.telemetry_unwatch(w1);
+            q.telemetry_unwatch(w2);
+        })
+    }
+}
+
 /// The wall clock as the queue takes it: a value, never waited on.
 fn now() -> u64 {
     skuld::host_now()

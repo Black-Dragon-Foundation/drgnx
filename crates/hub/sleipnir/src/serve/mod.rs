@@ -24,6 +24,9 @@ pub mod disk;
 pub mod platform;
 #[cfg(test)]
 mod platform_tests;
+pub mod telemetry;
+mod telemetry_link;
+pub mod telemetry_store;
 
 use crate::linux::jobexec::{self, KEY_USE};
 use crate::linux::reserve::Reservation;
@@ -319,6 +322,8 @@ enum Event {
     Fetched(JobRef, Result<(), String>),
     /// A disk guard pass ended (for the hub's order, when one asked): what went and what stayed.
     Guarded(Option<u64>, Vec<forseti::disk::Evicted>),
+    /// The telemetry thread made a frame for the hub.
+    Telemetry(Frame),
 }
 
 /// What the loop does after a frame.
@@ -380,6 +385,14 @@ pub struct Serve<W: Write> {
     island_held: Option<bool>,
     /// The disk guard's state: the hub's last pins, the last pass and report ([`disk`]).
     disk: disk::DiskState,
+    /// The resource sampler's thread, started at the first hello ([`telemetry_link`]); none where there are no files
+    /// to read.
+    telemetry: Option<mpsc::Sender<telemetry::Cmd>>,
+    telemetry_pushed: Option<Instant>,
+    /// The rates last given to the sampler (`runner.conf` `[telemetry]`).
+    telemetry_rates: telemetry::Rates,
+    /// The jobs a `waited` marker was left for since they were last admitted.
+    waited: BTreeSet<String>,
 }
 
 /// Runs `serve` with CFG on INPUT and OUTPUT until the link ends; the exit status.
@@ -429,6 +442,11 @@ pub fn run<R: Read + Send + 'static, W: Write>(cfg: Config, input: R, output: W)
             }
             Ok(Event::Guarded(order, done)) => {
                 if s.guarded(order, done) == Next::Stop {
+                    return 0;
+                }
+            }
+            Ok(Event::Telemetry(f)) => {
+                if s.send(&f) == Next::Stop {
                     return 0;
                 }
             }
@@ -517,6 +535,10 @@ impl<W: Write> Serve<W> {
             sent_idle: None,
             island_held: None,
             disk: disk::DiskState::load(&root, now),
+            telemetry: None,
+            telemetry_pushed: None,
+            telemetry_rates: telemetry::Rates::default(),
+            waited: BTreeSet::new(),
         };
         if let Some(i) = &s.cfg.island {
             s.platform.island_check(i)?;
@@ -618,6 +640,9 @@ impl<W: Write> Serve<W> {
                 Next::Stop
             }
             Frame::Probe => self.probe_result(),
+            f @ (Frame::TelemetryWatch { .. }
+            | Frame::TelemetryUnwatch { .. }
+            | Frame::TelemetryRange { .. }) => self.telemetry_frame(f),
             Frame::Offer {
                 r,
                 spec,
@@ -694,6 +719,7 @@ impl<W: Write> Serve<W> {
             );
         }
         self.hello = true;
+        self.telemetry_start();
         self.load_running();
         let missing = self.platform.contract().err().unwrap_or_default();
         let attempts = self.ours().iter().map(attempts::Found::info).collect();
@@ -818,6 +844,8 @@ impl<W: Write> Serve<W> {
             for id in std::mem::take(&mut self.paused) {
                 if let Err(e) = self.platform.unpause(&id) {
                     crate::eline!("sleipnir serve: {e}");
+                } else {
+                    self.mark(&id, "resumed", "");
                 }
             }
             return;
@@ -872,6 +900,7 @@ impl<W: Write> Serve<W> {
             Ok(()) => {
                 crate::eline!("sleipnir serve: the ladder pauses {id}");
                 self.paused.insert(id.to_string());
+                self.mark(id, "paused", "memory pressure");
             }
             Err(e) => crate::eline!("sleipnir serve: {e}"),
         }
@@ -1104,6 +1133,7 @@ impl<W: Write> Serve<W> {
         if let Err(e) = self.platform.kill(id) {
             crate::eline!("sleipnir serve: {e}");
         }
+        self.mark(id, "killed", reason);
     }
 
     fn refuse(&mut self, r: JobRef, why: impl Into<String>) -> Next {
@@ -1208,6 +1238,10 @@ impl<W: Write> Serve<W> {
                     self.p12_waiting = true;
                     self.p12_cores = self.p12_cores.max(spec.cores.min);
                 }
+                // once per wait: the offer comes again until it is admitted
+                if self.waited.insert(r.job.clone()) {
+                    self.mark(&r.job, "waited", &no.why);
+                }
                 self.send(&Frame::Refuse {
                     r,
                     why: no.why,
@@ -1240,6 +1274,8 @@ impl<W: Write> Serve<W> {
                 self.register_job(&dir, &meta.spec);
                 self.live
                     .insert((r.job.clone(), r.attempt), Live::new(dir, meta));
+                self.waited.remove(&r.job);
+                self.mark(&r.job, "admitted", "");
                 self.send(&Frame::Admit { r, grant })
             }
         }
@@ -1957,6 +1993,7 @@ impl<W: Write> Serve<W> {
             return Next::Go;
         }
         self.island_sync();
+        self.telemetry_push();
         if self.last_ping.elapsed() >= PING_EVERY {
             self.last_ping = Instant::now();
             if self.send(&Frame::Ping { at: now_s() }) == Next::Stop {

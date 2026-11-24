@@ -600,6 +600,8 @@ struct St {
     disk: super::disk::DiskRegister,
     /// What each project allows its jobs to pull or run ([`super::allow`]).
     allow: super::allow::Allow,
+    /// Who watches which runner's resource stream and who waits for its history (Task 38).
+    telemetry: super::telemetry::Relay,
     /// When this machine's next disk pass is due (seconds since the epoch; every ten minutes).
     local_disk_next: u64,
     /// This tick's drains (design §5.6): each machine a whole-machine timing run has, while it waits to start there
@@ -3345,6 +3347,7 @@ impl Queue {
     }
 
     fn link_lost(&self, st: &mut St, runner: &str, now: u64, out: &mut Vec<Outcome>) {
+        st.telemetry.lost(runner);
         // a link lost while jobs ran is a strike the second time in a day
         let ran = st
             .attempts
@@ -3685,6 +3688,15 @@ impl Queue {
                 st.disk.evicted(runner, order, &done);
                 return;
             }
+            f @ (Frame::Telemetry { .. } | Frame::TelemetryRanged { .. }) => {
+                // a viewer that is gone: its runner stops sending
+                for (id, gone) in st.telemetry.heard(runner, f) {
+                    if let Some(r) = st.runners.get(&gone) {
+                        r.session.send(Frame::TelemetryUnwatch { id });
+                    }
+                }
+                return;
+            }
             f => match f.job() {
                 Some(r) => AEvent::FrameFrom {
                     runner: runner.into(),
@@ -3757,6 +3769,68 @@ impl Queue {
                 why: why.join(", "),
             });
         }
+    }
+
+    /// A viewer for RUNNER's LEVEL samples (IDS, none: all) every EVERY_MS at most: its batches go to SINK, which says
+    /// false once the viewer is gone. The watch's id.
+    pub fn telemetry_watch(
+        &self,
+        runner: &str,
+        level: sleipnir::proto::telemetry::Level,
+        ids: Vec<String>,
+        every_ms: u64,
+        sink: super::telemetry::Sink,
+    ) -> villa::Result<u64> {
+        let mut st = self.lock();
+        let Some(r) = st.runners.get(runner) else {
+            return Err(villa::Error::not_found(format!("no runner {runner}")));
+        };
+        let session = r.session.clone();
+        let id = st.telemetry.watch(runner, sink);
+        if !session.send(Frame::TelemetryWatch {
+            id,
+            level,
+            ids,
+            every_ms,
+        }) {
+            st.telemetry.unwatch(id);
+            return Err(villa::Error::unavailable(format!(
+                "{runner} is not connected"
+            )));
+        }
+        Ok(id)
+    }
+
+    /// The viewer under ID is done: its runner stops sending.
+    pub fn telemetry_unwatch(&self, id: u64) {
+        let mut st = self.lock();
+        if let Some(runner) = st.telemetry.unwatch(id)
+            && let Some(r) = st.runners.get(&runner)
+        {
+            r.session.send(Frame::TelemetryUnwatch { id });
+        }
+    }
+
+    /// RUNNER's stored history RANGE asks for: the receiver of the answer (it closes when the link is lost).
+    pub fn telemetry_range(
+        &self,
+        runner: &str,
+        range: sleipnir::proto::telemetry::Range,
+    ) -> villa::Result<tokio::sync::oneshot::Receiver<runstav::methods::runners::TelemetryHistory>>
+    {
+        let mut st = self.lock();
+        let Some(r) = st.runners.get(runner) else {
+            return Err(villa::Error::not_found(format!("no runner {runner}")));
+        };
+        let session = r.session.clone();
+        let (id, rx) = st.telemetry.range(runner);
+        if !session.send(Frame::TelemetryRange { id, range }) {
+            st.telemetry.forget(id);
+            return Err(villa::Error::unavailable(format!(
+                "{runner} is not connected"
+            )));
+        }
+        Ok(rx)
     }
 
     /// Every machine's disk, or MACHINE's, as `runners/disk` shows it.

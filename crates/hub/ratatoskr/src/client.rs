@@ -181,6 +181,24 @@ impl Client {
         Ok(c)
     }
 
+    /// The next event the hub sends, as its name and data; none when WITHIN passes without one. (A call drops the
+    /// events that come while it waits for its answer.)
+    pub fn event(&mut self, within: Duration) -> villa::Result<Option<(String, Value)>> {
+        let deadline = crate::clock::real_now() + within;
+        loop {
+            let text = match read_line(&mut self.reader, deadline) {
+                Ok(t) => t,
+                Err(e) if e == "no answer in time" => return Ok(None),
+                Err(e) => return Err(villa::Error::io(e)),
+            };
+            let v: Value =
+                serde_json::from_str(&text).map_err(|e| villa::Error::invalid(e.to_string()))?;
+            if let Some(name) = v["event"].as_str() {
+                return Ok(Some((name.to_string(), v["data"].clone())));
+            }
+        }
+    }
+
     /// METHOD with PARAMS: the result, or the error as "code: message".
     pub fn call(&mut self, method: &str, params: Value, within: Duration) -> villa::Result<Value> {
         let deadline = crate::clock::real_now() + within;

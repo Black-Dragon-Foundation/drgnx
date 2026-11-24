@@ -1589,6 +1589,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `runners/reclaim` | user | `{dry_run?: boolean, name: Id}` | `{dry_run?: boolean, ids?: [string]}` | no |
 | `runners/remove` | user | `{confirm: boolean, name: Id}` | `{name: string}` | yes |
 | `runners/set` | user | `{accept?: "all" \| "heavy", island?: string, name: Id, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/telemetry/range` | user | `{from: natnum, ids?: [string], level: string, runner: Id, step_ms?: natnum, to: natnum}` | `{markers?: [TelemetryMarker], series?: [TelemetrySeries]}` | no |
+| `runners/telemetry/subscribe` | user | `{every_ms?: natnum, ids?: [string], level: string, runner: Id}` | `{every_ms: natnum, level: string, runner: Id, watch: natnum}` | no |
 | `runners/unbench` | user | `{name: Id}` | `Runner` | yes |
 | `say/end` | user | `{id: Id}` | `boolean` | yes |
 | `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
@@ -4858,6 +4860,25 @@ of rotation, its reason on a line of its own. `runner remove` without `--yes` on
 Tests: `norn::write::runners::` [D]; `runners::registry::` and `runner_cli::` [D]; `work::machines::` [D]; conformance
 `runners/methods-are-user-only` [B]; `tests/fleet_registry.rs` [C]: add (probe, copy, pull, bench, link), the contract's
 refusal with its list, the hub's own machine, a removal that leaves nothing of ours.
+
+## Runners: resource telemetry
+
+`runners/telemetry.rs` (the relay), `runners/queue.rs`, `runners/methods.rs`, `runner_cli.rs` (Task 38; the runner's
+half is docs/develop/sleipnir.md, "Resource telemetry"). The hub holds no samples: a runner keeps its own history.
+
+- **`runners/telemetry/subscribe {runner, level, ids, every_ms}`** (user): the queue asks the runner to stream
+  (`telemetry-watch`) and the answer is the stream's id. Each batch the runner sends reaches the caller's connection
+  as the event `runners-telemetry` (`{watch, runner, every_ms, samples, markers}`); a connection that has gone is
+  unwatched at its next batch, and the runner told. A lost link ends its runner's streams.
+- **`runners/telemetry/range {runner, level, ids, from, to, step_ms}`** (user): asked of the runner
+  (`telemetry-range`, answered within 30 s); at most 366 days.
+- **CLI.** `runner top` subscribes to the runner, slot and job levels on one connection and redraws `format_top`;
+  `runner telemetry` calls the range and prints JSON (`--json`) or one line a series.
+- **Settings.** The rates are the runner's own (`runner.conf` `[telemetry]`), not hub settings: they differ per
+  machine and apply on the machine without the hub.
+
+Tests: `runners::telemetry::` and `runner_cli::` [D]; `runstav` `telemetry_tests` [D]; conformance
+`runners/telemetry-is-user-only` [B]; `tests/fleet_runners.rs` `telemetry::` [C].
 
 ## Runners: the disk
 

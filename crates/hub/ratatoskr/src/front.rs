@@ -911,6 +911,8 @@ impl Front {
             | Params::RunnersDisk(_)
             | Params::RunnersReclaim(_)
             | Params::RunnersPin(_)
+            | Params::RunnersTelemetrySubscribe(_)
+            | Params::RunnersTelemetryRange(_)
             | Params::WorkConclusions(_)
             | Params::ReviewEffects(_)
             | Params::AgentsPresenceSubscribe(_)

@@ -249,6 +249,7 @@ impl<W: Write> Serve<W> {
         self.disk.guarding = false;
         self.disk.last_pass = Instant::now();
         for e in done.iter().filter(|e| e.refused.is_none()) {
+            self.mark(&e.id, "evicted", &e.why.text());
             self.disk.gone.insert(e.id.clone());
             if let Some(sid) = e.id.strip_prefix("slot:") {
                 self.disk.gone.insert(format!("build:{sid}"));

@@ -557,6 +557,44 @@ pub enum Frame {
         done: Vec<forseti::disk::Evicted>,
     },
 
+    // ---- resource telemetry (Task 38; `docs/develop/sleipnir.md`, "Resource telemetry")
+    /// hub → runner: a viewer wants LEVEL's samples (IDS, none: all) every EVERY_MS at most; the runner clamps it to
+    /// its `live_min_ms` and streams `telemetry` frames under ID until `telemetry-unwatch` or the link ends.
+    TelemetryWatch {
+        id: u64,
+        level: super::telemetry::Level,
+        #[serde(default)]
+        ids: Vec<String>,
+        #[serde(default)]
+        every_ms: u64,
+    },
+    /// hub → runner: the viewer under ID is gone.
+    TelemetryUnwatch {
+        id: u64,
+    },
+    /// runner → hub: samples for watch ID, batched per 16 ms, at EVERY_MS (the rate the runner settled on), and the
+    /// markers since the last batch.
+    Telemetry {
+        id: u64,
+        #[serde(default)]
+        every_ms: u64,
+        #[serde(default)]
+        samples: Vec<super::telemetry::Sample>,
+        #[serde(default)]
+        markers: Vec<super::telemetry::Marker>,
+    },
+    /// hub → runner: the stored history a viewer asks for.
+    TelemetryRange {
+        id: u64,
+        range: super::telemetry::Range,
+    },
+    /// runner → hub: the history asked for under ID.
+    TelemetryRanged {
+        id: u64,
+        #[serde(default)]
+        ranged: super::telemetry::Ranged,
+    },
+
     // ---- keep-alive and end
     Ping {
         #[serde(default)]

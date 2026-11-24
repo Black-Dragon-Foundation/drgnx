@@ -7,6 +7,7 @@
 
 mod codec;
 mod frame;
+pub mod telemetry;
 
 pub use codec::{CodecError, FrameReader, FrameWriter, MAX_CHUNK, MAX_LINE};
 pub use frame::{
@@ -334,6 +335,57 @@ mod tests {
                         refused: Some("in use".into()),
                     },
                 ],
+            },
+            Frame::TelemetryWatch {
+                id: 4,
+                level: telemetry::Level::Slot,
+                ids: vec!["s1-0".into()],
+                every_ms: 5,
+            },
+            Frame::TelemetryUnwatch { id: 4 },
+            Frame::Telemetry {
+                id: 4,
+                every_ms: 5,
+                samples: vec![telemetry::Sample {
+                    at_ms: 1_700_000_000_123,
+                    level: telemetry::Level::Job,
+                    id: "a3f".into(),
+                    values: [("cpu".to_string(), 1.5), ("mem_mib".to_string(), 812.0)].into(),
+                }],
+                markers: vec![telemetry::Marker {
+                    at_ms: 1_700_000_000_100,
+                    id: "a3f".into(),
+                    kind: "admitted".into(),
+                    detail: String::new(),
+                }],
+            },
+            Frame::TelemetryRange {
+                id: 5,
+                range: telemetry::Range {
+                    level: telemetry::Level::Runner,
+                    ids: vec![],
+                    from: 1,
+                    to: 2,
+                    step_ms: 1000,
+                },
+            },
+            Frame::TelemetryRanged {
+                id: 5,
+                ranged: telemetry::Ranged {
+                    series: vec![telemetry::Series {
+                        level: telemetry::Level::Runner,
+                        id: "runner".into(),
+                        metric: "cpu".into(),
+                        points: vec![telemetry::Point {
+                            t: 1,
+                            min: 0.5,
+                            max: 3.0,
+                            mean: 1.0,
+                            last: 2.0,
+                        }],
+                    }],
+                    markers: vec![],
+                },
             },
             Frame::Ping { at: 7 },
             Frame::Pong { at: 8 },

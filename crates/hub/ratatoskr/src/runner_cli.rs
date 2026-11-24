@@ -15,6 +15,9 @@
 //! runner disk [NAME] [--json]               (each runner's disk: free, the quota, btrfs, per kind, every item)
 //! runner reclaim NAME [--dry-run]           (its items past their age, not pinned or in use, removed)
 //! runner pin NAME ID on|off                 (an item kept, or let go)
+//! runner top [NAME] [--every MS]            (live: the machine, its slots and jobs; redrawn until ended)
+//! runner telemetry NAME [--since 1h] [--level runner|slot|reservation|job] [--ids A,B] [--step MS] [--json]
+//!                                           (the stored history; --json for scripts)
 //! runner cloud setup aws --regions R[,R…] --sizes S[,S…] [--hub ID]     (prints the role's policy; no hub call)
 //! runner cloud setup gcp --project P [--member user:EMAIL] [--hub ID]   (prints the role and its binding; no hub call)
 //! runner cloud cost | rotate-ca | off [--yes]
@@ -53,6 +56,22 @@ pub enum RunnerCommand {
     /// `disk`: one runner's disk or every runner's, as text ([`format_disk`]) or JSON.
     Disk {
         name: Option<String>,
+        json: bool,
+    },
+    /// `top`: a runner's slots and jobs live, redrawn every EVERY_MS (0: the fastest the runner allows) until the user
+    /// ends it ([`format_top`]).
+    Top {
+        name: Option<String>,
+        every_ms: u64,
+    },
+    /// `telemetry`: a runner's stored history of LEVEL over the last SINCE_MS, in STEP_MS points, as JSON for scripts
+    /// (or as a short text table).
+    Telemetry {
+        name: String,
+        level: String,
+        ids: Vec<String>,
+        since_ms: u64,
+        step_ms: u64,
         json: bool,
     },
     /// One call to the hub: its method and params.
@@ -103,6 +122,72 @@ pub fn setup_gcp_text(hub: &str, project: &str, member: Option<&str>) -> String 
     )
 }
 
+/// A span such as `90s`, `15m`, `1h` or `2d` in milliseconds; a bare number is seconds.
+pub fn parse_span(s: &str) -> Option<u64> {
+    let (digits, unit) = match s.find(|c: char| !c.is_ascii_digit()) {
+        Some(i) => s.split_at(i),
+        None => (s, "s"),
+    };
+    let n: u64 = digits.parse().ok()?;
+    let per = match unit {
+        "s" => 1000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        _ => return None,
+    };
+    n.checked_mul(per)
+}
+
+/// What `runner top` keeps: the last sample of each (level, id), its values by metric name.
+pub type Latest =
+    std::collections::BTreeMap<(String, String), std::collections::BTreeMap<String, f64>>;
+
+/// The live view `runner top` redraws: NAME's machine line, then a row per slot and per job from LATEST.
+pub fn format_top(name: &str, latest: &Latest) -> String {
+    let get = |level: &str, id: &str, metric: &str| {
+        latest
+            .get(&(level.to_string(), id.to_string()))
+            .and_then(|v| v.get(metric))
+            .copied()
+    };
+    let mut out = String::new();
+    let machine = |m: &str| get("runner", "runner", m);
+    if latest.is_empty() {
+        out.push_str(&format!("{name}  no samples yet\n"));
+        return out;
+    }
+    out.push_str(&format!(
+        "{name}  cpu {:.1}  free {:.0}M  psi {:.1}/{:.1}/{:.1}  room {:.0}M\n",
+        machine("cpu").unwrap_or(0.0),
+        machine("mem_avail_mib").unwrap_or(0.0),
+        machine("psi_cpu").unwrap_or(0.0),
+        machine("psi_mem").unwrap_or(0.0),
+        machine("psi_io").unwrap_or(0.0),
+        machine("headroom_mib").unwrap_or(0.0),
+    ));
+    out.push_str(&format!(
+        "{:<5} {:<14} {:>5} {:>8} {:>8}\n",
+        "level", "id", "cpu", "mem MiB", "io MiB/s"
+    ));
+    for (level, short) in [("slot", "slot"), ("job", "job")] {
+        for ((l, id), vals) in latest {
+            if l != level {
+                continue;
+            }
+            let v = |m: &str| vals.get(m).copied().unwrap_or(0.0);
+            let id: String = id.chars().take(14).collect();
+            out.push_str(&format!(
+                "{short:<5} {id:<14} {:>5.1} {:>8.0} {:>8.1}\n",
+                v("cpu"),
+                v("mem_mib"),
+                v("io_mibs"),
+            ));
+        }
+    }
+    out
+}
+
 fn one_of(what: &str, v: String, allowed: &[&str]) -> villa::Result<String> {
     if allowed.contains(&v.as_str()) {
         Ok(v)
@@ -126,7 +211,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<RunnerCo
         None => {
             return Err(villa::Error::invalid(
                 "runner needs a subcommand (list, add, check, bench, trust, profile, unbench, remove, audit, disk, \
-                 reclaim, pin, cloud)",
+                 top, telemetry, reclaim, pin, cloud)",
             ));
         }
     };
@@ -153,6 +238,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<RunnerCo
         "remove" => &["yes"],
         "audit" => &["key", "job"],
         "disk" => &["json"],
+        "top" => &["every"],
+        "telemetry" => &["since", "level", "ids", "step", "json"],
         "reclaim" => &["dry-run"],
         "cloud" => &["hub", "regions", "sizes", "project", "member", "yes"],
         "check" | "bench" | "trust" | "unbench" | "pin" => &[],
@@ -346,6 +433,61 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<RunnerCo
             }
             Ok(RunnerCommand::Disk {
                 name: words.first().cloned(),
+                json: json_out,
+            })
+        }
+        "top" => {
+            if words.len() > 1 {
+                return Err(villa::Error::invalid(
+                    "usage: runner top [NAME] [--every MS]",
+                ));
+            }
+            let every_ms = match opt("every") {
+                Some(v) => v.parse::<u64>().map_err(|_| {
+                    villa::Error::invalid(format!("--every is a number of ms, not {v:?}"))
+                })?,
+                None => 1000,
+            };
+            Ok(RunnerCommand::Top {
+                name: words.first().cloned(),
+                every_ms,
+            })
+        }
+        "telemetry" => {
+            want(
+                1,
+                "telemetry NAME [--since 1h] [--level slot] [--ids A,B] [--step MS] [--json]",
+            )?;
+            let since = opt("since").unwrap_or_else(|| "1h".into());
+            let since_ms = parse_span(&since).ok_or_else(|| {
+                villa::Error::invalid(format!(
+                    "--since is a span like 90s, 15m, 1h or 2d, not {since:?}"
+                ))
+            })?;
+            let level = one_of(
+                "level",
+                opt("level").unwrap_or_else(|| "runner".into()),
+                &runstav::methods::runners::TELEMETRY_LEVELS,
+            )?;
+            let step_ms = match opt("step") {
+                Some(v) => v.parse::<u64>().map_err(|_| {
+                    villa::Error::invalid(format!("--step is a number of ms, not {v:?}"))
+                })?,
+                None => 0,
+            };
+            Ok(RunnerCommand::Telemetry {
+                name: words[0].clone(),
+                level,
+                ids: opt("ids")
+                    .map(|v| {
+                        v.split(',')
+                            .filter(|s| !s.is_empty())
+                            .map(String::from)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                since_ms,
+                step_ms,
                 json: json_out,
             })
         }
@@ -585,6 +727,138 @@ fn cloud_off_note() -> String {
         .into()
 }
 
+/// A stored history as text: a line per series (its level, id and metric, the extremes over the whole span and the
+/// number of points), then the markers.
+pub fn format_history(v: &Value) -> String {
+    let series = v["series"].as_array().cloned().unwrap_or_default();
+    let markers = v["markers"].as_array().cloned().unwrap_or_default();
+    if series.is_empty() && markers.is_empty() {
+        return "no samples in that span\n".into();
+    }
+    let mut out = String::new();
+    for s in &series {
+        let points = s["points"].as_array().cloned().unwrap_or_default();
+        let fold = |k: &str, init: f64, f: fn(f64, f64) -> f64| {
+            points.iter().filter_map(|p| p[k].as_f64()).fold(init, f)
+        };
+        out.push_str(
+            &format!(
+                "{} {} {}: min {:.2} max {:.2} last {:.2} ({} points)",
+                s["level"].as_str().unwrap_or("?"),
+                s["id"].as_str().unwrap_or("?"),
+                s["metric"].as_str().unwrap_or("?"),
+                fold("min", f64::INFINITY, f64::min),
+                fold("max", f64::NEG_INFINITY, f64::max),
+                points
+                    .last()
+                    .and_then(|p| p["last"].as_f64())
+                    .unwrap_or(0.0),
+                points.len(),
+            )
+            .chars()
+            .take(WIDTH)
+            .collect::<String>(),
+        );
+        out.push('\n');
+    }
+    for m in &markers {
+        out.push_str(
+            &format!(
+                "@{} {} {} {}",
+                m["at_ms"].as_u64().unwrap_or(0),
+                m["id"].as_str().unwrap_or("?"),
+                m["kind"].as_str().unwrap_or("?"),
+                m["detail"].as_str().unwrap_or(""),
+            )
+            .chars()
+            .take(WIDTH)
+            .collect::<String>(),
+        );
+        out.push('\n');
+    }
+    out
+}
+
+/// `runner top`: subscribes to NAME's runner, slot and job levels and redraws [`format_top`] every EVERY_MS until
+/// the user ends it (or the hub goes); the first ready runner when NAME is none.
+fn top(env: &Env, name: Option<String>, every_ms: u64) -> i32 {
+    let hub = crate::supervise::ensure_quiet(env, ENSURE_TIMEOUT);
+    if hub != 0 {
+        return hub;
+    }
+    let fail = |e: villa::Error| {
+        crate::soft::err_line(&format!("ratatoskr runner: {e}"));
+        1
+    };
+    let mut c = match Client::user(env, Duration::from_secs(5)) {
+        Ok(c) => c,
+        Err(e) => return fail(e),
+    };
+    let name = match name {
+        Some(n) => n,
+        None => {
+            let list = match c.call("runners/list", json!({}), CALL) {
+                Ok(l) => l,
+                Err(e) => return fail(e),
+            };
+            let pick = list["runners"].as_array().and_then(|rs| {
+                rs.iter()
+                    .find(|r| r["state"] == "ready")
+                    .and_then(|r| r["name"].as_str())
+                    .map(String::from)
+            });
+            match pick {
+                Some(n) => n,
+                None => return fail(villa::Error::not_found("no runner is ready")),
+            }
+        }
+    };
+    for level in ["runner", "slot", "job"] {
+        let params = json!({"runner": name, "level": level, "every_ms": every_ms});
+        if let Err(e) = c.call("runners/telemetry/subscribe", params, CALL) {
+            return fail(e);
+        }
+    }
+    let draw_every = Duration::from_millis(every_ms.max(100));
+    let mut latest = Latest::new();
+    let mut seen: std::collections::BTreeMap<(String, String), u64> = Default::default();
+    let mut drawn = crate::clock::real_now();
+    loop {
+        match c.event(draw_every) {
+            Ok(Some((event, data))) if event == "runners-telemetry" => {
+                for s in data["samples"].as_array().cloned().unwrap_or_default() {
+                    let key = (
+                        s["level"].as_str().unwrap_or("").to_string(),
+                        s["id"].as_str().unwrap_or("").to_string(),
+                    );
+                    let values = s["values"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| {
+                                    Some((v["metric"].as_str()?.to_string(), v["value"].as_f64()?))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    seen.insert(key.clone(), s["at_ms"].as_u64().unwrap_or(0));
+                    latest.insert(key, values);
+                }
+            }
+            Ok(_) => {}
+            Err(e) => return fail(e),
+        }
+        if crate::clock::real_now().saturating_duration_since(drawn) >= draw_every {
+            drawn = crate::clock::real_now();
+            // a row nothing has said for a while is gone (the job ended)
+            let newest = seen.values().copied().max().unwrap_or(0);
+            let keep = (every_ms * 5).max(3000);
+            latest.retain(|k, _| newest.saturating_sub(seen.get(k).copied().unwrap_or(0)) <= keep);
+            crate::soft::out_text(&format!("\x1b[2J\x1b[H{}", format_top(&name, &latest)));
+        }
+    }
+}
+
 /// `runner …`: the exit code.
 pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
     let (method, params, within, json_out) = match cmd {
@@ -595,6 +869,22 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
                 None => json!({}),
             };
             ("runners/disk", params, CALL, json)
+        }
+        RunnerCommand::Top { name, every_ms } => return top(env, name, every_ms),
+        RunnerCommand::Telemetry {
+            name,
+            level,
+            ids,
+            since_ms,
+            step_ms,
+            json,
+        } => {
+            let to = (crate::clock::wall_secs() * 1000.0) as u64;
+            let params = json!({
+                "runner": name, "level": level, "ids": ids,
+                "from": to.saturating_sub(since_ms), "to": to + 1, "step_ms": step_ms,
+            });
+            ("runners/telemetry/range", params, CALL, json)
         }
         RunnerCommand::Call { method, params } => (
             method,
@@ -651,8 +941,15 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
             if let Some(why) = a["no_room"].as_str() {
                 crate::soft::err_line(&(wrap(why, 0).join("\n")).to_string());
             }
-            if json_out || !matches!(method, "runners/list" | "runners/disk") {
+            if json_out
+                || !matches!(
+                    method,
+                    "runners/list" | "runners/disk" | "runners/telemetry/range"
+                )
+            {
                 crate::soft::out_line(&a.to_string());
+            } else if method == "runners/telemetry/range" {
+                crate::soft::out_text(&format_history(&a));
             } else if method == "runners/disk" {
                 crate::soft::out_text(&format_disk(&a));
             } else {
@@ -1006,5 +1303,119 @@ desk · 412.0 GB free of 1000.0 GB · ours 88.2 GB
             out.contains(&crate::runners::cloud::gcp::condition("p1")),
             "{out}"
         );
+    }
+
+    /// [D] pure: spans read as a number and a unit, a bare number is seconds, and nonsense is none.
+    #[test]
+    fn spans_read_as_a_number_and_a_unit() {
+        assert_eq!(parse_span("90s"), Some(90_000));
+        assert_eq!(parse_span("15m"), Some(900_000));
+        assert_eq!(parse_span("1h"), Some(3_600_000));
+        assert_eq!(parse_span("2d"), Some(172_800_000));
+        assert_eq!(parse_span("30"), Some(30_000));
+        assert_eq!(parse_span(""), None);
+        assert_eq!(parse_span("h"), None);
+        assert_eq!(parse_span("5x"), None);
+        assert_eq!(parse_span("-5m"), None);
+    }
+
+    /// [D] pure: `top` and `telemetry` parse, with their defaults and options, and refuse what they can't take.
+    #[test]
+    fn top_and_telemetry_parse() {
+        assert_eq!(
+            p(&["top"]),
+            Ok(RunnerCommand::Top {
+                name: None,
+                every_ms: 1000
+            })
+        );
+        assert_eq!(
+            p(&["top", "desk", "--every", "5"]),
+            Ok(RunnerCommand::Top {
+                name: Some("desk".into()),
+                every_ms: 5
+            })
+        );
+        assert!(p(&["top", "a", "b"]).is_err());
+        assert!(p(&["top", "--every", "fast"]).is_err());
+        assert_eq!(
+            p(&["telemetry", "desk"]),
+            Ok(RunnerCommand::Telemetry {
+                name: "desk".into(),
+                level: "runner".into(),
+                ids: vec![],
+                since_ms: 3_600_000,
+                step_ms: 0,
+                json: false,
+            })
+        );
+        assert_eq!(
+            p(&[
+                "telemetry",
+                "desk",
+                "--since",
+                "15m",
+                "--level",
+                "slot",
+                "--ids",
+                "s1-0,s2-0",
+                "--step",
+                "1000",
+                "--json"
+            ]),
+            Ok(RunnerCommand::Telemetry {
+                name: "desk".into(),
+                level: "slot".into(),
+                ids: vec!["s1-0".into(), "s2-0".into()],
+                since_ms: 900_000,
+                step_ms: 1000,
+                json: true,
+            })
+        );
+        assert!(p(&["telemetry"]).is_err());
+        assert!(p(&["telemetry", "desk", "--level", "disk"]).is_err());
+        assert!(p(&["telemetry", "desk", "--since", "soon"]).is_err());
+    }
+
+    /// [D] pure: the live view: the machine line, then a row per slot and per job, each within 60 columns.
+    #[test]
+    fn top_shows_the_machine_slots_and_jobs() {
+        let mut latest = std::collections::BTreeMap::new();
+        let mut put = |level: &str, id: &str, vals: &[(&str, f64)]| {
+            latest.insert(
+                (level.to_string(), id.to_string()),
+                vals.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+            );
+        };
+        put(
+            "runner",
+            "runner",
+            &[
+                ("cpu", 1.04),
+                ("mem_avail_mib", 7812.4),
+                ("psi_cpu", 1.5),
+                ("psi_mem", 0.0),
+                ("psi_io", 12.0),
+                ("headroom_mib", 1234.0),
+            ],
+        );
+        put("slot", "s1-0", &[("cpu", 0.3), ("mem_mib", 256.0)]);
+        put(
+            "job",
+            "a3f",
+            &[("cpu", 1.0), ("mem_mib", 1024.4), ("io_mibs", 2.51)],
+        );
+        let text = format_top("r1", &latest);
+        let want = "\
+r1  cpu 1.0  free 7812M  psi 1.5/0.0/12.0  room 1234M
+level id               cpu  mem MiB io MiB/s
+slot  s1-0             0.3      256      0.0
+job   a3f              1.0     1024      2.5
+";
+        assert_eq!(text, want);
+        for l in text.lines() {
+            assert!(l.chars().count() <= WIDTH, "{l:?}");
+        }
+        assert!(format_top("r1", &Default::default()).contains("no samples yet"));
     }
 }

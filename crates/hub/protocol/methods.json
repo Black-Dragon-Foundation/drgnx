@@ -3640,6 +3640,136 @@
     {
       "data": {
         "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "TelemetryMarker": {
+            "additionalProperties": false,
+            "description": "A moment on the timeline: `admitted`, `waited`, `paused`, `resumed`, `killed`, `stage-start`, `stage-end`, `evicted`.",
+            "properties": {
+              "at_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "at_ms",
+              "id",
+              "kind",
+              "detail"
+            ],
+            "type": "object"
+          },
+          "TelemetrySample": {
+            "additionalProperties": false,
+            "description": "One reading: the values of one id at one level at one instant.",
+            "properties": {
+              "at_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "level": {
+                "type": "string"
+              },
+              "values": {
+                "items": {
+                  "$ref": "#/$defs/TelemetryValue"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "at_ms",
+              "level",
+              "id",
+              "values"
+            ],
+            "type": "object"
+          },
+          "TelemetryValue": {
+            "additionalProperties": false,
+            "description": "One metric's value in a reading.",
+            "properties": {
+              "metric": {
+                "description": "`cpu`, `mem_mib`, `psi_mem`, `headroom_mib`, …",
+                "type": "string"
+              },
+              "value": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "metric",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The event `runners-telemetry`: a batch of a stream's samples and markers.",
+        "properties": {
+          "every_ms": {
+            "description": "The rate the runner settled on.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "markers": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TelemetryMarker"
+            },
+            "type": "array"
+          },
+          "runner": {
+            "$ref": "#/$defs/Id"
+          },
+          "samples": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TelemetrySample"
+            },
+            "type": "array"
+          },
+          "watch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "watch",
+          "runner",
+          "every_ms"
+        ],
+        "title": "TelemetryBatch",
+        "type": "object"
+      },
+      "doc": "a runner's resource samples and markers for a stream the connection subscribed to (runners/telemetry/subscribe), batched per 16 ms of the runner's clock",
+      "name": "runners-telemetry"
+    },
+    {
+      "data": {
+        "$defs": {
           "KeyName": {
             "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
             "maxLength": 128,
@@ -37589,6 +37719,268 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a runner's stored resource history of one level between two times, in points that keep each window's min, max, mean and last, with the markers (admitted, waited, paused, killed, evicted) on the same timeline",
+      "name": "runners/telemetry/range",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/telemetry/range`'s params: runner RUNNER's stored history of LEVEL (IDS, none: all) from FROM to TO (epoch\nms), in STEP_MS points (0: as stored).",
+        "properties": {
+          "from": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "level": {
+            "type": "string"
+          },
+          "runner": {
+            "$ref": "#/$defs/Id"
+          },
+          "step_ms": {
+            "default": 0,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runner",
+          "level",
+          "from",
+          "to"
+        ],
+        "title": "TelemetryRange",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "TelemetryMarker": {
+            "additionalProperties": false,
+            "description": "A moment on the timeline: `admitted`, `waited`, `paused`, `resumed`, `killed`, `stage-start`, `stage-end`, `evicted`.",
+            "properties": {
+              "at_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "at_ms",
+              "id",
+              "kind",
+              "detail"
+            ],
+            "type": "object"
+          },
+          "TelemetryPoint": {
+            "additionalProperties": false,
+            "description": "One stored point: the window starting at T, with every sample's extremes kept.",
+            "properties": {
+              "last": {
+                "format": "double",
+                "type": "number"
+              },
+              "max": {
+                "format": "double",
+                "type": "number"
+              },
+              "mean": {
+                "format": "double",
+                "type": "number"
+              },
+              "min": {
+                "format": "double",
+                "type": "number"
+              },
+              "t": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "t",
+              "min",
+              "max",
+              "mean",
+              "last"
+            ],
+            "type": "object"
+          },
+          "TelemetrySeries": {
+            "additionalProperties": false,
+            "description": "One metric of one id over time.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "level": {
+                "type": "string"
+              },
+              "metric": {
+                "type": "string"
+              },
+              "points": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/TelemetryPoint"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "level",
+              "id",
+              "metric"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/telemetry/range`'s answer.",
+        "properties": {
+          "markers": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TelemetryMarker"
+            },
+            "type": "array"
+          },
+          "series": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TelemetrySeries"
+            },
+            "type": "array"
+          }
+        },
+        "title": "TelemetryHistory",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection hears a runner's resource samples (runner, slot, reservation or job level) as `runners-telemetry` events, every every_ms at most and never faster than the runner's live_min_ms, while it stays connected",
+      "name": "runners/telemetry/subscribe",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/telemetry/subscribe`'s params: this connection hears LEVEL's samples of runner RUNNER (IDS: only those\nids, none: all) every EVERY_MS at most (0: the runner's store rate; never below its `live_min_ms`).",
+        "properties": {
+          "every_ms": {
+            "default": 0,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "level": {
+            "type": "string"
+          },
+          "runner": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "runner",
+          "level"
+        ],
+        "title": "TelemetrySubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/telemetry/subscribe`'s answer: the stream's id, which every `runners-telemetry` event carries.",
+        "properties": {
+          "every_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "level": {
+            "type": "string"
+          },
+          "runner": {
+            "$ref": "#/$defs/Id"
+          },
+          "watch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "watch",
+          "runner",
+          "level",
+          "every_ms"
+        ],
+        "title": "TelemetryWatching",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
