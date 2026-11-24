@@ -6,9 +6,6 @@
 //! time, budgets and the supervisor ([`timeline`]); the Extensions view's catalog ([`extensions`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
-pub mod agents_side;
-pub mod budgets_page;
-pub mod changes;
 pub mod comments;
 pub mod config;
 pub mod coord;
@@ -18,14 +15,12 @@ pub mod debug_fork;
 pub mod debug_heap;
 pub mod debug_origin;
 pub mod debug_runs;
-pub mod doc_comments;
 pub mod editor;
 pub mod exec;
 pub mod extensions;
 pub mod folds;
 pub mod forecast;
 pub mod gateway;
-pub mod git;
 pub mod graph;
 pub mod history;
 pub mod hub;
@@ -41,7 +36,6 @@ pub mod past;
 pub mod plans;
 pub mod plugins;
 pub mod records;
-pub mod review_screen;
 pub mod runners;
 pub mod say;
 pub mod scm;
@@ -198,7 +192,6 @@ params! {
     AgentsKill(agents::ById),
     AgentsPermission(agents::PermissionParams),
     AgentsDo(agents::DoParams),
-    PastSubscribe(past::PastSubscribe),
     PastSearch(past::PastSearch),
     PastOpen(past::PastRef),
     PastResume(past::PastResume),
@@ -222,7 +215,6 @@ params! {
     AgentsSlice(agents::SliceParams),
     AgentsEntriesSubscribe(agents::SessionRef),
     AgentsEntriesUnsubscribe(agents::SessionRef),
-    AgentsPanelLook(agents::PanelLook),
     AgentsToolInput(agents::ToolInputParams),
     AgentsToolOutput(agents::ToolOutputParams),
     AgentsPause(agents::ById),
@@ -295,32 +287,13 @@ params! {
     AgentsPresenceGet(work::PresenceGet),
     AgentsBufferWatch(editor::BufferWatch),
     AgentsBufferUnwatch(editor::BufferUnwatch),
-    WorkMapSubscribe(work::MapSubscribe),
-    WorkMapSet(work::MapSet),
     WorkTargetSet(work::TargetSetParams),
-    WorkMapClose(work::MapClose),
-    WorkTrailSubscribe(work::TrailSubscribe),
-    WorkTrailClose(work::TrailClose),
-    WorkBoardSubscribe(work::BoardSubscribe),
-    WorkTrailSet(work::TrailSet),
-    WorkScheduleSubscribe(work::ScheduleSubscribe),
-    WorkScheduleSet(work::ScheduleSet),
-    WorkFlowSubscribe(work::FlowSubscribe),
     WorkFiles(work::EditedFiles),
     WorkHunks(work::HunksParams),
     WorkFileAt(work::FileAtParams),
     ViewEnv(view::ViewEnv),
     ViewResync(view::ViewResync),
     ViewAck(view::ViewAck),
-    ViewGlyphs(view::ViewGlyphs),
-    ViewMeasured(view::ViewMeasured),
-    ViewClose(view::ViewClose),
-    ViewWindow(view::ViewWindow),
-    BuffersSet(view::BuffersSet),
-    OutlineSet(view::OutlineSet),
-    OutlineScopes(view::OutlineScopesParams),
-    MinimapWatch(view::MinimapWatch),
-    MinimapBucket(view::MinimapBucketParams),
     FoldsSave(folds::FoldsSave),
     FoldsLoad(folds::FoldsLoad),
     TermOpen(term::TermOpen),
@@ -356,13 +329,6 @@ params! {
     DebugWriteMemory(debug::DebugWriteMemory),
     DebugBreakpoints(debug::DebugBreakpoints),
     DebugRunToCursor(debug::DebugRunToCursor),
-    DebugDataBreakpoint(debug::DebugDataBreakpoint),
-    DebugView(debug::DebugView),
-    DebugExpand(debug::DebugExpand),
-    DebugWatch(debug::DebugWatch),
-    DebugSetValue(debug::DebugSetValue),
-    DebugEvaluate(debug::DebugEvaluate),
-    DebugChildren(debug::DebugChildren),
     DebugFork(debug_fork::DebugFork),
     DebugForkRun(debug_fork::DebugForkId),
     DebugForkDrop(debug_fork::DebugForkId),
@@ -393,9 +359,7 @@ params! {
     NotebookInput(notebook::NotebookInput),
     NotebookTail(notebook::NotebookCellRef),
     NotebookOutput(notebook::NotebookCellRef),
-    NotebookView(notebook::NotebookViewParams),
     NotebookLog(notebook::NotebookLogParams),
-    NotebookFocus(notebook::NotebookFocusParams),
     NotebookClear(notebook::NotebookClear),
     NotebookClose(notebook::NotebookId),
     SearchQuery(search::QueryParams),
@@ -405,25 +369,6 @@ params! {
     SearchEmbedRetry(Empty),
     SearchModelDownload(search::DownloadParams),
     SearchTyping(Empty),
-    GitLetters(git::LettersParams),
-    AgentsSideSubscribe(agents_side::Subscribe),
-    AgentsSideSet(agents_side::Set),
-    AgentsSideClose(agents_side::ViewId),
-    BudgetsPageSubscribe(budgets_page::Subscribe),
-    BudgetsPageSet(budgets_page::Set),
-    BudgetsPageClose(budgets_page::ViewId),
-    ChangesSubscribe(changes::Subscribe),
-    ChangesSet(changes::Set),
-    ChangesClose(changes::ViewId),
-    ReviewScreenSubscribe(review_screen::Subscribe),
-    ReviewScreenSet(review_screen::Set),
-    ReviewScreenClose(review_screen::ViewId),
-    DocCommentsSubscribe(doc_comments::Subscribe),
-    DocCommentsSet(doc_comments::Set),
-    DocCommentsClose(doc_comments::ViewId),
-    ScmSubscribe(scm::Subscribe),
-    ScmSet(scm::Set),
-    ScmClose(scm::ViewId),
     GitStage(scm::Paths),
     GitUnstage(scm::Paths),
     GitDiscard(scm::Paths),
@@ -435,37 +380,18 @@ params! {
     GitCheckout(scm::Checkout),
     GitDeleteBranch(scm::DeleteBranch),
     GitStash(scm::Stash),
-    SearchRun(search::RunParams),
-    SearchBuffer(search::BufferParams),
-    SearchFiles(search::FilesParams),
     SearchSymbolAt(search::SymbolAtParams),
     SearchSymbols(search::SymbolsParams),
     SearchOutline(search::OutlineParams),
     SearchWhy(search::WhyParams),
     SearchMap(search::MapParams),
     SearchUsages(search::UsagesParams),
-    SearchGrepReplace(search::GrepReplaceParams),
-    SearchGrepLook(search::GrepLookParams),
-    SearchGrepSkipped(search::GrepSkippedParams),
-    SearchGroup(search::GroupParams),
-    SearchFold(search::FoldParams),
-    SearchEdits(search::EditsParams),
-    SearchEditDoc(search::EditDocParams),
-    SearchHandoff(search::HandoffParams),
-    SearchHandoffContext(search::HandoffContextParams),
-    SearchHandoffMark(search::HandoffMarkParams),
-    SearchHandoffState(search::HandoffStateParams),
-    SearchPreview(search::PreviewParams),
-    SearchApply(search::ApplyParams),
-    SearchApplied(search::AppliedParams),
-    SearchUndo(search::UndoParams),
     SearchRecent(search::RootParams),
     SearchSavedList(search::RootParams),
     SearchSavedPut(search::SavedPutParams),
     SearchSavedDelete(search::SavedNameParams),
     SearchSavedShare(search::SavedNameParams),
     SearchScopeBases(search::RootParams),
-    ExplorerSubscribe(search::ExplorerParams),
     SearchExport(search::ExportParams),
     SearchImport(search::ImportParams),
     SearchList(Empty),
@@ -511,8 +437,6 @@ params! {
     RunnersRemove(runners::RemoveParams),
     ExtensionsSearch(extensions::SearchParams),
     ExtensionsDetails(extensions::DetailsParams),
-    ExtensionsRows(extensions::RowsParams),
-    ExtensionsList(extensions::ListParams),
     ExtensionsModules(extensions::ModulesParams),
     ExtensionsRecommended(extensions::RecommendedParams),
     PluginsList(Empty),
@@ -566,12 +490,6 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(editor::methods());
     v.extend(folds::methods());
     v.extend(search::methods());
-    v.extend(git::methods());
-    v.extend(agents_side::methods());
-    v.extend(budgets_page::methods());
-    v.extend(changes::methods());
-    v.extend(review_screen::methods());
-    v.extend(doc_comments::methods());
     v.extend(scm::methods());
     v.extend(runners::methods());
     v.extend(jobs_q::methods());

@@ -345,7 +345,7 @@ pub struct RuntimeValues {
     /// `drgnx-search-gpu-busy`: How busy the GPU may be while the engine embeds, in percent (batches are paced).
     pub search_gpu_busy: Option<u32>,
     /// Which files Quick Open, Find and the text search list: `index` (the index's filters) or `real`
-    /// ([`crate::view::files::ignore_of`]).
+    /// (the rows that listed them are switched off: `view/REPLACED.md`).
     pub search_ignore_rules: String,
     /// The plugins that run, in hook order (`drgnx-agents-plugins`). A project's list replaces it
     /// ([`overrides::PER_PROJECT`]); a plugin runs only when the user approved it too ([`crate::plugins`]).

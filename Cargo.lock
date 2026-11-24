@@ -5781,7 +5781,6 @@ dependencies = [
  "mimir",
  "minni",
  "norn",
- "notify",
  "openssh",
  "proptest",
  "pulldown-cmark",

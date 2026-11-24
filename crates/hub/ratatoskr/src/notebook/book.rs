@@ -171,33 +171,6 @@ impl Book {
             .collect()
     }
 
-    /// The first LIMIT cells for the outline (their first lines, not their sources) and how many cells there are. A cell's state is
-    /// how its last run ended; queued and running are the caller's to say.
-    pub fn outline(&self, limit: usize) -> (usize, Vec<super::views::OutlineCell>) {
-        let cells = self.nb.cells();
-        let out = cells
-            .iter()
-            .take(limit)
-            .map(|c| {
-                let shown = self.shown.get(&c.id);
-                super::views::OutlineCell {
-                    id: c.id.clone(),
-                    kind: c.kind,
-                    first_line: super::views::first_line(&c.source),
-                    execution_count: c.execution_count,
-                    state: match shown.map(|s| s.run.status) {
-                        Some(RunStatus::Error) => "error",
-                        Some(RunStatus::Aborted) => "aborted",
-                        Some(RunStatus::Cancelled) => "cancelled",
-                        _ => "",
-                    },
-                    stale: shown.is_some_and(|s| s.stale),
-                }
-            })
-            .collect();
-        (cells.len(), out)
-    }
-
     /// One cell, without copying the others.
     pub fn cell_info(&self, id: &str) -> Option<CellInfo> {
         let c = &self.nb.cells()[self.index(id)?];

@@ -152,11 +152,6 @@ pub struct PastStatus {
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
-            "agents/history/subscribe", PastSubscribe(PastSubscribe) -> bool,
-            classes: [User], writes: false,
-            doc: "the caller's view shows the other CLIs' past sessions as rows (the workspace's first), narrowed by a query",
-        ),
-        method!(
             "agents/history/search", PastSearch(PastSearch) -> PastHits,
             classes: [User], writes: false,
             doc: "past sessions whose title or transcript holds every word of the query, best first, with a snippet",

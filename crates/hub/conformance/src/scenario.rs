@@ -200,12 +200,33 @@ pub fn parse(text: &str) -> Result<Scenario, ParseError> {
 }
 
 /// Every `*.jsonl` under `dir`, parsed, in path order.  A file that does not parse is an error naming file and line.
+/// A folder holding a `REPLACED.md` is reference for a replaced part and not loaded: all of it, or only the paths
+/// (relative to the folder) that its `files:` line lists.
 pub fn load_dir(dir: &std::path::Path) -> Result<Vec<Scenario>, String> {
-    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
+    fn walk(
+        dir: &std::path::Path,
+        skip: &mut Vec<std::path::PathBuf>,
+        out: &mut Vec<std::path::PathBuf>,
+    ) -> std::io::Result<()> {
+        if let Ok(text) = std::fs::read_to_string(dir.join("REPLACED.md")) {
+            match text.lines().find_map(|l| l.strip_prefix("files:")) {
+                None => return Ok(()),
+                Some(list) => skip.extend(
+                    list.split('#')
+                        .next()
+                        .unwrap_or_default()
+                        .split_whitespace()
+                        .map(|f| dir.join(f)),
+                ),
+            }
+        }
         for e in std::fs::read_dir(dir)? {
             let p = e?.path();
+            if skip.iter().any(|s| p.starts_with(s)) {
+                continue;
+            }
             if p.is_dir() {
-                walk(&p, out)?;
+                walk(&p, skip, out)?;
             } else if p.extension().is_some_and(|x| x == "jsonl") {
                 out.push(p);
             }
@@ -213,7 +234,7 @@ pub fn load_dir(dir: &std::path::Path) -> Result<Vec<Scenario>, String> {
         Ok(())
     }
     let mut files = Vec::new();
-    walk(dir, &mut files).map_err(|e| format!("{}: {e}", dir.display()))?;
+    walk(dir, &mut Vec::new(), &mut files).map_err(|e| format!("{}: {e}", dir.display()))?;
     files.sort();
     files
         .iter()
@@ -455,6 +476,33 @@ mod tests {
 {"do": "file_grep", "paths": ["$ROOT/**"], "absent": "secret"}
 {"do": "db_digest", "capture": "d"}
 "#;
+
+    /// A folder holding `REPLACED.md` stays as reference: its cases are not loaded (the whole folder, or the files its
+    /// `files:` line names).
+    #[test]
+    fn load_dir_skips_replaced_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = "{\"scenario\": \"t/ok\"}\n";
+        std::fs::write(dir.path().join("ok.jsonl"), ok).unwrap();
+        let gone = dir.path().join("gone");
+        std::fs::create_dir(&gone).unwrap();
+        std::fs::write(gone.join("a.jsonl"), "not json\n").unwrap();
+        std::fs::write(gone.join("b.jsonl"), "not json\n").unwrap();
+        assert!(
+            load_dir(dir.path()).is_err(),
+            "the bad cases are loaded without a REPLACED.md"
+        );
+        std::fs::write(gone.join("REPLACED.md"), "# Replaced: not compiled\n").unwrap();
+        let loaded = load_dir(dir.path()).unwrap();
+        assert_eq!(loaded.len(), 1);
+        std::fs::write(
+            gone.join("REPLACED.md"),
+            "# Replaced: not compiled\nfiles: a.jsonl   # b.jsonl stays\n",
+        )
+        .unwrap();
+        let e = load_dir(dir.path()).unwrap_err();
+        assert!(e.contains("b.jsonl") && !e.contains("a.jsonl"), "{e}");
+    }
 
     #[test]
     fn every_verb_parses() {

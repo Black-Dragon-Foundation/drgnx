@@ -1002,11 +1002,6 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "this connection no longer gets the session's `agent-entries` events",
         ),
         method!(
-            "agents/panel/look", AgentsPanelLook(PanelLook) -> bool,
-            classes: [User], writes: false,
-            doc: "what the user chose for an agent panel's rows (the step types open, rows opened or folded by hand, one window further back): its view-patch follows",
-        ),
-        method!(
             "agents/tool-input", AgentsToolInput(ToolInputParams) -> ToolInput,
             classes: [User], writes: false,
             doc: "a tool call's raw input, which no event carries (at most 256 KiB, else its JSON text cut and `truncated`)",

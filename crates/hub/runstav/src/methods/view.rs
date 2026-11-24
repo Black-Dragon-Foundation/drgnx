@@ -309,25 +309,6 @@ pub enum BufferOp {
     },
 }
 
-fn check_buffers(p: &BuffersSet) -> Result<(), Error> {
-    check_ids(&p.view, None)?;
-    if p.ops.len() > BUFFER_OPS_MAX {
-        return Err(invalid("ops", "at most 50000 changes"));
-    }
-    let long = |id: &String| id.is_empty() || id.len() > VIEW_MAX;
-    let bad = p.ops.iter().any(|op| match op {
-        BufferOp::Put { id, .. } | BufferOp::Modified { id, .. } | BufferOp::Remove { id } => {
-            long(id)
-        }
-        BufferOp::Scope { ids: Some(ids) } => ids.iter().any(long),
-        _ => false,
-    });
-    if bad {
-        return Err(invalid("ops", "buffer ids of 1 to 64 bytes"));
-    }
-    Ok(())
-}
-
 /// The longest file name `outline/set` takes, in bytes.
 pub const OUTLINE_FILE_MAX: usize = 4096;
 
@@ -349,14 +330,6 @@ pub struct OutlineSet {
 
 /// The most folded lines `outline/set` takes.
 pub const OUTLINE_FOLDED_MAX: usize = 65536;
-
-fn check_outline(p: &OutlineSet) -> Result<(), Error> {
-    check_ids(&p.view, None)?;
-    if p.folded.len() > OUTLINE_FOLDED_MAX {
-        return Err(invalid("folded", "at most 65536 lines"));
-    }
-    p.file.as_deref().map_or(Ok(()), check_outline_file)
-}
 
 /// `outline/scopes`: the definitions around LINE (from 1) of a file, as the Outline reads it (the editor's unsaved text
 /// where its edit history tracks the buffer, else the disk): what the breadcrumb's symbol and sticky scroll show.  The
@@ -445,69 +418,6 @@ pub struct MinimapBucket {
     pub buckets: u32,
 }
 
-fn check_minimap_bucket(p: &MinimapBucketParams) -> Result<(), Error> {
-    check_outline_file(&p.file)?;
-    if p.bucket >= 1024 {
-        return Err(invalid("bucket", "a bucket index below 1024"));
-    }
-    if !(1..=40).contains(&p.lines) {
-        return Err(invalid("lines", "1 to 40 lines"));
-    }
-    Ok(())
-}
-
-/// The heat layers `minimap/watch` knows.
-pub const MINIMAP_HEAT: [&str; 4] = ["blame", "coverage", "profile", "agent-read"];
-
-fn check_minimap_watch(p: &MinimapWatch) -> Result<(), Error> {
-    check_outline_file(&p.file)?;
-    if p.density
-        .as_ref()
-        .is_some_and(|d| d.error.len() > 1024 || d.warning.len() > 1024)
-    {
-        return Err(invalid("density", "two expressions of at most 1024 bytes"));
-    }
-    if p.heat
-        .as_deref()
-        .is_some_and(|h| !MINIMAP_HEAT.contains(&h))
-    {
-        return Err(invalid(
-            "heat",
-            "one of blame, coverage, profile, agent-read",
-        ));
-    }
-    if p.coverage.len() > 32
-        || p.coverage
-            .iter()
-            .any(|c| c.is_empty() || c.len() > OUTLINE_FILE_MAX)
-    {
-        return Err(invalid(
-            "coverage",
-            "at most 32 paths of at most 4096 bytes",
-        ));
-    }
-    if p.profile
-        .as_deref()
-        .is_some_and(|f| check_outline_file(f).is_err())
-    {
-        return Err(invalid(
-            "profile",
-            "an absolute file name of at most 4096 bytes",
-        ));
-    }
-    Ok(())
-}
-
-fn check_outline_file(f: &str) -> Result<(), Error> {
-    if f.is_empty() || f.len() > OUTLINE_FILE_MAX || !f.starts_with('/') {
-        return Err(invalid(
-            "file",
-            "an absolute file name of at most 4096 bytes",
-        ));
-    }
-    Ok(())
-}
-
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -527,81 +437,6 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "the editor applied a (view, class)'s patch of this version: an acknowledged view's next patch may go",
             check: |p: &ViewAck| check_ids(&p.view, Some(&p.class)),
-        ),
-        method!(
-            "view/glyphs", ViewGlyphs(ViewGlyphs) -> bool,
-            classes: [User], writes: false,
-            doc: "the editor's advances for the glyphs a view-glyphs asked for, [role, char, px] each",
-            check: |p: &ViewGlyphs| check_ids(&p.view, Some(&p.class)),
-        ),
-        method!(
-            "view/measured", ViewMeasured(ViewMeasured) -> bool,
-            classes: [User], writes: false,
-            doc: "the fit guard's measurements of strings that overflowed, [role, string, px] each: the hub fits by them",
-            check: |p: &ViewMeasured| check_ids(&p.view, Some(&p.class)),
-        ),
-        method!(
-            "view/window", ViewWindow(ViewWindow) -> bool,
-            classes: [User], writes: false,
-            doc: "the editor's replica needs another window of a list of a view's model, from a position in the whole list: the view's builder sends the model with that window",
-            check: |p: &ViewWindow| {
-                check_ids(&p.view, None)?;
-                if p.list.is_empty() || p.list.len() > VIEW_MAX {
-                    return Err(invalid("list", "a list name of 1 to 64 bytes"));
-                }
-                Ok(())
-            },
-        ),
-        method!(
-            "view/close", ViewClose(ViewClose) -> bool,
-            classes: [User], writes: false,
-            doc: "the editor shows a view no more: its envs and rows are forgotten (a connection's views end with it)",
-            check: |p: &ViewClose| check_ids(&p.view, None),
-        ),
-        method!(
-            "buffers/set", BuffersSet(BuffersSet) -> bool,
-            classes: [User], writes: false,
-            doc: "Emacs-era, re-decide at B1: changes to the Buffers panel's open buffers of a hub-fed view (put, modified, remove, the window's scope, the filter), in order: the hub sends the view's rows that changed to every class of it",
-            check: check_buffers,
-        ),
-        method!(
-            "outline/set", OutlineSet(OutlineSet) -> bool,
-            classes: [User], writes: false,
-            doc: "the file the Outline panel's hub-fed view shows (none: no file): the hub outlines it (the editor's unsaved text where its edit history tracks the buffer, else the disk), again after edits pause, and sends the view's model and rows",
-            check: check_outline,
-        ),
-        method!(
-            "minimap/watch", MinimapWatch(MinimapWatch) -> bool,
-            classes: [User], writes: false,
-            doc: "the editor shows a file in a minimap, or no longer: while it does, the hub sends the file's labels (its definitions, up to 8 MiB of text) and the heat layer asked for (blame, coverage, profile or agent-read) on the model's raw path, again after edits pause",
-            check: check_minimap_watch,
-        ),
-        method!(
-            "minimap/bucket", MinimapBucket(MinimapBucketParams) -> MinimapBucket,
-            classes: [User], writes: false,
-            doc: "the first lines of a density bucket of a huge file, read from disk: the density strip's peek",
-            check: check_minimap_bucket,
-        ),
-        method!(
-            "outline/scopes", OutlineScopes(OutlineScopesParams) -> OutlineScopes,
-            classes: [User], writes: false,
-            doc: "the definitions around a line of a file, outermost first, as the Outline reads it (the editor's unsaved text where its edit history tracks the buffer, else the disk): the breadcrumb's symbol and sticky scroll",
-            check: |p: &OutlineScopesParams| {
-                match (&p.file, &p.worktree_root, &p.path) {
-                    (Some(f), None, None) => check_outline_file(f)?,
-                    (None, Some(root), Some(path)) => {
-                        check_outline_file(root)?;
-                        if path.is_empty() || path.len() > OUTLINE_FILE_MAX || path.starts_with('/') {
-                            return Err(invalid("path", "a file name relative to worktree_root, at most 4096 bytes"));
-                        }
-                    }
-                    _ => return Err(invalid("file", "a file, or a path and its worktree_root")),
-                }
-                if p.line == 0 {
-                    return Err(invalid("line", "a line number from 1"));
-                }
-                Ok(())
-            },
         ),
     ]
 }
@@ -664,7 +499,7 @@ mod tests {
             .collect();
         assert_eq!(
             methods.len(),
-            7,
+            3,
             "the view/ methods: {:?}",
             methods.iter().map(|m| m.name).collect::<Vec<_>>()
         );

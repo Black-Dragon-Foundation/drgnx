@@ -423,11 +423,6 @@ mod tests {
         ]);
         // the vector server: a listener, its token
         want.extend(["embed/serve-start", "embed/serve-stop", "embed/serve-token"]);
-        // the Search view's saved searches: the hub's state, and the project's file on a click
-        // the Search view's writes: project files, on disk or through the editor
-        want.extend(["search/apply", "search/undo"]);
-        // Ask an Agent: a worktree, a session and its brief
-        want.extend(["search/handoff"]);
         want.extend([
             "search/saved/delete",
             "search/saved/put",
@@ -592,8 +587,7 @@ mod tests {
     const EMACS_ERA_MARK: &str = "Emacs-era, re-decide at B1: ";
 
     /// The methods that served a client with buffers (the audit's section 5): kept, and marked.
-    const EMACS_ERA: [&str; 17] = [
-        "buffers/set",
+    const EMACS_ERA: [&str; 16] = [
         "config/changed",
         "config/settings",
         "env/set",

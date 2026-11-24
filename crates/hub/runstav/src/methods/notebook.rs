@@ -353,25 +353,8 @@ fn check_cell(p: &NotebookCellRef) -> Result<(), Error> {
     name("cell", &p.cell)
 }
 
-fn check_focus(p: &NotebookFocusParams) -> Result<(), Error> {
-    name("id", &p.id)?;
-    p.cell.as_deref().map_or(Ok(()), |c| name("cell", c))
-}
-
 fn check_log(p: &NotebookLogParams) -> Result<(), Error> {
     name("id", &p.id)
-}
-
-fn check_view(p: &NotebookViewParams) -> Result<(), Error> {
-    name("id", &p.id)?;
-    match (p.kind, p.cell.as_deref()) {
-        (NotebookViewKind::Output, Some(c)) => name("cell", c),
-        (NotebookViewKind::Output, None) => Err(invalid("cell", "the cell whose output it shows")),
-        (NotebookViewKind::Outline | NotebookViewKind::Log, None) => Ok(()),
-        (NotebookViewKind::Outline | NotebookViewKind::Log, Some(_)) => {
-            Err(invalid("cell", "none for this view"))
-        }
-    }
 }
 
 fn check_clear(p: &NotebookClear) -> Result<(), Error> {
@@ -453,18 +436,6 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_cell,
         ),
         method!(
-            "notebook/view", NotebookView(NotebookViewParams) -> NotebookViewName,
-            classes: [User], writes: false,
-            doc: "a hub view of a notebook for the editor to show in Sjá: the cell outline (one row per cell with its index, type, first line, prompt and state) the whole output of one cell (windowed by view/window) or the kernel's log; the answer names the view, rows follow its view/env",
-            check: check_view,
-        ),
-        method!(
-            "notebook/focus", NotebookFocus(NotebookFocusParams) -> bool,
-            classes: [User], writes: false,
-            doc: "the editor is in this cell of the notebook (none: in none): the cell outline marks its row; sent when the cell changes",
-            check: check_focus,
-        ),
-        method!(
             "notebook/log", NotebookLog(NotebookLogParams) -> NotebookLog,
             classes: [User], writes: false,
             doc: "the kernel's log of a notebook after entry `since`: the messages that answered no cell (the kernel's own logging, messages from other clients), the last 500, each cut at 4096 characters",
@@ -505,8 +476,6 @@ mod tests {
             "input",
             "tail",
             "output",
-            "view",
-            "focus",
             "log",
             "clear",
             "close",
@@ -541,15 +510,7 @@ mod tests {
             json!({"id": "nb1", "request": "r", "value": "x"})
         ));
         assert!(ok("notebook/clear", json!({"id": "nb1"})));
-        assert!(ok("notebook/view", json!({"id": "nb1", "kind": "outline"})));
-        assert!(ok(
-            "notebook/view",
-            json!({"id": "nb1", "kind": "output", "cell": "a"})
-        ));
-        assert!(ok("notebook/view", json!({"id": "nb1", "kind": "log"})));
         assert!(ok("notebook/log", json!({"id": "nb1"})));
-        assert!(ok("notebook/focus", json!({"id": "nb1"})));
-        assert!(ok("notebook/focus", json!({"id": "nb1", "cell": "a"})));
         assert!(ok("notebook/log", json!({"id": "nb1", "since": 4})));
         assert!(ok("notebook/tail", json!({"id": "nb1", "cell": "a"})));
     }
@@ -598,35 +559,9 @@ mod tests {
         );
         assert!(err("notebook/tail", json!({"id": "nb1"})).path.is_some());
         assert!(
-            err("notebook/view", json!({"id": "nb1", "kind": "chart"}))
-                .path
-                .is_some()
-        );
-        assert!(
             err("notebook/log", json!({"id": "nb1", "since": -1}))
                 .path
                 .is_some()
-        );
-        assert_eq!(
-            err("notebook/focus", json!({"id": "nb1", "cell": ""}))
-                .path
-                .as_deref(),
-            Some("cell")
-        );
-        assert_eq!(
-            err("notebook/view", json!({"id": "nb1", "kind": "output"}))
-                .path
-                .as_deref(),
-            Some("cell")
-        );
-        assert_eq!(
-            err(
-                "notebook/view",
-                json!({"id": "nb1", "kind": "outline", "cell": "a"})
-            )
-            .path
-            .as_deref(),
-            Some("cell")
         );
         assert!(err("notebook/shutdown", json!({})).path.is_some());
     }

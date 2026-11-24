@@ -9,7 +9,7 @@ use runstav::methods::Params;
 use runstav::methods::notebook::{
     NotebookCell, NotebookCellText, NotebookEnded, NotebookKernel, NotebookKernels, NotebookLog,
     NotebookLogEntry, NotebookOpened, NotebookOutput, NotebookSkipped, NotebookStarted,
-    NotebookTail, NotebookViewName,
+    NotebookTail,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
@@ -18,7 +18,6 @@ use super::book::{CellInfo, CellSync};
 use super::hub::Notebooks;
 use super::kernel::{Exit, Timeouts};
 use super::spec::{self, Interrupt};
-use super::views::{NbViews, WatchSink};
 use crate::dispatch::Caller;
 use crate::front::Front;
 use hrafn::notebook::Kind;
@@ -27,8 +26,6 @@ use hrafn::notebook::Kind;
 #[derive(Default)]
 pub struct Hub {
     nb: Mutex<Option<Arc<Notebooks>>>,
-    /// The notebooks' Sjá views.
-    pub views: Arc<NbViews>,
 }
 
 fn err(message: impl ToString) -> Error {
@@ -48,7 +45,7 @@ pub(crate) fn runtime_dir(xdg: Option<PathBuf>, fallback: &Path) -> villa::Resul
     }
 }
 
-fn make(front: &Front, views: &Arc<NbViews>) -> villa::Result<Notebooks> {
+fn make(front: &Front) -> villa::Result<Notebooks> {
     // SAFETY: geteuid has no preconditions.
     let uid = unsafe { libc::geteuid() };
     let runtime = runtime_dir(
@@ -67,10 +64,7 @@ fn make(front: &Front, views: &Arc<NbViews>) -> villa::Result<Notebooks> {
         std::env::var(stig::SYSTEM_DATA_DIRS_VAR).ok().as_deref(),
     );
     Ok(Notebooks::new(
-        Arc::new(WatchSink {
-            inner: front.editors.clone(),
-            views: views.clone(),
-        }),
+        front.editors.clone(),
         folder,
         dirs,
         Timeouts::default(),
@@ -79,9 +73,7 @@ fn make(front: &Front, views: &Arc<NbViews>) -> villa::Result<Notebooks> {
 
 impl Hub {
     fn get(&self, front: &Front) -> Result<Arc<Notebooks>, Error> {
-        let nb = self.get_with(|| make(front, &self.views))?;
-        self.views.attach(&nb, front.core.views.front_weak());
-        Ok(nb)
+        self.get_with(|| make(front))
     }
 
     /// The notebooks, made by MAKE the first time it works: an error is not kept.
@@ -100,7 +92,6 @@ impl Hub {
 
     /// The editor on connection CONN is gone: its notebooks close and their kernels end.
     pub fn gone(&self, conn: u64) {
-        self.views.gone(conn);
         let nb = saman::lock(&self.nb).clone();
         if let Some(nb) = nb {
             crate::clock::spawn("notebook:gone", async move { nb.gone(conn).await });
@@ -163,7 +154,6 @@ pub async fn serve(
     };
     let conn = caller.conn_id;
     let ok = |r: villa::Result<()>| r.map(|()| json!(true)).map_err(err);
-    let views = &front.notebooks.views;
     Ok(match p {
         Params::NotebookOpen(p) => match nb.open(conn, std::path::Path::new(&p.path), p.text).await
         {
@@ -179,21 +169,11 @@ pub async fn serve(
             })(),
             Err(e) => Err(err(e)),
         },
-        Params::NotebookSync(p) => {
-            let r = nb.sync(conn, &p.id, &syncs(p.cells)).await;
-            views.changed(conn, &p.id);
-            ok(r)
-        }
-        Params::NotebookExecute(p) => {
-            let r = nb.execute(conn, &p.id, &syncs(p.cells)).await;
-            views.changed(conn, &p.id);
-            ok(r)
-        }
+        Params::NotebookSync(p) => ok(nb.sync(conn, &p.id, &syncs(p.cells)).await),
+        Params::NotebookExecute(p) => ok(nb.execute(conn, &p.id, &syncs(p.cells)).await),
         Params::NotebookSave(p) => {
             let cells = p.cells.map(syncs);
-            let r = nb.save(conn, &p.id, cells.as_deref()).await;
-            views.changed(conn, &p.id);
-            ok(r)
+            ok(nb.save(conn, &p.id, cells.as_deref()).await)
         }
         Params::NotebookKernels(_) => {
             let (specs, skipped) = nb.kernels_with_skips();
@@ -247,19 +227,7 @@ pub async fn serve(
             .await
             .map(|outputs| json!(NotebookOutput { outputs }))
             .map_err(err),
-        Params::NotebookClear(p) => {
-            let r = nb.clear(conn, &p.id, p.cell.as_deref()).await;
-            views.changed(conn, &p.id);
-            ok(r)
-        }
-        Params::NotebookFocus(p) => {
-            if nb.owns(conn, &p.id) {
-                views.focus(conn, &p.id, p.cell.as_deref());
-                Ok(json!(true))
-            } else {
-                Err(err(format!("no open notebook {}", p.id)))
-            }
-        }
+        Params::NotebookClear(p) => ok(nb.clear(conn, &p.id, p.cell.as_deref()).await),
         Params::NotebookLog(p) => nb
             .kernel_log(conn, &p.id, p.since.unwrap_or(0))
             .map(|(entries, next, lost)| {
@@ -277,19 +245,8 @@ pub async fn serve(
                 })
             })
             .map_err(err),
-        Params::NotebookView(p) => {
-            if nb.owns(conn, &p.id) {
-                views
-                    .register(conn, &p.id, p.kind, p.cell.as_deref())
-                    .map(|view| json!(NotebookViewName { view }))
-                    .map_err(err)
-            } else {
-                Err(err(format!("no open notebook {}", p.id)))
-            }
-        }
         Params::NotebookClose(p) => {
             nb.close(conn, &p.id).await;
-            views.closed(conn, &p.id);
             Ok(json!(true))
         }
         other => return Err(Box::new(other)),

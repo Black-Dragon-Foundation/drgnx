@@ -167,6 +167,61 @@ fn reactive_with_dev_dep_on_glitnir(ws: &Path, row: &str) {
     std::fs::write(&table, text).unwrap();
 }
 
+/// Two files that break `no-env-home` (the fixture's `home.rs` does) under `crates/bad/src/gone/`.
+fn gone_folder(ws: &Path) -> std::path::PathBuf {
+    let dir = ws.join("crates/bad/src/gone");
+    std::fs::create_dir_all(&dir).unwrap();
+    let home = std::fs::read_to_string(ws.join("crates/bad/src/home.rs")).unwrap();
+    std::fs::write(dir.join("a.rs"), &home).unwrap();
+    std::fs::write(dir.join("b.rs"), &home).unwrap();
+    dir
+}
+
+#[test]
+fn a_folder_with_replaced_md_is_not_scanned() {
+    let ws = fixture();
+    let dir = gone_folder(ws.path());
+    let (_, out) = run(ws.path(), &[]);
+    assert!(
+        !lines(&out, "crates/bad/src/gone/a.rs", "[").is_empty(),
+        "{out}"
+    );
+    std::fs::write(dir.join("REPLACED.md"), "# Replaced: not compiled\n").unwrap();
+    let (_, out) = run(ws.path(), &[]);
+    assert!(
+        lines(&out, "crates/bad/src/gone/a.rs", "[").is_empty(),
+        "{out}"
+    );
+    assert!(
+        lines(&out, "crates/bad/src/gone/b.rs", "[").is_empty(),
+        "{out}"
+    );
+    assert!(
+        !lines(&out, "crates/bad/src/home.rs", "[").is_empty(),
+        "{out}"
+    );
+}
+
+#[test]
+fn replaced_md_with_files_skips_only_the_listed_files() {
+    let ws = fixture();
+    let dir = gone_folder(ws.path());
+    std::fs::write(
+        dir.join("REPLACED.md"),
+        "# Replaced: not compiled\nfiles: a.rs   # b.rs stays\n",
+    )
+    .unwrap();
+    let (_, out) = run(ws.path(), &[]);
+    assert!(
+        lines(&out, "crates/bad/src/gone/a.rs", "[").is_empty(),
+        "{out}"
+    );
+    assert!(
+        !lines(&out, "crates/bad/src/gone/b.rs", "[").is_empty(),
+        "{out}"
+    );
+}
+
 #[test]
 fn layer_dev_dependency_back_edge_fails_with_dev_true() {
     let ws = fixture();

@@ -558,16 +558,15 @@ fn a_worktree_root_answers_from_its_view() {
 }
 
 /// The tools a search socket lists, by name.
-/// A session's search tools; `search_results` answers only the session a Search view hand-off went to; `index_list` and
-/// `index_status` read the index's state (§11A: agents see it, the user changes it).
-const TOOLS: [&str; 8] = [
+/// A session's search tools; `index_list` and `index_status` read the index's state (§11A: agents see it, the user
+/// changes it).
+const TOOLS: [&str; 7] = [
     "find_usages",
     "index_list",
     "index_status",
     "outline",
     "repo_map",
     "search",
-    "search_results",
     "symbols",
 ];
 

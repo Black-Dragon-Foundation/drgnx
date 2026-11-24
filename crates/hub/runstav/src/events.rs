@@ -454,11 +454,6 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "the hub asks the editor for advances it cannot read from a font file, [role, char] each: answered by view/glyphs"
         ),
         event!(
-            "git-letters-error",
-            crate::methods::git::LettersError,
-            "git/letters could not read a repository's status (git's complaint): the view keeps the rows it has; to the asking connection only"
-        ),
-        event!(
             "scm-remote",
             crate::methods::scm::RemoteEvent,
             "a git/remote command (push, pull, fetch, sync, publish) is running, done, failed (git's complaint) or stopped; to the asking connection only"

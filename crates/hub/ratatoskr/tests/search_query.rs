@@ -250,7 +250,6 @@ fn mcp_search_answers_with_lag_line() {
                 "outline",
                 "repo_map",
                 "search",
-                "search_results",
                 "symbols"
             ]
         );

@@ -23,7 +23,6 @@ mod background_tests;
 )]
 pub(crate) mod blocks;
 pub(crate) mod panel;
-pub(crate) mod rows;
 pub(crate) mod turn_core;
 
 use super::launch;
@@ -34,7 +33,7 @@ use super::transcript;
 use super::wheel::{self, Wheel};
 use crate::dispatch::Caller;
 use crate::front::Front;
-use crate::matrix_gate::{ActionCtx, AllowedBy, Gate, MatrixGate};
+use crate::matrix_gate::{ActionCtx, Gate, MatrixGate};
 use crate::settings::AgentProfile;
 use crate::settings::profiles::Mode as ProfileMode;
 use hermod::schema::v1::{ReadTextFileResponse, RequestPermissionResponse, WriteTextFileResponse};
@@ -53,7 +52,7 @@ use runstav::registry::Class;
 use runstav::types::RequestId;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -1196,8 +1195,6 @@ pub struct Session {
     editors: Arc<crate::settings::agents::Editors>,
     /// The pair door: a project chat's writes of the checkout go through the editor ([`crate::pair`]).
     pair: Arc<crate::pair::door::Door>,
-    /// The Work map: each snapshot reaches it too ([`crate::work::map`]).
-    map: Arc<crate::work::map::Map>,
     /// The presence model: its tool calls feed it as they run ([`Session::feed_live`]).
     presence: Arc<crate::work::presence::Live>,
     /// The follow feed: each tool call's place reaches it ([`crate::editor::follow`]).
@@ -1226,9 +1223,6 @@ pub struct Session {
     closed: AtomicBool,
     /// The decision-log version the freshness gate last told this session of (Task 24).
     gated: AtomicU64,
-    /// How each allowed tool call was allowed, by `toolCallId`: the line its step's row shows ([`Session::allowed_how`]).
-    /// One short line per call, so it grows with the transcript and no faster.
-    allowed: Mutex<BTreeMap<String, String>>,
     state: Mutex<State>,
     /// Transcripts and the held queue on disk (none in unit tests).
     store: Option<transcript::Store>,
@@ -1260,8 +1254,6 @@ pub struct Session {
     mcp_servers: Vec<String>,
     /// Its agent's `_drgnx/panel` extension: what it offers, its context breakdown.
     panel: panel::Panel,
-    /// The agent panels' rows: each change of the transcript builds the rows of the groups it touched.
-    panels: Arc<crate::view::panel::Panels>,
     /// The projects' edit histories and the hub's state folder they live under: every write the hub serves for the
     /// agent is recorded there (none: the hub has no state folder).
     history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
@@ -1290,8 +1282,6 @@ pub(crate) struct StepSink {
     pub stamps: Option<Arc<crate::work::conclusions::Stamps>>,
     /// The presence model: the files each step was in (none: a test).
     pub presence: Option<Arc<crate::work::presence::Live>>,
-    /// The Work map: each closed step, and the presence it changed (none: a test).
-    pub map: Option<Arc<crate::work::map::Map>>,
     /// The trace supervisor: a shell step's close takes what its command opened (none: a test).
     pub traces: Option<Arc<crate::work::trace::Traces>>,
     /// The conflict predictor: an edit step's file against the other worktrees' (none: a test).
@@ -2672,7 +2662,6 @@ fn assemble(
                 asks: Some(front.core.asks.handle()),
                 stamps: Some(front.core.stamps.clone()),
                 presence: Some(front.core.presence.clone()),
-                map: Some(front.core.map.clone()),
                 traces: Some(front.core.traces.clone()),
                 predict: Some(front.core.predict.clone()),
             },
@@ -2756,7 +2745,6 @@ fn assemble(
         acp: l.acp,
         editors: front.editors.clone(),
         pair: front.pair.clone(),
-        map: front.core.map.clone(),
         presence: front.core.presence.clone(),
         follows: front.follows.clone(),
         gate: front.core.matrix.clone(),
@@ -2773,7 +2761,6 @@ fn assemble(
         wait_refusals: AtomicU32::new(0),
         closed: AtomicBool::new(false),
         gated: AtomicU64::new(0),
-        allowed: Mutex::new(BTreeMap::new()),
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
         disk: crate::disk::Ordered::new("session:disk"),
@@ -2789,7 +2776,6 @@ fn assemble(
         hooked,
         mcp_servers,
         panel,
-        panels: front.core.views.panels.clone(),
         history: front
             .dirs
             .get()
@@ -2958,140 +2944,6 @@ impl Session {
         }
     }
 
-    /// The transcript entries that carry one of MIDS as their `messageId`, at most CAP.
-    /// How many entries the transcript holds.
-    pub(crate) fn entry_count(&self) -> usize {
-        lock(&self.state).entries.len()
-    }
-
-    /// The agent panel's groups ([`rows::groups`]) of the entries from FROM on, each with its entries and, for an agent
-    /// message, its Markdown blocks (the streaming message's as they stand, another's from its text): every group, or
-    /// with ONLY those that hold one of its indexes.
-    pub(crate) fn panel_groups(
-        &self,
-        from: usize,
-        only: Option<&std::collections::BTreeSet<usize>>,
-    ) -> Vec<rows::GroupIn> {
-        let st = lock(&self.state);
-        let tail: Vec<(usize, &Entry)> = st.entries.iter().enumerate().skip(from).collect();
-        rows::groups(&tail)
-            .into_iter()
-            .filter(|(head, thoughts)| {
-                only.is_none_or(|o| o.contains(head) || thoughts.iter().any(|t| o.contains(t)))
-            })
-            .map(|(head, thoughts)| {
-                let entry = st.entries[head].clone();
-                let blocks = (entry.kind == EntryType::Agent).then(|| match st.md.as_ref() {
-                    Some(m) if m.entry == head => m.stream.blocks().to_vec(),
-                    _ => entry
-                        .rest
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .map(|t| {
-                            let mut md = super::markdown::Stream::default();
-                            md.update(t);
-                            md.blocks().to_vec()
-                        })
-                        .unwrap_or_default(),
-                });
-                rows::GroupIn {
-                    head,
-                    entry,
-                    thoughts: thoughts.iter().map(|t| st.entries[*t].clone()).collect(),
-                    blocks,
-                }
-            })
-            .collect()
-    }
-
-    /// The conversation blocks' roles of the entries from FROM on ([`rows::panel_roles`]).
-    pub(crate) fn panel_roles(&self, from: usize) -> std::collections::BTreeMap<usize, rows::Role> {
-        let st = lock(&self.state);
-        rows::panel_roles(&st.entries[from.min(st.entries.len())..], from)
-    }
-
-    /// The agent panel's steps from FROM on, for its model ([`crate::view::panel::heads_of`]).
-    pub(crate) fn panel_heads(&self, from: usize) -> Vec<crate::view::panel::Head> {
-        let st = lock(&self.state);
-        let tail: Vec<(usize, &Entry)> = st.entries.iter().enumerate().skip(from).collect();
-        crate::view::panel::heads_of(&tail)
-    }
-
-    /// The latest plan entry's items as (status, content): the agent's to-do list; none when it made no plan.
-    pub(crate) fn plan_items(&self) -> Option<Vec<(String, String)>> {
-        let st = lock(&self.state);
-        let e = st
-            .entries
-            .iter()
-            .rev()
-            .find(|e| e.kind == EntryType::Plan)?;
-        let items = e.rest.get("entries")?.as_array()?;
-        Some(
-            items
-                .iter()
-                .map(|i| {
-                    let get = |k: &str| i.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
-                    (get("status"), get("content"))
-                })
-                .collect(),
-        )
-    }
-
-    /// The indexes of the finished edits in the transcript (a tool call of kind `edit` that completed), ascending.
-    pub(crate) fn finished_edits(&self) -> Vec<usize> {
-        let st = lock(&self.state);
-        st.entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| {
-                e.kind == EntryType::Tool
-                    && e.rest.get("kind").and_then(Value::as_str) == Some("edit")
-                    && e.rest.get("status").and_then(Value::as_str) == Some("completed")
-            })
-            .map(|(i, _)| i)
-            .collect()
-    }
-
-    /// The first of the entries at INDEXES that is a tool call.
-    pub(crate) fn first_tool(&self, indexes: &BTreeSet<usize>) -> Option<usize> {
-        let st = lock(&self.state);
-        indexes
-            .iter()
-            .copied()
-            .find(|&i| st.entries.get(i).is_some_and(|e| e.kind == EntryType::Tool))
-    }
-
-    /// The line for how tool call TOOL was allowed, kept for its step's row: `auto-allowed: <preset> · <scope>`
-    /// (the matrix's own cell) or `allowed by your earlier yes · <scope>`; the scope is the session's kind.
-    async fn note_allowed(&self, tool: Option<&Value>, action: Action, ctx: ActionCtx) {
-        let Some(id) = tool
-            .and_then(|t| t.get("toolCallId"))
-            .and_then(Value::as_str)
-        else {
-            return;
-        };
-        let scope = if self.role == Role::Chat {
-            "this chat"
-        } else {
-            "this task"
-        };
-        let how = match self
-            .gate
-            .allowed_by(&self.writer, self.who(), action, ctx)
-            .await
-        {
-            AllowedBy::Preset(p) => format!("auto-allowed: {p} \u{b7} {scope}"),
-            AllowedBy::Grant => format!("allowed by your earlier yes \u{b7} {scope}"),
-        };
-        lock(&self.allowed).insert(id.to_owned(), how);
-    }
-
-    /// The cached line for how tool entry E was allowed (read at render: no lookup beyond this map).
-    pub(crate) fn allowed_how(&self, e: &Entry) -> Option<String> {
-        let id = e.rest.get("id").and_then(Value::as_str)?;
-        lock(&self.allowed).get(id).cloned()
-    }
-
     /// Whether the session's folder is one the user trusted (`trusted-folders.eld`, [`super::trust`]): fail closed.  A
     /// problem with the file is said once per change to every editor.
     fn cwd_trusted(&self) -> bool {
@@ -3112,17 +2964,7 @@ impl Session {
         answer.trusted
     }
 
-    /// Whether a live Always grant of this session covers tool entry E (its kind, when both name one, and its title).
-    pub(crate) fn always_covers(&self, e: &Entry) -> bool {
-        let title = e.rest.get("title").and_then(Value::as_str);
-        let kind = e.rest.get("kind").and_then(Value::as_str);
-        self.grants.list().iter().any(|g| {
-            !g.revoked
-                && g.title.as_deref() == title
-                && (kind.is_none() || g.tool.is_empty() || Some(g.tool.as_str()) == kind)
-        })
-    }
-
+    /// The transcript entries that carry one of MIDS as their `messageId`, at most CAP.
     pub(crate) fn entries_for(
         &self,
         mids: &std::collections::HashSet<String>,
@@ -3752,7 +3594,6 @@ async fn write_steps(
                 })
                 .await
                 .unwrap_or_default();
-                let mut changed = Vec::new();
                 match (&c.open.tool_id, c.call_end) {
                     (Some(call), Some(end)) => {
                         let closed = mine
@@ -3776,37 +3617,19 @@ async fn write_steps(
                                 live: false,
                                 tool_call: None,
                             });
-                        changed.extend(live.close_live(&ctx.session, call, closed));
+                        live.close_live(&ctx.session, call, closed);
                     }
                     (Some(_), None) => {}
                     (None, _) => files.extend(mine),
                 }
                 if id != 0 && !files.is_empty() {
-                    changed.extend(live.apply(presence::PresenceEv::Step {
+                    live.apply(presence::PresenceEv::Step {
                         session: ctx.session.clone(),
                         step: id,
                         at: step.start,
                         files,
-                    }));
+                    });
                 }
-                if !changed.is_empty()
-                    && let Some(map) = &sink.map
-                {
-                    map.presence(&live.now_in(&changed));
-                }
-            }
-            // the step's class is the agent card's activity
-            if let Some(map) = &sink.map
-                && id != 0
-            {
-                map.step(&ctx.session, id, &step.class, step.start);
-            }
-            // a snapshot was taken (an edit, or the turn's first step): the worktree's changed files reach the map's
-            // overlaps, also once the edit is no longer in flight
-            if let Some(map) = &sink.map
-                && step.snapshot.is_some()
-            {
-                map.edited(&ctx.session).await;
             }
             // an edit step closed on a file: the conflict predictor checks it against the other worktrees' changes there
             if let (Some(predict), Some(d)) = (&sink.predict, &c.detail)
@@ -4445,11 +4268,9 @@ impl Session {
     }
 
     fn emit(&self) {
-        let dirty: std::collections::BTreeSet<usize>;
         let (seq, entries) = {
             let mut st = lock(&self.state);
             let idx: Vec<usize> = std::mem::take(&mut st.dirty).into_iter().collect();
-            dirty = idx.iter().copied().collect();
             let mut entries: Vec<(u64, Entry)> = idx
                 .into_iter()
                 .filter_map(|i| st.entries.get(i).map(|e| (i as u64, e.clone())))
@@ -4471,17 +4292,10 @@ impl Session {
             (st.seq, entries)
         };
         let snapshot = self.snapshot();
-        // the Agents side follows every session, a map open or not
-        self.map.agents_changed();
-        if self.map.open() {
-            self.map.session(&snapshot, &self.subagents());
-        }
         self.editors.broadcast_agent(
             &self.id,
             json!({"id": self.id, "seq": seq, "session": snapshot}),
         );
-        // the panel's header and chips follow the snapshot, also when no entry changed
-        self.panels.changed(self, &dirty);
         if entries.is_empty() {
             return;
         }
@@ -5013,7 +4827,6 @@ impl Session {
     async fn feed_live(&self, outs: Vec<(String, LiveOut)>) {
         use crate::work::presence::CallStatus;
         use runstav::methods::work::PresenceMode as Mode;
-        let mut changed = Vec::new();
         for (call, out) in outs {
             match out {
                 LiveOut::At {
@@ -5030,13 +4843,12 @@ impl Session {
                     if pending && update.mode == Mode::Edit {
                         update.mode = Mode::Pending;
                     }
-                    changed.extend(self.presence.apply_live(&self.id, &call, update));
+                    self.presence.apply_live(&self.id, &call, update);
                 }
-                LiveOut::Gone => changed.extend(self.presence.close_live(&self.id, &call, None)),
+                LiveOut::Gone => {
+                    self.presence.close_live(&self.id, &call, None);
+                }
             }
-        }
-        if !changed.is_empty() {
-            self.map.presence(&self.presence.now_in(&changed));
         }
     }
 
@@ -5106,10 +4918,7 @@ impl Session {
             return;
         };
         update.mode = Mode::Pending;
-        let changed = self.presence.apply_live(&self.id, call, update);
-        if !changed.is_empty() {
-            self.map.presence(&self.presence.now_in(&changed));
-        }
+        self.presence.apply_live(&self.id, call, update);
     }
 
     /// Permission request P answered with ANSWER (none: cancelled), and its pending presence settled: refused, the call
@@ -5134,15 +4943,10 @@ impl Session {
         }
         reply(p.resp, answer);
         let Some(call) = call else { return };
-        let changed = if !allowed {
-            self.presence.close_live(&self.id, &call, None)
-        } else if lock(&self.state).tools.contains_key(&call) {
-            Vec::new()
-        } else {
-            self.presence.withdraw_live(&self.id, &call)
-        };
-        if !changed.is_empty() {
-            self.map.presence(&self.presence.now_in(&changed));
+        if !allowed {
+            self.presence.close_live(&self.id, &call, None);
+        } else if !lock(&self.state).tools.contains_key(&call) {
+            self.presence.withdraw_live(&self.id, &call);
         }
     }
 
@@ -5277,7 +5081,6 @@ impl Session {
                 facts,
                 ..ActionCtx::of_session(&s.scopes, &s.id)
             };
-            let why_ctx = ctx.clone();
             let gate = s
                 .gate
                 .decide(&s.settings, &s.writer, s.who(), action, ctx)
@@ -5298,7 +5101,6 @@ impl Session {
                     if pick_allow(&options).is_some()
                         && !s.grants.revoked_covers(req.get("toolCall")) =>
                 {
-                    s.note_allowed(req.get("toolCall"), action, why_ctx).await;
                     reply(resp, pick_allow(&options))
                 }
                 gate => {
@@ -5318,7 +5120,6 @@ impl Session {
     async fn record_always(&self, tool: Option<Value>, card: Option<i64>) {
         let g = self.grants.record(&self.id, tool.as_ref(), card, now());
         self.save_grant(&g).await;
-        self.panels.refresh(&self.id);
     }
 
     /// Grant G as a record `always:<session>:<key>`, written as the hub.
@@ -5352,7 +5153,6 @@ impl Session {
             .revoke(id, live)
             .map_err(|e| invalid("grant", &e))?;
         self.save_grant(&g).await;
-        self.panels.refresh(&self.id);
         Ok(out)
     }
 
@@ -7402,13 +7202,11 @@ fn asks_gone(f: &Front, sid: &str) {
         .send(crate::work::asks::AskEv::SessionGone {
             session: sid.to_string(),
         });
-    let changed = f
-        .core
+    f.core
         .presence
         .apply(crate::work::presence::PresenceEv::SessionEnd {
             session: sid.to_string(),
         });
-    f.core.map.presence(&f.core.presence.now_in(&changed));
     f.core.traces.end(sid);
 }
 
@@ -8093,7 +7891,6 @@ mod tests {
                 asks: None,
                 stamps: None,
                 presence: None,
-                map: None,
                 traces: None,
                 predict: None,
             };
@@ -8165,7 +7962,6 @@ mod tests {
                 asks: None,
                 stamps: None,
                 presence: None,
-                map: None,
                 traces: None,
                 predict: None,
             };
@@ -8278,7 +8074,6 @@ mod tests {
                 asks: None,
                 stamps: None,
                 presence: None,
-                map: None,
                 traces: None,
                 predict: None,
             };
@@ -8360,7 +8155,6 @@ mod tests {
                 asks: None,
                 stamps: None,
                 presence: None,
-                map: None,
                 traces: None,
                 predict: None,
             };
@@ -8465,7 +8259,6 @@ mod tests {
                 asks: None,
                 stamps: None,
                 presence: None,
-                map: None,
                 traces: None,
                 predict: None,
             };
@@ -8574,7 +8367,6 @@ mod tests {
                 asks: None,
                 stamps: None,
                 presence: None,
-                map: None,
                 traces: None,
                 predict: None,
             };
@@ -8661,7 +8453,6 @@ mod tests {
                 asks: None,
                 stamps: None,
                 presence: None,
-                map: None,
                 traces: None,
                 predict: None,
             };
@@ -8751,7 +8542,6 @@ mod tests {
             asks: None,
             stamps: None,
             presence: None,
-            map: None,
             traces: None,
             predict: None,
         };

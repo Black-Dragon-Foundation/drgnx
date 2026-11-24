@@ -15,9 +15,8 @@ use runstav::methods::Empty;
 use runstav::methods::work::{Machine, MachineReport, MachinesList, MoveParams, MoveResult, Slot};
 use runstav::wire::Error;
 use serde_json::json;
-use vegvisir::{MachineFact, RunnerFact};
+use vegvisir::RunnerFact;
 
-use super::map::machine_fact;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -35,8 +34,6 @@ pub struct Registry {
     local: Vec<Slot>,
     /// The runners the hub keeps (`runners/registry`): listed after `local`, never expiring.
     runners: Vec<String>,
-    /// What the map shows of each runner: its fact and its cores (the load's total).
-    facts: BTreeMap<String, (RunnerFact, u32)>,
 }
 
 #[derive(Debug)]
@@ -85,24 +82,6 @@ impl Registry {
         let changed = self.runners != names;
         self.runners = names;
         changed
-    }
-
-    /// What the map shows of the runners. True when that changed it.
-    pub fn set_facts(&mut self, facts: BTreeMap<String, (RunnerFact, u32)>) -> bool {
-        let changed = self.facts != facts;
-        self.facts = facts;
-        changed
-    }
-
-    /// The list as the map holds it: a runner's entry with its fact.
-    pub fn map_facts(&self) -> Vec<MachineFact> {
-        self.list()
-            .iter()
-            .map(|m| {
-                let r = self.facts.get(&m.machine).map(|(r, c)| (r, *c));
-                machine_fact(m, r.filter(|_| !m.local))
-            })
-            .collect()
     }
 
     /// `local` first, then the runners by name, then the reported machines by name (a report under a runner's name
@@ -178,49 +157,7 @@ fn refresh(f: &Front) -> Vec<Machine> {
             }),
         );
     }
-    feed_map(f);
     list
-}
-
-/// The map hears the machines as they stand, with each runner's fact (it holds only what differs), and the jobs the
-/// sessions run (a running one on its runner), so a card's job and its "runs on" edge follow the job.
-fn feed_map(f: &Front) {
-    let queue = f.core.exec.queue();
-    let mut facts = f.core.machines.lock().map_facts();
-    // a runner's state and jobs are the queue's now, not those of the last `runners-changed`
-    for m in &mut facts {
-        if let (Some(r), Some(q)) = (m.runner.as_mut(), queue.as_ref()) {
-            r.jobs = q.runner_jobs(&m.name);
-            m.used = r.jobs;
-            if let Some(row) = q.runner(&m.name) {
-                r.state = row.state;
-            }
-        }
-    }
-    f.core.map.machines(facts);
-    let live = f.core.exec.live();
-    let keys = queue.map(|q| q.keys().clone());
-    f.core.map.jobs(&|session| {
-        let id = live.ids(session).into_iter().next()?;
-        let row = f.core.exec.get(&id)?;
-        let sent = keys
-            .as_ref()
-            .map(|k| {
-                k.audit(Some(&id), None)
-                    .into_iter()
-                    .filter(|r| r.kind == runstav::methods::runners::AuditKind::Sent)
-                    .map(|r| r.key.as_str().to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
-        Some(super::map::job_fact(&row, sent))
-    });
-}
-
-/// The map's machines now (the registry brought up to date first): the Work map's seed.
-pub(crate) fn facts_now(f: &Front) -> Vec<MachineFact> {
-    refresh(f);
-    f.core.machines.lock().map_facts()
 }
 
 /// The local slots the hub starts with, read once the job pool is open and before anything is served: they are the
@@ -231,16 +168,11 @@ pub fn seed(f: &Front) {
 
 /// The hub's runners are these (`runners/*`): they join the list after `local`, and the subscribers hear of a change.
 pub fn set_runners(f: &Front, runners: Vec<(String, RunnerFact, u32)>) {
-    let names: Vec<String> = runners.iter().map(|r| r.0.clone()).collect();
-    let facts: BTreeMap<String, (RunnerFact, u32)> = runners
-        .into_iter()
-        .map(|(n, r, cores)| (n, (r, cores)))
-        .collect();
+    let names: Vec<String> = runners.into_iter().map(|r| r.0).collect();
     let (list, changed) = {
         let mut g = f.core.machines.lock();
         let before = g.list();
         g.set_runners(names);
-        g.set_facts(facts);
         let after = g.list();
         let changed = before != after;
         (after, changed)
@@ -248,7 +180,6 @@ pub fn set_runners(f: &Front, runners: Vec<(String, RunnerFact, u32)>) {
     if changed {
         f.broadcast("machines-changed", json!(MachinesList { machines: list }));
     }
-    feed_map(f);
 }
 
 /// `machines/report`. The caller is a user connection (the registry's class table).
@@ -271,7 +202,6 @@ pub async fn report(f: &Front, _: &Caller, p: MachineReport) -> Result<Machine, 
             }),
         );
     }
-    feed_map(f);
     Ok(list
         .into_iter()
         .find(|m| m.machine == name)

@@ -1365,7 +1365,7 @@ pub async fn sweep(front: &Front) {
 }
 
 /// `forecast/start`: the start step of a proposed job (docs/develop/hub.md, "The start step"): the forecast of the job, as
-/// [`crate::work::map::budget_detail::start_of`] reads it.
+/// [`crate::work::budget_detail::start_of`] reads it.
 pub async fn start(
     front: &Front,
     caller: &Caller,
@@ -1380,8 +1380,8 @@ pub async fn start(
         },
     )
     .await?;
-    Ok(crate::work::map::budget_detail::view_of(
-        &crate::work::map::budget_detail::start_of(&f, p.utc_offset),
+    Ok(crate::work::budget_detail::view_of(
+        &crate::work::budget_detail::start_of(&f, p.utc_offset),
     ))
 }
 

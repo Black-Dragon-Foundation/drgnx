@@ -1339,14 +1339,12 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/history/resume` | user | `{id: string, profile?: string, provider: "claude" \| "gemini" \| "codex", route: "copy" \| "original"}` | `{route: "copy" \| "original", session: string}` | yes |
 | `agents/history/search` | user | `{query: string}` | `{hits?: [PastHit]}` | no |
 | `agents/history/status` | user | `{}` | `{drift?: [PastDrift], on: boolean, sessions: natnum}` | no |
-| `agents/history/subscribe` | user | `{limit?: natnum, query?: string, view: string, workspace?: AbsPath}` | `boolean` | no |
 | `agents/huddle/get` | user | `{id: Id}` | `Huddle` | no |
 | `agents/huddle/start` | user | `{clash?: string, sessions?: [Id]}` | `Huddle` | yes |
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
 | `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
-| `agents/panel/look` | user | `{bg_selected?: string, dear_cost?: number, ledger_open?: boolean, lens?: [string], lens_on?: natnum, older?: boolean, open?: [string], pins?: [string], rows?: [[natnum, boolean]], slow_secs?: number, view: string}` | `boolean` | no |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
 | `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
@@ -1354,9 +1352,6 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
 | `agents/send` | user | `{id: Id, if_free?: boolean, intent?: "steer" \| "ask", text: Prompt}` | `boolean` | yes |
-| `agents/side/close` | user | `{view: string}` | `boolean` | no |
-| `agents/side/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
-| `agents/side/subscribe` | user | `{view: string}` | `boolean` | no |
 | `agents/slice` | user | `{from_step: natnum, id: Id, n?: natnum}` | `{entries?: [[natnum, Entry]], id: string, next?: natnum, steps?: [Step]}` | no |
 | `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes |
@@ -1373,14 +1368,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `budget/raise` | user | `{card: natnum, limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], resume?: boolean}` | `{held?: [BudgetHeld], resumed?: [string], view: BudgetView}` | yes |
 | `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
 | `budget/tree` | user | `{after?: string, depth?: natnum, root?: {project: string} \| {spec: string} \| {plan: string} \| {run: Id} \| {task: string} \| {manager: Id} \| {worker: Id}}` | `{next?: string, nodes?: [BudgetNode]}` | no |
-| `budgets/page/close` | user | `{view: string}` | `boolean` | no |
-| `budgets/page/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
-| `budgets/page/subscribe` | user | `{view: string}` | `boolean` | no |
-| `buffers/set` | user | `{ops: [{op: "reset"} \| {file?: string, id: string, modified?: boolean, name: string, op: "put"} \| {id: string, modified: boolean, op: "modified"} \| {id: string, op: "remove"} \| {ids?: [string], op: "scope"} \| {op: "filter", text?: string}], view: string}` | `boolean` | no |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |
-| `changes/close` | user | `{view: string}` | `boolean` | no |
-| `changes/set` | user | `{filter?: {agent?: string, task?: string}, refresh?: boolean, view: string}` | `boolean` | no |
-| `changes/subscribe` | user | `{view: string}` | `boolean` | no |
 | `comments/add` | user | `{anchor: {heading?: [string], key?: string, quote?: string, state?: string}, record: string, text: string}` | `{anchor: Anchor, comment: string, sent_to?: string}` | yes |
 | `comments/list` | user | `{record: string}` | `{threads: [Thread]}` | no |
 | `comments/reply` | user | `{comment: string, text: string}` | `{at: number, author: string, id: string, text: string}` | yes |
@@ -1394,15 +1382,11 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `debug/bisect/states` | user | `{good?: {id: string, kind: string}, root: string}` | `{states: [any]}` | no |
 | `debug/breakpoint-locations` | user | `{line: natnum, path: string, session: string}` | `{locations: [BreakpointLocation]}` | no |
 | `debug/breakpoints` | user | `{kind?: string, op?: {adapter?: string, column?: natnum, condition?: string, enabled?: boolean, hit?: string, id?: natnum, instruction?: string, line?: natnum, log?: string, name?: string, offset?: integer, op: string, path?: string, triggered_by?: natnum}, path?: string, root: string, session?: string}` | `DebugBreakpointsView` | no |
-| `debug/children` | user | `{epoch?: natnum, reference: integer, session: string}` | `{variables: [DebugChild]}` | no |
 | `debug/compare` | user | `{fork: string, run: string}` | `DebugForkView` | no |
 | `debug/completions` | user | `{column: natnum, frame?: integer, session: string, text: string}` | `{targets: [CompletionTarget]}` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
 | `debug/control` | user | `{granularity?: string, op: string, session: string, thread?: integer}` | `boolean` | no |
-| `debug/data-breakpoint` | user | `{access_type?: string, data_id?: string, name?: string, node?: string, op: string, reference?: integer, session?: string, view?: string}` | `{breakpoints: [any], session: string}` | no |
 | `debug/disassemble` | user | `{count: natnum, instruction_offset?: integer, offset?: integer, reference: string, session: string}` | `{instructions: [DisassembledInstruction]}` | no |
-| `debug/evaluate` | user | `{context: string, expr: string, frame?: integer, session: string}` | `{epoch?: natnum, reference?: integer, result: string, type?: string}` | no |
-| `debug/expand` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
 | `debug/fork` | user | `{anyway?: boolean, at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
 | `debug/fork/drop` | user | `{fork: string}` | `boolean` | no |
 | `debug/fork/run` | user | `{fork: string}` | `boolean` | no |
@@ -1421,17 +1405,11 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `debug/run/stop` | user | `{file?: string, run: string, stop: natnum}` | `{capture: any, run: string, snapshot?: string, source: any, stop: any}` | no |
 | `debug/runs/list` | user | `{root: string}` | `{runs: [any]}` | no |
 | `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
-| `debug/set-value` | user | `{node: string, value: string, view: string}` | `{value: string}` | no |
 | `debug/source` | user | `{ref: integer, session: string}` | `{mime?: string, text: string}` | no |
 | `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, no_debug?: boolean, root: string, selection?: string, terminal?: boolean, unsaved?: [string], user?: [JsonObject]}` | `{needs?: any, session?: string, sessions?: [string]}` | no |
 | `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
-| `debug/view` | user | `{filter?: string, indent?: natnum, root: string, session?: string, view: string}` | `boolean` | no |
-| `debug/watch` | user | `{expr?: string, index?: natnum, op: string, root: string, to?: natnum}` | `[string]` | no |
 | `debug/write-memory` | user | `{allow_partial?: boolean, data: string, offset?: integer, reference: string, session: string}` | `{offset?: integer, written?: natnum}` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
-| `doc-comments/close` | user | `{view: string}` | `boolean` | no |
-| `doc-comments/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
-| `doc-comments/subscribe` | user | `{record: string, view: string}` | `boolean` | no |
 | `embed/serve-start` | user | `{listen: string, no_embed?: boolean, plain?: boolean}` | `{cert_sha256?: string, token?: string, url: string}` | yes |
 | `embed/serve-stop` | user | `{}` | `boolean` | yes |
 | `embed/serve-token` | user | `{}` | `{token: string}` | yes |
@@ -1444,12 +1422,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", lane?: "work" \| "timing", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, needs?: [Id], network?: boolean, nice?: integer, no_timebox?: boolean, os?: "linux" \| "macos", priority?: natnum, rows?: {dialect?: string, listed: [string], parser: string}, silent_s?: natnum, stall_s?: natnum, timebox_s?: natnum, whole_machine?: boolean, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
-| `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
-| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{collapsed?: boolean, minus_updates?: boolean, name: string, search: {filters?: {archive?: string, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed", summaries?: [[string]]}]}` | `{}` | no |
 | `extensions/recommended` | user | `{ids: [string], version: natnum}` | `{}` | no |
-| `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
 | `extensions/search` | user, agent | `{filters?: {archive?: string, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
 | `folds/load` | user | `{path: string, worktree: string}` | `{anchors: [Anchor]}` | no |
 | `folds/save` | user | `{anchors?: [{end: natnum, fold_kind?: string, hash: string, kind: "fold" \| "pin", name?: string, open?: boolean, start: natnum}], path: string, worktree: string}` | `boolean` | yes |
@@ -1472,7 +1447,6 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `git/commit` | user | `{all?: boolean, amend?: boolean, message: string, root: AbsPath}` | `{sha: string}` | yes |
 | `git/delete-branch` | user | `{branch: string, force?: boolean, root: AbsPath}` | `boolean` | yes |
 | `git/discard` | user | `{paths: [string], root: AbsPath}` | `boolean` | yes |
-| `git/letters` | user | `{root: AbsPath, shown?: [string], view: string}` | `boolean` | no |
 | `git/remote` | user | `{op: "push" \| "pull" \| "fetch" \| "sync" \| "publish", root: AbsPath}` | `{id: natnum}` | yes |
 | `git/remote-stop` | user | `{id: natnum}` | `boolean` | yes |
 | `git/stage` | user | `{paths: [string], root: AbsPath}` | `boolean` | yes |
@@ -1545,12 +1519,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes |
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
-| `minimap/bucket` | user | `{bucket: natnum, file: string, lines: natnum}` | `{buckets: natnum, start: natnum, text: string}` | no |
-| `minimap/watch` | user | `{coverage?: [string], density?: {error: string, warning: string}, file: string, heat?: string, on: boolean, profile?: string}` | `boolean` | no |
 | `notebook/clear` | user | `{cell?: string, id: string}` | `boolean` | no |
 | `notebook/close` | user | `{id: string}` | `boolean` | no |
 | `notebook/execute` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
-| `notebook/focus` | user | `{cell?: string, id: string}` | `boolean` | no |
 | `notebook/input` | user | `{id: string, request: string, value: string}` | `boolean` | no |
 | `notebook/interrupt` | user | `{id: string}` | `boolean` | no |
 | `notebook/kernels` | user | `{}` | `{kernels: [NotebookKernel], skipped: [NotebookSkipped]}` | no |
@@ -1563,10 +1534,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `notebook/start` | user | `{id: string, kernel?: string}` | `{kernel: string}` | no |
 | `notebook/sync` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
 | `notebook/tail` | user | `{cell: string, id: string}` | `NotebookTail` | no |
-| `notebook/view` | user | `{cell?: string, id: string, kind: "outline" \| "output" \| "log"}` | `{view: string}` | no |
 | `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
-| `outline/scopes` | user | `{file?: string, line: natnum, path?: string, worktree_root?: string}` | `{scopes: [OutlineScope]}` | no |
-| `outline/set` | user | `{file?: string, folded?: [natnum], view: string}` | `boolean` | no |
 | `outside/bind` | user | `{kind: AgentKind, role: "manager" \| "worker" \| "chat", root: AbsPath}` | `{at: number, id: string, kind: string, role: "manager" \| "worker" \| "chat", root: string}` | yes |
 | `outside/bindings` | user | `{}` | `{bindings: [BindingRow]}` | no |
 | `outside/unbind` | user | `{id: Id}` | `boolean` | yes |
@@ -1592,9 +1560,6 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `records/write` | user | `{base_version: natnum, kind: "spec" \| "decision", path?: string, project?: string, record?: string, remove?: [string], sections?: [{after?: string, body: Text, heading: string, key?: string}], status?: Status, title?: string}` | `{path: string, record: string, sections?: [SectionId], tx: natnum, version: natnum}` | yes |
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
-| `review-screen/close` | user | `{view: string}` | `boolean` | no |
-| `review-screen/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
-| `review-screen/subscribe` | user | `{doc?: string, from?: string, session?: string, view: string}` | `boolean` | no |
 | `review/effects` | user | `{change: ChangeRef}` | `[TaskEffect]` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
 | `runners/add` | user | `{accept?: "all" \| "heavy", allow_admin?: boolean, allow_own_account?: boolean, host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
@@ -1615,30 +1580,12 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `say/end` | user | `{id: Id}` | `boolean` | yes |
 | `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
 | `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
-| `scm/close` | user | `{view: string}` | `boolean` | no |
-| `scm/set` | user | `{active?: AbsPath, more?: AbsPath, refresh?: boolean, select?: {on: boolean, root: AbsPath}, toggle?: string, view: string, view_as?: "list" \| "tree"}` | `boolean` | no |
-| `scm/subscribe` | user | `{active?: AbsPath, roots: [AbsPath], view: string, view_as?: "list" \| "tree"}` | `boolean` | no |
-| `search/applied` | user | `{applied?: [string], change: natnum, inverse?: [{byte_end?: natnum, byte_start?: natnum, col: natnum, end_col: natnum, end_line: natnum, id: string, line: natnum, new: string, old: string}], not_open?: boolean, path: string, saved?: boolean, skipped?: [{id: string, why: string}], tick?: natnum}` | `boolean` | no |
-| `search/apply` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
-| `search/buffer` | user | `{large?: boolean, mirror?: boolean, path: AbsPath, text?: string, tick?: natnum, version?: natnum, view: string}` | `boolean` | no |
 | `search/delete` | user | `{confirm: boolean, root: AbsPath}` | `{bytes: natnum, packs: natnum, root: string, vectors: natnum}` | yes |
-| `search/edit-doc` | user | `{context?: natnum, max?: natnum, view: string}` | `{lines: [EditLine], over?: boolean, skipped?: [EditSkip], total: natnum}` | no |
-| `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], lines?: [{eol?: boolean, line: natnum, line_id: string, new?: [string], old: string, path: AbsPath}], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
 | `search/embed-retry` | user | `{}` | `boolean` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, chain?: [ChainEntry], prefer?: string, servers: [ServerInfo]}` | no |
 | `search/export` | user | `{all_trees?: boolean, branch?: string, out?: AbsPath, root: AbsPath}` | `{keys: natnum, path: AbsPath, sha256: string, warning: string}` | yes |
 | `search/extra-gpus` | user | `{answer: "use" \| "dismiss"}` | `{changed: boolean, gpus: [string]}` | yes |
-| `search/files` | user | `{exclude?: [string], ignore?: "index" \| "real", n?: natnum, name?: boolean, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
-| `search/fold` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
 | `search/forget-pin` | user | `{provider: string}` | `boolean` | yes |
-| `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
-| `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
-| `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
-| `search/group` | user | `{group: "file" \| "tree" \| "symbol", sort?: "path" \| "count" \| "rank", view: string}` | `boolean` | no |
-| `search/handoff` | user | `{hidden?: boolean, ids?: [string], instruction: Prompt, mark?: {face: string, glyph: string, name: string}, off?: [string], to: {new: {profile: string}} \| {pair: {profile: string}} \| {session: {id: Id}}, view: string}` | `HandoffAnswer` | yes |
-| `search/handoff-context` | user | `{hidden?: boolean, ids?: [string], off?: [string], view: string}` | `{hidden?: [string], rows: [HandoffContextRow], tokens: natnum, total: natnum}` | no |
-| `search/handoff-mark` | user | `{handoff: string, mark: {face: string, glyph: string, name: string}}` | `boolean` | no |
-| `search/handoff-state` | user | `{handoff: string}` | `HandoffState` | no |
 | `search/import` | user | `{file: AbsPath, keep_all?: boolean, root?: AbsPath}` | `ImportAnswer` | yes |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/list` | user | `{}` | `{roots: [RootInfo]}` | no |
@@ -1646,11 +1593,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
 | `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
 | `search/pause` | user | `{all?: boolean, root?: AbsPath}` | `{roots: [RootInfo]}` | yes |
-| `search/preview` | user | `{off?: [string], path: AbsPath, replace?: string, view: string}` | `PreviewAnswer` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
 | `search/resume` | user | `{all?: boolean, root?: AbsPath}` | `{roots: [RootInfo]}` | yes |
-| `search/run` | user | `{context?: boolean, count?: boolean, group?: "file" \| "tree" \| "symbol", ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string} \| {lang?: string, mode: "pattern", pattern: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, sort?: "path" \| "count" \| "rank", view: string}` | `{run: natnum}` | no |
 | `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
 | `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
 | `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string} \| {lang?: string, mode: "pattern", pattern: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
@@ -1661,7 +1606,6 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/symbol-at` | user | `{file: string, line: natnum, root: AbsPath}` | `{name?: string}` | no |
 | `search/symbols` | user | `{base?: boolean, k?: natnum, kind?: [string], match?: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", name: string, path?: string, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code"}` | `{fresh: Fresh, matched: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", symbols: [SymbolHit]}` | no |
 | `search/typing` | user | `{}` | `{}` | no |
-| `search/undo` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
 | `search/usages` | user | `{base?: boolean, k?: natnum, name: string, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code"}` | `{defined: [SymbolHit], fresh: Fresh, usages: [Usage]}` | no |
 | `search/why` | user | `{path: string, root: AbsPath}` | `{layer: "builtin" \| "repo" \| "user", list: "include" \| "ignore" \| "no-embed" \| "default", rule?: string, verdict: "index" \| "no-embed" \| "ignored"}` | no |
 | `settings/confirm` | user | `{error?: string, ok: boolean, tx: natnum}` | `{state: "accepted" \| "reverted" \| "blocked"}` | yes |
@@ -1694,27 +1638,13 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `term/visible` | user | `{id: string, visible: boolean}` | `boolean` | no |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
-| `view/close` | user | `{view: string}` | `boolean` | no |
 | `view/env` | user | `{ascii?: boolean, attach?: boolean, badge?: [[natnum, natnum], [natnum, natnum], natnum], cell: [natnum, natnum], class: string, density?: "compact" \| "comfortable" \| "roomy", display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], glyphs?: [[string, string]], hc?: boolean, headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tail?: [natnum, natnum], tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
-| `view/glyphs` | user | `{class: string, faces?: [{avg?: number, face: string, file?: string, index?: natnum, pad?: number, px?: number, role: string, wght?: number}], glyphs: [[string, string, number]], view: string}` | `boolean` | no |
-| `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
-| `view/window` | user | `{from: natnum, list: string, view: string}` | `boolean` | no |
-| `work/board/subscribe` | user | `{map: string, plans?: [string], view: string}` | `{hub: natnum}` | no |
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
 | `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
 | `work/files` | user | `{session: Id}` | `{files: [EditedFile]}` | no |
-| `work/flow/subscribe` | user | `{detail?: string, job?: string, map: string, rules?: boolean, view: string}` | `{hub: natnum}` | no |
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
-| `work/map/close` | user | `{view: string}` | `boolean` | no |
-| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {focus?: string, overlaps?: boolean, recent_days?: natnum, show?: "active" \| "completed" \| "all"}, mode?: "list" \| "graph", outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
-| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {focus?: string, overlaps?: boolean, recent_days?: natnum, show?: "active" \| "completed" \| "all"}, mode?: "list" \| "graph", outline?: string, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `{hub: natnum, version: natnum}` | no |
-| `work/schedule/set` | user | `{group?: "plan" \| "machine", view: string, window?: {from: number, to: number}}` | `boolean` | no |
-| `work/schedule/subscribe` | user | `{group?: "plan" \| "machine", view: string, window: {from: number, to: number}}` | `{hub: natnum}` | no |
 | `work/target/set` | user | `{item: string, target_at?: number}` | `boolean` | yes |
-| `work/trail/close` | user | `{view: string}` | `boolean` | no |
-| `work/trail/set` | user | `{filter?: "all" \| "edits" \| "waits", follow?: boolean, view: string, window?: {from: number, to: number}}` | `boolean` | no |
-| `work/trail/subscribe` | user | `{filter?: "all" \| "edits" \| "waits", follow?: boolean, lanes?: [{label: string, session: string}], session?: string, view: string, window?: {from: number, to: number}}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
 
 The Changes view's rows are the kit's (`view/changes.rs`, built per display class): a task is a section header with its file count, the agent's mark and name and a running status dot with its word; a file is a tree row (`+N −M`) that opens it; a hunk is a diff block (`c:hunk:T:F:H/0` head with Open, Comment and Revert, `/h0` the `@@` row, `/h0/0` the reason in the agent's words or "no reason recorded"), every row carrying `drgnx-hunk`.
@@ -2413,6 +2343,8 @@ sent_to?, anchor}`, `comments/reply {comment, text}` → the reply, `comments/li
 
 ### The Work map
 
+> Switched off in the ratatoskr split (Wave 0b): not compiled, kept as reference until the Living Document UI replaces it; see the `REPLACED.md` next to the code (`crates/hub/ratatoskr/src/view/`, `work/`, `agents/session/`).
+
 The Work space's map (`work::map`): the hub feeds the pure map core `vegvisir` from its sources, lays each map view
 out, and sends the connection that shows it the view's model and rows.
 
@@ -2460,6 +2392,8 @@ out, and sends the connection that shows it the view's model and rows.
   new hub's sessions and store, under the new hub's id.
 
 ### The trail and the Timeline
+
+> Switched off in the ratatoskr split (Wave 0b): not compiled, kept as reference until the Living Document UI replaces it; see the `REPLACED.md` next to the code (`crates/hub/ratatoskr/src/view/`, `work/`, `agents/session/`).
 
 The Work space's trail (one session's steps, its conclusions among them) and Timeline (a lane per agent session) as
 rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display class like the map's ("Rows" below).
@@ -2628,6 +2562,8 @@ it builds for Android too).
 
 ### The wire: envs, patches, resyncs (`view`)
 
+> Switched off in the ratatoskr split (Wave 0b): only the terminals' `view/env`, `view/resync` and `view/ack` are served; the rest of the view wire is reference code, see `crates/hub/ratatoskr/src/view/REPLACED.md`.
+
 The hub keeps, per (connection, view, display class), the env the editor sent, the version and rows it last sent,
 and the images that editor holds (`view::Store`, pure, tested in every order of envs, rows, resyncs and restarts).
 All of it is in memory only.
@@ -2710,6 +2646,8 @@ All of it is in memory only.
   carries.
 
 ### The native view model (`view-model`)
+
+> Switched off in the ratatoskr split (Wave 0b): not compiled, kept as reference until the Living Document UI replaces it; see the `REPLACED.md` next to the code (`crates/hub/ratatoskr/src/view/`, `work/`, `agents/session/`).
 
 A view whose keys move a selection (the Work map first) also sends its **model**: what the editor's replica (Sjá, in
 Nidhogg) needs to answer every key in-process, never from the hub. The hub keeps, per (connection, view), the model
@@ -2865,6 +2803,8 @@ gives `builtin.fingerprint` and `builtin.label`, each server's `fingerprint` (no
 and `prefer`, a fingerprint. The MCP and CLI clients print the label where they printed the model.
 
 ### Text search as rows (`search/run`)
+
+> Switched off in the ratatoskr split (Wave 0b): not compiled, kept as reference until the Living Document UI replaces it; see the `REPLACED.md` next to the code (`crates/hub/ratatoskr/src/view/`, `work/`, `agents/session/`).
 
 The Search view's results are a row stream under the rules above (`crates/hub/ratatoskr/src/view/search/`:
 `mod.rs` the runs, `rows.rs` the rows and the model, `run.rs` the match ids, the carried unticks and the files'
@@ -3022,6 +2962,8 @@ snapshots; the search itself is `hrafn::grep`).
 
 ### Search writes (`search/edits`, `search/apply`, `search/undo`)
 
+> Switched off in the ratatoskr split (Wave 0b): not compiled, kept as reference until the Living Document UI replaces it; see the `REPLACED.md` next to the code (`crates/hub/ratatoskr/src/view/`, `work/`, `agents/session/`).
+
 The Search view's one write path (`crates/hub/ratatoskr/src/view/search/edits.rs`, `apply.rs`): Replace All,
 Replace This, Undo Replace and Symbol mode's rename go through it, so a write never lands behind an open buffer.
 
@@ -3047,7 +2989,7 @@ Replace This, Undo Replace and Symbol mode's rename go through it, so a write ne
   in a worktree of its own from the project's HEAD (registered as a worker, so the Work space's review lists it), or a
   live session, which edits where it is. The brief is the instruction, the search and the replacement, then the
   matches by file as `path:line:col  in <definition>  <line>`, at most 300 lines or 32,000 characters (~8k tokens),
-  then "N more: call the `search_results` tool with handoff id h:N", the files changed since the search, and the rule
+  then (while the Search view was compiled; its `search_results` MCP tool is gone with it) "N more", the files changed since the search, and the rule
   to edit only those places and say which were skipped. Paths the index never reads (dot paths, secret-looking names)
   are left out unless `hidden` and named in the answer, `{handoff, session, worktree?, ids, sent, more, hidden?}`.
   `search_results {handoff, page?}` is the drgnx-search MCP server's tool: 100 rows a page, to the session the
@@ -3230,6 +3172,8 @@ The protocol, the token, TLS and pinning are in [vector-protocol.md](vector-prot
 
 ### Ranked file names as rows (`search/files`)
 
+> Switched off in the ratatoskr split (Wave 0b): not compiled, kept as reference until the Living Document UI replaces it; see the `REPLACED.md` next to the code (`crates/hub/ratatoskr/src/view/`, `work/`, `agents/session/`).
+
 Quick Open's and Find's candidates are a row stream too (`crates/hub/ratatoskr/src/view/files.rs`; the list
 and the ranking are `hrafn::rank`).
 
@@ -3258,6 +3202,8 @@ and the ranking are `hrafn::rank`).
   typed in one Quick Open rank one listing and the next Quick Open sees the files as they are.
 
 ### The Explorer's listing as a tree (`explorer/subscribe`)
+
+> Switched off in the ratatoskr split (Wave 0b): not compiled, kept as reference until the Living Document UI replaces it; see the `REPLACED.md` next to the code (`crates/hub/ratatoskr/src/view/`, `work/`, `agents/session/`).
 
 The Explorer's folders, listed by the hub as a model and rows (`crates/hub/ratatoskr/src/view/explorer.rs`).
 
@@ -3325,6 +3271,8 @@ The Explorer's folders, listed by the hub as a model and rows (`crates/hub/ratat
 
 ### The Buffers panel's rows (`buffers/set`)
 
+> Switched off in the ratatoskr split (Wave 0b): not compiled, kept as reference until the Living Document UI replaces it; see the `REPLACED.md` next to the code (`crates/hub/ratatoskr/src/view/`, `work/`, `agents/session/`).
+
 The Open list's rows, built by the hub from what the editor says is open (`crates/hub/ratatoskr/src/view/buffers.rs`;
 the editor's side is `wb/drgnx-buffers.el`).
 
@@ -3346,6 +3294,8 @@ the editor's side is `wb/drgnx-buffers.el`).
   again. The editor draws the right edge (the letter, ● or ×, the hover) for the rows drawn near what a window shows.
 
 ### The Source Control view (`scm/*`, `git/*`)
+
+> Switched off in the ratatoskr split (Wave 0b): the `scm/*` rows are reference code (`crates/hub/ratatoskr/src/view/REPLACED.md`); the `git/*` actions stay, in `git_actions.rs`.
 
 The side bar's Source Control rows: the repositories of the workspace, each one's changes and its commit graph, built
 by the hub (`crates/hub/ratatoskr/src/view/scm.rs` and `view/scm/`; the methods are
@@ -3388,6 +3338,8 @@ never a fixed time; the GUI scenario is `drgnx-scenario/scm-stage-and-commit-by-
 
 ### The Outline panel's rows (`outline/set`)
 
+> Switched off in the ratatoskr split (Wave 0b): not compiled, kept as reference until the Living Document UI replaces it; see the `REPLACED.md` next to the code (`crates/hub/ratatoskr/src/view/`, `work/`, `agents/session/`).
+
 The Outline section's rows: the definitions of the file in the editor, built by the hub with Hrafn's parse
 (`hrafn::symbols::outline_text`; `crates/hub/ratatoskr/src/view/outline.rs`; the editor's side is
 `wb/drgnx-outline.el`).
@@ -3419,6 +3371,8 @@ The Outline section's rows: the definitions of the file in the editor, built by 
   `PARSED_FILES` (8) parses are kept by file and a hash of their text, so a scroll or a moved point parses nothing again.
 
 ### The minimap's labels and folds (`minimap/watch`)
+
+> Switched off in the ratatoskr split (Wave 0b): not compiled, kept as reference until the Living Document UI replaces it; see the `REPLACED.md` next to the code (`crates/hub/ratatoskr/src/view/`, `work/`, `agents/session/`).
 
 `minimap/watch {file, on}` says the editor shows FILE (absolute, its true name) in a minimap, or no longer. While a
 connection watches it, the hub sends it the file's definitions as the minimap's `labels` layer (`view/minimap.rs`):
@@ -3487,6 +3441,8 @@ or killed and 30 s idle after a fold change, asks for it in `find-file-hook`, an
 its hash (module `editor/fold`, `drgnx-fold-remember`; [the guide](../guide/editing.md), "Folding").
 
 ### The agent panel's rows
+
+> Switched off in the ratatoskr split (Wave 0b): not compiled, kept as reference until the Living Document UI replaces it; see the `REPLACED.md` next to the code (`crates/hub/ratatoskr/src/view/`, `work/`, `agents/session/`).
 
 **Two views.** A panel is two hub views of one session (`view/panel.rs`): `agent-panel-top/SID` (`view_of_top`), the
 header, the chips and the strip, which the editor shows in the panel's header window; and `agent-panel/SID`

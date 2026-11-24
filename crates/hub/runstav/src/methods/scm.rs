@@ -4,7 +4,6 @@
 //! editor never waits on git (docs/develop/hub.md, "The Source Control view").
 
 use super::method;
-use super::view::check_ids;
 use crate::registry::Method;
 use crate::types::AbsPath;
 use crate::wire::Error;
@@ -210,25 +209,6 @@ pub struct ViewId {
     pub view: String,
 }
 
-fn check_subscribe(p: &Subscribe) -> Result<(), Error> {
-    check_ids(&p.view, None)?;
-    if p.roots.is_empty() || p.roots.len() > ROOTS_MAX {
-        return Err(super::invalid("roots", "1 to 64 folders"));
-    }
-    Ok(())
-}
-
-fn check_set(p: &Set) -> Result<(), Error> {
-    check_ids(&p.view, None)?;
-    if p.toggle
-        .as_ref()
-        .is_some_and(|k| k.is_empty() || k.len() > 8192)
-    {
-        return Err(super::invalid("toggle", "a row key of 1 to 8192 bytes"));
-    }
-    Ok(())
-}
-
 /// A path git takes: relative, not empty, no `..` part, no NUL.
 pub fn check_path(path: &str) -> Result<(), Error> {
     if path.is_empty()
@@ -273,24 +253,6 @@ fn check_branch(b: &str) -> Result<(), Error> {
 
 pub(crate) fn methods() -> Vec<Method> {
     vec![
-        method!(
-            "scm/subscribe", ScmSubscribe(Subscribe) -> bool,
-            classes: [User], writes: false,
-            doc: "a hub-fed view shows the Source Control of every repository under the workspace's folders (nested ones and linked worktrees too, at most 200): the repositories, each shown one's branch, staged, unstaged and conflicted changes and its commit graph, as rows; each repository is watched and read again on a thread after its changes",
-            check: check_subscribe,
-        ),
-        method!(
-            "scm/set", ScmSet(Set) -> bool,
-            classes: [User], writes: false,
-            doc: "a change to a Source Control view: the editor's file, a repository shown or hidden, list or tree, a section, folder or graph folded or unfolded, more of a graph",
-            check: check_set,
-        ),
-        method!(
-            "scm/close", ScmClose(ViewId) -> bool,
-            classes: [User], writes: false,
-            doc: "a Source Control view is shown no more: its repositories are no longer watched",
-            check: |p: &ViewId| check_ids(&p.view, None),
-        ),
         method!(
             "git/stage", GitStage(Paths) -> bool,
             classes: [User], writes: true,

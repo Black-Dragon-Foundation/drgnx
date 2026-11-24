@@ -31,7 +31,7 @@
 //! | `agents/presence/{subscribe,get}` | [`crate::work::presence`] |
 //! | `agents/buffer/{watch,unwatch}` | [`crate::editor`] |
 //! | `work/{files,hunks,file-at}` | [`crate::work::edits`] |
-//! | `work/map/{subscribe,set,close}` | [`crate::work::map`] |
+//! | `work/target/set` | [`crate::work::target`] |
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -67,10 +67,8 @@ pub struct Core {
     pub stamps: std::sync::Arc<crate::work::conclusions::Stamps>,
     /// Who is in which file now ([`crate::work::presence`]).
     pub presence: std::sync::Arc<crate::work::presence::Live>,
-    /// The Work map's views and the model behind them ([`crate::work::map`]).
-    pub map: std::sync::Arc<crate::work::map::Map>,
-    /// The trail and Timeline views ([`crate::work::trail`]).
-    pub trails: crate::work::trail::Trails,
+    /// The remote git commands running ([`crate::git_actions`]).
+    pub git: crate::git_actions::Remotes,
     /// The editors' buffer views: the agents in each watched buffer ([`crate::editor`]).
     pub buffers: std::sync::Arc<crate::editor::Buffers>,
     /// The files shell steps opened, from Gleipnir's tracer ([`crate::work::trace`]).
@@ -83,8 +81,6 @@ pub struct Core {
     pub history: std::sync::Arc<crate::history::wire::Hubs>,
     /// The planning sessions of Say it and the channel to their shell ([`crate::say`]).
     pub say: crate::say::Say,
-    /// The editors' view environments and the rows each (view, class) was sent ([`crate::view`]).
-    pub views: crate::view::Views,
     /// The terminals' workers and where their patches go ([`crate::term`]).
     pub terms: crate::term::Terms,
     /// The outside bridges attached now: every gate and scope lookup of an `ext:` caller asks it ([`crate::outside`]).
@@ -231,7 +227,6 @@ pub async fn serve(
         Params::SayRevise(p) => arm!(answer(say::revise(f, c, p).await)),
         Params::SayEnd(p) => arm!(answer(say::end(f, c, p).await)),
         Params::RecordsImport(p) => arm!(answer(records::import(f, c, p).await)),
-        Params::PastSubscribe(p) => arm!(answer(crate::agents::past::subscribe(f, c, p).await)),
         Params::PastSearch(p) => arm!(answer(crate::agents::past::search(f, c, p).await)),
         Params::PastOpen(p) => arm!(answer(crate::agents::past::open(f, c, p).await)),
         Params::PastResume(p) => arm!(answer(crate::agents::past::resume(f, c, p).await)),
@@ -324,21 +319,7 @@ pub async fn serve(
         Params::AgentsPresenceGet(p) => arm!(answer(work::presence::get(f, c, p).await)),
         Params::AgentsBufferWatch(p) => arm!(answer(crate::editor::watch(f, c, p).await)),
         Params::AgentsBufferUnwatch(p) => answer(crate::editor::unwatch(f, c, p)),
-        Params::WorkMapSubscribe(p) => arm!(answer(work::map::subscribe(f, c, p).await)),
-        Params::WorkMapSet(p) => answer(work::map::set(f, c, p)),
-        Params::WorkTargetSet(p) => arm!(answer(work::map::target_set(f, c, p).await)),
-        Params::WorkMapClose(p) => answer(work::map::close(f, c, p)),
-        Params::WorkTrailSubscribe(p) => arm!(answer(work::trail::subscribe(f, c, p).await)),
-        Params::WorkTrailClose(p) => answer(work::trail::close(f, c, p)),
-        Params::WorkBoardSubscribe(p) => {
-            arm!(answer(work::trail::board_subscribe(f, c, p).await))
-        }
-        Params::WorkTrailSet(p) => arm!(answer(work::trail::set(f, c, p).await)),
-        Params::WorkScheduleSubscribe(p) => {
-            arm!(answer(work::trail::schedule_subscribe(f, c, p).await))
-        }
-        Params::WorkScheduleSet(p) => arm!(answer(work::trail::schedule_set(f, c, p).await)),
-        Params::WorkFlowSubscribe(p) => arm!(answer(work::trail::flow_subscribe(f, c, p).await)),
+        Params::WorkTargetSet(p) => arm!(answer(work::target::target_set(f, c, p).await)),
         Params::WorkFiles(p) => arm!(answer(work::edits::files(f, c, p).await)),
         Params::WorkHunks(p) => arm!(answer(work::edits::hunks(f, c, p).await)),
         Params::WorkFileAt(p) => arm!(answer(work::edits::file_at(f, c, p).await)),

@@ -174,25 +174,61 @@ fn rust_files(members: &[Member]) -> Vec<(PathBuf, String)> {
         .map(|m| (m.dir.clone(), m.name.clone()))
         .collect();
     let mut out = Vec::new();
+    let mut skip = Vec::new();
     for m in members {
-        walk(&m.dir, &m.name, &dirs, &mut out);
+        walk(&m.dir, &m.name, &dirs, &mut skip, &mut out);
     }
     out.sort();
     out
 }
 
+/// What a `REPLACED.md` in a folder switches off (code kept as reference, not compiled): the whole folder, or the
+/// paths (relative to the folder) its `files:` line lists.
+enum Replaced {
+    Whole,
+    Files(Vec<String>),
+}
+
+/// The `REPLACED.md` in DIR, if there is one.
+fn replaced_in(dir: &Path) -> Option<Replaced> {
+    let text = std::fs::read_to_string(dir.join("REPLACED.md")).ok()?;
+    let files = text.lines().find_map(|l| l.strip_prefix("files:"));
+    Some(match files {
+        None => Replaced::Whole,
+        Some(list) => Replaced::Files(
+            list.split('#')
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect(),
+        ),
+    })
+}
+
+/// DIR's .rs files and subfolders into OUT, but not what a `REPLACED.md` switches off; SKIP collects the paths those
+/// files name.
 fn walk(
     dir: &Path,
     krate: &str,
     members: &BTreeMap<PathBuf, String>,
+    skip: &mut Vec<PathBuf>,
     out: &mut Vec<(PathBuf, String)>,
 ) {
+    match replaced_in(dir) {
+        Some(Replaced::Whole) => return,
+        Some(Replaced::Files(files)) => skip.extend(files.iter().map(|f| dir.join(f))),
+        None => {}
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
     entries.sort();
     for p in entries {
+        if skip.iter().any(|s| p.starts_with(s)) {
+            continue;
+        }
         let name = p
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -205,7 +241,7 @@ fn walk(
             {
                 continue;
             }
-            walk(&p, krate, members, out);
+            walk(&p, krate, members, skip, out);
         } else if name.ends_with(".rs") {
             out.push((p, krate.to_string()));
         }

@@ -6,9 +6,13 @@
 //! - [`comments`]: paragraph comments: a thread on a paragraph of a record, steered to its writer, anchored by content.
 //! - [`conclusions`]: the step each conclusion was recorded in, stamped by the hub, and the steps it rests on.
 //! - [`bases`]: where each worktree branched from (the interim diff base), and which branch is based on which.
+//! - [`budget_detail`]: the budget lines and the start step of a plan, pure (`forecast/start` reads it).
+//! - [`target`]: `work/target/set`, the target date of a spec or a plan.
+//!
+//! The Work map, the trail, Timeline, Board, Flow and Schedule row builders (`map.rs`, `trail.rs`, `schedule.rs` and the
+//! folders beside them) are switched off: see `REPLACED.md` in this folder.
 //! - [`detail`]: a step's detail by tool name.
 //! - [`machines`]: the machines the hub lists (`local`, and those jobq reports with `machines/report`).
-//! - [`map`]: the Work map: `vegvisir` fed from the sources above, and each map view's deltas, coalesced.
 //! - [`presence`]: who is in which file, at which line, now (the presence model part 3 builds on).
 //! - [`shell_read`]: the files a shell command names, parsed from its text and kept inside the workspace (layer 1 of
 //!   "reads through shell commands").
@@ -20,6 +24,7 @@
 
 pub mod asks;
 pub mod bases;
+pub mod budget_detail;
 pub mod changes;
 pub mod comments;
 pub mod conclusions;
@@ -27,12 +32,10 @@ pub mod detail;
 pub mod edit_lines;
 pub mod edits;
 pub mod machines;
-pub mod map;
 pub mod presence;
-pub mod schedule;
 pub mod shell_read;
 pub mod specs;
 pub mod subagents;
+pub mod target;
 pub mod task_effects;
 pub mod trace;
-pub mod trail;

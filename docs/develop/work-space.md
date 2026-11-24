@@ -1,5 +1,7 @@
 # The Work space: how the map is built
 
+> Switched off in the ratatoskr split (Wave 0b): the map, trail and schedule row builders are reference code (`crates/hub/ratatoskr/src/work/REPLACED.md`) until the Living Document UI replaces them.
+
 The Work space's map shows every live piece of a workspace's agent work in eight fixed layers: you asked, specs, plans,
 tasks, agents, branches, files and machines ("Runs on"). `Kind::Task` is layer 4 and `Model::task_state` gives its
 `TaskState` (needs you, running, done, not started); a machine's jobs are `Item.chips`, each linking to its agent.
