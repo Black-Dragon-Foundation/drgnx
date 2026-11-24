@@ -39,6 +39,8 @@ required-features = ["test-support"]
 
 [dev-dependencies]
 rustix.workspace = true
+# `test_support` (the fixture plugins' build) is compiled into the unit tests too
+draugr = { path = "../draugr", version = "0.1.0" }
 tempfile.workspace = true
 wat.workspace = true
 skuld = { path = "../skuld", version = "0.1.0" }

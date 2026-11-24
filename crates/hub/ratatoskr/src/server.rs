@@ -676,7 +676,7 @@ const STOP_NOTE_EVERY: Duration = Duration::from_secs(5);
 struct Stopping {
     what: &'static str,
     queued: Box<dyn Fn() -> usize + Send>,
-    join: crate::clock::Blocking<()>,
+    join: saman::Task<()>,
 }
 
 impl Stopping {
@@ -689,7 +689,7 @@ impl Stopping {
         Stopping {
             what,
             queued: Box::new(queued),
-            join: crate::clock::blocking(stop),
+            join: saman::spawn_blocking("server:stop-store", stop),
         }
     }
 }

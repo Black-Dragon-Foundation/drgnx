@@ -82,6 +82,10 @@ pub struct Opts {
     /// allows the rest, with no architecture check: only for a harness that tests what a sandbox does when the
     /// system refuses a call it needs.
     pub deny_syscall: Option<libc::c_long>,
+    /// The child stays in the parent's process group (no group of its own, no session unless `new_session`): only for a
+    /// harness that tests a helper which must make its own session, since a group leader cannot. Its pid is then not its
+    /// group's: never end it with `kill_group`.
+    pub inherit_group: bool,
     /// Keep all of the child's stderr, not its tail ([`StderrTail::get_all`]): for a check that must see every byte.
     pub stderr_all: bool,
 }
@@ -344,7 +348,7 @@ fn launch<C>(
             .stderr(opts.stderr.stdio()?);
         // std's setpgid runs before the pre_exec closure, and a group leader cannot setsid: so one or the other.
         let new_session = spec.new_session;
-        if !new_session {
+        if !new_session && !opts.inherit_group {
             cmd.process_group(0);
         }
         if let Some(cwd) = &spec.cwd {

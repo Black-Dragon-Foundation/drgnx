@@ -395,7 +395,7 @@ mod tests {
                 &[],
                 Some("aws sso login")
             ),
-            Err(villa::Error::invalid(
+            Err(villa::Error::unavailable(
                 "Run `aws sso login`, then Runners: Retry Cloud"
             ))
         );

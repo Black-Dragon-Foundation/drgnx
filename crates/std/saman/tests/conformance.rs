@@ -185,13 +185,14 @@ fn a_pool_ended_with_a_timeout_has_dropped_its_tasks() {
 
 #[test]
 fn a_thread_gets_the_stack_it_asked_for() {
-    // 8 MiB of frame does not fit the default 2 MiB stack of a spawned thread, and does in 16 MiB
+    // 3 MiB of frame (a debug build copies it a time or two) does not fit the default 2 MiB stack of a spawned thread,
+    // and does in 16 MiB
     let t = saman::spawn_thread_with_stack("saman-test-stack", Some(16 << 20), || {
-        let frame = std::hint::black_box([1u8; 8 << 20]);
+        let frame = std::hint::black_box([1u8; 3 << 20]);
         frame.iter().map(|b| u64::from(*b)).sum::<u64>()
     })
     .unwrap();
-    assert_eq!(t.join().unwrap(), 8 << 20);
+    assert_eq!(t.join().unwrap(), 3 << 20);
 }
 
 #[test]

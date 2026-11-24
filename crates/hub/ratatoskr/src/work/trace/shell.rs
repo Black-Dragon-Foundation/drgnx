@@ -260,11 +260,12 @@ async fn serve(listener: tokio::net::UnixListener, st: Arc<SessionTrace>) {
         };
         let open = st.open_command();
         let me = st.clone();
-        crate::clock::blocking(move || {
+        saman::spawn_blocking("trace:offer", move || {
             if stream.set_nonblocking(false).is_ok() {
                 me.offered(stream, open);
             }
-        });
+        })
+        .detach("the offer is answered on its own thread");
     }
 }
 

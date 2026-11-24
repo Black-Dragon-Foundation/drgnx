@@ -444,7 +444,10 @@ fn trusted(m: &std::fs::Metadata) -> Result<(), String> {
 /// KERNEL.JSON opened without following a link and without blocking (a FIFO put there after a check would hold the open), then
 /// looked at: a regular file, small enough, trusted. The file and its metadata, or why not.
 pub(crate) fn open_spec_file(path: &Path) -> Result<std::fs::File, String> {
-    let f = eitri::open_read(path).map_err(|e| format!("cannot be opened: {e}"))?;
+    let f = eitri::open_read(path).map_err(|e| match e {
+        eitri::FsError::NotRegular => "kernel.json is not a regular file".to_string(),
+        e => format!("cannot be opened: {e}"),
+    })?;
     let meta = f.metadata().map_err(|e| format!("cannot be read: {e}"))?;
     if !meta.is_file() {
         return Err("kernel.json is not a regular file".into());

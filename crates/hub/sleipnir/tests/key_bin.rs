@@ -14,7 +14,7 @@ const KEY: &str = env!("CARGO_BIN_EXE_drgnx-key");
 /// A helper on a fresh socket that answers its one request with REPLY and gives back the request line it read.
 fn helper(reply: &'static [u8]) -> (tempfile::TempDir, PathBuf, std::thread::JoinHandle<String>) {
     let dir = tempfile::tempdir().unwrap();
-    let sock = dir.path().join("key.sock");
+    let sock = dir.path().join("helper.sock");
     let listener = UnixListener::bind(&sock).unwrap();
     let served = saman::spawn_thread("key-helper", move || {
         let (mut s, _) = listener.accept().unwrap();

@@ -213,6 +213,11 @@ pub mod real {
         std::time::Instant::now()
     }
 
+    /// The monotonic time of tokio's own clock: the system's, or the paused one inside a test that paused tokio's time.
+    pub fn tokio_instant() -> tokio::time::Instant {
+        tokio::time::Instant::now()
+    }
+
     /// The system's time of day, whatever clock is installed: for the base a virtual clock itself starts from.
     pub fn wall() -> std::time::SystemTime {
         std::time::SystemTime::now()

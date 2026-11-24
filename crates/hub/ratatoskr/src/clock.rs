@@ -108,9 +108,9 @@ pub fn now() -> tokio::time::Instant {
     real_instant()
 }
 
-/// The system's monotonic time as tokio's instant, whatever clock the hub runs on.
+/// Tokio's monotonic time, whatever clock the hub runs on: the system's, or a paused test's.
 fn real_instant() -> tokio::time::Instant {
-    tokio::time::Instant::from_std(stund::real::instant())
+    stund::real::tokio_instant()
 }
 
 /// The hub's time of day.

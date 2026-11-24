@@ -150,3 +150,11 @@ fn next_due_is_the_wait_to_the_earliest_timer() {
     assert_eq!(early.as_mut().poll(&mut cx), Poll::Ready(()));
     assert_eq!(clock.next_due(), Some(Duration::from_secs(5)));
 }
+
+/// `real::tokio_instant` is tokio's clock: a test that pauses and advances it moves it.
+#[tokio::test(start_paused = true)]
+async fn the_tokio_instant_follows_tokios_paused_clock() {
+    let a = stund::real::tokio_instant();
+    tokio::time::advance(Duration::from_secs(3600)).await;
+    assert!(a.elapsed() >= Duration::from_secs(3600));
+}

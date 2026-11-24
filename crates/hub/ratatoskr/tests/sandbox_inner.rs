@@ -124,6 +124,8 @@ fn run_fd(spec_fd: OwnedFd, cmd: &[&str], o: Opts) -> Outcome {
     };
     let opts = draugr::Opts {
         deny_syscall: o.deny,
+        // a helper that makes its own session must not be spawned as a group leader
+        inherit_group: !o.pgroup && !o.setsid,
         ..draugr::Opts::default()
     };
     let mut child = draugr::spawn_std(&spec, &opts).unwrap();
