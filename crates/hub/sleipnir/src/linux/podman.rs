@@ -499,6 +499,17 @@ pub fn image_id_ok(id: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// One plain word for a folder name under `/art` or `/cache-gate`: letters, digits, `-`, `_`, `.`; not empty, not
+/// starting with `.` or `-`; no slash, so a name never reaches into a folder of another.
+fn word(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with(['.', '-'])
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+}
+
 /// A path inside the container that is one plain absolute path under PARENT (`/art/NAME`): no `..`, no `:` or `,`.
 fn under(parent: &str, inside: &str) -> bool {
     inside
@@ -826,7 +837,7 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
                 // an author's job reads the gate's partition, never writes it
                 if let Some((gate, name)) = &c.gate_ro {
                     let at = format!("{GATE_CACHE_INSIDE}/{name}");
-                    if !under(GATE_CACHE_INSIDE, &at) {
+                    if !word(name) || !under(GATE_CACHE_INSIDE, &at) {
                         return Err(refuse(format!(
                             "a cache's name is not a plain word: {name:?}"
                         )));
@@ -840,7 +851,7 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
                 match u {
                     UseMount::Dir { host, name } => {
                         let at = format!("{ART_INSIDE}/{name}");
-                        if !under(ART_INSIDE, &at) {
+                        if !word(name) || !under(ART_INSIDE, &at) {
                             return Err(refuse(format!(
                                 "an artifact's name is not a plain word: {name:?}"
                             )));
@@ -850,7 +861,7 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
                     }
                     UseMount::Image { id, name } => {
                         let at = format!("{ART_INSIDE}/{name}");
-                        if !under(ART_INSIDE, &at) || !image_id_ok(id) {
+                        if !word(name) || !under(ART_INSIDE, &at) || !image_id_ok(id) {
                             return Err(refuse(format!(
                                 "an image use is an image ID at a plain name: {id:?} {name:?}"
                             )));
@@ -2534,7 +2545,11 @@ mod tests {
         let mut r = runner_req(&["ls"]);
         r.keys = None;
         r.features = vec![Feature::Ptrace];
-        let a = on_runner(&r, &rcaps()).unwrap();
+        // not allowed for the project here: refused
+        assert!(on_runner(&r, &rcaps()).is_err());
+        let mut ra = RunnerArgs::runner("drgnx-run", "hub1", "drgnx-runner-work-x1a.slice");
+        ra.allowed = vec![Feature::Ptrace];
+        let a = strs(argv(&r, &rcaps(), &ra).unwrap());
         assert!(a.iter().any(|s| s == "--cap-add=SYS_PTRACE"), "{a:?}");
         assert!(
             !a.iter()

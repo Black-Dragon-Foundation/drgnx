@@ -31410,7 +31410,7 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`jobs/allow`'s params: PROJECT's CLASS allow-list (`image`, `tool`, `host` or `fetch`). With a `value` it is added (`on`) or removed; without one the list is only read.",
+        "description": "`jobs/allow`'s params: PROJECT's CLASS allow-list (`image`, `tool`, `host` or `fetch`). With a `value` it is added\n(`on`) or removed; without one the list is only read.",
         "properties": {
           "class": {
             "maxLength": 16,
