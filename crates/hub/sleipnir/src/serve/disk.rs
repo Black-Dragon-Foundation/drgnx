@@ -283,10 +283,17 @@ impl<W: Write> Serve<W> {
         self.send(&Frame::Disk(report))
     }
 
-    /// The report as it stands; the items it carries become the last reported.
+    /// The report as it stands; the items it carries become the last reported. None, said on stderr, when the
+    /// register can't be read: a torn register is never reported as empty.
     fn disk_now(&mut self) -> Option<DiskReport> {
         let root = self.cfg.root.clone();
-        let reg = Register::open(&root).ok()?;
+        let reg = match Register::open(&root) {
+            Ok(r) => r,
+            Err(e) => {
+                crate::eline!("sleipnir serve: the disk register: {e}: no disk report");
+                return None;
+            }
+        };
         let df: Df = self.platform.df(&root).ok()?;
         let items = reg.items();
         let now: BTreeMap<String, DiskItem> =
