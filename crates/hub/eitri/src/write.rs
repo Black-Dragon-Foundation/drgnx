@@ -237,6 +237,44 @@ pub fn open_lock(abs: &Path, mode: u32) -> Result<std::fs::File, FsError> {
     Ok(std::fs::File::from(fd))
 }
 
+/// Opens the regular file at the absolute path `abs` for appending (a log): made with `create` as its mode (less the
+/// umask) when it is absent, and left as it is when it is not; never truncated. The parent is opened with `open_path`
+/// (a link in any component is refused); the open is `O_NOFOLLOW`, so a link at `abs` is `Link`, and anything that is not a
+/// regular file is `NotRegular`. With `create` `None` an absent file is an `Io` error of kind `NotFound`; a mode above
+/// 0o777 is refused.
+pub fn open_append(abs: &Path, create: Option<u32>) -> Result<std::fs::File, FsError> {
+    if create.is_some_and(|m| m & !0o777 != 0) {
+        return Err(invalid("a mode beyond 0o777"));
+    }
+    let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) else {
+        return Err(invalid("the path names no file"));
+    };
+    let parent = open_path(parent, Kind::Dir)?;
+    let mut flags = OFlags::WRONLY
+        | OFlags::APPEND
+        | OFlags::NOFOLLOW
+        | OFlags::CLOEXEC
+        | OFlags::NOCTTY
+        | OFlags::NONBLOCK;
+    if create.is_some() {
+        flags |= OFlags::CREATE;
+    }
+    let mode = Mode::from_raw_mode(create.unwrap_or(0) as RawMode);
+    let fd = match openat(parent.fd.as_fd(), name, flags, mode) {
+        Ok(fd) => fd,
+        Err(Errno::LOOP) => {
+            return Err(FsError::Link {
+                path: abs.to_path_buf(),
+            });
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if FileType::from_raw_mode(rustix::fs::fstat(&fd)?.st_mode) != FileType::RegularFile {
+        return Err(FsError::NotRegular);
+    }
+    Ok(std::fs::File::from(fd))
+}
+
 /// Renames the directory `from` to `to` (absolute paths, each parent opened with `open_path`, so a link in either is
 /// refused). `from` must be a directory itself: a link (even to a directory) is `Link`, anything else `NotDir`. As
 /// `rename(2)`, `to` is replaced when it is an empty directory; both parents are synced.
@@ -249,6 +287,107 @@ pub fn rename_dir(from: &Path, to: &Path) -> Result<(), FsError> {
 /// is `Link`, anything else `NotRegular`. As `rename(2)`, `to` is replaced; both parents are synced.
 pub fn rename_file(from: &Path, to: &Path) -> Result<(), FsError> {
     rename_entry(from, to, FileType::RegularFile, FsError::NotRegular)
+}
+
+/// Replaces the file at `dest` with `bytes` through the temporary file `tmp` the caller names (its name is part of a
+/// protocol: an editor's own save ignores `<file>.drgnx-tmp`, a test holds a pipe there to make the disk slow): `tmp` is
+/// opened for writing (made when absent, emptied, a link at it refused; the open waits for what is there, a pipe
+/// included), written whole, synced where the file system can, and renamed over `dest`. Both parents are opened with
+/// `open_path` (a link in any component is refused) and synced. Where `tmp` stays is a failure's: it is not removed.
+pub fn replace_via(tmp: &Path, dest: &Path, bytes: &[u8]) -> Result<(), FsError> {
+    let (Some(tmp_parent), Some(tmp_name), Some(dest_parent), Some(dest_name)) = (
+        tmp.parent(),
+        tmp.file_name(),
+        dest.parent(),
+        dest.file_name(),
+    ) else {
+        return Err(invalid("a path names no file"));
+    };
+    let tmp_dir = open_path(tmp_parent, Kind::Dir)?;
+    let dest_dir = open_path(dest_parent, Kind::Dir)?;
+    let flags = OFlags::WRONLY
+        | OFlags::CREATE
+        | OFlags::TRUNC
+        | OFlags::NOFOLLOW
+        | OFlags::CLOEXEC
+        | OFlags::NOCTTY;
+    let fd = match openat(
+        tmp_dir.fd.as_fd(),
+        tmp_name,
+        flags,
+        Mode::from_raw_mode(0o644),
+    ) {
+        Ok(fd) => fd,
+        Err(Errno::LOOP) => {
+            return Err(FsError::Link {
+                path: tmp.to_path_buf(),
+            });
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match rustix::io::write(&fd, rest) {
+            Ok(n) => rest = &rest[n..],
+            Err(Errno::INTR) => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    // a pipe or a file system with no sync says so with EINVAL: nothing to wait for there
+    match fsync(&fd) {
+        Ok(()) | Err(Errno::INVAL) => {}
+        Err(e) => return Err(e.into()),
+    }
+    drop(fd);
+    renameat(tmp_dir.fd.as_fd(), tmp_name, dest_dir.fd.as_fd(), dest_name)?;
+    sync_dir(dest_dir.fd.as_fd())?;
+    sync_dir(tmp_dir.fd.as_fd())
+}
+
+/// Renames the unix socket `from` to `to` (absolute paths, each parent opened with `open_path`, so a link in either is
+/// refused): a bound socket's path moved to the name clients dial. `from` must be a socket itself: a link is `Link`,
+/// anything else `NotRegular`. As `rename(2)`, `to` is replaced; both parents are synced.
+pub fn rename_socket(from: &Path, to: &Path) -> Result<(), FsError> {
+    rename_entry(from, to, FileType::Socket, FsError::NotRegular)
+}
+
+/// Writes `bytes` into the existing regular file at the absolute path `abs`, in place: no temporary file and no rename,
+/// the file is neither created nor replaced (its inode, and any lock held on it, stay; its old content is emptied first). For a file that is a control (a cgroup's `cpuset.cpus`), where a temporary
+/// file cannot be made beside it and one `write(2)` is the whole change. The parent is opened with `open_path` (a link
+/// in any component is refused); the open is `O_NOFOLLOW`, so a link at `abs` is `Link`, a file that is not there is
+/// an `Io` error of kind `NotFound`, and anything that is not a regular file is `NotRegular`.
+pub fn write_in_place(abs: &Path, bytes: &[u8]) -> Result<(), FsError> {
+    let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) else {
+        return Err(invalid("the path names no file"));
+    };
+    let parent = open_path(parent, Kind::Dir)?;
+    let flags = OFlags::WRONLY
+        | OFlags::TRUNC
+        | OFlags::NOFOLLOW
+        | OFlags::CLOEXEC
+        | OFlags::NOCTTY
+        | OFlags::NONBLOCK;
+    let fd = match openat(parent.fd.as_fd(), name, flags, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(Errno::LOOP) => {
+            return Err(FsError::Link {
+                path: abs.to_path_buf(),
+            });
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if FileType::from_raw_mode(rustix::fs::fstat(&fd)?.st_mode) != FileType::RegularFile {
+        return Err(FsError::NotRegular);
+    }
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match rustix::io::write(&fd, rest) {
+            Ok(n) => rest = &rest[n..],
+            Err(Errno::INTR) => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
 }
 
 /// `from` renamed to `to` when `from` is itself of type WANT (else a link is `Link` and any other type REFUSED).

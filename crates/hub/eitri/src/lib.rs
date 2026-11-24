@@ -27,8 +27,8 @@ pub use trusted::{
     TrustedProgram, pin_system_owned_file, root_only_file, system_owned_file, trusted_program,
 };
 pub use write::{
-    create_new, open_lock, remove_beneath, rename_dir, rename_file, replace_file, symlink_beneath,
-    write_regular,
+    create_new, open_append, open_lock, remove_beneath, rename_dir, rename_file, rename_socket,
+    replace_file, replace_via, symlink_beneath, write_in_place, write_regular,
 };
 
 /// Why an eitri call refused or failed. Nothing here is ever retried by resolving the path another way.
@@ -118,6 +118,16 @@ impl From<FsError> for villa::Error {
                 villa::Error::invalid(e.to_string()).with_source(e)
             }
             FsError::Unsupported(_) => villa::Error::unavailable(e.to_string()).with_source(e),
+        }
+    }
+}
+
+impl From<FsError> for io::Error {
+    /// An `Io` error as it was; any other refusal as an `other` error carrying it.
+    fn from(e: FsError) -> io::Error {
+        match e {
+            FsError::Io(e) => e,
+            other => io::Error::other(other),
         }
     }
 }
