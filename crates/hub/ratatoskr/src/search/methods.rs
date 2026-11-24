@@ -599,10 +599,10 @@ impl Hub {
             embedders.push(b);
         }
         // the `vectors` providers (another machine's `embed serve`): lookup sources, embedders when trusted (MP-18)
+        // the stamp first: a key that lands between the two is in the sources and not yet in the stamp, so the next
+        // call opens the project once more, never the reverse
+        fingerprints.extend(front.gate.vectors_stamp());
         let remotes = front.gate.vectors();
-        for (id, url, _, trusted) in &remotes {
-            fingerprints.push(format!("vectors:{id}:{url}:{trusted}"));
-        }
         // a project that cannot be read is an error the user sees (the Search view's state line), never a search
         // with the global settings or off; nothing is opened, the next call asks git again
         let unread = |e: String| internal(format!("search: {e}"));

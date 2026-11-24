@@ -178,6 +178,9 @@ pub struct Gate {
     keys: Arc<RwLock<Keys>>,
     /// The ids whose key is held (`Keys` lists none).
     held: Mutex<BTreeSet<String>>,
+    /// How many times each provider's key was set or revoked (never the key): what a project built from a remote
+    /// source carries, so a token that arrives or changes later opens it again.
+    key_gens: Mutex<BTreeMap<String, u64>>,
     /// Why keys are refused: the process could not be made not dumpable (`server::harden`), or no one said it was.
     /// Fails closed (design §6.2): `None` only once the server's hardening succeeded.
     keys_refused: Mutex<Option<String>>,
@@ -212,6 +215,7 @@ impl Gate {
             trusted: RwLock::new(BTreeSet::new()),
             keys: Arc::new(RwLock::new(Keys::new())),
             held: Mutex::new(BTreeSet::new()),
+            key_gens: Mutex::new(BTreeMap::new()),
             keys_refused: Mutex::new(Some("the hub was not hardened".into())),
             db: OnceLock::new(),
             budgets: OnceLock::new(),
@@ -398,6 +402,23 @@ impl Gate {
                 (p.id.clone(), base, token, trusted.contains(&p.id))
             })
             .collect()
+    }
+
+    /// What an open project's remote sources were built from, one entry per `vectors` provider: its URL, trust and how
+    /// often its key was set or revoked (a token handed over after the open, or changed, is another stamp).
+    pub(crate) fn vectors_stamp(&self) -> Vec<String> {
+        let gens = lock(&self.key_gens).clone();
+        self.vectors()
+            .into_iter()
+            .map(|(id, url, _, trusted)| {
+                let g = gens.get(&id).copied().unwrap_or(0);
+                format!("vectors:{id}:{url}:{trusted}:keys{g}")
+            })
+            .collect()
+    }
+
+    fn bump_key_gen(&self, id: &str) {
+        *lock(&self.key_gens).entry(id.to_owned()).or_insert(0) += 1;
     }
 
     /// `runtime.db`, once the gateway has it.
@@ -764,6 +785,7 @@ impl Gate {
         let mut held = lock(&self.held);
         let mut pending = lock(&self.pending);
         for id in ids {
+            self.bump_key_gen(&id);
             pending.remove(&id);
             held.insert(id);
         }
@@ -775,6 +797,9 @@ impl Gate {
     pub fn revoke_key(&self, provider: &str) -> bool {
         let had = write(&self.keys).remove(provider);
         lock(&self.held).remove(provider);
+        if had {
+            self.bump_key_gen(provider);
+        }
         had
     }
 
@@ -2042,6 +2067,38 @@ mod tests {
         // the answer passes the registry's check of gateway/keys-held's result
         let m = registry::find("gateway/keys-held").unwrap();
         assert_eq!((m.check_result)(&json!(held)).unwrap(), json!(held));
+    }
+
+    /// A `vectors` provider's token that arrives after a project opened (the editor hands keys over when it connects,
+    /// which can be later), is replaced, or is revoked changes what an open project was built from, so it is opened
+    /// again with the remote source in (or out) at once, not at the next hub restart. Another provider's key does not.
+    #[tokio::test]
+    async fn a_late_changed_or_revoked_token_changes_the_vectors_stamp() {
+        let h = hub().await;
+        let g = &h.front.gate;
+        let t: Vec<ProviderConfig> = serde_json::from_value(json!([
+            {"id": "desk", "kind": "vectors", "base": "http://127.0.0.1:7", "auth": "bearer",
+             "messages": false, "caps": ["embed"]}]))
+        .unwrap();
+        g.apply(&t).unwrap();
+        let keys = |v: Value| -> runstav::types::ProviderKeys {
+            decoded::<runstav::methods::gateway::KeysParams>("gateway/keys", json!({ "keys": v }))
+                .keys
+        };
+        let none = g.vectors_stamp();
+        assert_eq!(none.len(), 1, "{none:?}");
+        g.take_keys(keys(json!({"desk": "canary-token-1"})));
+        let late = g.vectors_stamp();
+        assert_ne!(none, late, "a token handed over after the open");
+        g.take_keys(keys(json!({"desk": "canary-token-2"})));
+        let changed = g.vectors_stamp();
+        assert_ne!(late, changed, "a changed token");
+        g.take_keys(keys(json!({"openrouter": "canary-token-3"})));
+        assert_eq!(changed, g.vectors_stamp(), "another provider's key");
+        assert!(g.revoke_key("desk"));
+        assert_ne!(changed, g.vectors_stamp(), "a revoked token");
+        let text = format!("{none:?}{late:?}{changed:?}");
+        assert!(!text.contains("canary"), "never the token: {text}");
     }
 
     #[tokio::test]

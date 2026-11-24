@@ -93,7 +93,9 @@ local text.
 ```
 
 - The token comes from the entry's `key_env` through the gateway's key hand-over; it is never logged and never in an
-  error.
+  error. A token handed over after a project opened, changed or revoked reopens the open projects at once (the
+  gateway counts each provider's key changes, and a project's sources are built from that count), so the source joins
+  or leaves the chain without a restart.
 - **Lookup-only unless trusted.** Without `:trusted t` the source is `SourceKind::Lookup`: the chain asks it for the keys
   the cache lacks and never sends it a text. With `:trusted t` it is `Embed`: it is asked for the keys first, and only
   the ones it lacks go to it as texts. (`:trusted t` on a `tei` or `ollama` provider off this machine lets it be sent
