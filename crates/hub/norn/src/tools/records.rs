@@ -115,9 +115,16 @@ pub fn rw_tools() -> Vec<Box<dyn Tool<Ctx>>> {
     vec![guarded(RecordsRead), guarded(RecordsWrite)]
 }
 
-/// The tools of [`super::OUTSIDE_TOOLS`], in that order: what a bound outside agent gets on top of [`super::tools`].
+/// The tools of [`super::outside_tool_names`], in that order: what a bound outside agent gets on top of
+/// [`super::tools`]. Each area's tools are in the pool below, and a name on the list picks its tool.
 pub fn outside_tools() -> Vec<Box<dyn Tool<Ctx>>> {
-    let mut all = super::plan::tools();
-    all.extend(rw_tools());
-    all
+    let mut pool = super::plan::tools();
+    pool.extend(rw_tools());
+    super::outside_tool_names()
+        .into_iter()
+        .filter_map(|name| {
+            let at = pool.iter().position(|t| t.name() == name)?;
+            Some(pool.swap_remove(at))
+        })
+        .collect()
 }
