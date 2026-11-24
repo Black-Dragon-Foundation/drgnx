@@ -592,7 +592,7 @@ impl Front {
                 .events_since(p.since, p.limit)
                 .await
                 .map(|page| json!(page))
-                .map_err(internal),
+                .map_err(|e| internal(e.message().to_owned())),
             Params::CoordNotify(_) => {
                 self.writer.signals.events_soon();
                 self.writer.signals.notify_soon();

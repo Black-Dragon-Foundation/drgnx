@@ -188,11 +188,11 @@ impl NeverSetWatch {
 pub fn machine_ports(
     inspect: &serde_json::Value,
     config: Option<&serde_json::Value>,
-) -> Result<Vec<u16>, String> {
+) -> villa::Result<Vec<u16>> {
     let port = |v: &serde_json::Value| v.as_u64().and_then(|p| u16::try_from(p).ok());
     let ssh = port(&inspect["SSHConfig"]["Port"])
         .or_else(|| config.and_then(|c| port(&c["SSH"]["Port"])))
-        .ok_or("podman machine inspect names no SSH port")?;
+        .ok_or_else(|| villa::Error::invalid("podman machine inspect names no SSH port"))?;
     let mut out = vec![ssh];
     if let Some(c) = config {
         for e in [

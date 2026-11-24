@@ -649,7 +649,7 @@ impl Store {
     }
 
     /// OP on SESSION's instruction breakpoints; refused for a number it does not have.
-    pub fn instr_op(&mut self, session: &str, op: InstrOp) -> Result<(), String> {
+    pub fn instr_op(&mut self, session: &str, op: InstrOp) -> villa::Result<()> {
         let set = self.instrs.entry(session.to_owned()).or_default();
         let text = |t: Option<String>| t.filter(|t| !t.is_empty());
         match op {
@@ -674,7 +674,9 @@ impl Store {
                 let before = set.list.len();
                 set.list.retain(|(b, _)| b.n != n);
                 if before == set.list.len() {
-                    return Err(format!("no instruction breakpoint {n}"));
+                    return Err(villa::Error::invalid(format!(
+                        "no instruction breakpoint {n}"
+                    )));
                 }
             }
             InstrOp::Edit {
@@ -683,11 +685,9 @@ impl Store {
                 condition,
                 hit,
             } => {
-                let (b, _) = set
-                    .list
-                    .iter_mut()
-                    .find(|(b, _)| b.n == n)
-                    .ok_or_else(|| format!("no instruction breakpoint {n}"))?;
+                let (b, _) = set.list.iter_mut().find(|(b, _)| b.n == n).ok_or_else(|| {
+                    villa::Error::invalid(format!("no instruction breakpoint {n}"))
+                })?;
                 if let Some(e) = enabled {
                     b.enabled = e;
                 }

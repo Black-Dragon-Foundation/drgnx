@@ -22,15 +22,15 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-fn err(code: ErrorCode, message: impl Into<String>) -> Error {
+fn err(code: ErrorCode, message: impl ToString) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
 
-fn invalid(message: impl Into<String>) -> Error {
+fn invalid(message: impl ToString) -> Error {
     err(ErrorCode::InvalidParams, message)
 }
 
@@ -54,27 +54,30 @@ pub enum Make {
 }
 
 /// The bisect's shadow repository for the staging folder SOURCE under ROOT, made with alternates OBJECTS.  Blocking.
-pub fn stage_repo(root: &Path, source: &Path, objects: &[PathBuf]) -> Result<PathBuf, String> {
+pub fn stage_repo(root: &Path, source: &Path, objects: &[PathBuf]) -> villa::Result<PathBuf> {
     let repo = repo_of(root, source);
-    std::fs::create_dir_all(source).map_err(|e| format!("{}: {e}", source.display()))?;
-    std::fs::create_dir_all(&repo).map_err(|e| format!("{}: {e}", repo.display()))?;
+    std::fs::create_dir_all(source)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", source.display())))?;
+    std::fs::create_dir_all(&repo)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", repo.display())))?;
     if !repo.join("HEAD").exists() {
         run_git(&repo, None, None, &["init", "--bare", "-q"])?;
     }
     let info = repo.join("objects").join("info");
-    std::fs::create_dir_all(&info).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&info).map_err(|e| villa::Error::io(e.to_string()))?;
     let mut text = String::new();
     for o in objects.iter().filter(|o| o.is_dir()) {
         text.push_str(&o.to_string_lossy());
         text.push('\n');
     }
-    crate::fsio::write(info.join("alternates"), text).map_err(|e| e.to_string())?;
+    crate::fsio::write(info.join("alternates"), text)
+        .map_err(|e| villa::Error::io(e.to_string()))?;
     Ok(repo)
 }
 
 /// Each pending state's tree written into REPO: the candidates, a state whose tree equals the one before it dropped
 /// (nothing to run).  Blocking.
-pub fn materialise(repo: &Path, pending: Vec<Pending>) -> Result<Vec<Candidate>, String> {
+pub fn materialise(repo: &Path, pending: Vec<Pending>) -> villa::Result<Vec<Candidate>> {
     let index = repo.join("bisect-index");
     let git = |args: &[&str]| run_git(repo, None, Some(&index), args);
     let mut out: Vec<Candidate> = Vec::new();
@@ -98,7 +101,8 @@ pub fn materialise(repo: &Path, pending: Vec<Pending>) -> Result<Vec<Candidate>,
                     }
                 };
                 for (path, text) in texts {
-                    let blob = hash_text(repo, &text)?;
+                    let blob =
+                        hash_text(repo, &text).map_err(|e| villa::Error::invalid(e.to_string()))?;
                     let mode = modes.get(&path).map_or("100644", String::as_str);
                     let info = format!("{mode},{blob},{path}");
                     git(&["update-index", "--add", "--cacheinfo", &info])?;
@@ -133,7 +137,7 @@ fn modes_of(repo: &Path, base: &str) -> HashMap<String, String> {
 }
 
 /// TEXT written into REPO as a blob: its id.
-fn hash_text(repo: &Path, text: &str) -> Result<String, String> {
+fn hash_text(repo: &Path, text: &str) -> villa::Result<String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let mut c = Command::new("git")
@@ -146,22 +150,26 @@ fn hash_text(repo: &Path, text: &str) -> Result<String, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("git: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("git: {e}")))?;
     c.stdin
         .take()
-        .ok_or("git: no stdin")?
+        .ok_or_else(|| villa::Error::invalid("git: no stdin"))?
         .write_all(text.as_bytes())
-        .map_err(|e| format!("git: {e}"))?;
-    let out = c.wait_with_output().map_err(|e| format!("git: {e}"))?;
+        .map_err(|e| villa::Error::io(format!("git: {e}")))?;
+    let out = c
+        .wait_with_output()
+        .map_err(|e| villa::Error::io(format!("git: {e}")))?;
     if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
+        return Err(villa::Error::unavailable(
+            String::from_utf8_lossy(&out.stderr).trim(),
+        ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
 
 /// The commits of GIT_DIR after GOOD (a commit) up to HEAD on the first-parent line, oldest first; with no GOOD, the
 /// ones made after the time SINCE (the newest [`bisect::STATES_MAX`]).  Blocking.
-pub fn commits(git_dir: &Path, good: Option<&str>, since: f64) -> Result<Vec<Pending>, String> {
+pub fn commits(git_dir: &Path, good: Option<&str>, since: f64) -> villa::Result<Vec<Pending>> {
     let range = good.map(|g| format!("{g}..HEAD"));
     let max = format!("-n{}", bisect::STATES_MAX);
     let mut args = vec![
@@ -208,21 +216,35 @@ fn records(
     tree: &crate::history::Tree,
     after: Option<i64>,
     since: f64,
-) -> Result<Vec<Pending>, String> {
+) -> villa::Result<Vec<Pending>> {
     use verdandi::{Kind, OpId};
     hub.with(|h| {
         let e = |e: verdandi::Error| e.to_string();
-        let Some(branch) = h.find_branch(&tree.branch_name()).map_err(e)? else {
+        let Some(branch) = h
+            .find_branch(&tree.branch_name())
+            .map_err(e)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?
+        else {
             return Ok(Vec::new());
         };
-        let base = h.base_of(branch).map_err(e)?;
+        let base = h
+            .base_of(branch)
+            .map_err(e)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let ops = h
             .records_on(branch, after.map(OpId), &[Kind::Save, Kind::AgentStep])
-            .map_err(e)?;
+            .map_err(e)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let mut v = Vec::new();
         for op in ops.into_iter().filter(|o| o.at > since) {
-            let texts = h.texts_after(branch, op.id).map_err(e)?;
-            let author = h.author_of(op.author).map_err(e)?;
+            let texts = h
+                .texts_after(branch, op.id)
+                .map_err(e)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            let author = h
+                .author_of(op.author)
+                .map_err(e)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let label = if op.summary.is_empty() {
                 match op.kind {
                     Kind::AgentStep => "an agent's step".to_owned(),
@@ -298,8 +320,11 @@ struct Jobs {
 }
 
 impl Jobs {
-    async fn job(&self, dir: &Path, argv: &[String]) -> Result<Option<i32>, String> {
-        let front = self.front.upgrade().ok_or("the hub is stopping")?;
+    async fn job(&self, dir: &Path, argv: &[String]) -> villa::Result<Option<i32>> {
+        let front = self
+            .front
+            .upgrade()
+            .ok_or_else(|| villa::Error::invalid("the hub is stopping"))?;
         let mut events = front.core.exec.subscribe();
         // the project's own command over states an agent may have written: an agent's sandbox, the slot its only
         // writable folder (`exec::start_sealed`)
@@ -309,14 +334,15 @@ impl Jobs {
             "timebox_s": self.predicate.timebox_s.unwrap_or(600),
             "name": format!("bisect {}", self.bisect),
         }))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let sealed = crate::exec::Sealed {
             label: format!("bisect-{}", self.bisect),
             tree: dir.to_owned(),
         };
         let id = crate::exec::start_sealed(&front, &sealed, params)
             .await
-            .map_err(|e| e.message)?
+            .map_err(|e| e.message)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?
             .id;
         drop(front);
         self.running.lock().expect("bisect jobs").insert(id.clone());
@@ -331,10 +357,10 @@ impl Jobs {
                         .and_then(|f| f.core.exec.get(&id))
                         .is_none_or(|r| r.ended.is_some());
                     if ended {
-                        break Err("its end was missed".to_owned());
+                        break Err(villa::Error::invalid("its end was missed"));
                     }
                 }
-                Err(_) => break Err("the hub is stopping".to_owned()),
+                Err(_) => break Err(villa::Error::invalid("the hub is stopping")),
             }
         };
         self.running.lock().expect("bisect jobs").remove(&id);
@@ -345,10 +371,16 @@ impl Jobs {
 impl Jobs {
     /// An `exception` or `probe` predicate in the slot DIR: the recorded run's configuration run there to its end,
     /// the place watched (`fork_wire::run_in`, sealed as a fork is).
-    async fn watched(&self, dir: &Path) -> Result<Outcome, String> {
+    async fn watched(&self, dir: &Path) -> villa::Result<Outcome> {
         let p = &self.predicate;
-        let front = self.front.upgrade().ok_or("the hub is stopping")?;
-        let run = p.run.clone().ok_or("no recorded run")?;
+        let front = self
+            .front
+            .upgrade()
+            .ok_or_else(|| villa::Error::invalid("the hub is stopping"))?;
+        let run = p
+            .run
+            .clone()
+            .ok_or_else(|| villa::Error::invalid("no recorded run"))?;
         let watch = watch_of(p)?;
         let limit = std::time::Duration::from_secs(p.timebox_s.unwrap_or(600));
         let end = super::fork_wire::run_in(front, run, dir.to_owned(), watch, limit).await?;
@@ -357,19 +389,23 @@ impl Jobs {
 }
 
 /// The place a replayed predicate watches: AT (`path:line`, relative to the project), and a probe's CONDITION.
-pub fn watch_of(p: &DebugPredicate) -> Result<Watch, String> {
+pub fn watch_of(p: &DebugPredicate) -> villa::Result<Watch> {
     let (path, line) =
         p.at.as_deref()
             .and_then(|a| a.rsplit_once(':'))
             .and_then(|(path, l)| Some((path.to_owned(), l.parse::<u32>().ok()?)))
-            .ok_or("the predicate's place is not PATH:LINE")?;
+            .ok_or_else(|| villa::Error::invalid("the predicate's place is not PATH:LINE"))?;
     Ok(match (p.kind.as_str(), &p.condition) {
         ("probe", Some(c)) => Watch::Probe {
             path,
             line,
             expr: c.clone(),
         },
-        ("probe", None) => return Err("a probe predicate needs its condition".into()),
+        ("probe", None) => {
+            return Err(villa::Error::invalid(
+                "a probe predicate needs its condition",
+            ));
+        }
         _ => Watch::Exception { path, line },
     })
 }
@@ -413,14 +449,17 @@ impl Prober for Jobs {
                 match me.job(&dir, &p.build).await {
                     Ok(Some(0)) => {}
                     Ok(c) => return Outcome::Skip(format!("it does not build (exit {c:?})")),
-                    Err(e) => return Outcome::Skip(e),
+                    Err(e) => return Outcome::Skip(e.message().to_owned()),
                 }
             }
             if matches!(p.kind.as_str(), "exception" | "probe") {
-                return me.watched(&dir).await.unwrap_or_else(Outcome::Skip);
+                return me
+                    .watched(&dir)
+                    .await
+                    .unwrap_or_else(|e| Outcome::Skip(e.message().to_owned()));
             }
             match (p.kind.as_str(), me.job(&dir, &p.argv).await) {
-                (_, Err(e)) => Outcome::Skip(e),
+                (_, Err(e)) => Outcome::Skip(e.message().to_owned()),
                 ("exit", Ok(Some(125))) => Outcome::Skip("the predicate said skip (125)".into()),
                 ("exit", Ok(Some(c))) if Some(c) == p.code => Outcome::Bad,
                 ("exit", Ok(Some(_))) => Outcome::Good,
@@ -825,7 +864,8 @@ async fn narrow(front: &Front, p: DebugBisectId) -> Result<bool, Error> {
         let hunks = match crate::clock::blocking(move || s2.hunks(&good, &bad)).await {
             Ok(Ok(h)) => h,
             Ok(Err(e)) => {
-                return sink.event(json!({"bisect": id, "state": "narrow-failed", "why": e}));
+                return sink
+                    .event(json!({"bisect": id, "state": "narrow-failed", "why": e.message()}));
             }
             Err(e) => {
                 return sink

@@ -21,10 +21,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-fn err(message: impl Into<String>) -> Error {
+fn err(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
@@ -168,12 +168,15 @@ async fn fork(front: &Front, p: DebugFork) -> Result<DebugForked, Error> {
 }
 
 /// RUN's configuration resolved now as `debug/fork` resolves it, for a use without the user (no inputs asked).
-pub(super) fn resolved_for(front: &Front, run: &RunInfo) -> Result<Value, String> {
-    match resolve(front, run, &[]).map_err(|e| e.message)? {
+pub(super) fn resolved_for(front: &Front, run: &RunInfo) -> villa::Result<Value> {
+    match resolve(front, run, &[])
+        .map_err(|e| e.message)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?
+    {
         Ok(v) => Ok(v),
-        Err(first) if first.needs == Some(serde_json::json!("trust")) => {
-            Err(format!("the project of run {} is not trusted", run.id))
-        }
+        Err(first) if first.needs == Some(serde_json::json!("trust")) => Err(
+            villa::Error::invalid(format!("the project of run {} is not trusted", run.id)),
+        ),
         Err(first) => {
             let ids: Vec<String> = first
                 .needs
@@ -188,7 +191,11 @@ pub(super) fn resolved_for(front: &Front, run: &RunInfo) -> Result<Value, String
                         .or_else(|| Some(n.to_string()))
                 })
                 .collect();
-            Err(format!("run {} needs input {}", run.id, ids.join(", ")))
+            Err(villa::Error::invalid(format!(
+                "run {} needs input {}",
+                run.id,
+                ids.join(", ")
+            )))
         }
     }
 }
@@ -203,14 +210,14 @@ pub async fn trace<F>(
     env: F,
     files: Vec<(String, Vec<u8>)>,
     probes: Vec<super::record::RunProbe>,
-) -> Result<TraceTree, String>
+) -> villa::Result<TraceTree>
 where
     F: FnOnce(&Path) -> Vec<(String, String)> + Send + 'static,
 {
     let f = forks(&front);
     let info = f
         .recorded(&run)
-        .ok_or_else(|| format!("no recorded run {run}"))?;
+        .ok_or_else(|| villa::Error::invalid(format!("no recorded run {run}")))?;
     let resolved = resolved_for(&front, &info)?;
     f.trace(&run, stop, resolved, env, files, probes).await
 }
@@ -223,19 +230,25 @@ pub async fn run_in(
     tree: PathBuf,
     watch: Watch,
     limit: Duration,
-) -> Result<RunEnd, String> {
-    let tree = in_slots(&slots_root(&front.shell_env.paths_env()), &tree)?;
+) -> villa::Result<RunEnd> {
+    let tree = in_slots(&slots_root(&front.shell_env.paths_env()), &tree)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let f = forks(&front);
     let info = f
         .recorded(&run)
-        .ok_or_else(|| format!("no recorded run {run}"))?;
+        .ok_or_else(|| villa::Error::invalid(format!("no recorded run {run}")))?;
     let resolved = resolved_for(&front, &info)?;
     f.run_in(&run, resolved, tree, watch, limit).await
 }
 
 /// TREE, links resolved, when it is strictly under SLOTS (also resolved).
-pub(super) fn in_slots(slots: &Path, tree: &Path) -> Result<PathBuf, String> {
-    let refuse = || format!("{} is not a bisect slot of the hub's", tree.display());
+pub(super) fn in_slots(slots: &Path, tree: &Path) -> villa::Result<PathBuf> {
+    let refuse = || {
+        villa::Error::refused(format!(
+            "{} is not a bisect slot of the hub's",
+            tree.display()
+        ))
+    };
     let slots = std::fs::canonicalize(slots).map_err(|_| refuse())?;
     let t = std::fs::canonicalize(tree).map_err(|_| refuse())?;
     if t != slots && t.starts_with(&slots) {

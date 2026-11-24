@@ -300,7 +300,7 @@ async fn a_hostile_answer_is_refused_whether_nested_objects_a_list_in_a_list_or_
 }
 
 /// The mock's answer to `resolveMainClass` has a main class and no project name.
-async fn fill_without_project(optional: bool) -> Result<serde_json::Value, String> {
+async fn fill_without_project(optional: bool) -> villa::Result<serde_json::Value> {
     let mut steps = fills();
     steps[0].into[1].optional = optional;
     steps[1].args[1] = if optional {

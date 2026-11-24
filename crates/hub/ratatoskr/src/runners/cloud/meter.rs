@@ -268,25 +268,25 @@ impl Meter {
         idle_s: u64,
         running: &[RunningCost],
         needs_login: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> villa::Result<()> {
         if let Some(cmd) = needs_login {
-            return Err(needs_login_text(cmd));
+            return Err(villa::Error::unavailable(needs_login_text(cmd)));
         }
         let spent = self.spent(now);
         if spent >= cap {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "cloud cap: {} of {} used; no new cloud work",
                 usd(spent),
                 usd(cap)
-            ));
+            )));
         }
         if projection(spent, price_h, busy_s, idle_s, running) > cap {
             let min = (busy_s + idle_s).div_ceil(60);
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "cloud cap: {} of {} used; a {size} for ~{min} min would pass it",
                 usd(spent),
                 usd(cap)
-            ));
+            )));
         }
         Ok(())
     }
@@ -307,15 +307,15 @@ impl Meter {
 }
 
 /// Writes REC as `cloud_spend:<machine>.<from>`, as `("hub", Class::System)`.
-pub async fn write(db: &norn::store::CoordDb, rec: &CloudSpend) -> Result<(), String> {
+pub async fn write(db: &norn::store::CoordDb, rec: &CloudSpend) -> villa::Result<()> {
     let name = format!("{}.{}", rec.machine, rec.from);
-    let data = serde_json::to_value(rec).map_err(|e| e.to_string())?;
+    let data = serde_json::to_value(rec).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let meta = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "runners/cloud");
     db.write(meta, move |tx| {
         norn::write::runners::put(tx, "cloud_spend", &name, data).map(|_| ())
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| villa::Error::invalid(e.to_string()))
 }
 
 #[cfg(test)]
@@ -350,7 +350,9 @@ mod tests {
         // $15/h for 25 min busy and 15 min idle is $10 more: past $50
         assert_eq!(
             m.gate(0, 50.0, "c7a.4xlarge", 15.0, 1500, 900, &[], None),
-            Err("cloud cap: $41 of $50 used; a c7a.4xlarge for ~40 min would pass it".into())
+            Err(villa::Error::invalid(
+                "cloud cap: $41 of $50 used; a c7a.4xlarge for ~40 min would pass it"
+            ))
         );
         assert_eq!(
             m.gate(0, 50.0, "c7a.4xlarge", 1.2, 1500, 900, &[], None),
@@ -369,13 +371,17 @@ mod tests {
         let at = Meter::new(NO_EXTRAS, 50.0);
         assert_eq!(
             at.gate(0, 50.0, "m7g.large", 0.01, 60, 900, &[], None),
-            Err("cloud cap: $50 of $50 used; no new cloud work".into())
+            Err(villa::Error::invalid(
+                "cloud cap: $50 of $50 used; no new cloud work"
+            ))
         );
         // small sums in cents
         let low = Meter::new(NO_EXTRAS, 3.1);
         assert_eq!(
             low.gate(0, 3.5, "m7g.large", 1.0, 1500, 900, &[], None),
-            Err("cloud cap: $3.10 of $3.50 used; a m7g.large for ~40 min would pass it".into())
+            Err(villa::Error::invalid(
+                "cloud cap: $3.10 of $3.50 used; a m7g.large for ~40 min would pass it"
+            ))
         );
         // expired credentials: nothing new starts, and the card names the command
         assert_eq!(
@@ -389,7 +395,9 @@ mod tests {
                 &[],
                 Some("aws sso login")
             ),
-            Err("Run `aws sso login`, then Runners: Retry Cloud".into())
+            Err(villa::Error::invalid(
+                "Run `aws sso login`, then Runners: Retry Cloud"
+            ))
         );
     }
 

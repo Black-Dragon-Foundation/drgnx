@@ -182,18 +182,18 @@ pub fn confirm_delete(
 }
 
 /// The arguments after `search`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<SearchCommand> {
     use lexopt::Arg::{Long, Short, Value as Word};
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let name = match p.next().map_err(e)? {
         Some(Word(v)) => v.string().map_err(e)?,
-        Some(other) => return Err(other.unexpected().to_string()),
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
         None => {
-            return Err(
-                "search needs a subcommand: index, query, mcp, export, import or eval".into(),
-            );
+            return Err(villa::Error::invalid(
+                "search needs a subcommand: index, query, mcp, export, import or eval",
+            ));
         }
     };
     if name == "eval" {
@@ -230,7 +230,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             Long("budget") if name == "map" => {
                 let b: u32 = p.value().map_err(e)?.parse().map_err(e)?;
                 if !(256..=32_000).contains(&b) {
-                    return Err("--budget is 256 to 32000 tokens".into());
+                    return Err(villa::Error::invalid("--budget is 256 to 32000 tokens"));
                 }
                 budget = Some(b);
             }
@@ -241,16 +241,18 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             Long("scope") if name == "map" => {
                 let s = p.value().map_err(e)?.string().map_err(e)?;
                 if !["code", "all"].contains(&s.as_str()) {
-                    return Err(format!("--scope is code or all, not {s:?}"));
+                    return Err(villa::Error::invalid(format!(
+                        "--scope is code or all, not {s:?}"
+                    )));
                 }
                 scope = Some(s);
             }
             Long("match") if name == "symbols" => {
                 let m = p.value().map_err(e)?.string().map_err(e)?;
                 if !["auto", "exact", "prefix", "contains", "regex"].contains(&m.as_str()) {
-                    return Err(format!(
+                    return Err(villa::Error::invalid(format!(
                         "--match is auto, exact, prefix, contains or regex, not {m:?}"
-                    ));
+                    )));
                 }
                 mode = Some(m);
             }
@@ -264,27 +266,33 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             Long("scope") if asks => {
                 let s = p.value().map_err(e)?.string().map_err(e)?;
                 if !["code", "tests", "docs", "all"].contains(&s.as_str()) {
-                    return Err(format!("--scope is code, tests, docs or all, not {s:?}"));
+                    return Err(villa::Error::invalid(format!(
+                        "--scope is code, tests, docs or all, not {s:?}"
+                    )));
                 }
                 scope = Some(s);
             }
             Short('k') if asks => {
                 let n: u32 = p.value().map_err(e)?.parse().map_err(e)?;
                 if !(1..=100).contains(&n) {
-                    return Err("-k is 1 to 100".into());
+                    return Err(villa::Error::invalid("-k is 1 to 100"));
                 }
                 k = Some(n);
             }
             Word(v) => words.push(v.string().map_err(e)?),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let mut words = words.into_iter();
     Ok(match name.as_str() {
         "index" => {
-            let root = words.next().ok_or("search index needs a project root")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search index needs a project root"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search index: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search index: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Index {
                 root: root.into(),
@@ -293,10 +301,12 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "query" => {
-            let root = words.next().ok_or("search query needs a project root")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search query needs a project root"))?;
             let text = words.collect::<Vec<_>>().join(" ");
             if text.trim().is_empty() {
-                return Err("search query needs a question".into());
+                return Err(villa::Error::invalid("search query needs a question"));
             }
             SearchCommand::Query {
                 root: root.into(),
@@ -307,10 +317,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "symbols" => {
-            let root = words.next().ok_or("search symbols needs a project root")?;
-            let name = words.next().ok_or("search symbols needs a name")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search symbols needs a project root"))?;
+            let name = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search symbols needs a name"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search symbols: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search symbols: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Symbols {
                 root: root.into(),
@@ -324,10 +340,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "outline" => {
-            let root = words.next().ok_or("search outline needs a project root")?;
-            let path = words.next().ok_or("search outline needs a file")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search outline needs a project root"))?;
+            let path = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search outline needs a file"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search outline: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search outline: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Outline {
                 root: root.into(),
@@ -337,10 +359,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "why" => {
-            let root = words.next().ok_or("search why needs a project root")?;
-            let path = words.next().ok_or("search why needs a file")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search why needs a project root"))?;
+            let path = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search why needs a file"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search why: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search why: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Why {
                 root: root.into(),
@@ -349,9 +377,13 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "map" => {
-            let root = words.next().ok_or("search map needs a project root")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search map needs a project root"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search map: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search map: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Map {
                 root: root.into(),
@@ -363,12 +395,18 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "export" => {
-            let root = words.next().ok_or("search export needs a project root")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search export needs a project root"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search export: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search export: unexpected argument {extra:?}"
+                )));
             }
             if all_trees && branch.is_some() {
-                return Err("search export: --branch or --all-trees, not both".into());
+                return Err(villa::Error::invalid(
+                    "search export: --branch or --all-trees, not both",
+                ));
             }
             SearchCommand::Export {
                 root: root.into(),
@@ -378,10 +416,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "import" => {
-            let file = words.next().ok_or("search import needs a pack file")?;
+            let file = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search import needs a pack file"))?;
             let root = words.next();
             if let Some(extra) = words.next() {
-                return Err(format!("search import: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search import: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Import {
                 file: file.into(),
@@ -390,10 +432,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "usages" => {
-            let root = words.next().ok_or("search usages needs a project root")?;
-            let name = words.next().ok_or("search usages needs a name")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search usages needs a project root"))?;
+            let name = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search usages needs a name"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search usages: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search usages: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Usages {
                 root: root.into(),
@@ -406,7 +454,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
         _ => {
             let root = words.next();
             if let Some(extra) = words.next() {
-                return Err(format!("search mcp: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search mcp: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Mcp {
                 root: root.map(PathBuf::from),
@@ -416,7 +466,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
 }
 
 /// `list`, `status`, `pause`, `resume`, `stop` and `delete` (Hrafn redesign §11A).
-fn parse_manage(name: &str, mut p: lexopt::Parser) -> Result<SearchCommand, String> {
+fn parse_manage(name: &str, mut p: lexopt::Parser) -> villa::Result<SearchCommand> {
     use lexopt::Arg::{Long, Value as Word};
     use lexopt::ValueExt;
     let verb = match name {
@@ -424,9 +474,13 @@ fn parse_manage(name: &str, mut p: lexopt::Parser) -> Result<SearchCommand, Stri
         "resume" => Some(Verb::Resume),
         "stop" => Some(Verb::Stop),
         "list" | "status" | "delete" => None,
-        _ => return Err(format!("unknown search subcommand {name:?}")),
+        _ => {
+            return Err(villa::Error::invalid(format!(
+                "unknown search subcommand {name:?}"
+            )));
+        }
     };
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let (mut json, mut all, mut yes, mut words) = (false, false, false, Vec::new());
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
@@ -434,27 +488,31 @@ fn parse_manage(name: &str, mut p: lexopt::Parser) -> Result<SearchCommand, Stri
             Long("all") if verb.is_some() => all = true,
             Long("yes") if name == "delete" => yes = true,
             Word(v) => words.push(PathBuf::from(v.string().map_err(e)?)),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let max = if name == "list" { 0 } else { 1 };
     if words.len() > max {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "search {name}: unexpected argument {:?}",
             words[max]
-        ));
+        )));
     }
     let root = words.pop();
     Ok(match (name, verb) {
         ("list", _) => SearchCommand::List { json },
         ("status", _) => SearchCommand::Status { root, json },
         ("delete", _) => SearchCommand::Delete {
-            root: root.ok_or("search delete needs a project root (one at a time)")?,
+            root: root.ok_or_else(|| {
+                villa::Error::invalid("search delete needs a project root (one at a time)")
+            })?,
             yes,
         },
         (_, Some(verb)) => {
             if root.is_some() == all {
-                return Err(format!("search {name} needs a project root or --all"));
+                return Err(villa::Error::invalid(format!(
+                    "search {name} needs a project root or --all"
+                )));
             }
             SearchCommand::Manage { verb, root, all }
         }
@@ -490,7 +548,8 @@ impl Backend for ClientBackend {
                     params["k"] = json!(k);
                 }
                 let v = Client::user(&env, Duration::from_secs(5))
-                    .and_then(|mut c| c.call("search/query", params, CALL))?;
+                    .and_then(|mut c| c.call("search/query", params, CALL))
+                    .map_err(|e| e.message().to_owned())?;
                 serde_json::from_value(v).map_err(|e| e.to_string())
             })
             .await
@@ -514,6 +573,7 @@ impl Backend for ClientBackend {
             })
             .await
             .map_err(|e| e.to_string())?
+            .map_err(|e| e.message().to_owned())
         })
     }
 }
@@ -910,7 +970,7 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
 mod tests {
     use super::*;
 
-    fn p(args: &[&str]) -> Result<SearchCommand, String> {
+    fn p(args: &[&str]) -> villa::Result<SearchCommand> {
         parse(args.iter().map(OsString::from))
     }
 

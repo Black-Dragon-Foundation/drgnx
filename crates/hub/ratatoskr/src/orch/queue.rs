@@ -194,7 +194,7 @@ pub struct Entry<'a> {
 
 /// E's turn in its job's queue, in DIR (the job's tree, HEAD its line).  With shared paths, a clean merge onto the
 /// line joining shared files both sides changed sends the task back for notes.  Blocking (git).
-pub fn turn(queue: &Queue, dir: &Path, e: Entry<'_>) -> Result<Turn, String> {
+pub fn turn(queue: &Queue, dir: &Path, e: Entry<'_>) -> villa::Result<Turn> {
     let (job, task) = (e.job, e.task);
     let t = turn_of(queue, dir, e)?;
     match &t {
@@ -206,7 +206,7 @@ pub fn turn(queue: &Queue, dir: &Path, e: Entry<'_>) -> Result<Turn, String> {
     Ok(t)
 }
 
-fn turn_of(queue: &Queue, dir: &Path, e: Entry<'_>) -> Result<Turn, String> {
+fn turn_of(queue: &Queue, dir: &Path, e: Entry<'_>) -> villa::Result<Turn> {
     let Entry {
         job,
         task,

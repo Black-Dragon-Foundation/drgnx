@@ -19,8 +19,10 @@ use std::path::{Path, PathBuf};
 
 /// TREE's files the edit history says the agent changed against the branch's base, with the base commit; none while
 /// the history holds no branch for the tree.
-pub fn from_history(hub: &Hub, tree: &Tree) -> Result<Option<(String, Vec<FileCount>)>, String> {
-    let found = hub.edits_against_base(tree).map_err(|e| e.to_string())?;
+pub fn from_history(hub: &Hub, tree: &Tree) -> villa::Result<Option<(String, Vec<FileCount>)>> {
+    let found = hub
+        .edits_against_base(tree)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     Ok(found.map(|(base, files)| {
         let files = files
             .into_iter()
@@ -36,8 +38,8 @@ pub fn from_history(hub: &Hub, tree: &Tree) -> Result<Option<(String, Vec<FileCo
 }
 
 /// PATH's bytes in TREE.
-pub fn file_blob(root: &Path, worktree: &Path, tree: &str, path: &str) -> Result<Vec<u8>, String> {
-    check_path(path)?;
+pub fn file_blob(root: &Path, worktree: &Path, tree: &str, path: &str) -> villa::Result<Vec<u8>> {
+    check_path(path).map_err(|e| villa::Error::invalid(e.to_string()))?;
     snapshot::blob(root, worktree, tree, path)
 }
 
@@ -73,7 +75,7 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-fn fail(message: impl Into<String>) -> Error {
+fn fail(message: impl ToString) -> Error {
     crate::runner::invalid(message)
 }
 
@@ -175,11 +177,16 @@ pub async fn edited(f: &Front, session: &str) -> Result<Option<Changed>, Error> 
     let (hub, tree) = history_of(f, session)?;
     let (sid, now) = (session.to_owned(), crate::clock::wall_secs());
     let found = crate::clock::blocking(move || {
-        if hub.shared_with(&tree, &sid).map_err(|e| e.to_string())? {
-            let base = hub.base_commit(&tree).map_err(|e| e.to_string())?;
+        if hub
+            .shared_with(&tree, &sid)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?
+        {
+            let base = hub
+                .base_commit(&tree)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let files = hub
                 .session_edits(&tree, &sid, now)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| villa::Error::invalid(e.to_string()))?
                 .into_iter()
                 .map(|c| FileCount {
                     path: c.path,

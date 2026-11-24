@@ -1169,10 +1169,10 @@ fn login_grants(
 ) -> Result<LoginGrants, Refusal> {
     let mut g = login_grants_base(dir, shape, scratch, target)?;
     if let Some(r) = crate::agents::past::grant(&shape.sid) {
-        resume_grant(&r, dir, shape, scratch, target, &mut g).map_err(|message| Refusal {
+        resume_grant(&r, dir, shape, scratch, target, &mut g).map_err(|e| Refusal {
             rule: Rule::Setup,
             path: Some(r.file.clone()),
-            message,
+            message: e.message().to_owned(),
         })?;
     }
     Ok(g)
@@ -1190,26 +1190,33 @@ fn resume_grant(
     scratch: &Path,
     target: gleipnir::Target,
     g: &mut LoginGrants,
-) -> Result<(), String> {
+) -> villa::Result<()> {
     use crate::agents::past::checked_file;
     use runstav::methods::past::PastRoute;
     let real_dir = dir
         .canonicalize()
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", dir.display())))?;
     let root = r
         .root
         .canonicalize()
-        .map_err(|e| format!("{}: {e}", r.root.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", r.root.display())))?;
     if real_dir != root {
-        return Err("the session's CLI folder is not the one the past session is in".into());
+        return Err(villa::Error::invalid(
+            "the session's CLI folder is not the one the past session is in",
+        ));
     }
     let file = checked_file(&root, &r.file)?;
-    let name = file.file_name().ok_or("no file name")?.to_owned();
+    let name = file
+        .file_name()
+        .ok_or_else(|| villa::Error::invalid("no file name"))?
+        .to_owned();
     // where the CLI looks (REAL, under the login dir) and the session's own folder bound there (OWN)
     let (real, own, rel): (PathBuf, PathBuf, PathBuf) = match r.provider {
         minni::Provider::Claude => {
-            let project = crate::agents::lock::claude_project(dir, &shape.cwd)
-                .ok_or("the session's cwd has no Claude project folder")?;
+            let project =
+                crate::agents::lock::claude_project(dir, &shape.cwd).ok_or_else(|| {
+                    villa::Error::invalid("the session's cwd has no Claude project folder")
+                })?;
             (
                 project,
                 scratch.join("claude-project"),
@@ -1228,11 +1235,11 @@ fn resume_grant(
                     let d = n
                         .strip_prefix("rollout-")
                         .and_then(|t| t.get(..10))
-                        .ok_or("not a rollout file")?;
+                        .ok_or_else(|| villa::Error::invalid("not a rollout file"))?;
                     let mut parts = d.split('-');
                     let (y, m, day) = (parts.next(), parts.next(), parts.next());
                     let (Some(y), Some(m), Some(day)) = (y, m, day) else {
-                        return Err("not a rollout file".into());
+                        return Err(villa::Error::invalid("not a rollout file"));
                     };
                     PathBuf::from(y).join(m).join(day).join(&name)
                 }
@@ -1246,25 +1253,28 @@ fn resume_grant(
         minni::Provider::Gemini => {
             let rel = file
                 .strip_prefix(root.join("tmp"))
-                .map_err(|_| "not under the CLI's tmp folder".to_string())?
+                .map_err(|_| villa::Error::invalid("not under the CLI's tmp folder"))?
                 .to_path_buf();
             (dir.join("tmp"), scratch.join("login").join("tmp"), rel)
         }
     };
     let bwrap = target == gleipnir::Target::LinuxBwrap;
-    let made = |p: &Path| -> Result<(), String> {
+    let made = |p: &Path| -> villa::Result<()> {
         if let Some(parent) = p.parent() {
-            paths::private_dir(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            paths::private_dir(parent)
+                .map_err(|e| villa::Error::invalid(format!("{}: {e}", parent.display())))?;
         }
         Ok(())
     };
     match r.route {
         PastRoute::Copy => {
             if !bwrap {
-                return Err("resuming on a copy needs the full sandbox tier: resume in the original file, or in a terminal".into());
+                return Err(villa::Error::invalid(
+                    "resuming on a copy needs the full sandbox tier: resume in the original file, or in a terminal",
+                ));
             }
             let to = own.join(&rel);
-            made(&to)?;
+            made(&to).map_err(|e| villa::Error::invalid(e.to_string()))?;
             copy_private(&file, &to)?;
             if r.provider == minni::Provider::Claude
                 && let Some(stem) = file.file_stem()
@@ -1274,7 +1284,8 @@ fn resume_grant(
                     let into = own.join(stem).join("subagents");
                     for e in rd.flatten() {
                         if e.file_type().is_ok_and(|t| t.is_file()) {
-                            made(&into.join(e.file_name()))?;
+                            made(&into.join(e.file_name()))
+                                .map_err(|e| villa::Error::invalid(e.to_string()))?;
                             copy_private(&e.path(), &into.join(e.file_name()))?;
                         }
                     }
@@ -1284,9 +1295,9 @@ fn resume_grant(
         PastRoute::Original => {
             if bwrap {
                 let stand_in = own.join(&rel);
-                made(&stand_in)?;
+                made(&stand_in).map_err(|e| villa::Error::invalid(e.to_string()))?;
                 crate::fsio::append(&stand_in, true)
-                    .map_err(|e| format!("{}: {e}", stand_in.display()))?;
+                    .map_err(|e| villa::Error::io(format!("{}: {e}", stand_in.display())))?;
                 g.binds.push(gleipnir::Bind {
                     mode: gleipnir::Mode::Rw,
                     source: file,
@@ -1295,7 +1306,9 @@ fn resume_grant(
             } else if real.join(&rel) == file {
                 g.write.push(file);
             } else {
-                return Err("that file is not where the CLI looks for it: resume on a copy, or in a terminal".into());
+                return Err(villa::Error::invalid(
+                    "that file is not where the CLI looks for it: resume on a copy, or in a terminal",
+                ));
             }
         }
     }
@@ -1303,13 +1316,13 @@ fn resume_grant(
 }
 
 /// FROM copied to TO (made with mode 0600, never through a link).
-fn copy_private(from: &Path, to: &Path) -> Result<(), String> {
+fn copy_private(from: &Path, to: &Path) -> villa::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     let mut src = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
         .open(from)
-        .map_err(|e| format!("{}: {e}", from.display()))?;
+        .map_err(|e| villa::Error::io(format!("{}: {e}", from.display())))?;
     let mut dst = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -1317,8 +1330,9 @@ fn copy_private(from: &Path, to: &Path) -> Result<(), String> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(to)
-        .map_err(|e| format!("{}: {e}", to.display()))?;
-    std::io::copy(&mut src, &mut dst).map_err(|e| format!("{}: {e}", to.display()))?;
+        .map_err(|e| villa::Error::io(format!("{}: {e}", to.display())))?;
+    std::io::copy(&mut src, &mut dst)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", to.display())))?;
     Ok(())
 }
 

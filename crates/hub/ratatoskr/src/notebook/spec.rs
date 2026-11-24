@@ -158,35 +158,42 @@ impl Kernelspec {
 }
 
 /// The session's private folder: made 0700 if missing; refused if it is a link, is not ours or is open to others.
-pub fn private_folder(path: &Path) -> Result<PathBuf, String> {
+pub fn private_folder(path: &Path) -> villa::Result<PathBuf> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     if std::fs::symlink_metadata(path).is_err() {
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(path)
-            .map_err(|e| format!("cannot make {}: {e}", path.display()))?;
+            .map_err(|e| villa::Error::io(format!("cannot make {}: {e}", path.display())))?;
     }
-    let m = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let m = std::fs::symlink_metadata(path)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
     if m.file_type().is_symlink() {
-        return Err(format!(
+        return Err(villa::Error::io(format!(
             "{} is a link, not a private folder",
             path.display()
-        ));
+        )));
     }
     if !m.is_dir() {
-        return Err(format!("{} is not a folder", path.display()));
+        return Err(villa::Error::invalid(format!(
+            "{} is not a folder",
+            path.display()
+        )));
     }
     // SAFETY: geteuid has no preconditions.
     if m.uid() != unsafe { libc::geteuid() } {
-        return Err(format!("{} belongs to another user", path.display()));
+        return Err(villa::Error::invalid(format!(
+            "{} belongs to another user",
+            path.display()
+        )));
     }
     if m.mode() & 0o777 != 0o700 {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{} must be mode 0700 (it is {:04o})",
             path.display(),
             m.mode() & 0o777
-        ));
+        )));
     }
     Ok(path.to_path_buf())
 }
@@ -217,18 +224,18 @@ fn check_id(id: &str) -> Result<(), String> {
 
 impl Connection {
     /// A new file `kernel-<id>.json` in FOLDER (which must be [`private_folder`]'s answer), over ipc.
-    pub fn create(folder: &Path, id: &str, kernel_name: &str) -> Result<Connection, String> {
-        check_id(id)?;
+    pub fn create(folder: &Path, id: &str, kernel_name: &str) -> villa::Result<Connection> {
+        check_id(id).map_err(|e| villa::Error::invalid(e.to_string()))?;
         let prefix = folder.join(format!("k-{id}"));
         let prefix_text = prefix
             .to_str()
-            .ok_or("the session folder's path is not text")?
+            .ok_or_else(|| villa::Error::invalid("the session folder's path is not text"))?
             .to_string();
         if prefix_text.len() + 2 > MAX_SOCKET_PATH {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "the socket path under {} is too long for a unix socket",
                 folder.display()
-            ));
+            )));
         }
         let mut ports = [0u16; 5];
         for (i, p) in ports.iter_mut().enumerate() {
@@ -252,8 +259,8 @@ impl Connection {
         id: &str,
         kernel_name: &str,
         ports: [u16; 5],
-    ) -> Result<Connection, String> {
-        check_id(id)?;
+    ) -> villa::Result<Connection> {
+        check_id(id).map_err(|e| villa::Error::invalid(e.to_string()))?;
         Self::write(
             folder,
             id,
@@ -276,7 +283,7 @@ impl Connection {
         ports: [u16; 5],
         prefix: PathBuf,
         tcp: Option<[u16; 5]>,
-    ) -> Result<Connection, String> {
+    ) -> villa::Result<Connection> {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
         let key = Key::generate()?;
@@ -296,10 +303,13 @@ impl Connection {
             .create_new(true)
             .mode(0o600)
             .open(&path)
-            .map_err(|e| format!("cannot create {}: {e}", path.display()))?;
+            .map_err(|e| villa::Error::io(format!("cannot create {}: {e}", path.display())))?;
         if let Err(e) = f.write_all(body.to_string().as_bytes()) {
             crate::soft::done(std::fs::remove_file(&path), "std::fs::remove_file");
-            return Err(format!("cannot write {}: {e}", path.display()));
+            return Err(villa::Error::io(format!(
+                "cannot write {}: {e}",
+                path.display()
+            )));
         }
         Ok(Connection {
             path,

@@ -378,8 +378,8 @@ impl Terminals for NoTerms {
         _: String,
         _: Vec<String>,
         _: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<Opened, String>> {
-        Box::pin(async { Err("no terminals".into()) })
+    ) -> BoxFut<'_, villa::Result<Opened>> {
+        Box::pin(async { Err(villa::Error::invalid("no terminals")) })
     }
 }
 
@@ -390,14 +390,15 @@ pub(super) struct Mocks {
 }
 
 impl Launcher for Mocks {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
             let steps = self
                 .scripts
                 .lock()
                 .unwrap()
                 .pop_front()
-                .ok_or("no script left")?;
+                .ok_or("no script left")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let script: Script = serde_json::from_value(Value::Array(steps)).unwrap();
             let (a, b) = tokio::io::duplex(1 << 20);
             let (cr, cw) = tokio::io::split(a);

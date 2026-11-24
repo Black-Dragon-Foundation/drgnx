@@ -68,20 +68,20 @@ fn var<'a>(env: &'a Env, name: &str) -> Option<&'a str> {
 }
 
 /// At start: what ENV asks for, set up (the recorder, or the replayer started).  Err: the hub does not start.
-pub async fn start(env: &Env) -> Result<(), String> {
+pub async fn start(env: &Env) -> villa::Result<()> {
     match (var(env, "DRGNX_RECORD"), var(env, "DRGNX_REPLAY")) {
-        (Some(_), Some(_)) => Err(
-            "DRGNX_RECORD and DRGNX_REPLAY cannot both be set: a run is recorded or replayed"
-                .into(),
-        ),
+        (Some(_), Some(_)) => Err(villa::Error::invalid(
+            "DRGNX_RECORD and DRGNX_REPLAY cannot both be set: a run is recorded or replayed",
+        )),
         (Some(dir), None) => {
             let provenance = var(env, "DRGNX_RECORD_PROVENANCE").unwrap_or("live");
             if !matches!(provenance, "mock" | "live") {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "DRGNX_RECORD_PROVENANCE is {provenance:?}: mock or live"
-                ));
+                )));
             }
-            let r = Recorder::start(Path::new(dir), Roots::of_env(env), provenance)?;
+            let r = Recorder::start(Path::new(dir), Roots::of_env(env), provenance)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             // the caps `bin/drgnx record start` was given, for the manifest and the report (the run enforces them)
             if let Some(caps) = var(env, "DRGNX_RECORD_CAPS")
                 .and_then(|c| serde_json::from_str::<Value>(c).ok())
@@ -95,12 +95,12 @@ pub async fn start(env: &Env) -> Result<(), String> {
         }
         (None, Some(dir)) => {
             let dir = PathBuf::from(dir);
-            rec::read_manifest(&dir).map_err(|e| e.to_string())?;
+            rec::read_manifest(&dir)?;
             let (d, e) = (dir.clone(), env.clone());
-            let (port, mock, scratch) =
-                crate::clock::blocking(move || replayer(&d, &e))
-                    .await
-                    .map_err(|e| format!("the replayer did not start: {e}"))??;
+            let (port, mock, scratch) = crate::clock::blocking(move || replayer(&d, &e))
+                .await
+                .map_err(|e| villa::Error::invalid(format!("the replayer did not start: {e}")))?
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             tracing::info!(dir = %dir.display(), port, "replaying a recorded run (DRGNX_REPLAY)");
             crate::soft::done(
                 MODE.set(Mode::Replay(Replay {

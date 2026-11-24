@@ -231,12 +231,13 @@ impl Stage {
 
     /// Slot SLOT's folder holding TREE: made the first time, then changed by delta (only what differs is written).
     /// Blocking.
-    pub fn restore(&self, slot: usize, tree: &str) -> Result<PathBuf, String> {
+    pub fn restore(&self, slot: usize, tree: &str) -> villa::Result<PathBuf> {
         let dir = match slot {
             NARROW => self.work.join("narrow"),
             s => self.work.join(format!("slot-{s}")),
         };
-        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", dir.display())))?;
         crate::timeline::snapshot::restore_into(&self.root, &self.source, &dir, tree, None, &[])?;
         Ok(dir)
     }
@@ -255,7 +256,7 @@ impl Stage {
     }
 
     /// The diff from tree GOOD to tree BAD, cut at [`DIFF_MAX`] bytes.  Blocking.
-    pub fn diff(&self, good: &str, bad: &str) -> Result<String, String> {
+    pub fn diff(&self, good: &str, bad: &str) -> villa::Result<String> {
         let mut d = crate::timeline::snapshot::run_git(
             &self.repo(),
             None,
@@ -273,7 +274,7 @@ impl Stage {
     }
 
     /// The hunks from tree GOOD to tree BAD. Blocking.
-    pub fn hunks(&self, good: &str, bad: &str) -> Result<Vec<Hunk>, String> {
+    pub fn hunks(&self, good: &str, bad: &str) -> villa::Result<Vec<Hunk>> {
         let diff = crate::timeline::snapshot::run_git(
             &self.repo(),
             None,
@@ -292,10 +293,11 @@ impl Stage {
     }
 
     /// Tree GOOD with the hunks HUNKS (a subset of [`Stage::hunks`]) applied: the new tree.  Blocking.
-    pub fn with_hunks(&self, good: &str, hunks: &[&Hunk]) -> Result<String, String> {
+    pub fn with_hunks(&self, good: &str, hunks: &[&Hunk]) -> villa::Result<String> {
         let repo = self.repo();
         let tmp = self.work.join("narrow-index");
-        std::fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::create_dir_all(&tmp)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", tmp.display())))?;
         let (index, patch) = (tmp.join("index"), tmp.join("patch"));
         crate::soft::done(std::fs::remove_file(&index), "std::fs::remove_file");
         let mut text = String::new();
@@ -307,7 +309,7 @@ impl Stage {
             }
             text.push_str(&h.body);
         }
-        crate::fsio::write(&patch, text).map_err(|e| e.to_string())?;
+        crate::fsio::write(&patch, text).map_err(|e| villa::Error::io(e.to_string()))?;
         let git =
             |args: &[&str]| crate::timeline::snapshot::run_git(&repo, None, Some(&index), args);
         git(&["read-tree", good])?;
@@ -436,7 +438,7 @@ pub async fn narrow(
         let tree = stage.with_hunks(good, &picked);
         let o = match tree.and_then(|t| stage.restore(NARROW, &t)) {
             Ok(dir) => run(dir).await,
-            Err(e) => Outcome::Skip(e),
+            Err(e) => Outcome::Skip(e.message().to_owned()),
         };
         asked.push((set, o));
     }

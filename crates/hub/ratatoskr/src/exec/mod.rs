@@ -955,8 +955,11 @@ impl Runner {
 
     /// The user moves job ID to TO (`machines/move`): the queue's answer ([`Queue::move_job`]), its tick run at once
     /// for a job that now waits elsewhere. A job no queue holds (ended, or a server) is refused, saying so.
-    pub fn move_job(&self, id: &str, to: Machine) -> Result<queue::Moved, String> {
-        let i = self.inner.get().ok_or("jobs are not open yet")?;
+    pub fn move_job(&self, id: &str, to: Machine) -> villa::Result<queue::Moved> {
+        let i = self
+            .inner
+            .get()
+            .ok_or_else(|| villa::Error::invalid("jobs are not open yet"))?;
         let moved = i.queue.move_job(id, to)?;
         if moved == queue::Moved::Requeued {
             i.pump();
@@ -967,14 +970,20 @@ impl Runner {
     /// The user's Restart of running job ID on TO (the move card's): one on a runner goes back to the queue pinned
     /// to TO, its attempt there cancelled; one here has no attempt to requeue, so it is stopped and its request
     /// started again, pinned to TO, as a new job. The id of the job that now runs it.
-    pub async fn restart_on(&self, id: &str, to: Machine) -> Result<String, String> {
-        let i = self.inner.get().ok_or("jobs are not open yet")?.clone();
-        let row = i.row(id).ok_or_else(|| format!("no job {id}"))?;
+    pub async fn restart_on(&self, id: &str, to: Machine) -> villa::Result<String> {
+        let i = self
+            .inner
+            .get()
+            .ok_or_else(|| villa::Error::invalid("jobs are not open yet"))?
+            .clone();
+        let row = i
+            .row(id)
+            .ok_or_else(|| villa::Error::invalid(format!("no job {id}")))?;
         if row.status != ExecStatus::Running {
-            return Err(format!("job {id} no longer runs"));
+            return Err(villa::Error::invalid(format!("job {id} no longer runs")));
         }
         if let Some(why) = i.queue.refusal(id, &to) {
-            return Err(why);
+            return Err(villa::Error::refused(why));
         }
         if row.machine.as_deref().is_some_and(|m| m != queue::LOCAL) {
             let outs = i.queue.restart_on(id, to, now() as u64)?;
@@ -986,19 +995,24 @@ impl Runner {
             .queue
             .pending(id)
             .and_then(|v| serde_json::from_value::<Pending>(v).ok())
-            .ok_or_else(|| format!("job {id}: its start request is gone"))?
+            .ok_or_else(|| villa::Error::invalid(format!("job {id}: its start request is gone")))?
             .into_spec();
         spec.place.machine = to;
         spec.place.by_user = true;
-        i.clone().stop(id).await.map_err(|e| e.message)?;
-        i.start(spec).await.map_err(|e| e.message)
+        i.clone()
+            .stop(id)
+            .await
+            .map_err(|e| villa::Error::refused(e.message))?;
+        i.start(spec)
+            .await
+            .map_err(|e| villa::Error::refused(e.message))
     }
 
     /// The user moves session SESSION's next jobs to TO ([`Queue::prefer`]).
-    pub fn prefer(&self, session: &str, to: Machine) -> Result<(), String> {
+    pub fn prefer(&self, session: &str, to: Machine) -> villa::Result<()> {
         self.inner
             .get()
-            .ok_or("jobs are not open yet")?
+            .ok_or_else(|| villa::Error::invalid("jobs are not open yet"))?
             .queue
             .prefer(session, to)
     }
@@ -1429,7 +1443,7 @@ impl Inner {
         // a job may need only jobs the queue knows, never one that waits on it
         self.queue
             .check_needs(&spec.forseti_spec(id, &self.hooks.memory))
-            .map_err(refusal)?;
+            .map_err(|e| refusal(e.message()))?;
         let started = now();
         let session = spec.starter.session();
         self.save_meta(&Meta {
@@ -3029,10 +3043,10 @@ fn tool_env(shell: &crate::shell_env::ShellEnv) -> Vec<(String, String)> {
         .collect()
 }
 
-fn error(code: ErrorCode, message: impl Into<String>) -> Error {
+fn error(code: ErrorCode, message: impl ToString) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }

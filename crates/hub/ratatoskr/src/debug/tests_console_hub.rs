@@ -41,8 +41,8 @@ impl Terminals for NoTerms {
         _: String,
         _: Vec<String>,
         _: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<Opened, String>> {
-        Box::pin(async { Err("no terminals here".to_owned()) })
+    ) -> BoxFut<'_, villa::Result<Opened>> {
+        Box::pin(async { Err(villa::Error::unavailable("no terminals here")) })
     }
 }
 
@@ -59,9 +59,15 @@ impl Proc for Exits {
 struct One(Mutex<Option<Vec<Value>>>, Mutex<Vec<Mock>>);
 
 impl Launcher for One {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
-            let steps = self.0.lock().unwrap().take().ok_or("one session only")?;
+            let steps = self
+                .0
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or("one session only")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let script: Script = serde_json::from_value(Value::Array(steps)).unwrap();
             let (a, b) = tokio::io::duplex(1 << 20);
             let (cr, cw) = tokio::io::split(a);

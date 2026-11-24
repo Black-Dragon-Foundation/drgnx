@@ -410,7 +410,7 @@ fn card_granted(conn: &urdr::Connection, a: Action, ctx: &ActionCtx, card: i64, 
 
 impl MatrixGate {
     /// Take the `agents-matrix` setting V (what `Settings::effective` gives).
-    pub fn apply_setting(&self, v: &Value) -> Result<(), String> {
+    pub fn apply_setting(&self, v: &Value) -> villa::Result<()> {
         let d = decode::decode(v)?;
         let mut st = self.st.lock().expect("matrix gate");
         st.base = d.preset;

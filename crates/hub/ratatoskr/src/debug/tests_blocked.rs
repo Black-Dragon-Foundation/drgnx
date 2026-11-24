@@ -16,7 +16,7 @@ fn env() -> Env {
     }
 }
 
-fn plan_of(id: &str, found: Found, config: Value) -> Result<Plan, String> {
+fn plan_of(id: &str, found: Found, config: Value) -> villa::Result<Plan> {
     let t = Table::builtin();
     blocked::plan(
         t.by_id(id).unwrap(),
@@ -196,7 +196,7 @@ fn what_a_block_cannot_run_says_why() {
         json!({"type": "debugpy", "request": "attach", "processId": 12}),
     )
     .unwrap_err();
-    assert!(attach.contains("launch"), "{attach}");
+    assert!(attach.message().contains("launch"), "{attach}");
     let none = plan_of(
         "debugpy",
         Found::Python("/x/python3".into()),
@@ -204,7 +204,7 @@ fn what_a_block_cannot_run_says_why() {
     )
     .unwrap_err();
     assert!(
-        none.contains("program") && none.contains("module"),
+        none.message().contains("program") && none.message().contains("module"),
         "{none}"
     );
     let lldb = plan_of(
@@ -213,7 +213,7 @@ fn what_a_block_cannot_run_says_why() {
         json!({"type": "lldb-dap", "request": "launch", "program": "/p/a"}),
     )
     .unwrap_err();
-    assert!(lldb.contains("lldb-dap"), "{lldb}");
+    assert!(lldb.message().contains("lldb-dap"), "{lldb}");
 }
 
 /// A plan whose adapter and program never listen (`sleep`), on PORT and the next.
@@ -277,7 +277,7 @@ async fn a_strangers_listener_on_the_adapters_port_ends_the_session_unconnected(
         Err(e) => e,
     };
     assert!(
-        e.contains(&port.to_string()) && e.contains("not the session's"),
+        e.message().contains(&port.to_string()) && e.message().contains("not the session's"),
         "{e}"
     );
     // never connected to it
@@ -300,7 +300,7 @@ async fn the_adapter_and_the_program_start_through_the_seal() {
                 let mut argv = vec![spec.program.display().to_string()];
                 argv.extend(spec.args.iter().map(|a| a.to_string_lossy().into_owned()));
                 seen.lock().unwrap().push(argv);
-                Err::<draugr::Spec, String>("sealed: refused here".into())
+                Err::<draugr::Spec, villa::Error>(villa::Error::refused("sealed: refused here"))
             })
         })
     };
@@ -312,7 +312,7 @@ async fn the_adapter_and_the_program_start_through_the_seal() {
         .await
         .err()
         .expect("a refused seal starts nothing");
-    assert!(e.contains("sealed: refused here"), "{e}");
+    assert!(e.message().contains("sealed: refused here"), "{e}");
     // js-debug's shape: the program first
     let mut p = sleeping(47990);
     p.debuggee.after_listen = None;
@@ -323,7 +323,7 @@ async fn the_adapter_and_the_program_start_through_the_seal() {
         .await
         .err()
         .expect("a refused seal starts nothing");
-    assert!(e.contains("sealed: refused here"), "{e}");
+    assert!(e.message().contains("sealed: refused here"), "{e}");
     assert_eq!(
         *seen.lock().unwrap(),
         [
@@ -338,17 +338,25 @@ async fn the_adapter_and_the_program_start_through_the_seal() {
 #[test]
 fn a_port_that_never_listened_says_what_the_adapter_did() {
     let e = blocked::why_not_listening(
-        "nothing listened".into(),
+        villa::Error::unavailable("nothing listened"),
         i32::MAX,
         "  PermissionError: denied\n",
     );
     assert_eq!(
         e,
-        "nothing listened (the adapter had exited; its stderr ends:\nPermissionError: denied)"
+        villa::Error::unavailable(
+            "nothing listened (the adapter had exited; its stderr ends:\nPermissionError: denied)"
+        )
     );
-    let e = blocked::why_not_listening("nothing listened".into(), std::process::id() as i32, "");
+    let e = blocked::why_not_listening(
+        villa::Error::unavailable("nothing listened"),
+        std::process::id() as i32,
+        "",
+    );
     assert_eq!(
         e,
-        "nothing listened (the adapter still runs, nothing on its stderr)"
+        villa::Error::unavailable(
+            "nothing listened (the adapter still runs, nothing on its stderr)"
+        )
     );
 }

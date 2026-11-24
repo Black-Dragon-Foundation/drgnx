@@ -865,16 +865,18 @@ async fn agent_conn(sh: Arc<Shared>, conn: u64, fut: fastwebsockets::upgrade::Up
 /// behind it (its end of the socketpair is kept open and never read), for the conformance rows on the endpoint itself.
 /// Answers the secret's hex.
 #[cfg(feature = "test-hooks")]
-pub fn test_endpoint(socket: &std::path::Path) -> Result<String, String> {
+pub fn test_endpoint(socket: &std::path::Path) -> villa::Result<String> {
     use std::io::Read;
     use std::sync::Mutex;
     static KEPT: Mutex<Vec<(BrokerHandle, UnixStream)>> = Mutex::new(Vec::new());
     let mut secret = [0u8; 32];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut f| f.read_exact(&mut secret))
-        .map_err(|e| format!("/dev/urandom: {e}"))?;
-    let listener = UnixListener::bind(socket).map_err(|e| format!("{}: {e}", socket.display()))?;
-    let (ours, theirs) = UnixStream::pair().map_err(|e| format!("a socketpair: {e}"))?;
+        .map_err(|e| villa::Error::io(format!("/dev/urandom: {e}")))?;
+    let listener = UnixListener::bind(socket)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", socket.display())))?;
+    let (ours, theirs) =
+        UnixStream::pair().map_err(|e| villa::Error::invalid(format!("a socketpair: {e}")))?;
     let (events, _) = mpsc::channel(1);
     let cfg = BrokerCfg {
         sid: "test".into(),

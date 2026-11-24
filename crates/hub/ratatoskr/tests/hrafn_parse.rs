@@ -26,7 +26,7 @@ struct Plain {
 }
 
 impl Launch for Plain {
-    fn start(&self, spec: &WorkerSpec) -> Result<Started, String> {
+    fn start(&self, spec: &WorkerSpec) -> villa::Result<Started> {
         let mut c = Command::new(BIN)
             .arg("hrafn-parse")
             .arg("--lib")
@@ -39,12 +39,17 @@ impl Launch for Plain {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0)
-            .spawn()
-            .map_err(|e| e.to_string())?;
+            .spawn()?;
         let pid = c.id() as i32;
         self.pids.lock().unwrap().push(pid);
-        let stdin = c.stdin.take().ok_or("no stdin")?;
-        let mut stderr = c.stderr.take().ok_or("no stderr")?;
+        let stdin = c
+            .stdin
+            .take()
+            .ok_or_else(|| villa::Error::invalid("no stdin"))?;
+        let mut stderr = c
+            .stderr
+            .take()
+            .ok_or_else(|| villa::Error::invalid("no stderr"))?;
         let tail = Arc::new(Mutex::new(String::new()));
         let t2 = tail.clone();
         std::thread::spawn(move || {
@@ -55,7 +60,10 @@ impl Launch for Plain {
             );
             *t2.lock().unwrap() = s;
         });
-        let stdout = c.stdout.take().ok_or("no stdout")?;
+        let stdout = c
+            .stdout
+            .take()
+            .ok_or_else(|| villa::Error::io("no stdout"))?;
         Ok(Started {
             stdin: Box::new(stdin),
             stdout: Box::new(stdout),

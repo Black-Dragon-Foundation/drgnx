@@ -356,16 +356,16 @@ pub enum EmbedCommand {
 }
 
 /// The arguments after `embed`.
-pub fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<EmbedCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> villa::Result<EmbedCommand> {
     use lexopt::Arg::{Long, Value as Word};
     use lexopt::ValueExt;
     const USE: &str =
         "embed serve --listen ADDR:PORT [--plain] [--no-embed] | --stop | --new-token";
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     match p.next().map_err(e)? {
         Some(Word(v)) if v == "serve" => {}
-        _ => return Err(format!("usage: ratatoskr {USE}")),
+        _ => return Err(villa::Error::invalid(format!("usage: ratatoskr {USE}"))),
     }
     let (mut listen, mut plain, mut no_embed, mut stop, mut new_token) =
         (None, false, false, false, false);
@@ -376,7 +376,7 @@ pub fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Embed
             Long("no-embed") => no_embed = true,
             Long("stop") => stop = true,
             Long("new-token") => new_token = true,
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     match (listen, stop, new_token) {
@@ -387,7 +387,7 @@ pub fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Embed
         }),
         (None, true, false) if !plain && !no_embed => Ok(EmbedCommand::Stop),
         (None, false, true) if !plain && !no_embed => Ok(EmbedCommand::NewToken),
-        _ => Err(format!("usage: ratatoskr {USE}")),
+        _ => Err(villa::Error::invalid(format!("usage: ratatoskr {USE}"))),
     }
 }
 
@@ -577,25 +577,25 @@ struct Shared {
 pub async fn start(
     spec: ServeSpec,
     serve: Arc<dyn Serve>,
-) -> Result<(Running, Option<String>), String> {
+) -> villa::Result<(Running, Option<String>)> {
     if spec.plain && !plain_allowed(spec.listen.ip()) {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "plain HTTP is served only on loopback or a Tailscale address (100.64.0.0/10, fd7a:115c:a1e0::/48), not {}; \
              leave out --plain for TLS",
             spec.listen.ip()
-        ));
+        )));
     }
     let listener = crate::clock::real(tokio::net::TcpListener::bind(spec.listen))
         .await
-        .map_err(|e| format!("{}: {e}", spec.listen))?;
-    let addr = listener.local_addr().map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", spec.listen)))?;
+    let addr = listener.local_addr()?;
     {
         use std::os::unix::fs::DirBuilderExt as _;
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(&spec.dir)
-            .map_err(|e| format!("{}: {e}", spec.dir.display()))?;
+            .map_err(|e| villa::Error::io(format!("{}: {e}", spec.dir.display())))?;
     }
     let kept = crate::fsio::read_to_string(spec.dir.join(TOKEN_FILE))
         .ok()
@@ -603,24 +603,25 @@ pub async fn start(
     let (token_sha, token) = match kept {
         Some(sha) => (sha, None),
         None => {
-            let (t, sha) =
-                mint_token(&spec.dir).map_err(|e| format!("{}: {e}", spec.dir.display()))?;
+            let (t, sha) = mint_token(&spec.dir)
+                .map_err(|e| villa::Error::invalid(format!("{}: {e}", spec.dir.display())))?;
             (sha, Some(t))
         }
     };
     let (acceptor, cert_sha256) = if spec.plain {
         (None, None)
     } else {
-        let (cert, key) = certificate(&spec.dir, addr.ip())?;
+        let (cert, key) =
+            certificate(&spec.dir, addr.ip()).map_err(|e| villa::Error::invalid(e.to_string()))?;
         let fp = key_hex(&sha256(cert.as_ref()));
         let config = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
         ))
         .with_safe_default_protocol_versions()
-        .map_err(|e| e.to_string())?
+        .map_err(|e| villa::Error::invalid(e.to_string()))?
         .with_no_client_auth()
         .with_single_cert(vec![cert], key)
-        .map_err(|e| format!("the certificate: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("the certificate: {e}")))?;
         (
             Some(tokio_rustls::TlsAcceptor::from(Arc::new(config))),
             Some(fp),
@@ -879,7 +880,7 @@ fn to_json<T: Serialize>(v: &T) -> serde_json::Value {
 mod tests {
     use super::*;
 
-    fn p(args: &[&str]) -> Result<EmbedCommand, String> {
+    fn p(args: &[&str]) -> villa::Result<EmbedCommand> {
         parse(args.iter().map(std::ffi::OsString::from))
     }
 

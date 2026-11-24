@@ -487,7 +487,7 @@ async fn a_sealed_session_gets_no_kernel_and_a_missing_kernel_is_named() {
     };
     let e = w.hub.start(7, &id, None, Some(&plan)).await.unwrap_err();
     assert_eq!(
-        e,
+        e.message(),
         "a notebook kernel runs unconfined and is not started in a sealed session"
     );
     assert!(w.hub.start(7, "nope", None, None).await.is_err());
@@ -702,15 +702,15 @@ async fn only_regular_notebook_files_ending_in_ipynb_are_opened() {
     let (a, b) = (fifo.clone(), zero.clone());
     std::thread::spawn(move || *s2.lock().unwrap() = Some((read_notebook(&a), read_notebook(&b))));
     let (f, z) = skuld::wait_until("the reads", 30, || slot.lock().unwrap().take());
-    assert!(f.unwrap_err().contains("not a regular file"));
-    assert!(z.unwrap_err().contains("not a regular file"));
+    assert!(f.unwrap_err().message().contains("not a regular file"));
+    assert!(z.unwrap_err().message().contains("not a regular file"));
     assert!(read_notebook(&w.path).is_ok());
     let e = w
         .hub
         .open(7, &w.d.path().join("notes.json"), Some("{}".into()))
         .await
         .unwrap_err();
-    assert!(e.contains("not a .ipynb file"), "{e}");
+    assert!(e.message().contains("not a .ipynb file"), "{e}");
     assert!(
         w.hub
             .open(7, &w.d.path().join("n.IPYNB"), Some(NB.into()))
@@ -726,6 +726,7 @@ async fn only_regular_notebook_files_ending_in_ipynb_are_opened() {
             .open(9, &w.path, None)
             .await
             .unwrap_err()
+            .message()
             .contains("close one first")
     );
 }
@@ -745,7 +746,10 @@ async fn two_starts_at_once_make_one_kernel() {
         "{a:?} {b:?}"
     );
     let refused = a.err().or(b.err()).unwrap();
-    assert!(refused.contains("already has a kernel"), "{refused}");
+    assert!(
+        refused.message().contains("already has a kernel"),
+        "{refused}"
+    );
     w.hub.close(7, &id).await;
 }
 
@@ -760,6 +764,7 @@ async fn a_start_that_fails_leaves_the_slot_free() {
             .start(7, &id, Some("nothere"), None)
             .await
             .unwrap_err()
+            .message()
             .contains("no kernel")
     );
     std::fs::create_dir_all(w.d.path().join("kernels/fake")).unwrap();
@@ -1008,7 +1013,7 @@ async fn open_answers_with_the_tails_of_the_first_cells_with_output_within_a_bud
         .open(7, &w.path, Some(huge.to_string()))
         .await
         .unwrap_err();
-    assert!(e.contains("MiB of cell sources"), "{e}");
+    assert!(e.message().contains("MiB of cell sources"), "{e}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1036,7 +1041,10 @@ async fn a_notebook_closed_while_its_kernel_starts_does_not_keep_the_kernel() {
         )
     };
     let e = starting.await.unwrap().unwrap_err();
-    assert!(e.contains("closed while its kernel started"), "{e}");
+    assert!(
+        e.message().contains("closed while its kernel started"),
+        "{e}"
+    );
     skuld::wait_until("the kernel's connection file to go", 30, || {
         (!file.exists()).then_some(())
     });

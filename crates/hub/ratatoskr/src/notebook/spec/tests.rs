@@ -182,7 +182,7 @@ fn the_private_folder_is_made_0700_and_a_loose_or_foreign_one_is_refused() {
         "an existing good folder is fine"
     );
     fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(private_folder(&p).unwrap_err().contains("0700"));
+    assert!(private_folder(&p).unwrap_err().message().contains("0700"));
     fs::set_permissions(&p, fs::Permissions::from_mode(0o770)).unwrap();
     assert!(private_folder(&p).is_err());
     // a link is refused even when it points at a good folder
@@ -190,7 +190,12 @@ fn the_private_folder_is_made_0700_and_a_loose_or_foreign_one_is_refused() {
     private_folder(&good).unwrap();
     let link = t.path().join("link");
     symlink(&good, &link).unwrap();
-    assert!(private_folder(&link).unwrap_err().contains("link"));
+    assert!(
+        private_folder(&link)
+            .unwrap_err()
+            .message()
+            .contains("link")
+    );
     // a file is refused
     let f = t.path().join("file");
     crate::fsio::write(&f, "").unwrap();
@@ -320,7 +325,7 @@ fn an_id_that_would_escape_or_a_path_too_long_for_a_socket_is_refused() {
     }
     let long = "x".repeat(MAX_SOCKET_PATH);
     let err = Connection::create(&folder, &long, "p").unwrap_err();
-    assert!(err.contains("socket path"), "{err}");
+    assert!(err.message().contains("socket path"), "{err}");
 }
 
 #[test]

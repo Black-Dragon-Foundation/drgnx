@@ -61,13 +61,13 @@ static TSC_WATCH: std::sync::LazyLock<Background> = std::sync::LazyLock::new(|| 
 });
 
 /// Task NAME's (T's) background patterns, from its `problemMatcher` (a name, an object or a list of them).
-fn background(t: &Value, name: &str) -> Result<Background, String> {
+fn background(t: &Value, name: &str) -> villa::Result<Background> {
     let list = match t.get("problemMatcher") {
         Some(Value::Array(a)) => a.clone(),
         Some(v) => vec![v.clone()],
         None => vec![],
     };
-    let pattern = |v: Option<&Value>, which: &str| -> Result<Option<Regex>, String> {
+    let pattern = |v: Option<&Value>, which: &str| -> villa::Result<Option<Regex>> {
         let text = match v {
             Some(Value::String(s)) => s.as_str(),
             Some(o) => match o.get("regexp").and_then(Value::as_str) {
@@ -77,7 +77,9 @@ fn background(t: &Value, name: &str) -> Result<Background, String> {
             None => return Ok(None),
         };
         Regex::new(text).map(Some).map_err(|e| {
-            format!("task {name}: its {which} {text:?} is not a pattern drgnx reads: {e}")
+            villa::Error::invalid(format!(
+                "task {name}: its {which} {text:?} is not a pattern drgnx reads: {e}"
+            ))
         })
     };
     let mut unknown = vec![];
@@ -89,12 +91,15 @@ fn background(t: &Value, name: &str) -> Result<Background, String> {
                 let Some(bg) = o.get("background") else {
                     continue;
                 };
-                let Some(ends) = pattern(bg.get("endsPattern"), "endsPattern")? else {
+                let Some(ends) = pattern(bg.get("endsPattern"), "endsPattern")
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?
+                else {
                     continue;
                 };
                 return Ok(Background {
                     active_begin: bg.get("activeBegin").and_then(Value::as_bool) == Some(true),
-                    begins: pattern(bg.get("beginsPattern"), "beginsPattern")?,
+                    begins: pattern(bg.get("beginsPattern"), "beginsPattern")
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?,
                     ends,
                 });
             }
@@ -105,10 +110,10 @@ fn background(t: &Value, name: &str) -> Result<Background, String> {
     } else {
         format!(" (drgnx does not know {})", unknown.join(", "))
     };
-    Err(format!(
+    Err(villa::Error::invalid(format!(
         "task {name} is isBackground: the session starts when its output matches its problemMatcher's background \
          endsPattern, and it has none{known}"
-    ))
+    )))
 }
 
 /// tasks.json's TEXT: its tasks.
@@ -163,12 +168,12 @@ fn strings(v: Option<&Value>) -> Vec<String> {
     }
 }
 
-fn step(t: &Value, root: &Path) -> Result<Step, String> {
+fn step(t: &Value, root: &Path) -> villa::Result<Step> {
     let name = label(t).unwrap_or_default().to_owned();
     let command = t
         .get("command")
         .and_then(Value::as_str)
-        .ok_or_else(|| format!("task {name}: no command"))?;
+        .ok_or_else(|| villa::Error::invalid(format!("task {name}: no command")))?;
     let args = strings(t.get("args"));
     let argv = match t.get("type").and_then(Value::as_str).unwrap_or("shell") {
         "process" => std::iter::once(command.to_owned()).chain(args).collect(),
@@ -179,7 +184,11 @@ fn step(t: &Value, root: &Path) -> Result<Step, String> {
                 .join(" ");
             vec!["/bin/sh".into(), "-c".into(), line]
         }
-        other => return Err(format!("task {name}: type {other} is not shell or process")),
+        other => {
+            return Err(villa::Error::invalid(format!(
+                "task {name}: type {other} is not shell or process"
+            )));
+        }
     };
     let options = t.get("options");
     let cwd = match options.and_then(|o| o.get("cwd")).and_then(Value::as_str) {
@@ -211,11 +220,11 @@ fn step(t: &Value, root: &Path) -> Result<Step, String> {
 
 /// The steps that run LABEL of TASKS on OS: its `dependsOn` first (see the module's doc). Relative working
 /// directories are under the current directory; [`before_launch`] gives the root.
-pub fn order(tasks: &[Value], label_: &str, os: Os) -> Result<Vec<Step>, String> {
+pub fn order(tasks: &[Value], label_: &str, os: Os) -> villa::Result<Vec<Step>> {
     order_in(tasks, label_, os, Path::new(""))
 }
 
-fn order_in(tasks: &[Value], first: &str, os: Os, root: &Path) -> Result<Vec<Step>, String> {
+fn order_in(tasks: &[Value], first: &str, os: Os, root: &Path) -> villa::Result<Vec<Step>> {
     let tasks: Vec<Value> = tasks.iter().map(|t| launch::for_platform(t, os)).collect();
     let mut done: Vec<String> = vec![];
     let mut out = vec![];
@@ -231,22 +240,22 @@ fn visit(
     path: &mut Vec<String>,
     done: &mut Vec<String>,
     out: &mut Vec<Step>,
-) -> Result<(), String> {
+) -> villa::Result<()> {
     if done.iter().any(|d| d == name) {
         return Ok(());
     }
     if path.iter().any(|p| p == name) {
         let mut cycle = path.clone();
         cycle.push(name.to_owned());
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "tasks.json: dependsOn goes round: {}",
             cycle.join(" → ")
-        ));
+        )));
     }
     let t = tasks
         .iter()
         .find(|t| label(t) == Some(name))
-        .ok_or_else(|| format!("tasks.json has no task {name}"))?;
+        .ok_or_else(|| villa::Error::invalid(format!("tasks.json has no task {name}")))?;
     path.push(name.to_owned());
     for d in strings(t.get("dependsOn")) {
         visit(tasks, &d, root, path, done, out)?;
@@ -257,9 +266,9 @@ fn visit(
     Ok(())
 }
 
-fn each_string(v: &Value, f: &dyn Fn(&str) -> Result<String, String>) -> Result<Value, String> {
+fn each_string(v: &Value, f: &dyn Fn(&str) -> villa::Result<String>) -> villa::Result<Value> {
     Ok(match v {
-        Value::String(s) => Value::String(f(s)?),
+        Value::String(s) => Value::String(f(s).map_err(|e| villa::Error::invalid(e.to_string()))?),
         Value::Array(a) => Value::Array(
             a.iter()
                 .map(|x| each_string(x, f))
@@ -268,7 +277,8 @@ fn each_string(v: &Value, f: &dyn Fn(&str) -> Result<String, String>) -> Result<
         Value::Object(m) => Value::Object(
             m.iter()
                 .map(|(k, x)| Ok((k.clone(), each_string(x, f)?)))
-                .collect::<Result<_, String>>()?,
+                .collect::<villa::Result<_>>()
+                .map_err(|e| villa::Error::invalid(e.to_string()))?,
         ),
         v => v.clone(),
     })
@@ -280,8 +290,8 @@ pub fn before_launch(
     root: &Path,
     config: &Value,
     os: Os,
-    subst: &dyn Fn(&str) -> Result<String, String>,
-) -> Result<Vec<Step>, String> {
+    subst: &dyn Fn(&str) -> villa::Result<String>,
+) -> villa::Result<Vec<Step>> {
     steps_for("preLaunchTask", root, config, os, subst)
 }
 
@@ -290,14 +300,15 @@ pub fn after_debug(
     root: &Path,
     config: &Value,
     os: Os,
-    subst: &dyn Fn(&str) -> Result<String, String>,
-) -> Result<Vec<Step>, String> {
-    let steps = steps_for("postDebugTask", root, config, os, subst)?;
+    subst: &dyn Fn(&str) -> villa::Result<String>,
+) -> villa::Result<Vec<Step>> {
+    let steps = steps_for("postDebugTask", root, config, os, subst)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if let Some(s) = steps.iter().find(|s| s.background.is_some()) {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "postDebugTask: task {} is isBackground: it would end with the session it follows",
             s.label
-        ));
+        )));
     }
     Ok(steps)
 }
@@ -307,15 +318,15 @@ fn steps_for(
     root: &Path,
     config: &Value,
     os: Os,
-    subst: &dyn Fn(&str) -> Result<String, String>,
-) -> Result<Vec<Step>, String> {
+    subst: &dyn Fn(&str) -> villa::Result<String>,
+) -> villa::Result<Vec<Step>> {
     let Some(name) = config.get(field).and_then(Value::as_str) else {
         return Ok(vec![]);
     };
     let path = root.join(".vscode/tasks.json");
     let text = crate::fsio::read_to_string(&path)
-        .map_err(|e| format!("{field} {name}: {}: {e}", path.display()))?;
-    let tasks = parse(&text).map_err(|e| format!("{}:{e}", path.display()))?;
+        .map_err(|e| villa::Error::io(format!("{field} {name}: {}: {e}", path.display())))?;
+    let tasks = parse(&text).map_err(|e| villa::Error::io(format!("{}:{e}", path.display())))?;
     let tasks = tasks
         .iter()
         .map(|t| each_string(t, subst))
@@ -331,10 +342,10 @@ async fn spawn(
     s: &Step,
     argv: &[String],
     env: &[(OsString, OsString)],
-) -> Result<draugr::Child, String> {
+) -> villa::Result<draugr::Child> {
     let (program, args) = argv
         .split_first()
-        .ok_or_else(|| format!("task {}: an empty command", s.label))?;
+        .ok_or_else(|| villa::Error::invalid(format!("task {}: an empty command", s.label)))?;
     let mut all: Vec<(OsString, OsString)> = env
         .iter()
         .filter(|(k, _)| !s.env.iter().any(|(a, _)| k.as_os_str() == a.as_str()))
@@ -351,21 +362,27 @@ async fn spawn(
         new_session: false,
     })
     .await
-    .map_err(|e| format!("task {}: {program}: {e}", s.label))
+    .map_err(|e| villa::Error::invalid(format!("task {}: {program}: {e}", s.label)))
 }
 
 /// Runs STEPS one after another with the hub's ENV plus each step's own; the first that fails is an error with its
 /// exit status and the end of its output, and the rest do not run. A background step goes on at its end pattern:
 /// its [`Watch`] is in the answer, and dropping it ends the task.
-pub async fn run(steps: &[Step], env: &[(OsString, OsString)]) -> Result<Vec<Watch>, String> {
+pub async fn run(steps: &[Step], env: &[(OsString, OsString)]) -> villa::Result<Vec<Watch>> {
     use tokio::io::AsyncReadExt;
     let mut watches = vec![];
     for s in steps {
         if let Some(bg) = &s.background {
-            watches.push(watch(s, bg, env).await?);
+            watches.push(
+                watch(s, bg, env)
+                    .await
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?,
+            );
             continue;
         }
-        let mut child = spawn(s, &s.argv, env).await?;
+        let mut child = spawn(s, &s.argv, env)
+            .await
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let mut out = child.take_stdout();
         let read = async {
             let mut tail = Vec::new();
@@ -384,7 +401,7 @@ pub async fn run(steps: &[Step], env: &[(OsString, OsString)]) -> Result<Vec<Wat
             tail
         };
         let (tail, status) = tokio::join!(read, child.wait());
-        let status = status.map_err(|e| format!("task {}: {e}", s.label))?;
+        let status = status.map_err(|e| villa::Error::invalid(format!("task {}: {e}", s.label)))?;
         let ok = status.is_some_and(|st| st.success());
         if !ok {
             let how = match status.and_then(|st| st.code()) {
@@ -393,11 +410,11 @@ pub async fn run(steps: &[Step], env: &[(OsString, OsString)]) -> Result<Vec<Wat
             };
             let mut text = String::from_utf8_lossy(&tail).into_owned();
             text.push_str(&child.stderr_tail());
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "task {} failed ({how}):\n{}",
                 s.label,
                 text.trim_end()
-            ));
+            )));
         }
     }
     Ok(watches)
@@ -441,7 +458,7 @@ fn plain(line: &[u8]) -> String {
 }
 
 /// Runs background step S until its end pattern (BG), with its stderr in its stdout.
-async fn watch(s: &Step, bg: &Background, env: &[(OsString, OsString)]) -> Result<Watch, String> {
+async fn watch(s: &Step, bg: &Background, env: &[(OsString, OsString)]) -> villa::Result<Watch> {
     use tokio::io::AsyncBufReadExt;
     let mut argv: Vec<String> = vec![
         "/bin/sh".into(),
@@ -454,7 +471,7 @@ async fn watch(s: &Step, bg: &Background, env: &[(OsString, OsString)]) -> Resul
     let mut out = tokio::io::BufReader::new(
         child
             .take_stdout()
-            .ok_or_else(|| format!("task {}: no output", s.label))?,
+            .ok_or_else(|| villa::Error::invalid(format!("task {}: no output", s.label)))?,
     );
     let mut active = bg.active_begin || bg.begins.is_none();
     let mut tail: Vec<String> = vec![];
@@ -466,12 +483,12 @@ async fn watch(s: &Step, bg: &Background, env: &[(OsString, OsString)]) -> Resul
                 Some(c) => format!("exit {c}"),
                 None => "killed".to_owned(),
             };
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "task {} ended ({how}) before its output matched {:?}:\n{}",
                 s.label,
                 bg.ends.as_str(),
                 tail.join("\n")
-            ));
+            )));
         }
         let line = plain(&buf);
         if !active {
@@ -555,7 +572,7 @@ pub async fn run_in(
     terms: &dyn super::Terminals,
     conn: u64,
     show: &(dyn Fn(&Step, &super::Opened) + Send + Sync),
-) -> Result<(), String> {
+) -> villa::Result<()> {
     for s in steps {
         let mut args: Vec<String> = vec![
             "/bin/sh".into(),
@@ -568,7 +585,7 @@ pub async fn run_in(
         let o = terms
             .open(conn, cwd, args, s.env.clone())
             .await
-            .map_err(|e| format!("task {}: {e}", s.label))?;
+            .map_err(|e| villa::Error::invalid(format!("task {}: {e}", s.label)))?;
         show(s, &o);
         match terms.run_task(o.term.clone()).await {
             (Some(0), _) => {}
@@ -579,17 +596,17 @@ pub async fn run_in(
                 while !text.is_char_boundary(cut) {
                     cut += 1;
                 }
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "task {} failed (exit {c}):\n{}",
                     s.label,
                     &text[cut..]
-                ));
+                )));
             }
             (None, _) => {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "task {}: its tab closed before the task ended",
                     s.label
-                ));
+                )));
             }
         }
     }

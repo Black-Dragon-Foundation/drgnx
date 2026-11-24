@@ -460,19 +460,21 @@ fn set_feature(
 }
 
 /// The scheduler's limits for PROFILE with RESERVE_MIB (refused as [`forseti::Limits::with_reserve`] refuses).
-fn limits(profile: Profile, reserve_mib: Option<u64>) -> Result<forseti::Limits, String> {
+fn limits(profile: Profile, reserve_mib: Option<u64>) -> villa::Result<forseti::Limits> {
     let p = match profile {
         Profile::Dedicated => forseti::Profile::Dedicated,
         Profile::Workstation => forseti::Profile::Workstation,
     };
     forseti::Limits::for_profile(p, 0, 1)
         .with_reserve(p, reserve_mib)
-        .map_err(|e| e.to_string())
+        .map_err(|e| villa::Error::invalid(e.to_string()))
 }
 
 /// A reserve for the user is a workstation's, of at least [`forseti::MIN_RESERVE_MIB`].
 fn check_reserve(profile: Profile, reserve_mib: Option<u64>) -> Result<(), RegError> {
-    limits(profile, reserve_mib).map(|_| ()).map_err(refused)
+    limits(profile, reserve_mib)
+        .map(|_| ())
+        .map_err(|e| refused(e.message()))
 }
 
 /// Below this much memory for jobs, hardly a job fits: the runner list says the runner has no room.
@@ -766,7 +768,7 @@ impl Registry {
     pub async fn probe_host(&self, host: &str) -> Result<Probed, RegError> {
         let name = format!("probe-{:.8}", hex(&Sha256::digest(host.as_bytes())));
         let rc = self.base_cfg(&name, host);
-        rc.check().map_err(refused)?;
+        rc.check().map_err(|e| refused(e.message()))?;
         let config = ssh_config::write(&self.cfg.runtime_dir, &name, &ssh_config::render(&rc))
             .map_err(|e| failed(format!("writing the ssh config: {e}")))?;
         let effective = super::transport::effective(&config, host).await?;
@@ -807,7 +809,7 @@ impl Registry {
         admin: bool,
     ) -> Result<(Record, Probe), RegError> {
         let cfg = self.base_cfg(name, host);
-        cfg.check().map_err(refused)?;
+        cfg.check().map_err(|e| refused(e.message()))?;
         // a Rosetta shell reports x86_64 on Apple silicon: `sysctl.proc_translated` says so
         let basics = self
             .sh_ok(
@@ -976,7 +978,9 @@ impl Registry {
             .as_ref()
             .map(|n| n.as_str().to_string())
             .unwrap_or_else(|| default_name(&host));
-        self.base_cfg(&name, &host).check().map_err(refused)?;
+        self.base_cfg(&name, &host)
+            .check()
+            .map_err(|e| refused(e.message()))?;
         check_reserve(p.profile.unwrap_or(Profile::Dedicated), p.reserve_mib)?;
         let known = self.cfg.store.list().await.map_err(failed)?;
         if known.iter().any(|r| r.name == name) {
@@ -1335,7 +1339,10 @@ impl Registry {
         let _g = self.busy.lock().await;
         let rec = self.record(name).await?;
         let session = self.cfg.queue.session(name);
-        self.cfg.queue.remove_runner(name).map_err(refused)?;
+        self.cfg
+            .queue
+            .remove_runner(name)
+            .map_err(|e| refused(e.message()))?;
         if let Some(s) = session {
             s.close().await;
         }

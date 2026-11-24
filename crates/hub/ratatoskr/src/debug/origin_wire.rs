@@ -41,17 +41,20 @@ impl Replay for ForkReplay {
         run: &str,
         stop: u64,
         watch: Vec<String>,
-    ) -> BoxFut<'static, Result<origin::Traced, String>> {
+    ) -> BoxFut<'static, villa::Result<origin::Traced>> {
         let (front, run) = (self.front.upgrade(), run.to_owned());
         Box::pin(async move {
-            let front = front.ok_or("the hub is stopping")?;
+            let front = front
+                .ok_or("the hub is stopping")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let root = front
                 .debug
                 .debug(&front)
                 .records()
                 .and_then(|r| r.run(&run))
                 .map(|i| PathBuf::from(i.root))
-                .ok_or_else(|| format!("no recorded run {run}"))?;
+                .ok_or_else(|| format!("no recorded run {run}"))
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let tree = super::fork_wire::trace(
                 front,
                 run,
@@ -64,7 +67,7 @@ impl Replay for ForkReplay {
             let (path, root2) = (tree.path.clone(), root);
             let got = crate::clock::blocking(move || origin::read_trace(&path, &root2))
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             drop(tree);
             got
         })
@@ -75,10 +78,12 @@ impl Replay for ForkReplay {
         run: &str,
         stop: u64,
         probes: Vec<super::record::RunProbe>,
-    ) -> BoxFut<'static, Result<Vec<super::record::RunHit>, String>> {
+    ) -> BoxFut<'static, villa::Result<Vec<super::record::RunHit>>> {
         let (front, run) = (self.front.upgrade(), run.to_owned());
         Box::pin(async move {
-            let front = front.ok_or("the hub is stopping")?;
+            let front = front
+                .ok_or("the hub is stopping")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let tree = super::fork_wire::trace(front, run, stop, |_: &Path| vec![], vec![], probes)
                 .await?;
             Ok(tree.hits.clone())
@@ -86,10 +91,10 @@ impl Replay for ForkReplay {
     }
 }
 
-fn err(code: ErrorCode, message: impl Into<String>) -> Error {
+fn err(code: ErrorCode, message: impl ToString) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
@@ -183,7 +188,7 @@ async fn start(front: &Front, p: DebugOrigin) -> Result<DebugOriginStarted, Erro
             }
             Err(e) => {
                 v["state"] = json!("failed");
-                v["why"] = json!(e);
+                v["why"] = json!(e.message());
                 v["links"] = json!(links.iter().map(origin::link_json).collect::<Vec<_>>());
             }
         }

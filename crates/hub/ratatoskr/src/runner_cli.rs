@@ -95,31 +95,30 @@ pub fn setup_gcp_text(hub: &str, project: &str, member: Option<&str>) -> String 
     )
 }
 
-fn one_of(what: &str, v: String, allowed: &[&str]) -> Result<String, String> {
+fn one_of(what: &str, v: String, allowed: &[&str]) -> villa::Result<String> {
     if allowed.contains(&v.as_str()) {
         Ok(v)
     } else {
-        Err(format!(
+        Err(villa::Error::invalid(format!(
             "{what} is one of {}, not {v:?}",
             allowed.join(", ")
-        ))
+        )))
     }
 }
 
 /// The arguments after `runner`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<RunnerCommand> {
     use lexopt::Arg::{Long, Value as Word};
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let sub = match p.next().map_err(e)? {
         Some(Word(v)) => v.string().map_err(e)?,
-        Some(other) => return Err(other.unexpected().to_string()),
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
         None => {
-            return Err(
-                "runner needs a subcommand (list, add, check, bench, trust, profile, unbench, remove, audit, cloud)"
-                    .into(),
-            );
+            return Err(villa::Error::invalid(
+                "runner needs a subcommand (list, add, check, bench, trust, profile, unbench, remove, audit, cloud)",
+            ));
         }
     };
     let mut words: Vec<String> = Vec::new();
@@ -146,7 +145,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
         "audit" => &["key", "job"],
         "cloud" => &["hub", "regions", "sizes", "project", "member", "yes"],
         "check" | "bench" | "trust" | "unbench" => &[],
-        other => return Err(format!("unknown runner subcommand {other:?}")),
+        other => {
+            return Err(villa::Error::invalid(format!(
+                "unknown runner subcommand {other:?}"
+            )));
+        }
     };
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
@@ -161,9 +164,13 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
                 Some(k) if !matches!(*k, "json" | "yes" | "allow-own-account" | "allow-admin") => {
                     opts.push((k, p.value().map_err(e)?.string().map_err(e)?))
                 }
-                _ => return Err(format!("runner {sub}: unknown option --{name}")),
+                _ => {
+                    return Err(villa::Error::invalid(format!(
+                        "runner {sub}: unknown option --{name}"
+                    )));
+                }
             },
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let opt = |k: &str| opts.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone());
@@ -171,15 +178,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
         if words.len() == n {
             Ok(())
         } else {
-            Err(format!("usage: runner {usage}"))
+            Err(villa::Error::invalid(format!("usage: runner {usage}")))
         }
     };
     // a workstation's reserve for its user, a number of MiB (the hub checks the rest)
-    let reserve = || -> Result<Option<u64>, String> {
+    let reserve = || -> villa::Result<Option<u64>> {
         opt("reserve-mib")
             .map(|v| {
-                v.parse::<u64>()
-                    .map_err(|_| format!("--reserve-mib is a number of MiB, not {v:?}"))
+                v.parse::<u64>().map_err(|_| {
+                    villa::Error::invalid(format!("--reserve-mib is a number of MiB, not {v:?}"))
+                })
             })
             .transpose()
     };
@@ -198,16 +206,24 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
                 "add HOST --trust mine|my-cloud|shared [--name N] [--profile P] [--accept A] [--root DIR] [--prefix P] \
                  [--allow-own-account] [--allow-admin] [--reserve-mib N]",
             )?;
-            let trust = opt("trust").ok_or("runner add needs --trust mine|my-cloud|shared")?;
-            let mut params = json!({"host": words[0], "trust": one_of("--trust", trust, &TRUSTS)?});
+            let trust = opt("trust").ok_or_else(|| {
+                villa::Error::invalid("runner add needs --trust mine|my-cloud|shared")
+            })?;
+            let mut params = json!({"host": words[0], "trust": one_of("--trust", trust, &TRUSTS).map_err(|e| villa::Error::invalid(e.to_string()))?});
             if let Some(v) = opt("name") {
                 params["name"] = json!(v);
             }
             if let Some(v) = opt("profile") {
-                params["profile"] = json!(one_of("--profile", v, &PROFILES)?);
+                params["profile"] = json!(
+                    one_of("--profile", v, &PROFILES)
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?
+                );
             }
             if let Some(v) = opt("accept") {
-                params["accept"] = json!(one_of("--accept", v, &ACCEPTS)?);
+                params["accept"] = json!(
+                    one_of("--accept", v, &ACCEPTS)
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?
+                );
             }
             for k in ["root", "prefix"] {
                 if let Some(v) = opt(k) {
@@ -217,7 +233,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             for k in &allowed {
                 params[*k] = json!(true);
             }
-            if let Some(n) = reserve()? {
+            if let Some(n) = reserve().map_err(|e| villa::Error::invalid(e.to_string()))? {
                 params["reserve_mib"] = json!(n);
             }
             Ok(RunnerCommand::Call {
@@ -239,7 +255,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
         }
         "trust" => {
             want(2, "trust NAME mine|my-cloud|shared")?;
-            let trust = one_of("trust", words[1].clone(), &TRUSTS)?;
+            let trust = one_of("trust", words[1].clone(), &TRUSTS)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             Ok(RunnerCommand::Call {
                 method: "runners/set",
                 params: json!({"name": words[0], "trust": trust}),
@@ -250,9 +267,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
                 2,
                 "profile NAME dedicated|workstation [--reserve-mib N] [--island CPUS]",
             )?;
-            let profile = one_of("profile", words[1].clone(), &PROFILES)?;
+            let profile = one_of("profile", words[1].clone(), &PROFILES)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let mut params = json!({"name": words[0], "profile": profile});
-            if let Some(n) = reserve()? {
+            if let Some(n) = reserve().map_err(|e| villa::Error::invalid(e.to_string()))? {
                 params["reserve_mib"] = json!(n);
             }
             // the timing island, a CPU list (the runner checks it against its caches)
@@ -273,9 +291,13 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
                 "feature",
                 words[1].clone(),
                 &["sandbox", "udmabuf", "render", "kvm"],
-            )?;
-            let on = one_of("on|off", words[2].clone(), &["on", "off"])? == "on";
-            let project = opt("project").ok_or("runner feature needs --project P")?;
+            )
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            let on = one_of("on|off", words[2].clone(), &["on", "off"])
+                .map_err(|e| villa::Error::invalid(e.to_string()))?
+                == "on";
+            let project = opt("project")
+                .ok_or_else(|| villa::Error::invalid("runner feature needs --project P"))?;
             Ok(RunnerCommand::Call {
                 method: "runners/feature",
                 params: json!({"name": words[0], "project": project, "feature": feature, "on": on}),
@@ -315,7 +337,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
                 return Ok(RunnerCommand::CloudOff { yes });
             }
             if yes {
-                return Err("usage: runner cloud off [--yes]".into());
+                return Err(villa::Error::invalid("usage: runner cloud off [--yes]"));
             }
             for (word, method) in [
                 ("cost", "runners/cloud/cost"),
@@ -329,9 +351,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
                 }
             }
             if words == ["setup", "gcp"] {
-                let project = opt("project").ok_or(usage)?;
+                let project = opt("project").ok_or_else(|| villa::Error::invalid(usage))?;
                 if opt("regions").is_some() || opt("sizes").is_some() {
-                    return Err(usage.into());
+                    return Err(villa::Error::invalid(usage));
                 }
                 return Ok(RunnerCommand::CloudSetupGcp {
                     hub,
@@ -340,7 +362,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
                 });
             }
             if words != ["setup", "aws"] || opt("project").is_some() || opt("member").is_some() {
-                return Err(usage.into());
+                return Err(villa::Error::invalid(usage));
             }
             let list = |k: &str| -> Vec<String> {
                 opt(k)
@@ -353,7 +375,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             };
             let (regions, sizes) = (list("regions"), list("sizes"));
             if regions.is_empty() || sizes.is_empty() {
-                return Err(usage.into());
+                return Err(villa::Error::invalid(usage));
             }
             Ok(RunnerCommand::CloudSetupAws {
                 hub,
@@ -538,7 +560,7 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
 mod tests {
     use super::*;
 
-    fn p(args: &[&str]) -> Result<RunnerCommand, String> {
+    fn p(args: &[&str]) -> villa::Result<RunnerCommand> {
         parse(args.iter().map(OsString::from))
     }
 

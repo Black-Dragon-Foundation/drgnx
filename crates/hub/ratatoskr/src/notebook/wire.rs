@@ -73,9 +73,10 @@ impl std::fmt::Debug for Key {
 impl Key {
     /// 32 bytes from the operating system's random generator, as 64 hex characters (the signing key is that text, as the
     /// protocol's kernels read it).
-    pub fn generate() -> Result<Key, String> {
+    pub fn generate() -> villa::Result<Key> {
         let mut b = [0u8; 32];
-        getrandom::fill(&mut b).map_err(|e| format!("no random bytes for a kernel key: {e}"))?;
+        getrandom::fill(&mut b)
+            .map_err(|e| villa::Error::invalid(format!("no random bytes for a kernel key: {e}")))?;
         Ok(Key(hex(&b).into_bytes()))
     }
 

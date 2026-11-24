@@ -237,7 +237,7 @@ impl Machine {
     }
 
     /// SCRIPT's stdout on the machine, or its stderr as the error.
-    fn try_sh(&self, script: &str) -> Result<String, String> {
+    fn try_sh(&self, script: &str) -> villa::Result<String> {
         let out = ratatoskr::proc::Command::new("ssh")
             .arg("-F")
             .arg(self.ssh_config())

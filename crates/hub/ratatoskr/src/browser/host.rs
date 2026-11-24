@@ -89,11 +89,11 @@ pub struct HostArgs {
 
 /// `--hub-fd N --ready-fd N --program P --dir D --web-port N [--max-message B] [--headless-shell|--full]
 /// [--unconfined]`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<HostArgs, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<HostArgs> {
     use lexopt::Arg::Long;
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let (mut hub_fd, mut ready_fd, mut program, mut dir, mut web_port) =
         (None, None, None, None, None);
     let mut max_message = DEFAULT_MAX_MESSAGE;
@@ -114,30 +114,42 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<HostArgs, Strin
             Long("full") if kind.is_none() => kind = Some(false),
             #[cfg(feature = "test-hooks")]
             Long("unconfined") => unconfined = true,
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let need = |what: &str| format!("browser-host needs --{what}");
-    let hub_fd = hub_fd.ok_or_else(|| need("hub-fd"))?;
-    let ready_fd = ready_fd.ok_or_else(|| need("ready-fd"))?;
-    let program = program.ok_or_else(|| need("program"))?;
-    let dir = dir.ok_or_else(|| need("dir"))?;
-    let web_port = web_port.ok_or_else(|| need("web-port"))?;
+    let hub_fd = hub_fd
+        .ok_or_else(|| need("hub-fd"))
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let ready_fd = ready_fd
+        .ok_or_else(|| need("ready-fd"))
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let program = program
+        .ok_or_else(|| need("program"))
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let dir = dir
+        .ok_or_else(|| need("dir"))
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let web_port = web_port
+        .ok_or_else(|| need("web-port"))
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if hub_fd < 3 || ready_fd < 3 || hub_fd == ready_fd {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "the hub's fd ({hub_fd}) and the ready fd ({ready_fd}) must be two numbers from 3"
-        ));
+        )));
     }
     for (name, path) in [("program", &program), ("dir", &dir)] {
         if !path.is_absolute() || path.to_str().is_none() {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "--{name} must be an absolute UTF-8 path: {}",
                 path.display()
-            ));
+            )));
         }
     }
     if web_port == 0 || max_message == 0 {
-        return Err("--web-port and --max-message must be above 0".into());
+        return Err(villa::Error::invalid(
+            "--web-port and --max-message must be above 0",
+        ));
     }
     Ok(HostArgs {
         hub_fd,
@@ -184,22 +196,24 @@ pub fn main(args: Vec<OsString>) -> i32 {
 
 /// Whether this process runs under the browser layer: `no_new_privs` is set (`/proc/self/status`), and a TCP bind on
 /// loopback is refused. The browser layer binds no port at all; the agent's own layer and an unsandboxed process may.
-pub fn check_layered() -> Result<(), String> {
+pub fn check_layered() -> villa::Result<()> {
     let status = crate::fsio::read_to_string("/proc/self/status")
-        .map_err(|e| format!("cannot read /proc/self/status: {e}"))?;
+        .map_err(|e| villa::Error::io(format!("cannot read /proc/self/status: {e}")))?;
     let nnp = status
         .lines()
         .find_map(|l| l.strip_prefix("NoNewPrivs:"))
         .map(str::trim);
     if nnp != Some("1") {
-        return Err("no_new_privs is not set".into());
+        return Err(villa::Error::invalid("no_new_privs is not set"));
     }
     match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
-        Ok(_) => Err("a TCP bind on loopback was allowed, which the browser layer refuses".into()),
-        Err(e) if matches!(e.raw_os_error(), Some(libc::EACCES | libc::EPERM)) => Ok(()),
-        Err(e) => Err(format!(
-            "a TCP bind on loopback failed, but was not refused: {e}"
+        Ok(_) => Err(villa::Error::invalid(
+            "a TCP bind on loopback was allowed, which the browser layer refuses",
         )),
+        Err(e) if matches!(e.raw_os_error(), Some(libc::EACCES | libc::EPERM)) => Ok(()),
+        Err(e) => Err(villa::Error::invalid(format!(
+            "a TCP bind on loopback failed, but was not refused: {e}"
+        ))),
     }
 }
 
@@ -1500,7 +1514,7 @@ mod tests {
     fn refuses_to_run_unlayered_without_the_flag() {
         let why = check_layered().expect_err("a test process holds no browser layer");
         assert!(
-            why.contains("no_new_privs") || why.contains("allowed"),
+            why.message().contains("no_new_privs") || why.message().contains("allowed"),
             "{why}"
         );
         let dir = tempfile::tempdir().unwrap();

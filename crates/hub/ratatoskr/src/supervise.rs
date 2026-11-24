@@ -234,7 +234,7 @@ pub fn launchd_start(
     label: &str,
     plist: &Path,
     changed: bool,
-) -> Result<Launched, String> {
+) -> villa::Result<Launched> {
     let domain = format!("gui/{uid}");
     if !ctl.ok(&["print", &domain]) {
         return Ok(Launched::NoDomain);
@@ -258,7 +258,7 @@ pub fn launchd_start(
     if ctl.ok(&first) {
         Ok(Launched::Started)
     } else {
-        Err(format!("launchctl {verb} failed"))
+        Err(villa::Error::invalid(format!("launchctl {verb} failed")))
     }
 }
 
@@ -343,7 +343,7 @@ fn isolate(cmd: &mut Command) {
 }
 
 /// What `ensure` runs once nothing answers.  Err is the reason it could not start one.
-fn start(env: &Env, socket: &Path, exe: &Path) -> Result<Option<std::process::Child>, String> {
+fn start(env: &Env, socket: &Path, exe: &Path) -> villa::Result<Option<std::process::Child>> {
     let h = hash(socket);
     match choose(env) {
         Mode::Systemd(prog) => {
@@ -352,7 +352,7 @@ fn start(env: &Env, socket: &Path, exe: &Path) -> Result<Option<std::process::Ch
                 .args(args)
                 .stdin(Stdio::null())
                 .output()
-                .map_err(|e| format!("systemd-run: {e}"))?;
+                .map_err(|e| villa::Error::invalid(format!("systemd-run: {e}")))?;
             let said = String::from_utf8_lossy(&out.stderr);
             // a racing `ensure` already made the unit: both then ping
             if out.status.success()
@@ -361,12 +361,15 @@ fn start(env: &Env, socket: &Path, exe: &Path) -> Result<Option<std::process::Ch
             {
                 Ok(None)
             } else {
-                Err(format!("systemd-run failed: {}", said.trim()))
+                Err(villa::Error::invalid(format!(
+                    "systemd-run failed: {}",
+                    said.trim()
+                )))
             }
         }
         Mode::Launchd(prog) => {
             let state = paths::state_dir(env).join("hub");
-            paths::private_dir(&state).map_err(|e| e.to_string())?;
+            paths::private_dir(&state)?;
             let plist = state.join("launchd.plist");
             let vars: Vec<(String, String)> = present(env)
                 .into_iter()
@@ -375,7 +378,8 @@ fn start(env: &Env, socket: &Path, exe: &Path) -> Result<Option<std::process::Ch
             let text = launchd_plist(&label(&h), exe, &vars, &state.join("launchd.log"));
             let changed =
                 crate::fsio::read_to_string(&plist).ok().as_deref() != Some(text.as_str());
-            write_private(&plist, &text).map_err(|e| format!("{}: {e}", plist.display()))?;
+            write_private(&plist, &text)
+                .map_err(|e| villa::Error::io(format!("{}: {e}", plist.display())))?;
             match launchd_start(&RealLaunchctl(prog), env.uid, &label(&h), &plist, changed)? {
                 Launched::Started => Ok(None),
                 Launched::NoDomain => {
@@ -383,7 +387,9 @@ fn start(env: &Env, socket: &Path, exe: &Path) -> Result<Option<std::process::Ch
                         "ratatoskr ensure: no gui/{} launchd domain (an SSH session?): the hub detaches itself and is not restarted on a crash",
                         env.uid
                     ));
-                    detach(exe).map(Some).map_err(|e| e.to_string())
+                    detach(exe)
+                        .map(Some)
+                        .map_err(|e| villa::Error::invalid(e.to_string()))
                 }
             }
         }
@@ -393,7 +399,9 @@ fn start(env: &Env, socket: &Path, exe: &Path) -> Result<Option<std::process::Ch
                     "ratatoskr ensure: {why}: the hub detaches itself and is not restarted on a crash"
                 ));
             }
-            detach(exe).map(Some).map_err(|e| e.to_string())
+            detach(exe)
+                .map(Some)
+                .map_err(|e| villa::Error::invalid(e.to_string()))
         }
     }
 }
@@ -635,7 +643,7 @@ fn stop_ratatoskr(
         listener
             .terminate()
             .map(|()| p)
-            .map_err(|e| format!("SIGTERM to pid {p} failed ({e})"))
+            .map_err(|e| villa::Error::unavailable(format!("SIGTERM to pid {p} failed ({e})")))
     });
     match signalled {
         Ok(p) => {

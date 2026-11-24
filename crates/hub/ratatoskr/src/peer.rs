@@ -45,22 +45,24 @@ impl Listener {
 }
 
 /// The process listening on SOCKET, for `stop` (above).
-pub fn listener_of(socket: &Path) -> Result<Listener, String> {
+pub fn listener_of(socket: &Path) -> villa::Result<Listener> {
     let dir = socket.parent().unwrap_or(Path::new("/"));
     let name = Path::new(socket.file_name().unwrap_or_default());
-    let fd = runstav::paths::trusted_dir(dir).map_err(|e| e.to_string())?;
-    runstav::paths::owned_in_trusted(&fd, name).map_err(|e| match e.kind() {
-        io::ErrorKind::NotFound => format!("{} is gone", socket.display()),
-        _ => e.to_string(),
-    })?;
-    let l = listen::listener(socket)?;
+    let fd = runstav::paths::trusted_dir(dir)?;
+    runstav::paths::owned_in_trusted(&fd, name)
+        .map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => format!("{} is gone", socket.display()),
+            _ => e.to_string(),
+        })
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let l = listen::listener(socket).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let me = rustix::process::geteuid().as_raw();
     if l.uid != me {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "the process listening on {} (pid {}) is another user's",
             socket.display(),
             l.pid
-        ));
+        )));
     }
     Ok(l)
 }
@@ -517,10 +519,10 @@ mod tests {
         assert!(l.running(), "signal 0 reaches this process");
         // nothing listening, and a directory open to others: refused, with why
         let gone = listener_of(&dir.path().join("none.sock")).err().unwrap();
-        assert!(gone.contains("is gone"), "{gone}");
+        assert!(gone.message().contains("is gone"), "{gone}");
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
         let open = listener_of(&path).err().unwrap();
-        assert!(open.contains("open to other users"), "{open}");
+        assert!(open.message().contains("open to other users"), "{open}");
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]

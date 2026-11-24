@@ -35,7 +35,7 @@ fn brace_words_are_filled_in_and_another_word_is_an_error_naming_it() {
     );
     assert_eq!(expand("no braces", &v).unwrap(), "no braces");
     let e = expand("{nope}", &v).unwrap_err();
-    assert!(e.contains("unknown {nope}"), "{e}");
+    assert!(e.message().contains("unknown {nope}"), "{e}");
     assert!(expand("a { b", &v).is_err());
     assert_eq!(file_uri(Path::new("/a/ü b")), "file:///a/%C3%BC%20b");
 }
@@ -65,6 +65,7 @@ fn a_glob_names_exactly_one_file_under_the_tools_folder() {
     assert!(
         expand("{glob:jdtls/plugins/nothing_*.jar}", &v)
             .unwrap_err()
+            .message()
             .contains("matches nothing")
     );
     crate::fsio::write(plugins.join("org.eclipse.equinox.launcher_2.jar"), "").unwrap();
@@ -74,6 +75,7 @@ fn a_glob_names_exactly_one_file_under_the_tools_folder() {
             &v
         )
         .unwrap_err()
+        .message()
         .contains("matches 2 files")
     );
     assert!(expand("{glob:jdtls/plugins/other.jar}", &v).is_err());

@@ -613,7 +613,7 @@ fn week(provider: &str, used: f64, added: Option<Range>) -> PaceEffect {
 
 /// The rule under PRESET for a plan of TASKS tasks with forecast F, whose subscription providers are SUBS: a temp
 /// store, the shipped cells.
-async fn rule_in(preset: &str, f: Forecast, tasks: usize, subs: &[&str]) -> Result<(), String> {
+async fn rule_in(preset: &str, f: Forecast, tasks: usize, subs: &[&str]) -> villa::Result<()> {
     let dir = tempfile::tempdir().unwrap();
     let db = norn::store::CoordDb::spawn(dir.path().join("work.db"));
     let g = MatrixGate::default();
@@ -632,7 +632,7 @@ fn priced(usd: f64) -> Forecast {
 #[tokio::test(flavor = "multi_thread")]
 async fn balanced_waits() {
     let e = rule_in("balanced", priced(1.0), 1, &[]).await.unwrap_err();
-    assert!(e.contains("balanced"), "{e}");
+    assert!(e.message().contains("balanced"), "{e}");
     assert!(rule_in("cautious", priced(1.0), 1, &[]).await.is_err());
 }
 
@@ -648,7 +648,7 @@ async fn autonomous_over_the_spend_cell_waits() {
     let e = rule_in("autonomous", priced(151.0), 4, &[])
         .await
         .unwrap_err();
-    assert!(e.contains("spend"), "{e}");
+    assert!(e.message().contains("spend"), "{e}");
 }
 
 /// Pure (D): `usd` p90 100 and `usd-est` p90 60 are $160 against the $150 cell: it waits on the sum; either alone
@@ -657,7 +657,10 @@ async fn autonomous_over_the_spend_cell_waits() {
 async fn autonomous_with_mixed_units_checks_each() {
     let both = forecast(&[(Unit::Usd, 100.0), (Unit::UsdEst, 60.0)], &[], Vec::new());
     let e = rule_in("autonomous", both, 2, &[]).await.unwrap_err();
-    assert!(e.contains("spend") && e.contains("160"), "{e}");
+    assert!(
+        e.message().contains("spend") && e.message().contains("160"),
+        "{e}"
+    );
     assert_eq!(rule_in("autonomous", priced(100.0), 2, &[]).await, Ok(()));
     let est = forecast(&[(Unit::UsdEst, 60.0)], &[], Vec::new());
     assert_eq!(rule_in("autonomous", est, 2, &[]).await, Ok(()));
@@ -672,7 +675,7 @@ async fn autonomous_counts_an_estimate_as_dollars() {
         vec![week("claude", 0.1, Some(range(0.01, 0.02)))],
     );
     let e = rule_in("autonomous", f, 2, &["claude"]).await.unwrap_err();
-    assert!(e.contains("spend"), "{e}");
+    assert!(e.message().contains("spend"), "{e}");
 }
 
 /// Pure (D): used 0.9, the plan's p90 adds 0.15 before the reset: it waits, naming the provider and the week.
@@ -682,7 +685,10 @@ async fn autonomous_waits_when_the_week_would_run_out() {
     assert!(pace.runs_out_p90 && pace.window == PaceWindow::Week);
     let f = forecast(&[(Unit::UsdEst, 10.0)], &[], vec![pace]);
     let e = rule_in("autonomous", f, 2, &["claude"]).await.unwrap_err();
-    assert!(e.contains("claude") && e.contains("week"), "{e}");
+    assert!(
+        e.message().contains("claude") && e.message().contains("week"),
+        "{e}"
+    );
     // the same plan with room in the week starts
     let f = forecast(
         &[(Unit::UsdEst, 10.0)],
@@ -714,7 +720,7 @@ async fn autonomous_waits_when_any_window_would_run_out() {
         let f = forecast(&[(Unit::UsdEst, 10.0)], &[], vec![pace]);
         let e = rule_in("autonomous", f, 2, &["claude"]).await.unwrap_err();
         assert!(
-            e.contains("claude") && e.contains("before it resets"),
+            e.message().contains("claude") && e.message().contains("before it resets"),
             "{e}"
         );
     }
@@ -728,7 +734,10 @@ async fn autonomous_waits_with_no_pace_yet() {
     let e = rule_in("autonomous", none, 2, &["claude"])
         .await
         .unwrap_err();
-    assert!(e.contains("claude") && e.contains("no pace yet"), "{e}");
+    assert!(
+        e.message().contains("claude") && e.message().contains("no pace yet"),
+        "{e}"
+    );
     let unknown = forecast(
         &[(Unit::UsdEst, 10.0)],
         &[],
@@ -737,7 +746,7 @@ async fn autonomous_waits_with_no_pace_yet() {
     let e = rule_in("autonomous", unknown, 2, &["claude"])
         .await
         .unwrap_err();
-    assert!(e.contains("no pace yet"), "{e}");
+    assert!(e.message().contains("no pace yet"), "{e}");
     // another provider's pace is not this one's
     let other = forecast(
         &[(Unit::UsdEst, 10.0)],
@@ -752,7 +761,7 @@ async fn autonomous_waits_with_no_pace_yet() {
 async fn autonomous_with_an_unpriced_task_waits() {
     let f = forecast(&[(Unit::Usd, 5.0)], &["local-llm"], Vec::new());
     let e = rule_in("autonomous", f, 2, &[]).await.unwrap_err();
-    assert!(e.contains("local-llm"), "{e}");
+    assert!(e.message().contains("local-llm"), "{e}");
 }
 
 /// Pure (D): nine agents are over the manager's eight.
@@ -761,7 +770,7 @@ async fn autonomous_over_the_agent_cell_waits() {
     let e = rule_in("autonomous", priced(5.0), 9, &[])
         .await
         .unwrap_err();
-    assert!(e.contains("agents"), "{e}");
+    assert!(e.message().contains("agents"), "{e}");
     assert_eq!(rule_in("autonomous", priced(5.0), 8, &[]).await, Ok(()));
 }
 

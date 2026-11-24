@@ -84,12 +84,16 @@ impl Background {
     }
 
     /// The running item with this id, when exactly one has it.
-    pub fn find(&self, id: &str) -> Result<&Item, String> {
+    pub fn find(&self, id: &str) -> villa::Result<&Item> {
         let mut hits = self.items.iter().flatten().filter(|i| i.id == id);
         match (hits.next(), hits.next()) {
             (Some(i), None) => Ok(i),
-            (Some(_), Some(_)) => Err(format!("`{id}` names more than one background item")),
-            _ => Err(format!("`{id}` is not a running background item")),
+            (Some(_), Some(_)) => Err(villa::Error::invalid(format!(
+                "`{id}` names more than one background item"
+            ))),
+            _ => Err(villa::Error::invalid(format!(
+                "`{id}` is not a running background item"
+            ))),
         }
     }
 }

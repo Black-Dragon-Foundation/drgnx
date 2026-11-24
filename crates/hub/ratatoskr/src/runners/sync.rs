@@ -29,16 +29,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const GIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 /// GIT's output for ARGS, run for WHAT; its failure as words.
-fn git_out<S: AsRef<OsStr>>(git: &Git, what: &str, args: &[S]) -> Result<Vec<u8>, String> {
-    let out = draugr::run(git.cmd(args), GIT_LIMIT).map_err(|e| format!("git ({what}): {e}"))?;
+fn git_out<S: AsRef<OsStr>>(git: &Git, what: &str, args: &[S]) -> villa::Result<Vec<u8>> {
+    let out = draugr::run(git.cmd(args), GIT_LIMIT)
+        .map_err(|e| villa::Error::invalid(format!("git ({what}): {e}")))?;
     if out.status.success() {
         Ok(out.stdout)
     } else {
-        Err(format!(
+        Err(villa::Error::invalid(format!(
             "git ({what}) exited {}: {}",
             out.status.code().unwrap_or(-1),
             out.stderr.trim_end()
-        ))
+        )))
     }
 }
 
@@ -54,8 +55,9 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// The hardened git on the user's worktree at TOP.
-fn user_git(top: &Path) -> Result<Git, String> {
-    Git::for_worktree(top).map_err(|e| format!("{}: not a git worktree: {e}", top.display()))
+fn user_git(top: &Path) -> villa::Result<Git> {
+    Git::for_worktree(top)
+        .map_err(|e| villa::Error::invalid(format!("{}: not a git worktree: {e}", top.display())))
 }
 
 /// The REFS this repository holds as commits.
@@ -114,15 +116,19 @@ pub struct Origin {
 }
 
 /// The origin of the worktree at TOP, read through the hardened git.
-pub fn origin_of(top: &Path) -> Result<Origin, String> {
-    let git = user_git(top)?;
+pub fn origin_of(top: &Path) -> villa::Result<Origin> {
+    let git = user_git(top).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let url = draugr::run(git.cmd(["config", "--get", "remote.origin.url"]), GIT_LIMIT)
-        .map_err(|e| format!("git (read the origin): {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("git (read the origin): {e}")))?;
     let url = match url.status.code() {
         Some(0) => Some(String::from_utf8_lossy(&url.stdout).trim().to_string()),
         // not set
         Some(1) => None,
-        c => return Err(format!("git (read the origin) exited {c:?}")),
+        c => {
+            return Err(villa::Error::invalid(format!(
+                "git (read the origin) exited {c:?}"
+            )));
+        }
     };
     let listed = git_out(
         &git,
@@ -132,7 +138,8 @@ pub fn origin_of(top: &Path) -> Result<Origin, String> {
             "--format=%(objectname)",
             "refs/remotes/origin/",
         ],
-    )?;
+    )
+    .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let mut refs: Vec<String> = Vec::new();
     for r in String::from_utf8_lossy(&listed).lines() {
         if oid(r) && !refs.iter().any(|x| x == r) {
@@ -146,22 +153,24 @@ pub fn origin_of(top: &Path) -> Result<Origin, String> {
 }
 
 /// How many commits of COMMIT's history none of REFS reaches: 0 when the origin has it.
-pub fn not_on(top: &Path, commit: &str, refs: &[String]) -> Result<u32, String> {
+pub fn not_on(top: &Path, commit: &str, refs: &[String]) -> villa::Result<u32> {
     if !oid(commit) {
-        return Err(format!("{commit:?} is not an object id"));
+        return Err(villa::Error::invalid(format!(
+            "{commit:?} is not an object id"
+        )));
     }
-    let git = user_git(top)?;
+    let git = user_git(top).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let mut args = vec!["rev-list".to_string(), "--count".into(), commit.into()];
     let refs = present(&git, refs);
     if !refs.is_empty() {
         args.push("--not".into());
         args.extend(refs);
     }
-    let out = git_out(&git, "count the commits the origin lacks", &args)?;
-    String::from_utf8_lossy(&out)
-        .trim()
-        .parse()
-        .map_err(|e| format!("git (count the commits the origin lacks): {e}"))
+    let out = git_out(&git, "count the commits the origin lacks", &args)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    String::from_utf8_lossy(&out).trim().parse().map_err(|e| {
+        villa::Error::invalid(format!("git (count the commits the origin lacks): {e}"))
+    })
 }
 
 /// A job's inputs, frozen at submit: what every runner gets, whatever the worktree holds by then.
@@ -195,7 +204,7 @@ pub struct Frozen {
 }
 
 /// The bytes of the blobs of TREE in the repository of GIT (`git ls-tree -r -l`).
-fn tree_bytes(git: &Git, tree: &str) -> Result<u64, String> {
+fn tree_bytes(git: &Git, tree: &str) -> villa::Result<u64> {
     let out = git_out(
         git,
         "size the tree",
@@ -239,12 +248,14 @@ pub fn freeze(
     visibility: Visibility,
     shared_overlay: bool,
     blobs: &Path,
-) -> Result<Frozen, String> {
-    let inputs = capture::capture(top, extras).map_err(|e| format!("the job's inputs: {e}"))?;
+) -> villa::Result<Frozen> {
+    let inputs = capture::capture(top, extras)
+        .map_err(|e| villa::Error::invalid(format!("the job's inputs: {e}")))?;
     let origin = origin_of(top)?;
     let not_on_origin = not_on(top, &inputs.commit, &origin.refs)?;
-    let store = sleipnir::sync::blobs::Store::open(blobs)
-        .map_err(|e| format!("the hub's blob store {}: {e}", blobs.display()))?;
+    let store = sleipnir::sync::blobs::Store::open(blobs).map_err(|e| {
+        villa::Error::invalid(format!("the hub's blob store {}: {e}", blobs.display()))
+    })?;
     for e in inputs.manifest.iter().chain(&inputs.extras) {
         let Entry::File {
             path, mode, sha256, ..
@@ -263,19 +274,27 @@ pub fn freeze(
             std::fs::read(&full)
         };
         let named = || String::from_utf8_lossy(path).escape_debug().to_string();
-        let bytes = bytes.map_err(|e| format!("{}: {e}", named()))?;
-        store.put(sha256, &bytes).map_err(|_| {
-            format!(
-                "{}: it changed while it was read; start the job again",
-                named()
-            )
-        })?;
+        let bytes = bytes.map_err(|e| villa::Error::io(format!("{}: {e}", named())))?;
+        store
+            .put(sha256, &bytes)
+            .map_err(|_| {
+                format!(
+                    "{}: it changed while it was read; start the job again",
+                    named()
+                )
+            })
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
     }
-    let tree_bytes = tree_bytes(&user_git(top)?, &inputs.tree)?;
+    let tree_bytes = tree_bytes(
+        &user_git(top).map_err(|e| villa::Error::invalid(e.to_string()))?,
+        &inputs.tree,
+    )
+    .map_err(|e| villa::Error::invalid(e.to_string()))?;
     Ok(Frozen {
         tree_bytes,
         worktree: top.to_path_buf(),
-        repo: repo_id(top, origin.url.as_deref())?,
+        repo: repo_id(top, origin.url.as_deref())
+            .map_err(|e| villa::Error::invalid(e.to_string()))?,
         input_key: capture::input_key(&inputs),
         commit: inputs.commit,
         tree: inputs.tree,
@@ -309,7 +328,7 @@ fn entry(e: Entry) -> ManifestEntry {
 
 /// The repository's mirror id on runners: its name (the origin URL's last part, else its folder's) and 8 hex digits
 /// of the origin URL (else the repository's own folder), so two repositories of one name never share a mirror's refs.
-fn repo_id(top: &Path, url: Option<&str>) -> Result<String, String> {
+fn repo_id(top: &Path, url: Option<&str>) -> villa::Result<String> {
     let common = git_out(
         &user_git(top)?,
         "find the repository",
@@ -418,11 +437,13 @@ pub fn plan(job: &Frozen, runner: RunnerTrust, missing: u64, origin_key: Option<
 
 /// The bytes of COMMIT's objects that none of MIRROR_REFS reaches (`git rev-list --objects --disk-usage`); a ref the
 /// hub's repository doesn't hold is left out.
-pub fn missing_bytes(top: &Path, commit: &str, mirror_refs: &[String]) -> Result<u64, String> {
+pub fn missing_bytes(top: &Path, commit: &str, mirror_refs: &[String]) -> villa::Result<u64> {
     if !oid(commit) {
-        return Err(format!("{commit:?} is not an object id"));
+        return Err(villa::Error::invalid(format!(
+            "{commit:?} is not an object id"
+        )));
     }
-    let git = user_git(top)?;
+    let git = user_git(top).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let mut args = vec![
         "rev-list".to_string(),
         "--objects".into(),
@@ -434,17 +455,18 @@ pub fn missing_bytes(top: &Path, commit: &str, mirror_refs: &[String]) -> Result
         args.push("--not".into());
         args.extend(refs);
     }
-    let out = git_out(&git, "measure what the mirror lacks", &args)?;
+    let out = git_out(&git, "measure what the mirror lacks", &args)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     String::from_utf8_lossy(&out)
         .trim()
         .parse()
-        .map_err(|e| format!("git (measure what the mirror lacks): {e}"))
+        .map_err(|e| villa::Error::invalid(format!("git (measure what the mirror lacks): {e}")))
 }
 
 /// What of JOB's overlay and extras a runner of trust RUNNER gets: never a file of the lock's protected paths
 /// (`.envrc`, `mise.toml`, `.claude`, `.codex`, `.gemini`, `.git/hooks`). A `shared` runner gets an overlay only with
 /// `drgnx-runners-shared-overlay` on and every file passing `looks_like_secret`; otherwise why the job runs elsewhere.
-pub fn overlay_for(job: &Frozen, runner: RunnerTrust) -> Result<Vec<ManifestEntry>, String> {
+pub fn overlay_for(job: &Frozen, runner: RunnerTrust) -> villa::Result<Vec<ManifestEntry>> {
     let path = |e: &ManifestEntry| match e {
         ManifestEntry::File { path, .. } | ManifestEntry::Deleted { path } => path.clone(),
     };
@@ -461,10 +483,10 @@ pub fn overlay_for(job: &Frozen, runner: RunnerTrust) -> Result<Vec<ManifestEntr
     if !job.shared_overlay {
         let n = sent.len();
         let files = if n == 1 { "file" } else { "files" };
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "runs here: {n} uncommitted {files}, and the project sends none to a shared runner \
              (drgnx-runners-shared-overlay is off)"
-        ));
+        )));
     }
     for e in &sent {
         let ManifestEntry::File {
@@ -476,12 +498,13 @@ pub fn overlay_for(job: &Frozen, runner: RunnerTrust) -> Result<Vec<ManifestEntr
             continue;
         };
         let named = String::from_utf8_lossy(path).escape_debug().to_string();
-        let bytes = std::fs::read(blob_path(job, sha))
-            .map_err(|e| format!("runs here: the frozen bytes of {named}: {e}"))?;
+        let bytes = std::fs::read(blob_path(job, sha)).map_err(|e| {
+            villa::Error::io(format!("runs here: the frozen bytes of {named}: {e}"))
+        })?;
         if let Some(kind) = runstav::secrets::looks_like_secret(&String::from_utf8_lossy(&bytes)) {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "runs here: {named} may hold a secret ({kind}); it is never sent to a shared runner"
-            ));
+            )));
         }
     }
     Ok(sent)
@@ -499,9 +522,10 @@ pub fn send_blob(
     r: &JobRef,
     job: &Frozen,
     sha: &[u8; 32],
-) -> Result<bool, String> {
+) -> villa::Result<bool> {
     let path = blob_path(job, sha);
-    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let bytes =
+        std::fs::read(&path).map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
     let total = bytes.len() as u64;
     let mut offset = 0;
     // an empty blob is one empty chunk
@@ -546,23 +570,27 @@ pub fn make_bundle(
     commit: &str,
     mirror_refs: &[String],
     dir: &Path,
-) -> Result<BundleFile, String> {
+) -> villa::Result<BundleFile> {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     if !oid(commit) {
-        return Err(format!("{commit:?} is not an object id"));
+        return Err(villa::Error::invalid(format!(
+            "{commit:?} is not an object id"
+        )));
     }
-    let user = user_git(top)?;
+    let user = user_git(top).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let common = git_out(
         &user,
         "find the repository's objects",
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
+    )
+    .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let objects = PathBuf::from(OsStr::from_bytes(common.trim_ascii_end())).join("objects");
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     let name = format!("{}-{}-{n}", &commit[..12], std::process::id());
     let work = dir.join(format!("{name}.git"));
     let made = (|| {
-        std::fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
+        std::fs::create_dir_all(&work)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", work.display())))?;
         let bare = Git {
             git_dir: work.clone(),
             work_tree: None,
@@ -574,7 +602,8 @@ pub fn make_bundle(
         )?;
         let mut alt = objects.into_os_string().into_vec();
         alt.push(b'\n');
-        crate::fsio::write(work.join("objects/info/alternates"), alt).map_err(|e| e.to_string())?;
+        crate::fsio::write(work.join("objects/info/alternates"), alt)
+            .map_err(|e| villa::Error::io(e.to_string()))?;
         git_out(
             &bare,
             "name the commit",
@@ -594,16 +623,17 @@ pub fn make_bundle(
             args.extend(refs.into_iter().map(Into::into));
         }
         git_out(&bare, "make the bundle", &args)?;
-        Ok::<PathBuf, String>(file)
+        Ok::<PathBuf, villa::Error>(file)
     })();
     crate::soft::done(std::fs::remove_dir_all(&work), "std::fs::remove_dir_all");
     let path = made?;
-    let mut f = std::fs::File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut f = std::fs::File::open(&path)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
     let mut h = sha2::Sha256::new();
     let mut buf = vec![0u8; sleipnir::sync::bundle::CHUNK];
     let mut size = 0u64;
     loop {
-        let k = f.read(&mut buf).map_err(|e| e.to_string())?;
+        let k = f.read(&mut buf)?;
         if k == 0 {
             break;
         }
@@ -625,17 +655,17 @@ pub fn send_bundle(
     id: &str,
     file: &BundleFile,
     from_offset: u64,
-) -> Result<bool, String> {
-    let mut f =
-        std::fs::File::open(&file.path).map_err(|e| format!("{}: {e}", file.path.display()))?;
+) -> villa::Result<bool> {
+    let mut f = std::fs::File::open(&file.path)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", file.path.display())))?;
     f.seek(SeekFrom::Start(from_offset))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::io(e.to_string()))?;
     let mut offset = from_offset;
     while offset < file.size {
         let want = (file.size - offset).min(sleipnir::sync::bundle::CHUNK as u64) as usize;
         let mut bytes = vec![0u8; want];
         f.read_exact(&mut bytes)
-            .map_err(|e| format!("{}: {e}", file.path.display()))?;
+            .map_err(|e| villa::Error::invalid(format!("{}: {e}", file.path.display())))?;
         let sent = send(Frame::Bundle {
             r: r.clone(),
             id: id.into(),

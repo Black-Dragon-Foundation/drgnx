@@ -222,3 +222,12 @@ name = "search_index"
 # the local engine's rows: the process-wide virtual clock, as search_index
 [[test]]
 name = "search_engine"
+
+# the build script's output (cargo directives) goes through annall, its errors are villa's, its stamp is stund's
+[build-dependencies]
+annall.workspace = true
+villa.workspace = true
+stund = { path = "../stund", version = "0.1.0" }
+
+[lints]
+workspace = true

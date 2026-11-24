@@ -563,7 +563,8 @@ mod openssh_impl {
     impl Transport for OpensshTransport {
         fn open<'a>(&'a self, r: &'a RunnerCfg) -> BoxFuture<'a, Result<Channels, LinkError>> {
             Box::pin(async move {
-                r.check().map_err(LinkError::Refused)?;
+                r.check()
+                    .map_err(|e| LinkError::Refused(e.message().to_owned()))?;
                 let link = self.link_for(r);
                 let mut l = link.lock().await;
                 let mut permits =

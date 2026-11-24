@@ -22,7 +22,7 @@ impl Replay for Direct {
         _run: &str,
         _stop: u64,
         watch: Vec<String>,
-    ) -> BoxFut<'static, Result<Traced, String>> {
+    ) -> BoxFut<'static, villa::Result<Traced>> {
         let (dir, script, old) = (self.dir.clone(), self.script, self.old);
         Box::pin(async move {
             if old {
@@ -37,8 +37,8 @@ impl Replay for Direct {
         _run: &str,
         _stop: u64,
         _probes: Vec<super::record::RunProbe>,
-    ) -> BoxFut<'static, Result<Vec<super::record::RunHit>, String>> {
-        Box::pin(async { Err("Python is traced, never probed".into()) })
+    ) -> BoxFut<'static, villa::Result<Vec<super::record::RunHit>>> {
+        Box::pin(async { Err(villa::Error::invalid("Python is traced, never probed")) })
     }
 }
 

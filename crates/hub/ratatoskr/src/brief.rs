@@ -34,10 +34,10 @@ const OPEN: i64 = 4_611_686_018_427_387_904;
 #[derive(Default)]
 pub struct Briefs {}
 
-fn err(code: ErrorCode, msg: impl Into<String>) -> Error {
+fn err(code: ErrorCode, msg: impl ToString) -> Error {
     Error {
         code,
-        message: msg.into(),
+        message: msg.to_string(),
         path: None,
     }
 }

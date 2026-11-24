@@ -102,7 +102,7 @@ async fn a_reply_from_another_session_is_refused() {
     .await
     .unwrap();
     let refused = agent_reply(&f.db, "s2", &id, "not mine", 2.0).await;
-    assert!(refused.unwrap_err().contains("not sent to you"));
+    assert!(refused.unwrap_err().message().contains("not sent to you"));
     let r = agent_reply(&f.db, "s1", &id, "they version", 3.0)
         .await
         .unwrap();

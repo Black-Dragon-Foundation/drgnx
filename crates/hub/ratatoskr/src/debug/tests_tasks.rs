@@ -61,16 +61,19 @@ fn an_unknown_task_and_a_cycle_are_named() {
           {"label": "c", "command": "true", "dependsOn": "nope"}]}"#,
     );
     let e = tasks::order(&t, "a", Os::Linux).unwrap_err();
-    assert!(e.contains("a → b → a"), "{e}");
+    assert!(e.message().contains("a → b → a"), "{e}");
     let e = tasks::order(&t, "c", Os::Linux).unwrap_err();
-    assert!(e.contains("nope"), "{e}");
+    assert!(e.message().contains("nope"), "{e}");
 }
 
 #[test]
 fn a_background_task_without_an_end_pattern_is_refused() {
     let t = file(r#"{"tasks": [{"label": "watch", "command": "tsc -w", "isBackground": true}]}"#);
     let e = tasks::order(&t, "watch", Os::Linux).unwrap_err();
-    assert!(e.contains("watch") && e.contains("isBackground"), "{e}");
+    assert!(
+        e.message().contains("watch") && e.message().contains("isBackground"),
+        "{e}"
+    );
 }
 
 #[test]
@@ -129,7 +132,9 @@ async fn the_steps_run_in_order_and_the_first_failure_stops_the_rest() {
     ];
     let e = tasks::run(&bad, &env).await.unwrap_err();
     assert!(
-        e.contains("make") && e.contains("exit 2") && e.contains("no rule"),
+        e.message().contains("make")
+            && e.message().contains("exit 2")
+            && e.message().contains("no rule"),
         "{e}"
     );
     assert!(
@@ -172,7 +177,10 @@ async fn a_pre_launch_task_comes_from_the_roots_tasks_json() {
         &|s| Ok(s.into()),
     )
     .unwrap_err();
-    assert!(e.contains("tasks.json") && e.contains('x'), "{e}");
+    assert!(
+        e.message().contains("tasks.json") && e.message().contains('x'),
+        "{e}"
+    );
 }
 
 #[test]
@@ -196,7 +204,7 @@ fn a_post_debug_task_comes_from_the_same_file() {
     .unwrap();
     let e = tasks::after_debug(d.path(), &config, Os::Linux, &|s| Ok(s.into())).unwrap_err();
     assert!(
-        e.contains("postDebugTask") && e.contains("isBackground"),
+        e.message().contains("postDebugTask") && e.message().contains("isBackground"),
         "{e}"
     );
 }
@@ -218,7 +226,7 @@ impl super::Terminals for Tabs {
         cwd: String,
         args: Vec<String>,
         env: Vec<(String, String)>,
-    ) -> super::BoxFut<'_, Result<super::Opened, String>> {
+    ) -> super::BoxFut<'_, villa::Result<super::Opened>> {
         let mut o = self.opened.lock().unwrap();
         o.push((conn, cwd, args, env));
         let n = o.len();
@@ -274,11 +282,12 @@ async fn in_a_tab_each_step_runs_wrapped_and_a_failure_says_its_status_and_text(
         "each tab shown as it opens"
     );
     assert!(
-        e.contains("task make failed (exit 2)") && e.contains("t2: error: no rule"),
+        e.message().contains("task make failed (exit 2)")
+            && e.message().contains("t2: error: no rule"),
         "{e}"
     );
     assert!(
-        !e.contains("Enter closes"),
+        !e.message().contains("Enter closes"),
         "the tab's own line is not the task's: {e}"
     );
     let opened = tabs.opened.lock().unwrap();
@@ -316,7 +325,10 @@ async fn a_tab_that_goes_without_a_status_fails_the_start() {
     let e = tasks::run_in(&[step("b", "true", d.path())], &tabs, 1, &|_, _| {})
         .await
         .unwrap_err();
-    assert!(e.contains("task b") && e.contains("closed"), "{e}");
+    assert!(
+        e.message().contains("task b") && e.message().contains("closed"),
+        "{e}"
+    );
 }
 
 /// A background task's problem matcher: its own `background` patterns, or a named one drgnx knows.
@@ -346,11 +358,17 @@ fn a_background_task_needs_an_end_pattern_and_a_known_matcher() {
             .is_match("[12:00:01 PM] Found 0 errors. Watching for file changes.")
     );
     let e = tasks::order(&t, "plain", Os::Linux).unwrap_err();
-    assert!(e.contains("plain") && e.contains("endsPattern"), "{e}");
+    assert!(
+        e.message().contains("plain") && e.message().contains("endsPattern"),
+        "{e}"
+    );
     let e = tasks::order(&t, "other", Os::Linux).unwrap_err();
-    assert!(e.contains("$esbuild-watch"), "{e}");
+    assert!(e.message().contains("$esbuild-watch"), "{e}");
     let e = tasks::order(&t, "bad", Os::Linux).unwrap_err();
-    assert!(e.contains("bad") && e.contains("endsPattern"), "{e}");
+    assert!(
+        e.message().contains("bad") && e.message().contains("endsPattern"),
+        "{e}"
+    );
 }
 
 fn watch(label: &str, script: &str, cwd: &Path, begins: Option<&str>, ends: &str) -> Step {
@@ -430,10 +448,10 @@ async fn a_background_task_that_ends_first_fails_the_start() {
     )];
     let e = tasks::run(&steps, &env).await.unwrap_err();
     assert!(
-        e.contains("w")
-            && e.contains("exit 3")
-            && e.contains("cannot find tsconfig")
-            && e.contains("ready"),
+        e.message().contains("w")
+            && e.message().contains("exit 3")
+            && e.message().contains("cannot find tsconfig")
+            && e.message().contains("ready"),
         "{e}"
     );
 }

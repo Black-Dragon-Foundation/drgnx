@@ -39,8 +39,8 @@ impl Terminals for NoTerms {
         _: String,
         _: Vec<String>,
         _: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<Opened, String>> {
-        Box::pin(async { Err("no terminal in the live test".to_owned()) })
+    ) -> BoxFut<'_, villa::Result<Opened>> {
+        Box::pin(async { Err(villa::Error::unavailable("no terminal in the live test")) })
     }
 }
 

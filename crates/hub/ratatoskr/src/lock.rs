@@ -281,27 +281,33 @@ pub fn signal_target(
     lock_start: Option<u64>,
     listener: &crate::peer::Listener,
     start_time_of: impl Fn(u32) -> Option<u64>,
-) -> Result<u32, String> {
+) -> villa::Result<u32> {
     let (Some(pid), Some(start)) = (lock_pid, lock_start) else {
-        return Err("the lock is held but does not name a process".into());
+        return Err(villa::Error::invalid(
+            "the lock is held but does not name a process",
+        ));
     };
     if listener.pid != pid {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "the process listening on its socket is pid {}, but the lock names pid {pid}: not signalling either",
             listener.pid
-        ));
+        )));
     }
     match start_time_of(pid) {
         Some(now) if now == start => {}
         Some(now) => {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "the lock names pid {pid} started at {start}, but that pid started at {now} (another process): not signalling it"
-            ));
+            )));
         }
-        None => return Err(format!("the lock names pid {pid}, which is gone")),
+        None => {
+            return Err(villa::Error::invalid(format!(
+                "the lock names pid {pid}, which is gone"
+            )));
+        }
     }
     if !listener.running() {
-        return Err(format!("pid {pid} ended meanwhile"));
+        return Err(villa::Error::invalid(format!("pid {pid} ended meanwhile")));
     }
     Ok(pid)
 }
@@ -565,7 +571,7 @@ mod tests {
         let one = start_of(1).unwrap_or(1);
         let e = signal_target(Some(1), Some(one), &listener, start_of).unwrap_err();
         assert!(
-            e.contains(&format!("is pid {me}")) && e.contains("names pid 1"),
+            e.message().contains(&format!("is pid {me}")) && e.message().contains("names pid 1"),
             "{e}"
         );
         assert!(alive(1));
@@ -577,7 +583,7 @@ mod tests {
         );
         // the listener's pid with another start time (a reused pid), or gone, or a lock that names nobody: refused
         let e = signal_target(Some(me), Some(mine + 1), &listener, start_of).unwrap_err();
-        assert!(e.contains("(another process)"), "{e}");
+        assert!(e.message().contains("(another process)"), "{e}");
         assert!(signal_target(Some(me), Some(mine), &listener, |_| None).is_err());
         assert!(signal_target(None, Some(mine), &listener, start_of).is_err());
         assert!(signal_target(Some(me), None, &listener, start_of).is_err());

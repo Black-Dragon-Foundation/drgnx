@@ -122,7 +122,7 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         }
         "drgnx-ai-roles" => values.ai_roles = de::<Vec<RoleChain>>(v)?,
         "drgnx-agents-matrix" => {
-            super::check_matrix(v).map_err(|m| refused("", m))?;
+            super::check_matrix(v).map_err(|m| refused("", m.message()))?;
             values.agents_matrix = v.clone();
         }
         "drgnx-agents-away-after" => values.agents_away_after = de(v)?,
@@ -148,7 +148,8 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-agents-manager-context" => values.agents_manager_context = de(v)?,
         "drgnx-agents-model-prices" => {
             let Alist(pairs) = de::<Alist<super::ModelPrice>>(v)?;
-            values.agents_model_prices = super::prices(pairs).map_err(|m| refused("", m))?;
+            values.agents_model_prices =
+                super::prices(pairs).map_err(|m| refused("", m.message()))?;
         }
         "drgnx-runners-send" => {
             let s: String = de(v)?;
@@ -180,7 +181,8 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-search-builtin" => values.search_builtin = de(v)?,
         "drgnx-search-rules" => {
             let Alist(pairs) = de::<Alist<Vec<String>>>(v)?;
-            values.search_rules = super::search_rules(pairs).map_err(|why| refused("", why))?;
+            values.search_rules =
+                super::search_rules(pairs).map_err(|why| refused("", why.message()))?;
         }
         "drgnx-search-off" => values.search_off = de(v)?,
         "drgnx-search-base" => values.search_base = de(v)?,
@@ -201,30 +203,30 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-agents-hook-rules-off" => values.agents_hook_rules_off = de(v)?,
         "drgnx-agents-browser-program" => {
             let p = de(v)?;
-            super::check_browser_program(&p).map_err(|m| refused("", m))?;
+            super::check_browser_program(&p).map_err(|m| refused("", m.message()))?;
             values.agents_browser_program = p;
         }
         "drgnx-agents-browser-local-ports" => {
             let p: Vec<u16> = de(v)?;
-            super::check_browser_ports(&p).map_err(|m| refused("", m))?;
+            super::check_browser_ports(&p).map_err(|m| refused("", m.message()))?;
             values.agents_browser_local_ports = p;
         }
         "drgnx-agents-browser-deny-hosts" => values.agents_browser_deny_hosts = de(v)?,
         "drgnx-agents-browser-max-message" => {
             let n = de(v)?;
-            super::check_max_message(n).map_err(|m| refused("", m))?;
+            super::check_max_message(n).map_err(|m| refused("", m.message()))?;
             values.agents_browser_max_message = n;
         }
         "drgnx-agents-browser-idle" => values.agents_browser_idle = de(v)?,
         "drgnx-agents-browser-once-window" => values.agents_browser_once_window = de(v)?,
         "drgnx-agents-session-memory" => {
             let m: String = de(v)?;
-            super::check_memory(&m).map_err(|m| refused("", m))?;
+            super::check_memory(&m).map_err(|m| refused("", m.message()))?;
             values.agents_session_memory = m;
         }
         "drgnx-agents-browser-memory-high" => {
             let n = de(v)?;
-            super::check_memory_high(n).map_err(|m| refused("", m))?;
+            super::check_memory_high(n).map_err(|m| refused("", m.message()))?;
             values.agents_browser_memory_high = n;
         }
         other => return Err(refused("", format!("{other} is not a runtime setting"))),

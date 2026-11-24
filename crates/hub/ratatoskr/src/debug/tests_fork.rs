@@ -44,14 +44,15 @@ impl Mocks {
 }
 
 impl Launcher for Mocks {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
             let steps = self
                 .scripts
                 .lock()
                 .unwrap()
                 .pop_front()
-                .ok_or("no script left")?;
+                .ok_or("no script left")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let script: Script = serde_json::from_value(Value::Array(steps)).unwrap();
             let (a, b) = tokio::io::duplex(1 << 20);
             let (cr, cw) = tokio::io::split(a);
@@ -544,10 +545,12 @@ async fn without_probes_the_landing_is_checked_against_the_recorded_stop() {
         .await
         .unwrap_err();
     assert!(
-        e.contains("not the run's pass") && e.contains("i was 2 in the run there, 5 in the fork"),
+        e.message().contains("not the run's pass")
+            && e.message()
+                .contains("i was 2 in the run there, 5 in the fork"),
         "{e}"
     );
-    assert!(!e.contains(fork::MAY_BE_UNREPLAYED), "{e}");
+    assert!(!e.message().contains(fork::MAY_BE_UNREPLAYED), "{e}");
     // the run's pass, the clock's value apart: it goes on
     let out = drive(script("2", "9.5", true), Some(iv), false)
         .await
@@ -558,9 +561,10 @@ async fn without_probes_the_landing_is_checked_against_the_recorded_stop() {
         .await
         .unwrap_err();
     assert!(
-        e.contains("t was 1.0 in the run there, 9.5 in the fork")
-            && e.contains(fork::MAY_BE_UNREPLAYED)
-            && e.contains("fork at this pass anyway"),
+        e.message()
+            .contains("t was 1.0 in the run there, 9.5 in the fork")
+            && e.message().contains(fork::MAY_BE_UNREPLAYED)
+            && e.message().contains("fork at this pass anyway"),
         "{e}"
     );
     // and the user forks at this pass anyway
@@ -573,7 +577,8 @@ async fn without_probes_the_landing_is_checked_against_the_recorded_stop() {
     d.target.anyway = true;
     let e = fork::drive(d).await.unwrap_err();
     assert!(
-        e.contains("the run's stack there was g:20, the fork's f:20"),
+        e.message()
+            .contains("the run's stack there was g:20, the fork's f:20"),
         "{e}"
     );
 }
@@ -619,7 +624,9 @@ async fn a_landing_that_is_not_the_runs_pass_fails_loudly() {
     let m = Mocks::with(vec![s]);
     let e = fork::drive(counted_drive(m, 5)).await.unwrap_err();
     assert!(
-        e.contains("not the run's pass") && e.contains("the run had 5") && e.contains("the fork 2"),
+        e.message().contains("not the run's pass")
+            && e.message().contains("the run had 5")
+            && e.message().contains("the fork 2"),
         "{e}"
     );
 }
@@ -738,7 +745,7 @@ async fn ending_before_hit_n_says_how_far_it_got() {
     })
     .await
     .unwrap_err();
-    assert!(e.contains("2 of 3"), "{e}");
+    assert!(e.message().contains("2 of 3"), "{e}");
     m.logs().await;
 }
 

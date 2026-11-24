@@ -129,10 +129,10 @@ impl Tap {
 }
 
 impl Launcher for Tap {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move { Ok(self.wrap(self.inner.connect().await?)) })
     }
-    fn child(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn child(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move { Ok(self.wrap(self.inner.child().await?)) })
     }
 }
@@ -148,15 +148,21 @@ impl Terminals for Procs {
         cwd: String,
         args: Vec<String>,
         env: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<Opened, String>> {
+    ) -> BoxFut<'_, villa::Result<Opened>> {
         Box::pin(async move {
-            let (program, rest) = args.split_first().ok_or("no command")?;
+            let (program, rest) = args
+                .split_first()
+                .ok_or("no command")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let mut cmd = std::process::Command::new(program);
             cmd.args(rest).envs(env);
             if !cwd.is_empty() {
                 cmd.current_dir(cwd);
             }
-            let c = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+            let c = cmd
+                .spawn()
+                .map_err(|e| format!("{program}: {e}"))
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let pid = i64::from(c.id());
             self.0.lock().unwrap().push(c);
             Ok(Opened {

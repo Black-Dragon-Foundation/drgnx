@@ -117,7 +117,7 @@ fn the_tables_install_entries_read_as_plans() {
         "plan9-mips",
     )
     .unwrap_err();
-    assert!(e.contains("plan9-mips"), "{e}");
+    assert!(e.message().contains("plan9-mips"), "{e}");
     let dlv = install::plan(
         t.by_id("delve").unwrap().install.as_ref().unwrap(),
         "linux-x64",
@@ -168,7 +168,7 @@ async fn a_download_with_another_digest_installs_nothing() {
         .await
         .unwrap_err();
     assert!(
-        e.contains(&sha(&bytes)) && e.contains(&"0".repeat(64)),
+        e.message().contains(&sha(&bytes)) && e.message().contains(&"0".repeat(64)),
         "{e}"
     );
     assert_eq!(left(tools.path()), 0);
@@ -187,7 +187,7 @@ async fn an_archive_that_climbs_or_links_installs_nothing() {
         let e = install::install(&plan, tools.path(), &Source::Dir(src.path().into()), &[])
             .await
             .unwrap_err();
-        assert!(e.contains("unsafe"), "{name}: {e}");
+        assert!(e.message().contains("unsafe"), "{name}: {e}");
         assert_eq!(left(tools.path()), 0, "{name}");
     }
     assert!(!tools.path().parent().unwrap().join("evil").exists());
@@ -247,7 +247,7 @@ async fn a_link_inside_the_archive_is_made_and_one_that_leaves_it_is_not() {
         let e = install::install(&plan, t2.path(), &Source::Dir(src.path().into()), &[])
             .await
             .unwrap_err();
-        assert!(e.contains("unsafe"), "{name}: {e}");
+        assert!(e.message().contains("unsafe"), "{name}: {e}");
         assert_eq!(left(t2.path()), 0, "{name}");
     }
 }
@@ -324,7 +324,7 @@ async fn a_system_package_is_named_not_installed() {
     )
     .await
     .unwrap_err();
-    assert!(e.contains("dnf install delve"), "{e}");
+    assert!(e.message().contains("dnf install delve"), "{e}");
 }
 
 /// Several downloads for one adapter (a JDK, a language server, a plugin jar): every part is downloaded, checked and
@@ -350,7 +350,10 @@ async fn an_install_of_parts_is_all_or_none_and_a_file_part_is_one_checked_file(
     let e = install::install(&bad, &tools, &source, &[])
         .await
         .unwrap_err();
-    assert!(e.contains("digest") || e.contains("sha256"), "{e}");
+    assert!(
+        e.message().contains("digest") || e.message().contains("sha256"),
+        "{e}"
+    );
     assert!(
         !tools.join("jdk").exists() && !tools.join("jv").exists(),
         "{e}"

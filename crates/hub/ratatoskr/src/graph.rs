@@ -64,23 +64,23 @@ pub struct StoreDirs {
     pub hub: PathBuf,
 }
 
-fn error(code: ErrorCode, message: impl Into<String>, path: Option<&str>) -> Error {
+fn error(code: ErrorCode, message: impl ToString, path: Option<&str>) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: path.map(str::to_owned),
     }
 }
 
-fn internal(message: impl Into<String>) -> Error {
+fn internal(message: impl ToString) -> Error {
     error(ErrorCode::Internal, message, None)
 }
 
-fn invalid(path: &str, message: impl Into<String>) -> Error {
+fn invalid(path: &str, message: impl ToString) -> Error {
     error(ErrorCode::InvalidParams, message, Some(path))
 }
 
-fn not_allowed(path: &str, message: impl Into<String>) -> Error {
+fn not_allowed(path: &str, message: impl ToString) -> Error {
     error(ErrorCode::NotAllowed, message, Some(path))
 }
 

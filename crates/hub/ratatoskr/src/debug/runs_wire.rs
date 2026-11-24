@@ -18,10 +18,10 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-fn err(message: impl Into<String>) -> Error {
+fn err(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::InvalidParams,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }

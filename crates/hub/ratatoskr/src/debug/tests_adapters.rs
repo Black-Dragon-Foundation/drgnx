@@ -47,12 +47,14 @@ fn a_type_names_its_adapter_and_an_unknown_one_says_what_is_known() {
     assert_eq!(t.for_type("go").unwrap().id, "delve");
     let e = t.for_type("cobol").unwrap_err();
     assert!(
-        e.contains("cobol") && e.contains("debugpy") && e.contains("debug.adapters"),
+        e.message().contains("cobol")
+            && e.message().contains("debugpy")
+            && e.message().contains("debug.adapters"),
         "{e}"
     );
     let e = t.for_type("cppdbg").unwrap_err();
     assert!(
-        e.contains("not built in") && e.contains("debug.adapters"),
+        e.message().contains("not built in") && e.message().contains("debug.adapters"),
         "{e}"
     );
 }
@@ -73,6 +75,7 @@ fn the_table_is_data_and_nothing_in_it_is_evaluated() {
     assert!(
         Table::read(b"((:id \"x\" :name \"X\" :types (\"x\") :typo 1))")
             .unwrap_err()
+            .message()
             .contains("typo")
     );
 }
@@ -163,7 +166,7 @@ fn the_command_line_fills_in_program_python_tools_and_port() {
         None,
     )
     .unwrap_err();
-    assert!(e.contains("port"), "{e}");
+    assert!(e.message().contains("port"), "{e}");
 }
 
 /// The picker gives a port the kernel handed out (never freed and bound again here: another test could take it in
@@ -200,7 +203,7 @@ async fn a_tcp_adapters_port_taken_by_a_stranger_is_never_connected_to() {
         Err(e) => e,
     };
     assert!(
-        e.contains(&port.to_string()) && e.contains("not the session's"),
+        e.message().contains(&port.to_string()) && e.message().contains("not the session's"),
         "{e}"
     );
     assert!(

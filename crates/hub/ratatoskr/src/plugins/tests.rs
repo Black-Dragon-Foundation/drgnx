@@ -598,7 +598,7 @@ async fn install_copies_refuses_an_existing_name_and_replaces_with_a_flag() {
 
     crate::fsio::write(src.join("plugin.wasm"), b"two").unwrap();
     let e = install(&r.root(), &src, false).unwrap_err();
-    assert!(e.contains("--replace"), "{e}");
+    assert!(e.message().contains("--replace"), "{e}");
     assert_eq!(
         std::fs::read(dest.join("plugin.wasm")).unwrap(),
         b"one",
@@ -628,6 +628,7 @@ fn install_refuses_what_does_not_read() {
     assert!(
         install(&root, &src, false)
             .unwrap_err()
+            .message()
             .contains("plugin.json")
     );
     crate::fsio::write(src.join("plugin.json"), manifest("alpha", "")).unwrap();
@@ -635,6 +636,7 @@ fn install_refuses_what_does_not_read() {
     assert!(
         install(&root, &src, false)
             .unwrap_err()
+            .message()
             .contains("plugin.wasm")
     );
     crate::fsio::write(dir.path().join("elsewhere"), b"x").unwrap();

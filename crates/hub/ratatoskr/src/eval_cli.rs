@@ -42,13 +42,13 @@ pub enum SourceArg {
 
 impl SourceArg {
     /// `builtin`, `tei:URL`, `ollama:URL:MODEL` or `llama:URL`; a URL is `http://HOST[:PORT]` (TLS is not spoken).
-    pub fn parse(s: &str) -> Result<SourceArg, String> {
-        let url = |kind: &str, u: &str| -> Result<String, String> {
+    pub fn parse(s: &str) -> villa::Result<SourceArg> {
+        let url = |kind: &str, u: &str| -> villa::Result<String> {
             match u.strip_prefix("http://") {
                 Some(rest) if !rest.is_empty() => Ok(u.trim_end_matches('/').to_owned()),
-                _ => Err(format!(
+                _ => Err(villa::Error::invalid(format!(
                     "{kind}: needs an http://HOST[:PORT] URL, not {u:?}"
-                )),
+                ))),
             }
         };
         if s == "builtin" {
@@ -56,16 +56,20 @@ impl SourceArg {
         }
         if let Some(u) = s.strip_prefix("tei:") {
             return Ok(SourceArg::Tei {
-                url: url("tei", u)?,
+                url: url("tei", u).map_err(|e| villa::Error::invalid(e.to_string()))?,
             });
         }
         if let Some(u) = s.strip_prefix("llama:") {
             return Ok(SourceArg::Llama {
-                url: url("llama", u)?,
+                url: url("llama", u).map_err(|e| villa::Error::invalid(e.to_string()))?,
             });
         }
         if let Some(rest) = s.strip_prefix("ollama:") {
-            let no_model = || format!("ollama: needs ollama:http://HOST[:PORT]:MODEL, not {s:?}");
+            let no_model = || {
+                villa::Error::invalid(format!(
+                    "ollama: needs ollama:http://HOST[:PORT]:MODEL, not {s:?}"
+                ))
+            };
             let after = rest.strip_prefix("http://").ok_or_else(no_model)?;
             // the model may hold colons of its own (`qwen3-embedding:0.6b`): a port is the digits right after the host
             let mut parts = after.splitn(3, ':');
@@ -87,9 +91,9 @@ impl SourceArg {
                 model,
             });
         }
-        Err(format!(
+        Err(villa::Error::invalid(format!(
             "--source is builtin, tei:URL, ollama:URL:MODEL or llama:URL, not {s:?}"
-        ))
+        )))
     }
 }
 
@@ -136,18 +140,24 @@ pub enum EvalCommand {
 }
 
 /// The arguments after `search eval`.
-pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
+pub fn parse(args: Vec<OsString>) -> villa::Result<EvalCommand> {
     use lexopt::Arg::{Long, Value as Word};
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let name = match p.next().map_err(e)? {
         Some(Word(v)) => v.string().map_err(e)?,
-        Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err("search eval needs a subcommand: gen, run or compare".into()),
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
+        None => {
+            return Err(villa::Error::invalid(
+                "search eval needs a subcommand: gen, run or compare",
+            ));
+        }
     };
     if !["gen", "run", "compare"].contains(&name.as_str()) {
-        return Err(format!("unknown search eval subcommand {name:?}"));
+        return Err(villa::Error::invalid(format!(
+            "unknown search eval subcommand {name:?}"
+        )));
     }
     let (mut model, mut set, mut rows, mut device) =
         (None, "dev".to_string(), None, "cpu".to_string());
@@ -164,7 +174,11 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
                     "chunk" => eval::Gate::Chunk,
                     "file" => eval::Gate::File,
                     "floor" => eval::Gate::Floor,
-                    other => return Err(format!("--by is chunk, file or floor, not {other:?}")),
+                    other => {
+                        return Err(villa::Error::invalid(format!(
+                            "--by is chunk, file or floor, not {other:?}"
+                        )));
+                    }
                 }
             }
             Long("model") if name == "run" => {
@@ -173,14 +187,18 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
             Long("set") if name == "run" => {
                 set = p.value().map_err(e)?.string().map_err(e)?;
                 if !["dev", "test"].contains(&set.as_str()) {
-                    return Err(format!("--set is dev or test, not {set:?}"));
+                    return Err(villa::Error::invalid(format!(
+                        "--set is dev or test, not {set:?}"
+                    )));
                 }
             }
             Long("rows") if name == "run" => rows = Some(PathBuf::from(p.value().map_err(e)?)),
             Long("device") if name == "run" => {
                 device = p.value().map_err(e)?.string().map_err(e)?;
                 if device != "cpu" && !device.starts_with("gpu:") {
-                    return Err(format!("--device is cpu or gpu:ADAPTER, not {device:?}"));
+                    return Err(villa::Error::invalid(format!(
+                        "--device is cpu or gpu:ADAPTER, not {device:?}"
+                    )));
                 }
             }
             Long("models") if name == "run" => models = Some(PathBuf::from(p.value().map_err(e)?)),
@@ -199,18 +217,26 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
                 let v = p.value().map_err(e)?.string().map_err(e)?;
                 match v.parse::<usize>() {
                     Ok(n) if (256..=32000).contains(&n) => map = Some(n),
-                    _ => return Err(format!("--map is a token budget, 256 to 32000, not {v:?}")),
+                    _ => {
+                        return Err(villa::Error::invalid(format!(
+                            "--map is a token budget, 256 to 32000, not {v:?}"
+                        )));
+                    }
                 }
             }
             Long("dump-chunks") if name == "run" => {
                 let v = p.value().map_err(e)?.string().map_err(e)?;
                 match v.parse::<usize>() {
                     Ok(n) if (1..=10000).contains(&n) => dump_chunks = Some(n),
-                    _ => return Err(format!("--dump-chunks is a count, 1 to 10000, not {v:?}")),
+                    _ => {
+                        return Err(villa::Error::invalid(format!(
+                            "--dump-chunks is a count, 1 to 10000, not {v:?}"
+                        )));
+                    }
                 }
             }
             Word(v) => words.push(PathBuf::from(v)),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let mut words = words.into_iter();
@@ -221,11 +247,11 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
     };
     Ok(match name.as_str() {
         "gen" => EvalCommand::Gen {
-            root: next("a project root")?,
+            root: next("a project root").map_err(|e| villa::Error::invalid(e.to_string()))?,
             out,
         },
         "run" => EvalCommand::Run {
-            root: next("a project root")?,
+            root: next("a project root").map_err(|e| villa::Error::invalid(e.to_string()))?,
             model,
             set,
             rows,
@@ -239,8 +265,8 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
             dump_chunks,
         },
         _ => EvalCommand::Compare {
-            a: next("two reports")?,
-            b: next("two reports")?,
+            a: next("two reports").map_err(|e| villa::Error::invalid(e.to_string()))?,
+            b: next("two reports").map_err(|e| villa::Error::invalid(e.to_string()))?,
             by,
         },
     })
@@ -374,7 +400,7 @@ fn map_yields(
     budget: usize,
     ask: &dyn Fn(&Query) -> Answer,
     text: &dyn Fn(&str) -> Option<String>,
-) -> Result<MapYields, String> {
+) -> villa::Result<MapYields> {
     use hrafn::map::{MapAsk, repo_map};
     let map_of = |focus: Vec<String>, budget: usize| {
         rt.block_on(repo_map(
@@ -387,7 +413,7 @@ fn map_yields(
                 all: true,
             },
         ))
-        .map_err(|e| e.to_string())
+        .map_err(|e| villa::Error::invalid(e.to_string()))
     };
     let global = map_of(Vec::new(), budget)?;
     let global_shown = shown(&global);
@@ -484,11 +510,11 @@ fn project_name(root: &Path) -> String {
         .unwrap_or_else(|| "project".into())
 }
 
-fn runtime() -> Result<tokio::runtime::Runtime, String> {
+fn runtime() -> villa::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|e| format!("no runtime: {e}"))
+        .map_err(|e| villa::Error::invalid(format!("no runtime: {e}")))
 }
 
 /// A tier-1 index of ROOT's files in STATE, with the caches that tier 2 will fill. The listed files come back.
@@ -496,9 +522,9 @@ async fn index(
     store: &CodeStore,
     root: &Path,
     models: &[&VectorCache],
-) -> Result<Vec<hrafn::Listed>, String> {
+) -> villa::Result<Vec<hrafn::Listed>> {
     let listed = hrafn::list(root, &GitCli, &Config::default(), &|_| true)
-        .map_err(|e| format!("listing {}: {e}", root.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("listing {}: {e}", root.display())))?;
     let base = root.to_path_buf();
     hrafn::refresh(
         store,
@@ -507,7 +533,7 @@ async fn index(
         models,
     )
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| villa::Error::io(e.to_string()))?;
     Ok(listed)
 }
 
@@ -534,23 +560,24 @@ fn scratch(what: &str) -> PathBuf {
     std::env::temp_dir().join(format!("hrafn-eval-{what}-{}", std::process::id()))
 }
 
-fn gen_sets(root: &Path, out: Option<PathBuf>) -> Result<String, String> {
+fn gen_sets(root: &Path, out: Option<PathBuf>) -> villa::Result<String> {
     let rt = runtime()?;
     let state = scratch("gen");
-    std::fs::create_dir_all(&state).map_err(|e| e.to_string())?;
-    let store = CodeStore::open(&state.join("code.db")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&state).map_err(|e| villa::Error::io(e.to_string()))?;
+    let store =
+        CodeStore::open(&state.join("code.db")).map_err(|e| villa::Error::io(e.to_string()))?;
     let rows = rt.block_on(async {
         index(&store, root, &[]).await?;
         eval::generate(root, &GitCli, &store)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| villa::Error::invalid(e.to_string()))
     });
     store.shutdown();
     crate::soft::done(std::fs::remove_dir_all(&state), "std::fs::remove_dir_all");
     let rows = rows?;
     let dir =
         out.unwrap_or_else(|| PathBuf::from("crates/hub/hrafn/eval").join(project_name(root)));
-    eval::write_sets(&dir, &rows).map_err(|e| e.to_string())?;
+    eval::write_sets(&dir, &rows).map_err(|e| villa::Error::io(e.to_string()))?;
     let mut per: std::collections::BTreeMap<&str, usize> = Default::default();
     for r in &rows {
         *per.entry(r.stratum.as_str()).or_default() += 1;
@@ -568,11 +595,11 @@ fn gen_sets(root: &Path, out: Option<PathBuf>) -> Result<String, String> {
 /// What `eval run` embeds with: a model in this process or a server over HTTP. The id names the vectors in the store.
 trait DocSource {
     fn id(&self) -> String;
-    fn dims(&mut self) -> Result<usize, String>;
+    fn dims(&mut self) -> villa::Result<usize>;
     /// Documents go plain.
-    fn embed_docs(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String>;
+    fn embed_docs(&mut self, texts: &[String]) -> villa::Result<Vec<Vec<f32>>>;
     /// The vector of the question Q of its scope.
-    fn embed_query(&mut self, q: &Query) -> Result<Vec<f32>, String>;
+    fn embed_query(&mut self, q: &Query) -> villa::Result<Vec<f32>>;
 }
 
 /// The built-in model, in this process.
@@ -586,20 +613,20 @@ impl DocSource for LocalSource {
         self.spec.id.to_string()
     }
 
-    fn dims(&mut self) -> Result<usize, String> {
+    fn dims(&mut self) -> villa::Result<usize> {
         Ok(self.spec.dims)
     }
 
-    fn embed_docs(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    fn embed_docs(&mut self, texts: &[String]) -> villa::Result<Vec<Vec<f32>>> {
         self.embedder
             .embed_docs(texts)
-            .map_err(|e| format!("embedding: {e:?}"))
+            .map_err(|e| villa::Error::invalid(format!("embedding: {e:?}")))
     }
 
-    fn embed_query(&mut self, q: &Query) -> Result<Vec<f32>, String> {
+    fn embed_query(&mut self, q: &Query) -> villa::Result<Vec<f32>> {
         self.embedder
             .embed_query(&q.text, None)
-            .map_err(|e| format!("embedding a question: {e:?}"))
+            .map_err(|e| villa::Error::invalid(format!("embedding a question: {e:?}")))
     }
 }
 
@@ -616,7 +643,7 @@ impl DocSource for ServerSource<'_> {
         self.id.clone()
     }
 
-    fn dims(&mut self) -> Result<usize, String> {
+    fn dims(&mut self) -> villa::Result<usize> {
         if let Some(d) = self.dims {
             return Ok(d);
         }
@@ -633,18 +660,21 @@ impl DocSource for ServerSource<'_> {
         Ok(d)
     }
 
-    fn embed_docs(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-        self.rt.block_on(self.direct.embed(texts)).map_err(|e| e.0)
+    fn embed_docs(&mut self, texts: &[String]) -> villa::Result<Vec<Vec<f32>>> {
+        self.rt
+            .block_on(self.direct.embed(texts))
+            .map_err(|e| villa::Error::unavailable(e.0))
     }
 
-    fn embed_query(&mut self, q: &Query) -> Result<Vec<f32>, String> {
+    fn embed_query(&mut self, q: &Query) -> villa::Result<Vec<f32>> {
         let text = format!("Instruct: {}\nQuery:{}", q.scope.instruction(), q.text);
         let mut v = self
             .rt
             .block_on(self.direct.embed(&[text]))
-            .map_err(|e| e.0)?;
+            .map_err(|e| e.0)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         v.pop()
-            .ok_or_else(|| "the server answered no vector".into())
+            .ok_or_else(|| villa::Error::invalid("the server answered no vector"))
     }
 }
 
@@ -655,9 +685,11 @@ fn open_source<'a>(
     models: &Path,
     device: &Device,
     rt: &'a tokio::runtime::Runtime,
-) -> Result<Box<dyn DocSource + 'a>, String> {
-    let server = |api: Api, url: &str| -> Result<Box<dyn DocSource + 'a>, String> {
-        let base: Uri = url.parse().map_err(|e| format!("{url}: {e}"))?;
+) -> villa::Result<Box<dyn DocSource + 'a>> {
+    let server = |api: Api, url: &str| -> villa::Result<Box<dyn DocSource + 'a>> {
+        let base: Uri = url
+            .parse()
+            .map_err(|e| villa::Error::invalid(format!("{url}: {e}")))?;
         Ok(Box::new(ServerSource {
             id: arg.to_string(),
             direct: Direct::new(api, base),
@@ -668,7 +700,7 @@ fn open_source<'a>(
     match arg {
         SourceArg::Builtin => {
             let embedder = LocalEmbedder::load(spec, &models.join(spec.id), device)
-                .map_err(|e| format!("loading {}: {e:?}", spec.id))?;
+                .map_err(|e| villa::Error::invalid(format!("loading {}: {e:?}", spec.id)))?;
             Ok(Box::new(LocalSource { spec, embedder }))
         }
         SourceArg::Tei { url } => server(Api::Tei, url),
@@ -693,13 +725,13 @@ fn eval_weights() -> (f32, f32) {
     )
 }
 
-fn spec_of(id: Option<&str>) -> Result<&'static ModelSpec, String> {
+fn spec_of(id: Option<&str>) -> villa::Result<&'static ModelSpec> {
     match id {
         None => Ok(default_model()),
         Some(id) => MODELS
             .iter()
             .find(|m| m.id == id)
-            .ok_or_else(|| format!("no model {id:?}")),
+            .ok_or_else(|| villa::Error::invalid(format!("no model {id:?}"))),
     }
 }
 
@@ -708,7 +740,7 @@ fn spec_of(id: Option<&str>) -> Result<&'static ModelSpec, String> {
 async fn sample_names(
     store: &CodeStore,
     limit: usize,
-) -> Result<Vec<(String, String, String)>, String> {
+) -> villa::Result<Vec<(String, String, String)>> {
     let all: Vec<(String, String, String, String)> = store
         .handle()
         .read(|c| {
@@ -725,7 +757,7 @@ async fn sample_names(
             Ok(rows)
         })
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     Ok(spread(unique_code_names(all), limit))
 }
 
@@ -754,19 +786,20 @@ fn dump_chunks(
     n: usize,
     state: Option<PathBuf>,
     out: Option<PathBuf>,
-) -> Result<String, String> {
-    let out = out.ok_or("--dump-chunks needs --out FILE")?;
+) -> villa::Result<String> {
+    let out = out.ok_or_else(|| villa::Error::invalid("--dump-chunks needs --out FILE"))?;
     let rt = runtime()?;
     let state_dir = state.unwrap_or_else(|| scratch("dump"));
-    std::fs::create_dir_all(&state_dir).map_err(|e| e.to_string())?;
-    let store = CodeStore::open(&state_dir.join("code.db")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&state_dir).map_err(|e| villa::Error::io(e.to_string()))?;
+    let store =
+        CodeStore::open(&state_dir.join("code.db")).map_err(|e| villa::Error::io(e.to_string()))?;
     let (fp, record) = eval_fingerprint("dump-chunks", 0);
     let cache = VectorCache::open_writer(&state_dir.join("vectors"), &fp, &record)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     rt.block_on(index(&store, root, &[&cache]))?;
     let texts: Vec<String> = rt
         .block_on(hrafn::missing_with(&store, &cache, u32::MAX, false))
-        .map_err(|e| e.to_string())?
+        .map_err(|e| villa::Error::invalid(e.to_string()))?
         .into_iter()
         .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
         .map(|(_, _, t)| t)
@@ -774,7 +807,8 @@ fn dump_chunks(
     let all = texts.len();
     let texts = spread(texts, n);
     let json = serde_json::json!({ "texts": texts }).to_string();
-    crate::fsio::write(&out, json).map_err(|e| format!("{}: {e}", out.display()))?;
+    crate::fsio::write(&out, json)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", out.display())))?;
     Ok(format!(
         "{} of {all} chunk texts written to {}",
         texts.len(),
@@ -801,17 +835,20 @@ fn run_set(
     map: Option<usize>,
     source: SourceArg,
     query_source: Option<SourceArg>,
-) -> Result<String, String> {
+) -> villa::Result<String> {
     let spec = spec_of(model.as_deref())?;
     let rows_path = rows.unwrap_or_else(|| {
         PathBuf::from("crates/hub/hrafn/eval")
             .join(project_name(root))
             .join(format!("{set}.jsonl"))
     });
-    let questions: Vec<EvalRow> =
-        eval::read_set(&rows_path).map_err(|e| format!("{}: {e}", rows_path.display()))?;
+    let questions: Vec<EvalRow> = eval::read_set(&rows_path)
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", rows_path.display())))?;
     if questions.is_empty() {
-        return Err(format!("{} holds no questions", rows_path.display()));
+        return Err(villa::Error::invalid(format!(
+            "{} holds no questions",
+            rows_path.display()
+        )));
     }
     let dev = match device.strip_prefix("gpu:") {
         Some(a) => Device::Gpu {
@@ -832,18 +869,19 @@ fn run_set(
     if let Some(q) = queries.as_mut()
         && q.dims()? != dims
     {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "--query-source gives {} dimensions, --source {dims}: they are not one model",
             q.dims()?
-        ));
+        )));
     }
     let state_dir = state.clone().unwrap_or_else(|| scratch("run"));
-    std::fs::create_dir_all(&state_dir).map_err(|e| e.to_string())?;
-    let store = CodeStore::open(&state_dir.join("code.db")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&state_dir).map_err(|e| villa::Error::io(e.to_string()))?;
+    let store =
+        CodeStore::open(&state_dir.join("code.db")).map_err(|e| villa::Error::io(e.to_string()))?;
     // the vectors in STATE's cache, the source's own (a second writer, a hub on the same state, is refused)
     let (fp, record) = eval_fingerprint(&model_id, dims);
     let cache = VectorCache::open_writer(&state_dir.join("vectors"), &fp, &record)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     crate::soft::err_line(&format!(
         "indexing {} into {}",
         root.display(),
@@ -864,7 +902,7 @@ fn run_set(
     loop {
         let todo = rt
             .block_on(hrafn::missing_with(&store, &cache, 256, dir_weight > 0.0))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         if todo.is_empty() {
             break;
         }
@@ -882,7 +920,7 @@ fn run_set(
             let put: Vec<_> = rows.into_iter().map(|((_, k, _), v)| (*k, v)).collect();
             if !put.is_empty() {
                 rt.block_on(cache.put(kind, dims, &put))
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?;
             }
         }
         let before = embedded;
@@ -966,7 +1004,7 @@ fn run_set(
                 .collect::<Result<HashMap<_, _>, _>>()?;
             Ok(rows)
         }))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     report.coverage_errors = hrafn::coverage(&listed, &per_file)
         .iter()
         .map(|e| format!("{e:?}"))
@@ -1024,8 +1062,10 @@ fn run_set(
         map_yield,
     };
     if let Some(out) = out {
-        let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
-        crate::fsio::write(&out, json).map_err(|e| format!("{}: {e}", out.display()))?;
+        let json = serde_json::to_string_pretty(&file)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
+        crate::fsio::write(&out, json)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", out.display())))?;
     }
     Ok(text)
 }
@@ -1063,13 +1103,15 @@ fn summary(model: &str, set: &str, r: &Report, chunks: u64, secs: f64) -> String
     s
 }
 
-fn compare_files(a: &Path, b: &Path, by: eval::Gate) -> Result<(String, bool), String> {
-    let load = |p: &Path| -> Result<RunFile, String> {
-        let text = crate::fsio::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", p.display()))
+fn compare_files(a: &Path, b: &Path, by: eval::Gate) -> villa::Result<(String, bool)> {
+    let load = |p: &Path| -> villa::Result<RunFile> {
+        let text = crate::fsio::read_to_string(p)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", p.display())))?;
+        serde_json::from_str(&text).map_err(|e| villa::Error::io(format!("{}: {e}", p.display())))
     };
     let (fa, fb) = (load(a)?, load(b)?);
-    let v = eval::compare_on(&fa.report, &fb.report, by).map_err(|e| e.to_string())?;
+    let v = eval::compare_on(&fa.report, &fb.report, by)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let label = match by {
         eval::Gate::Chunk | eval::Gate::Floor => "MRR@10",
         eval::Gate::File => "file MRR@10",
@@ -1092,7 +1134,7 @@ fn compare_files(a: &Path, b: &Path, by: eval::Gate) -> Result<(String, bool), S
 }
 
 pub fn run(env: &runstav::paths::Env, cmd: EvalCommand) -> i32 {
-    let done = |r: Result<String, String>| match r {
+    let done = |r: villa::Result<String>| match r {
         Ok(text) => {
             print!("{text}");
             if !text.ends_with('\n') {
@@ -1101,7 +1143,7 @@ pub fn run(env: &runstav::paths::Env, cmd: EvalCommand) -> i32 {
             0
         }
         Err(e) => {
-            crate::soft::err_line(&format!("ratatoskr search eval: {e}"));
+            crate::soft::err_line(&format!("ratatoskr search eval: {}", e.message()));
             1
         }
     };
@@ -1160,7 +1202,7 @@ pub fn run(env: &runstav::paths::Env, cmd: EvalCommand) -> i32 {
 mod tests {
     use super::*;
 
-    fn p(args: &[&str]) -> Result<EvalCommand, String> {
+    fn p(args: &[&str]) -> villa::Result<EvalCommand> {
         parse(args.iter().map(OsString::from).collect())
     }
 

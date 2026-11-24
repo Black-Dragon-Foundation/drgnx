@@ -112,7 +112,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
 ];
 
 /// Open (or make) `runtime.db` in HUB_DIR on its own store thread.
-pub fn open(hub_dir: &Path) -> Result<(urdr::Store, urdr::Handle), String> {
+pub fn open(hub_dir: &Path) -> villa::Result<(urdr::Store, urdr::Handle)> {
     let path = hub_dir.join("runtime.db");
     let spec = || urdr::StoreSpec {
         path: path.clone(),
@@ -122,21 +122,25 @@ pub fn open(hub_dir: &Path) -> Result<(urdr::Store, urdr::Handle), String> {
         },
         migrations: MIGRATIONS,
     };
-    let fail = |e: urdr::Error| format!("cannot open {}: {e}", path.display());
+    let fail = |e: urdr::Error| villa::Error::io(format!("cannot open {}: {e}", path.display()));
     match urdr::Store::spawn(spec()) {
         Err(urdr::Error::NewerSchema { found, .. }) => {
             let at = crate::clock::wall()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs());
             let aside = hub_dir.join(format!("runtime.db.newer-{found}-{at}"));
-            crate::fsio::rename(&path, &aside)
-                .map_err(|e| format!("cannot move {} aside: {e}", path.display()))?;
+            crate::fsio::rename(&path, &aside).map_err(|e| {
+                villa::Error::io(format!("cannot move {} aside: {e}", path.display()))
+            })?;
             for ext in ["-wal", "-shm"] {
                 let from = hub_dir.join(format!("runtime.db{ext}"));
                 let to = hub_dir.join(format!("runtime.db.newer-{found}-{at}{ext}"));
                 match crate::fsio::rename(&from, &to) {
                     Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                        return Err(format!("cannot move {} aside: {e}", from.display()));
+                        return Err(villa::Error::io(format!(
+                            "cannot move {} aside: {e}",
+                            from.display()
+                        )));
                     }
                     _ => {}
                 }

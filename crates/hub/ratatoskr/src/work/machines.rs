@@ -332,7 +332,7 @@ pub async fn move_to(f: &Front, _: &Caller, p: MoveParams) -> Result<MoveResult,
         .get(id)
         .ok_or_else(|| invalid("target", format!("no job {id}")))?;
     let moved = exec.move_job(id, to).map_err(|e| {
-        let at = if e.starts_with("no job") {
+        let at = if e.message().starts_with("no job") {
             "target"
         } else {
             "machine"

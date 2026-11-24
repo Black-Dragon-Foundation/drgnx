@@ -28,21 +28,25 @@ pub struct MachinesCommand {
 }
 
 /// The arguments after `machines`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<MachinesCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<MachinesCommand> {
     use lexopt::Arg::{Long, Value as Word};
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     match p.next().map_err(e)? {
         Some(Word(v)) if v == "report" => {}
         Some(Word(v)) => {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "unknown machines subcommand {:?}",
                 v.string().map_err(e)?
+            )));
+        }
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
+        None => {
+            return Err(villa::Error::invalid(
+                "machines needs a subcommand (report)",
             ));
         }
-        Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err("machines needs a subcommand (report)".into()),
     }
     let (mut machine, mut ttl, mut slots_from) = (None, None, None);
     while let Some(arg) = p.next().map_err(e)? {
@@ -53,32 +57,38 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<MachinesCommand
                 t.parse::<f64>()
                     .ok()
                     .filter(|n| n.is_finite() && *n > 0.0)
-                    .ok_or_else(|| format!("--ttl wants a number of seconds, not {t:?}"))?;
+                    .ok_or_else(|| {
+                        villa::Error::invalid(format!("--ttl wants a number of seconds, not {t:?}"))
+                    })?;
                 ttl = Some(t);
             }
             Long("json") => slots_from = Some(p.value().map_err(e)?.string().map_err(e)?),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     Ok(MachinesCommand {
-        machine: machine.ok_or("machines report needs --machine")?,
-        ttl: ttl.ok_or("machines report needs --ttl")?,
+        machine: machine.ok_or_else(|| villa::Error::invalid("machines report needs --machine"))?,
+        ttl: ttl.ok_or_else(|| villa::Error::invalid("machines report needs --ttl"))?,
         slots_from,
     })
 }
 
 impl MachinesCommand {
     /// The `machines/report` params; SLOTS is the JSON text read from `--json`, if any.
-    pub fn params(&self, slots: Option<&str>) -> Result<Value, String> {
+    pub fn params(&self, slots: Option<&str>) -> villa::Result<Value> {
         let slots = match slots {
             None => json!([]),
             Some(text) => {
                 let v: Value = serde_json::from_str(text)
-                    .map_err(|e| format!("the slots are not JSON: {e}"))?;
+                    .map_err(|e| villa::Error::invalid(format!("the slots are not JSON: {e}")))?;
                 match v {
                     Value::Array(_) => v,
                     Value::Object(mut o) => o.remove("slots").unwrap_or_else(|| json!([])),
-                    _ => return Err("the slots are a list, or an object with `slots`".into()),
+                    _ => {
+                        return Err(villa::Error::invalid(
+                            "the slots are a list, or an object with `slots`",
+                        ));
+                    }
                 }
             }
         };
@@ -136,7 +146,7 @@ pub fn run(env: &Env, cmd: &MachinesCommand) -> i32 {
 mod tests {
     use super::*;
 
-    fn p(args: &[&str]) -> Result<MachinesCommand, String> {
+    fn p(args: &[&str]) -> villa::Result<MachinesCommand> {
         parse(args.iter().map(OsString::from))
     }
 

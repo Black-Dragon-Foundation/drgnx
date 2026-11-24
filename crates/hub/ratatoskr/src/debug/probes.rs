@@ -333,7 +333,7 @@ impl Probes {
     }
 
     /// Apply OP: the path whose probes changed and the probe it added, or why not.
-    pub fn apply(&mut self, op: Op) -> Result<(String, Option<String>), String> {
+    pub fn apply(&mut self, op: Op) -> villa::Result<(String, Option<String>)> {
         let out = match op {
             Op::Add { path, line, expr } => self.add(path, line, expr),
             Op::Result {
@@ -343,12 +343,15 @@ impl Probes {
                 text,
                 lang,
             } => {
-                let at = next_line(&text, line, lang)
-                    .ok_or_else(|| format!("no line runs after line {line}"))?;
+                let at = next_line(&text, line, lang).ok_or_else(|| {
+                    villa::Error::invalid(format!("no line runs after line {line}"))
+                })?;
                 self.add(path, at, expr)
             }
             Op::Remove { id } => {
-                let i = self.index(&id)?;
+                let i = self
+                    .index(&id)
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?;
                 let p = self.data.probes.remove(i);
                 (p.path, None)
             }
@@ -358,7 +361,9 @@ impl Probes {
                 enabled,
                 line,
             } => {
-                let i = self.index(&id)?;
+                let i = self
+                    .index(&id)
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?;
                 let p = &mut self.data.probes[i];
                 if let Some(e) = expr {
                     p.expr = e;
@@ -391,19 +396,21 @@ impl Probes {
     }
 
     /// Probe ID is agent session AGENT's (D4).
-    pub fn mark(&mut self, id: &str, agent: &str) -> Result<(), String> {
-        let i = self.index(id)?;
+    pub fn mark(&mut self, id: &str, agent: &str) -> villa::Result<()> {
+        let i = self
+            .index(id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         self.data.probes[i].agent = Some(agent.to_owned());
         self.save();
         Ok(())
     }
 
-    fn index(&self, id: &str) -> Result<usize, String> {
+    fn index(&self, id: &str) -> villa::Result<usize> {
         self.data
             .probes
             .iter()
             .position(|p| p.id == id)
-            .ok_or_else(|| format!("no probe {id}"))
+            .ok_or_else(|| villa::Error::not_found(format!("no probe {id}")))
     }
 
     pub fn list(&self) -> &[Probe] {

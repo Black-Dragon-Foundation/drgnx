@@ -59,19 +59,19 @@ use tokio_util::sync::CancellationToken;
 /// The kv keys.
 const KV_PORT: &str = "gateway_port";
 
-fn error(code: ErrorCode, message: impl Into<String>, path: Option<&str>) -> Error {
+fn error(code: ErrorCode, message: impl ToString, path: Option<&str>) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: path.map(str::to_owned),
     }
 }
 
-fn internal(message: impl Into<String>) -> Error {
+fn internal(message: impl ToString) -> Error {
     error(ErrorCode::Internal, message, None)
 }
 
-fn invalid(path: &str, message: impl Into<String>) -> Error {
+fn invalid(path: &str, message: impl ToString) -> Error {
     error(ErrorCode::InvalidParams, message, Some(path))
 }
 
@@ -269,7 +269,7 @@ impl Gate {
     pub async fn listen(
         &self,
         port: Option<u16>,
-    ) -> Result<mpsc::UnboundedReceiver<GatewayEvent>, String> {
+    ) -> villa::Result<mpsc::UnboundedReceiver<GatewayEvent>> {
         let kept = match self.db.get() {
             Some(db) => kv_get(db, KV_PORT).await.and_then(|p| p.parse().ok()),
             None => None,
@@ -283,23 +283,23 @@ impl Gate {
                         "the gateway's port {p} is taken ({e}): another one, and the tokens issued for {p} go"
                     );
                     *lock(&self.moved_from) = Some(p);
-                    TcpListener::bind(("127.0.0.1", 0))
-                        .await
-                        .map_err(|e| e.to_string())?
+                    TcpListener::bind(("127.0.0.1", 0)).await?
                 }
-                Err(e) => return Err(format!("cannot listen on 127.0.0.1:{p}: {e}")),
+                Err(e) => {
+                    return Err(villa::Error::invalid(format!(
+                        "cannot listen on 127.0.0.1:{p}: {e}"
+                    )));
+                }
             },
-            None => TcpListener::bind(("127.0.0.1", 0))
-                .await
-                .map_err(|e| e.to_string())?,
+            None => TcpListener::bind(("127.0.0.1", 0)).await?,
         };
-        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let port = listener.local_addr()?.port();
         draugr::spawn::never_pass(&listener);
         if let Some(db) = self.db.get() {
             kv_set(db, KV_PORT, &port.to_string()).await;
         }
         let upstream = Upstream::new(UpstreamOpts::default())
-            .map_err(|e| format!("no upstream client: {e}"))?;
+            .map_err(|e| villa::Error::invalid(format!("no upstream client: {e}")))?;
         let (tx, rx) = mpsc::unbounded_channel();
         let gw = Gateway::new(
             self.regs.clone(),
@@ -313,7 +313,7 @@ impl Gate {
             gw.set_tap(recorder);
         }
         if self.engine.set((gw.clone(), port)).is_err() {
-            return Err("the gateway listens already".into());
+            return Err(villa::Error::invalid("the gateway listens already"));
         }
         // a test's barrier waits until every request it saw answered has its events in the channel
         #[cfg(feature = "test-hooks")]
@@ -739,8 +739,8 @@ impl Gate {
     }
 
     /// The server's hardening (`server::harden`): `Ok` lets keys in, an `Err` says why they are refused.
-    pub fn set_hardened(&self, hardened: Result<(), String>) {
-        *lock(&self.keys_refused) = hardened.err();
+    pub fn set_hardened(&self, hardened: villa::Result<()>) {
+        *lock(&self.keys_refused) = hardened.err().map(|e| e.message().to_owned());
     }
 
     /// `not-allowed` at `keys` while this hub cannot keep other processes out of its memory (design §6.2, fail
@@ -2013,7 +2013,9 @@ mod tests {
         let h = hub().await;
         let g = &h.front.gate;
         table(g).await;
-        g.set_hardened(Err("cannot make the hub not dumpable: EPERM".into()));
+        g.set_hardened(Err(villa::Error::unavailable(
+            "cannot make the hub not dumpable: EPERM",
+        )));
         let e = g
             .register(
                 register_params(

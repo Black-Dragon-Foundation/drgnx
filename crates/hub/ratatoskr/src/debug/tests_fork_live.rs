@@ -457,7 +457,7 @@ impl super::origin::Replay for Traces {
         run: &str,
         stop: u64,
         watch: Vec<String>,
-    ) -> BoxFut<'static, Result<super::origin::Traced, String>> {
+    ) -> BoxFut<'static, villa::Result<super::origin::Traced>> {
         let (forks, resolved, root, run) = (
             self.forks.clone(),
             self.resolved.clone(),
@@ -474,7 +474,8 @@ impl super::origin::Replay for Traces {
                     super::origin::trace_files(),
                     vec![],
                 )
-                .await?;
+                .await
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             super::origin::read_trace(&t.path, &root)
         })
     }
@@ -484,7 +485,7 @@ impl super::origin::Replay for Traces {
         run: &str,
         stop: u64,
         probes: Vec<super::record::RunProbe>,
-    ) -> BoxFut<'static, Result<Vec<super::record::RunHit>, String>> {
+    ) -> BoxFut<'static, villa::Result<Vec<super::record::RunHit>>> {
         let (forks, resolved, run) = (self.forks.clone(), self.resolved.clone(), run.to_owned());
         Box::pin(async move {
             let t = forks
@@ -679,8 +680,8 @@ impl Terminals for NoTerms {
         _: String,
         _: Vec<String>,
         _: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<Opened, String>> {
-        Box::pin(async { Err("no terminals".into()) })
+    ) -> BoxFut<'_, villa::Result<Opened>> {
+        Box::pin(async { Err(villa::Error::invalid("no terminals")) })
     }
 }
 
@@ -688,7 +689,7 @@ impl Terminals for NoTerms {
 struct Debugpy;
 
 impl Launcher for Debugpy {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
             let python =
                 std::env::var("DRGNX_DEBUG_LIVE_PYTHON").unwrap_or_else(|_| "python3".into());
@@ -702,9 +703,9 @@ impl Launcher for Debugpy {
                 new_session: false,
             })
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let (Some(stdin), Some(stdout)) = (child.take_stdin(), child.take_stdout()) else {
-                return Err("no stdio".into());
+                return Err(villa::Error::invalid("no stdio"));
             };
             let (client, incoming) = vor::Client::new(stdout, stdin);
             Ok(Connected {

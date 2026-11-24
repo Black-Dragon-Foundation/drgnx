@@ -540,7 +540,7 @@ type RedoPlan = (Vec<PathBuf>, Vec<Merge>, Vec<(PathBuf, String)>);
 /// the revert changed goes back to UNDONE's version when the user has not touched it since (it is the checkpoint's
 /// still), is merged with the user's later edit where they do not meet (`merge3`: base the checkpoint's, ours the
 /// user's, theirs the undone), and is left, `edited-later`, where they meet.
-fn redo_plan(root: &Path, cwd: &Path, checkpoint: &str, undone: &str) -> Result<RedoPlan, String> {
+fn redo_plan(root: &Path, cwd: &Path, checkpoint: &str, undone: &str) -> villa::Result<RedoPlan> {
     let now = snapshot::tree_now(root, cwd, cwd, &[])?;
     let (mut back, mut merges, mut skipped) = (Vec::new(), Vec::new(), Vec::new());
     let regular = |m: u32| m == 0o100644 || m == 0o100755;

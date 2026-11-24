@@ -52,7 +52,7 @@ impl Terminals for NoTerms {
         cwd: String,
         args: Vec<String>,
         _: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<Opened, String>> {
+    ) -> BoxFut<'_, villa::Result<Opened>> {
         self.0.lock().unwrap().push((conn, cwd, args));
         Box::pin(async {
             Ok(Opened {
@@ -89,25 +89,30 @@ impl Mocks {
             ..Default::default()
         })
     }
-    async fn finish(&self) -> Vec<Result<vor::mock::Log, String>> {
+    async fn finish(&self) -> Vec<villa::Result<vor::mock::Log>> {
         let ms: Vec<Mock> = std::mem::take(&mut *self.running.lock().unwrap());
         let mut out = vec![];
         for m in ms {
-            out.push(m.finish().await.map_err(|e| e.to_string()));
+            out.push(
+                m.finish()
+                    .await
+                    .map_err(|e| villa::Error::internal(e.to_string())),
+            );
         }
         out
     }
 }
 
 impl Launcher for Mocks {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
             let steps = self
                 .scripts
                 .lock()
                 .unwrap()
                 .pop_front()
-                .ok_or("no script left")?;
+                .ok_or("no script left")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             if let Some(l) = steps
                 .iter()
                 .find(|s| s["expect"] == "launch" || s["expect"] == "attach")
@@ -802,6 +807,7 @@ async fn a_source_reference_is_fetched_from_the_adapter() {
         d.source(&id, 9)
             .await
             .unwrap_err()
+            .message()
             .contains("no such source")
     );
     assert!(d.source("nope", 42).await.is_err());

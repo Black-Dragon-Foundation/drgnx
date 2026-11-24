@@ -174,15 +174,18 @@ pub fn row(kind: AuditKind, r: &JobRef, name: &str, runner: &str, at: u64) -> Op
 }
 
 /// A job may name only keys on its project's `drgnx-runners-job-keys` LIST; the first one that isn't refuses it.
-pub fn on_the_project_list(names: &[String], list: &[String]) -> Result<(), String> {
+pub fn on_the_project_list(names: &[String], list: &[String]) -> villa::Result<()> {
     for n in names {
         if KeyName::new(n.as_str()).is_err() {
-            return Err(format!("key {n:?}: {}", KeyName::WHAT));
+            return Err(villa::Error::invalid(format!(
+                "key {n:?}: {}",
+                KeyName::WHAT
+            )));
         }
         if !list.iter().any(|l| l == n) {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "key {n} is not on the project's drgnx-runners-job-keys list: add it there to let jobs name it"
-            ));
+            )));
         }
     }
     Ok(())
@@ -290,13 +293,13 @@ pub fn graph_sink(db: norn::store::CoordDb) -> impl Fn(&AuditRow) + Send + Sync 
 }
 
 /// The graph's `key_sent` and `key_use` rows, oldest first.
-pub async fn graph_audit(db: &norn::store::CoordDb) -> Result<Vec<AuditRow>, String> {
+pub async fn graph_audit(db: &norn::store::CoordDb) -> villa::Result<Vec<AuditRow>> {
     let mut rows = vec![];
     for kind in ["key_sent", "key_use"] {
         let got = db
             .read(move |c| norn::read::runners::list(c, kind))
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         rows.extend(
             got.into_iter()
                 .filter_map(|(_, data)| serde_json::from_value::<AuditRow>(data).ok()),
@@ -324,11 +327,11 @@ mod tests {
         assert_eq!(on_the_project_list(&[], &[]), Ok(()));
         let e = on_the_project_list(&names(&["NPM_TOKEN", "AWS_SECRET"]), &list).unwrap_err();
         assert!(
-            e.contains("AWS_SECRET") && e.contains("drgnx-runners-job-keys"),
+            e.message().contains("AWS_SECRET") && e.message().contains("drgnx-runners-job-keys"),
             "{e}"
         );
         let e = on_the_project_list(&names(&["NPM_TOKEN"]), &[]).unwrap_err();
-        assert!(e.contains("NPM_TOKEN"), "{e}");
+        assert!(e.message().contains("NPM_TOKEN"), "{e}");
         for bad in ["a b", "1X", "X=Y", ""] {
             assert!(
                 on_the_project_list(&names(&[bad]), &names(&[bad])).is_err(),

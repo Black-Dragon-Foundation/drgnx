@@ -86,10 +86,10 @@ fn now() -> f64 {
     crate::clock::wall_secs()
 }
 
-fn err(msg: impl Into<String>) -> Error {
+fn err(msg: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: msg.into(),
+        message: msg.to_string(),
         path: None,
     }
 }
@@ -2886,10 +2886,10 @@ pub async fn resolve(f: &Front, _: &Caller, p: ResolveParams) -> Result<Resolved
     Ok(r)
 }
 
-fn refuse(msg: impl Into<String>) -> Error {
+fn refuse(msg: impl ToString) -> Error {
     Error {
         code: ErrorCode::NotAllowed,
-        message: msg.into(),
+        message: msg.to_string(),
         path: None,
     }
 }

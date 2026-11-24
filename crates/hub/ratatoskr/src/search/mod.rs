@@ -203,16 +203,16 @@ pub fn models_root(env: &Env) -> PathBuf {
 }
 
 /// Where models come from: `drgnx-search-model-mirror`, else the Hugging Face host.
-pub fn model_base(mirror: Option<&str>) -> Result<Uri, String> {
+pub fn model_base(mirror: Option<&str>) -> villa::Result<Uri> {
     let text = mirror.unwrap_or(HOST).trim_end_matches('/');
-    let uri: Uri = text
-        .parse()
-        .map_err(|e| format!("the model mirror {text:?} is not a URL: {e}"))?;
+    let uri: Uri = text.parse().map_err(|e| {
+        villa::Error::invalid(format!("the model mirror {text:?} is not a URL: {e}"))
+    })?;
     match uri.scheme_str() {
         Some("http" | "https") => Ok(uri),
-        _ => Err(format!(
+        _ => Err(villa::Error::invalid(format!(
             "the model mirror {text:?} is neither http nor https"
-        )),
+        ))),
     }
 }
 

@@ -189,7 +189,7 @@ impl Terms {
         conn: u64,
         session: Option<String>,
         s: Spawn,
-    ) -> Result<Record, String> {
+    ) -> villa::Result<Record> {
         self.spawn_as(conn, session, s, crate::exec::unit::systemd_user())
             .await
     }
@@ -201,13 +201,14 @@ impl Terms {
         session: Option<String>,
         s: Spawn,
         systemd: bool,
-    ) -> Result<Record, String> {
+    ) -> villa::Result<Record> {
         let dir = self
             .dir()
-            .ok_or("terminals: the store is not open yet")?
+            .ok_or_else(|| villa::Error::invalid("terminals: the store is not open yet"))?
             .to_path_buf();
         // 0700, made so, or refused when another user's: the workers' sockets and records are in it
-        runstav::paths::private_dir(&dir).map_err(|e| format!("terminals: {e}"))?;
+        runstav::paths::private_dir(&dir)
+            .map_err(|e| villa::Error::invalid(format!("terminals: {e}")))?;
         let id = new_id();
         let socket = dir.join(format!("{id}.sock"));
         let mut command = s.command.clone();
@@ -238,8 +239,8 @@ impl Terms {
         ];
         worker.extend(command.iter().cloned());
         let (program, args) = scope::command(&id, &worker, systemd, &s.limits);
-        let log =
-            std::fs::File::create(dir.join(format!("{id}.log"))).map_err(|e| e.to_string())?;
+        let log = std::fs::File::create(dir.join(format!("{id}.log")))
+            .map_err(|e| villa::Error::io(e.to_string()))?;
         let mut cmd = std::process::Command::new(&program);
         cmd.args(&args)
             .env_clear()
@@ -262,7 +263,9 @@ impl Terms {
             // its own session: the hub's signals and its process group never reach it
             cmd.process_group(0);
         }
-        let mut child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| villa::Error::invalid(format!("{program}: {e}")))?;
         let pid = child.id() as i32;
         // reaped by a thread of its own while this hub lives; after a restart, by init
         std::thread::spawn(move || {
@@ -285,7 +288,7 @@ impl Terms {
             place: s.place.clone(),
             remote: s.remote.clone(),
         };
-        rec.write(&dir).map_err(|e| e.to_string())?;
+        rec.write(&dir)?;
         // the worker binds its socket once it runs
         let (r, w, hello) =
             match adopt::connect_started(&socket, Duration::from_secs(5), Duration::from_secs(5))
@@ -294,7 +297,9 @@ impl Terms {
                 Ok(c) => c,
                 Err(e) => {
                     Record::remove(&dir, &id);
-                    return Err(format!("the terminal worker did not answer: {e}"));
+                    return Err(villa::Error::invalid(format!(
+                        "the terminal worker did not answer: {e}"
+                    )));
                 }
             };
         rec.shell_pid = Some(hello.shell_pid);
@@ -593,30 +598,31 @@ impl Terms {
         rows: u16,
         cell_px: (u32, u32),
         rows_in_sja: bool,
-    ) -> Result<Record, String> {
+    ) -> villa::Result<Record> {
         let rec = {
             let mut st = lock(&self.inner.state);
-            let session = st
-                .sessions
-                .get(&conn)
-                .cloned()
-                .ok_or("this connection named no editor session")?;
+            let session =
+                st.sessions.get(&conn).cloned().ok_or_else(|| {
+                    villa::Error::invalid("this connection named no editor session")
+                })?;
             let live = |s: &str| st.sessions.values().any(|o| o == s);
             let t = st
                 .terms
                 .get(id)
-                .ok_or_else(|| format!("no terminal {id}"))?;
+                .ok_or_else(|| villa::Error::invalid(format!("no terminal {id}")))?;
             if t.old {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "terminal {id} is from before an update: it can only be closed"
-                ));
+                )));
             }
             if let Some(s) = t.rec.session.as_deref()
                 && t.rec.detached_at.is_none()
                 && s != session
                 && live(s)
             {
-                return Err(format!("terminal {id} is open in another Emacs"));
+                return Err(villa::Error::invalid(format!(
+                    "terminal {id} is open in another Emacs"
+                )));
             }
             let t = st.terms.get_mut(id).expect("just found");
             t.rec.session = Some(session);
@@ -842,11 +848,11 @@ impl Terms {
         id: &str,
         make: impl FnOnce(u64) -> In,
         deadline: Duration,
-    ) -> Result<Out, String> {
+    ) -> villa::Result<Out> {
         let (req, rx) = {
             let mut st = lock(&self.inner.state);
             if !st.terms.contains_key(id) {
-                return Err(format!("no terminal {id}"));
+                return Err(villa::Error::invalid(format!("no terminal {id}")));
             }
             st.next_req += 1;
             let req = st.next_req;
@@ -856,15 +862,17 @@ impl Terms {
         };
         if !self.send(id, &make(req)) {
             lock(&self.inner.state).waiting.remove(&req);
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "terminal {id} takes nothing but close (from before an update)"
-            ));
+            )));
         }
         match crate::clock::timeout(deadline, rx).await {
             Ok(Ok(out)) => Ok(out),
             _ => {
                 lock(&self.inner.state).waiting.remove(&req);
-                Err(format!("terminal {id} did not answer"))
+                Err(villa::Error::invalid(format!(
+                    "terminal {id} did not answer"
+                )))
             }
         }
     }

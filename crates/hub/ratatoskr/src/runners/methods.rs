@@ -14,10 +14,10 @@ use runstav::wire::{Error, ErrorCode};
 #[cfg(all(unix, not(target_os = "android")))]
 use serde_json::json;
 
-fn error(code: ErrorCode, message: impl Into<String>) -> Error {
+fn error(code: ErrorCode, message: impl ToString) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }

@@ -104,23 +104,24 @@ pub struct CatalogFile {
 }
 
 /// The catalog file as bytes, or why not.
-pub fn parse_catalog(bytes: &[u8]) -> Result<CatalogFile, String> {
-    let file: CatalogFile = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+pub fn parse_catalog(bytes: &[u8]) -> villa::Result<CatalogFile> {
+    let file: CatalogFile =
+        serde_json::from_slice(bytes).map_err(|e| villa::Error::invalid(e.to_string()))?;
     if file.version != 1 {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "its version is {}, this hub reads version 1",
             file.version
-        ));
+        )));
     }
     Ok(file)
 }
 
-fn read_forms(bytes: &[u8], src: Src) -> Result<Vec<Node>, String> {
+fn read_forms(bytes: &[u8], src: Src) -> villa::Result<Vec<Node>> {
     let limits = Limits {
         max_bytes: src.max(),
         ..Limits::default()
     };
-    read_all(bytes, limits).map_err(|r| r.to_string())
+    read_all(bytes, limits).map_err(|r| villa::Error::invalid(r.to_string()))
 }
 
 /// A symbol or string's text.
@@ -168,19 +169,22 @@ pub struct LockEntry {
 }
 
 /// The lock's entries.
-pub fn parse_lock(bytes: &[u8]) -> Result<Vec<LockEntry>, String> {
-    let forms = read_forms(bytes, Src::Lock)?;
-    let root = forms.first().and_then(items).ok_or("it holds no plist")?;
+pub fn parse_lock(bytes: &[u8]) -> villa::Result<Vec<LockEntry>> {
+    let forms = read_forms(bytes, Src::Lock).map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let root = forms
+        .first()
+        .and_then(items)
+        .ok_or_else(|| villa::Error::invalid("it holds no plist"))?;
     let list = plist_get(root, ":packages")
         .and_then(items)
-        .ok_or("it has no :packages list")?;
+        .ok_or_else(|| villa::Error::invalid("it has no :packages list"))?;
     let mut out = Vec::new();
     for e in list {
-        let parts = items(e).ok_or("an entry is not a list")?;
+        let parts = items(e).ok_or_else(|| villa::Error::invalid("an entry is not a list"))?;
         let name = parts
             .first()
             .and_then(text)
-            .ok_or("an entry has no name")?
+            .ok_or_else(|| villa::Error::invalid("an entry has no name"))?
             .to_owned();
         let rest = &parts[1..];
         let get = |k: &str| plist_get(rest, k);
@@ -215,18 +219,19 @@ pub fn parse_lock(bytes: &[u8]) -> Result<Vec<LockEntry>, String> {
 }
 
 /// The wanted file: a list of package names.
-pub fn parse_names(bytes: &[u8]) -> Result<Vec<String>, String> {
-    let forms = read_forms(bytes, Src::Wanted)?;
+pub fn parse_names(bytes: &[u8]) -> villa::Result<Vec<String>> {
+    let forms = read_forms(bytes, Src::Wanted).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let Some(first) = forms.first() else {
         return Ok(Vec::new());
     };
-    let list = items(first).ok_or("it is not a list of names")?;
+    let list = items(first).ok_or_else(|| villa::Error::invalid("it is not a list of names"))?;
     Ok(list.iter().filter_map(text).map(str::to_owned).collect())
 }
 
 /// `packages.eld`'s `:packages` and the names of its `:git` entries.
-pub fn parse_packages(bytes: &[u8]) -> Result<Vec<String>, String> {
-    let forms = read_forms(bytes, Src::Packages)?;
+pub fn parse_packages(bytes: &[u8]) -> villa::Result<Vec<String>> {
+    let forms =
+        read_forms(bytes, Src::Packages).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let Some(root) = forms.first().and_then(items) else {
         return Ok(Vec::new());
     };
@@ -256,19 +261,22 @@ pub struct PackLock {
 }
 
 /// The lock's installed language packs (`:packs`); none when the lock has no such key.
-pub fn parse_pack_locks(bytes: &[u8]) -> Result<Vec<PackLock>, String> {
-    let forms = read_forms(bytes, Src::Lock)?;
-    let root = forms.first().and_then(items).ok_or("it holds no plist")?;
+pub fn parse_pack_locks(bytes: &[u8]) -> villa::Result<Vec<PackLock>> {
+    let forms = read_forms(bytes, Src::Lock).map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let root = forms
+        .first()
+        .and_then(items)
+        .ok_or_else(|| villa::Error::invalid("it holds no plist"))?;
     let Some(list) = plist_get(root, ":packs").and_then(items) else {
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
     for e in list {
-        let parts = items(e).ok_or("a pack entry is not a list")?;
+        let parts = items(e).ok_or_else(|| villa::Error::invalid("a pack entry is not a list"))?;
         let name = parts
             .first()
             .and_then(text)
-            .ok_or("a pack entry has no name")?
+            .ok_or_else(|| villa::Error::invalid("a pack entry has no name"))?
             .to_owned();
         let rest = &parts[1..];
         out.push(PackLock {
@@ -761,7 +769,7 @@ impl Cache {
             self.reads += 1;
             let loaded = files
                 .read(src)
-                .map_err(|e| e.to_string())
+                .map_err(|e| villa::Error::io(e.to_string()))
                 .and_then(|b| match src {
                     Src::Catalog => parse_catalog(&b).map(|c| self.catalog = Some(c)),
                     Src::Lock => parse_lock(&b).and_then(|l| {
@@ -781,8 +789,9 @@ impl Cache {
                     self.notes.insert(
                         src,
                         format!(
-                            "{} was not read ({e}); the last good copy is kept",
-                            src.label()
+                            "{} was not read ({}); the last good copy is kept",
+                            src.label(),
+                            e.message()
                         ),
                     );
                 }

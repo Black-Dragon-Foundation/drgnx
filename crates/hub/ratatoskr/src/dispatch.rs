@@ -551,8 +551,9 @@ pub(crate) mod tests {
         let mut u = user(&f);
         let keys =
             r#"{"id":1,"method":"gateway/keys","params":{"keys":{"openrouter":"sk-canary-m2"}}}"#;
-        f.gate
-            .set_hardened(Err("cannot deny debuggers the hub: busy".into()));
+        f.gate.set_hardened(Err(villa::Error::unavailable(
+            "cannot deny debuggers the hub: busy",
+        )));
         f.line(&mut u, &out, keys).await;
         let answer = out.take_lines().join("\n");
         assert!(

@@ -885,7 +885,7 @@ mod browser_endpoint {
         let socket = req.params["socket"].as_str().unwrap_or("");
         let result = match crate::browser::broker::test_endpoint(std::path::Path::new(socket)) {
             Ok(secret) => json!({"secret": secret}),
-            Err(e) => json!({"error": e}),
+            Err(e) => json!({"error": e.message()}),
         };
         if let Some(id) = req.id {
             let a = serde_json::to_string(&Answer {

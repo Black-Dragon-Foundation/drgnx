@@ -427,7 +427,7 @@ pub async fn compact_preview(f: &Front, _: &Caller, p: ById) -> Result<CompactPr
 pub async fn config(f: &Front, _: &Caller, p: ConfigParams) -> Result<bool, Error> {
     use crate::agents::config;
     let s = f.core.agents.find(p.id.as_str())?;
-    config::check(s.locked_as, &p.option.0, &p.value.0).map_err(|why| refuse(&why))?;
+    config::check(s.locked_as, &p.option.0, &p.value.0).map_err(|why| refuse(why.message()))?;
     match config::apply(&s.conn, &s.acp, &p.option.0, &p.value.0).await {
         Ok(()) => Ok(true),
         Err(hermod::Error::Rpc { message, .. }) => Err(refuse(&format!(

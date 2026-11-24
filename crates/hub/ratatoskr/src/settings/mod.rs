@@ -193,14 +193,18 @@ pub const RUNTIME: &[RuntimeSetting] = &[
 /// refused.
 pub(crate) fn search_rules(
     pairs: Vec<(String, Vec<String>)>,
-) -> Result<hrafn::rules::RuleSet, String> {
+) -> villa::Result<hrafn::rules::RuleSet> {
     let mut out = hrafn::rules::RuleSet::default();
     for (key, globs) in pairs {
         match key.as_str() {
             "include" => out.include = globs,
             "ignore" => out.ignore = globs,
             "no-embed" => out.no_embed = globs,
-            other => return Err(format!("{other:?} is not include, ignore or no-embed")),
+            other => {
+                return Err(villa::Error::invalid(format!(
+                    "{other:?} is not include, ignore or no-embed"
+                )));
+            }
         }
     }
     Ok(out)
@@ -346,23 +350,25 @@ pub(crate) fn hook_rules(v: &Value) -> Result<Value, (String, String)> {
 }
 
 /// The browser program setting: absolute, or none.
-pub(crate) fn check_browser_program(p: &Option<String>) -> Result<(), String> {
+pub(crate) fn check_browser_program(p: &Option<String>) -> villa::Result<()> {
     match p {
-        Some(p) if !p.starts_with('/') => Err(format!("{p:?} is not an absolute path")),
+        Some(p) if !p.starts_with('/') => Err(villa::Error::invalid(format!(
+            "{p:?} is not an absolute path"
+        ))),
         _ => Ok(()),
     }
 }
 
 /// The local ports setting: each 1 to 65535 (a u16 already holds the upper bound).
-pub(crate) fn check_browser_ports(ports: &[u16]) -> Result<(), String> {
+pub(crate) fn check_browser_ports(ports: &[u16]) -> villa::Result<()> {
     match ports.iter().find(|p| **p == 0) {
-        Some(_) => Err("a port is 1 to 65535, not 0".into()),
+        Some(_) => Err(villa::Error::invalid("a port is 1 to 65535, not 0")),
         None => Ok(()),
     }
 }
 
 /// A memory cap like `4G` or `512M`: digits (no leading 0) and an optional K, M, G or T.
-pub(crate) fn check_memory(m: &str) -> Result<(), String> {
+pub(crate) fn check_memory(m: &str) -> villa::Result<()> {
     let digits = m.strip_suffix(['K', 'M', 'G', 'T']).unwrap_or(m);
     let ok = !digits.is_empty()
         && !digits.starts_with('0')
@@ -370,25 +376,29 @@ pub(crate) fn check_memory(m: &str) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
-        Err(format!("{m:?} is not a size like \"4G\" or \"512M\""))
+        Err(villa::Error::invalid(format!(
+            "{m:?} is not a size like \"4G\" or \"512M\""
+        )))
     }
 }
 
 /// The high mark: a percent from 1 to 99.
-pub(crate) fn check_memory_high(n: u32) -> Result<(), String> {
+pub(crate) fn check_memory_high(n: u32) -> villa::Result<()> {
     if (1..=99).contains(&n) {
         Ok(())
     } else {
-        Err(format!("{n} is not a percent from 1 to 99"))
+        Err(villa::Error::invalid(format!(
+            "{n} is not a percent from 1 to 99"
+        )))
     }
 }
 
 /// The browser max message: at least 1 byte.
-pub(crate) fn check_max_message(n: u64) -> Result<(), String> {
+pub(crate) fn check_max_message(n: u64) -> villa::Result<()> {
     if n >= 1 {
         Ok(())
     } else {
-        Err("a message limit is at least 1 byte".into())
+        Err(villa::Error::invalid("a message limit is at least 1 byte"))
     }
 }
 
@@ -425,7 +435,7 @@ pub struct ModelPrice {
 }
 
 /// The rows of the price table with their keys, each price a finite number of 0 or more.
-pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> Result<Vec<ModelPrice>, String> {
+pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> villa::Result<Vec<ModelPrice>> {
     pairs
         .into_iter()
         .map(|(key, mut p)| {
@@ -442,10 +452,10 @@ pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> Result<Vec<ModelPrice>
                 .flatten()
                 .find(|x| !(x.is_finite() && *x >= 0.0))
             {
-                Some(_) => Err(format!(
+                Some(_) => Err(villa::Error::invalid(format!(
                     "{}: a price is dollars per million tokens, a number of 0 or more",
                     p.key
-                )),
+                ))),
                 None => Ok(p),
             }
         })
@@ -453,7 +463,7 @@ pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> Result<Vec<ModelPrice>
 }
 
 /// An `agents-matrix` value that is valid, as a message when it is not.
-pub(crate) fn check_matrix(v: &Value) -> Result<(), String> {
+pub(crate) fn check_matrix(v: &Value) -> villa::Result<()> {
     matrix::decode(v).map(drop)
 }
 
@@ -528,7 +538,7 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-ai-roles" => values.ai_roles = providers::roles(node)?,
         "drgnx-agents-matrix" => {
             let v: Value = de(node)?;
-            check_matrix(&v).map_err(|m| Bad::at(node, None, m))?;
+            check_matrix(&v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_matrix = v;
         }
         "drgnx-agents-away-after" => values.agents_away_after = de(node)?,
@@ -554,7 +564,8 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-manager-context" => values.agents_manager_context = de(node)?,
         "drgnx-agents-model-prices" => {
             let profiles::Alist(pairs) = de::<profiles::Alist<ModelPrice>>(node)?;
-            values.agents_model_prices = prices(pairs).map_err(|m| Bad::at(node, None, m))?;
+            values.agents_model_prices =
+                prices(pairs).map_err(|m| Bad::at(node, None, m.message()))?;
         }
         "drgnx-runners-send" => {
             let v: String = de(node)?;
@@ -586,7 +597,8 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-search-builtin" => values.search_builtin = de(node)?,
         "drgnx-search-rules" => {
             let profiles::Alist(pairs) = de::<profiles::Alist<Vec<String>>>(node)?;
-            values.search_rules = search_rules(pairs).map_err(|why| Bad::at(node, None, why))?;
+            values.search_rules =
+                search_rules(pairs).map_err(|why| Bad::at(node, None, why.message()))?;
         }
         "drgnx-search-off" => values.search_off = de(node)?,
         "drgnx-search-base" => values.search_base = de(node)?,
@@ -611,30 +623,30 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-hook-rules-off" => values.agents_hook_rules_off = de(node)?,
         "drgnx-agents-browser-program" => {
             let v = de(node)?;
-            check_browser_program(&v).map_err(|m| Bad::at(node, None, m))?;
+            check_browser_program(&v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_browser_program = v;
         }
         "drgnx-agents-browser-local-ports" => {
             let v: Vec<u16> = de(node)?;
-            check_browser_ports(&v).map_err(|m| Bad::at(node, None, m))?;
+            check_browser_ports(&v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_browser_local_ports = v;
         }
         "drgnx-agents-browser-deny-hosts" => values.agents_browser_deny_hosts = de(node)?,
         "drgnx-agents-browser-max-message" => {
             let v = de(node)?;
-            check_max_message(v).map_err(|m| Bad::at(node, None, m))?;
+            check_max_message(v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_browser_max_message = v;
         }
         "drgnx-agents-browser-idle" => values.agents_browser_idle = de(node)?,
         "drgnx-agents-browser-once-window" => values.agents_browser_once_window = de(node)?,
         "drgnx-agents-session-memory" => {
             let v: String = de(node)?;
-            check_memory(&v).map_err(|m| Bad::at(node, None, m))?;
+            check_memory(&v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_session_memory = v;
         }
         "drgnx-agents-browser-memory-high" => {
             let v = de(node)?;
-            check_memory_high(v).map_err(|m| Bad::at(node, None, m))?;
+            check_memory_high(v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_browser_memory_high = v;
         }
         other => {

@@ -77,7 +77,7 @@ fn field(v: &Value, k: &str) -> Option<String> {
 }
 
 /// The table's `:install` entry INSTALL on PLATFORM.
-pub fn plan(install: &Value, platform: &str) -> Result<Plan, String> {
+pub fn plan(install: &Value, platform: &str) -> villa::Result<Plan> {
     if let Some(c) = field(install, "system") {
         return Ok(Plan::System(c));
     }
@@ -86,36 +86,48 @@ pub fn plan(install: &Value, platform: &str) -> Result<Plan, String> {
         for part in parts {
             match plan(part, platform)? {
                 p @ (Plan::Archive { .. } | Plan::File { .. }) => plans.push(p),
-                _ => return Err("a part of an :install is a download".into()),
+                _ => return Err(villa::Error::invalid("a part of an :install is a download")),
             }
         }
         return Ok(Plan::Parts(plans));
     }
     if let Some(requirement) = field(install, "pip") {
-        let hash = field(install, "hash").ok_or("an :install with :pip needs its :hash")?;
+        let hash = field(install, "hash")
+            .ok_or_else(|| villa::Error::invalid("an :install with :pip needs its :hash"))?;
         return Ok(Plan::Pip { requirement, hash });
     }
-    let into = field(install, "into").ok_or("an archive :install needs :into")?;
+    let into = field(install, "into")
+        .ok_or_else(|| villa::Error::invalid("an archive :install needs :into"))?;
     let pin = match install.get("platforms").and_then(Value::as_array) {
         Some(pins) => pins
             .iter()
             .find(|p| field(p, "platform").as_deref() == Some(platform))
-            .ok_or_else(|| format!("{into} has no download for this platform ({platform})"))?,
+            .ok_or_else(|| {
+                villa::Error::invalid(format!(
+                    "{into} has no download for this platform ({platform})"
+                ))
+            })?,
         None => install,
     };
-    let url = field(pin, "url").ok_or("an archive :install needs :url")?;
-    let sha256 = field(pin, "sha256").ok_or("an archive :install needs :sha256")?;
+    let url =
+        field(pin, "url").ok_or_else(|| villa::Error::invalid("an archive :install needs :url"))?;
+    let sha256 = field(pin, "sha256")
+        .ok_or_else(|| villa::Error::invalid("an archive :install needs :sha256"))?;
     let safe = |s: &str| {
         let p = Path::new(s);
         !s.is_empty() && p.components().all(|c| matches!(c, Component::Normal(_)))
     };
     let root = field(pin, "root").or_else(|| field(install, "root"));
     if !safe(&into) || root.as_deref().is_some_and(|r| !safe(r)) {
-        return Err(format!("{into}: :into and :root are folder names"));
+        return Err(villa::Error::invalid(format!(
+            "{into}: :into and :root are folder names"
+        )));
     }
     if let Some(file) = field(install, "file") {
         if !safe(&file) || file.contains('/') {
-            return Err(format!("{into}: :file is a file name"));
+            return Err(villa::Error::invalid(format!(
+                "{into}: :file is a file name"
+            )));
         }
         return Ok(Plan::File {
             url,
@@ -140,9 +152,9 @@ pub fn pip_commands(
     plan: &Plan,
     tools: &Path,
     python: &str,
-) -> Result<(Vec<String>, Vec<String>, String), String> {
+) -> villa::Result<(Vec<String>, Vec<String>, String)> {
     let Plan::Pip { requirement, hash } = plan else {
-        return Err("not a pip install".into());
+        return Err(villa::Error::invalid("not a pip install"));
     };
     let venv = tools.join("venv");
     let show = |p: &Path| p.to_string_lossy().into_owned();
@@ -172,8 +184,8 @@ impl Drop for Gone {
     }
 }
 
-fn io_err(p: &Path, e: io::Error) -> String {
-    format!("{}: {e}", p.display())
+fn io_err(p: &Path, e: io::Error) -> villa::Error {
+    villa::Error::io(format!("{}: {e}", p.display()))
 }
 
 /// Carries PLAN out under TOOLS, archives from SOURCE; ENV is the user's environment (pip's PATH). What it did, in a
@@ -183,11 +195,11 @@ pub async fn install(
     tools: &Path,
     source: &Source,
     env: &[(OsString, OsString)],
-) -> Result<String, String> {
+) -> villa::Result<String> {
     match plan {
-        Plan::System(c) => Err(format!(
+        Plan::System(c) => Err(villa::Error::invalid(format!(
             "this adapter comes from a system package: install it with `{c}`"
-        )),
+        ))),
         Plan::Pip { requirement, .. } => {
             let (venv, pip, req) = pip_commands(plan, tools, "python3")?;
             let step = |label: &str, argv: Vec<String>| super::tasks::Step {
@@ -220,10 +232,12 @@ pub async fn install(
             let mut staged: Vec<Staged> = Vec::new();
             for part in parts {
                 let (Plan::Archive { into, .. } | Plan::File { into, .. }) = part else {
-                    return Err("a part of an :install is a download".into());
+                    return Err(villa::Error::invalid("a part of an :install is a download"));
                 };
                 if staged.iter().any(|s| &s.into == into) {
-                    return Err(format!("two parts of an :install go into {into}"));
+                    return Err(villa::Error::invalid(format!(
+                        "two parts of an :install go into {into}"
+                    )));
                 }
                 // nothing is put in place until every part is downloaded, checked and unpacked
                 staged.push(stage(part, tools, source).await?);
@@ -270,7 +284,7 @@ struct Staged {
 /// take turns. Released when the file closes, so a crashed install never leaves it held.
 struct Lock(#[allow(dead_code)] File);
 
-async fn lock_target(tools: &Path, into: &str) -> Result<Lock, String> {
+async fn lock_target(tools: &Path, into: &str) -> villa::Result<Lock> {
     use std::os::fd::AsRawFd;
     let path = tools.join(format!(".{into}.lock"));
     crate::clock::blocking(move || {
@@ -288,12 +302,12 @@ async fn lock_target(tools: &Path, into: &str) -> Result<Lock, String> {
         Ok(Lock(file))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| villa::Error::invalid(e.to_string()))?
 }
 
 /// Downloads an archive or a file of PLAN (the digest checked before anything is read from it) and unpacks it into a
 /// scratch folder under TOOLS.
-async fn stage(plan: &Plan, tools: &Path, source: &Source) -> Result<Staged, String> {
+async fn stage(plan: &Plan, tools: &Path, source: &Source) -> villa::Result<Staged> {
     let (url, sha256, into, root, file, version) = match plan {
         Plan::Archive {
             url,
@@ -309,7 +323,7 @@ async fn stage(plan: &Plan, tools: &Path, source: &Source) -> Result<Staged, Str
             file,
             version,
         } => (url, sha256, into, None, Some(file), version),
-        _ => return Err("not a download".into()),
+        _ => return Err(villa::Error::invalid("not a download")),
     };
     fs::create_dir_all(tools).map_err(|e| io_err(tools, e))?;
     let lock = lock_target(tools, into).await?;
@@ -328,18 +342,20 @@ async fn stage(plan: &Plan, tools: &Path, source: &Source) -> Result<Staged, Str
     let got = match source {
         Source::Https => fetch(url, &download, limits)
             .await
-            .map_err(|e| e.to_string())?,
+            .map_err(|e| villa::Error::invalid(e.to_string()))?,
         Source::Dir(dir) => {
             let name = url.rsplit('/').next().unwrap_or(url);
             copy_hashed(&dir.join(name), &download)?
         }
     };
     if &got != sha256 {
-        return Err(InstallError::DigestMismatch {
-            expected: sha256.clone(),
-            got,
-        }
-        .to_string());
+        return Err(villa::Error::invalid(
+            InstallError::DigestMismatch {
+                expected: sha256.clone(),
+                got,
+            }
+            .to_string(),
+        ));
     }
     fs::create_dir(&partial).map_err(|e| io_err(&partial, e))?;
     let made = if let Some(file) = file {
@@ -360,17 +376,17 @@ async fn stage(plan: &Plan, tools: &Path, source: &Source) -> Result<Staged, Str
             }
         })
         .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let made = match root {
             Some(r) => partial.join(r),
             None => partial.clone(),
         };
         if !made.is_dir() {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "the archive has no folder {}",
                 root.map(String::as_str).unwrap_or_default()
-            ));
+            )));
         }
         made
     };
@@ -395,7 +411,7 @@ async fn stage(plan: &Plan, tools: &Path, source: &Source) -> Result<Staged, Str
 }
 
 /// Puts a staged folder in place, the one it replaces kept aside until the install ends.
-fn commit(s: &Staged) -> Result<(), String> {
+fn commit(s: &Staged) -> villa::Result<()> {
     if s.dest.exists() {
         crate::fsio::rename(&s.dest, &s.old).map_err(|e| io_err(&s.dest, e))?;
     }
@@ -415,7 +431,7 @@ fn rollback(s: &Staged) {
 }
 
 /// FROM copied to the new file TO: its sha256.
-fn copy_hashed(from: &Path, to: &Path) -> Result<String, String> {
+fn copy_hashed(from: &Path, to: &Path) -> villa::Result<String> {
     let mut src = File::open(from).map_err(|e| io_err(from, e))?;
     let mut out = OpenOptions::new()
         .write(true)

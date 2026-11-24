@@ -562,7 +562,7 @@ impl NbViews {
         id: &str,
         kind: NotebookViewKind,
         cell: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> villa::Result<String> {
         let mut s = self.lock();
         let w = s.watch.entry((conn, id.to_owned())).or_default();
         match kind {
@@ -575,7 +575,8 @@ impl NbViews {
                 Ok(log_view(id))
             }
             NotebookViewKind::Output => {
-                let cell = cell.ok_or("a full output names its cell")?;
+                let cell =
+                    cell.ok_or_else(|| villa::Error::invalid("a full output names its cell"))?;
                 let n = match w.outputs.iter().position(|c| c.as_deref() == Some(cell)) {
                     Some(n) => n,
                     None => match w.outputs.iter().position(Option::is_none) {
@@ -585,9 +586,9 @@ impl NbViews {
                             w.outputs.len() - 1
                         }
                         None => {
-                            return Err(format!(
+                            return Err(villa::Error::invalid(format!(
                                 "{OUTPUT_VIEWS} outputs are shown: close one first"
-                            ));
+                            )));
                         }
                     },
                 };

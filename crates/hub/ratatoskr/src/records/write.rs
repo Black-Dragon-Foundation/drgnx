@@ -32,18 +32,18 @@ pub(crate) struct Actor {
     pub(crate) may_approve: bool,
 }
 
-fn invalid(msg: impl Into<String>) -> Error {
+fn invalid(msg: impl ToString) -> Error {
     Error {
         code: ErrorCode::InvalidParams,
-        message: msg.into(),
+        message: msg.to_string(),
         path: None,
     }
 }
 
-fn refuse(msg: impl Into<String>) -> Error {
+fn refuse(msg: impl ToString) -> Error {
     Error {
         code: ErrorCode::NotAllowed,
-        message: msg.into(),
+        message: msg.to_string(),
         path: None,
     }
 }

@@ -49,7 +49,7 @@ fn git(
     worktree: Option<&Path>,
     index: Option<&Path>,
     args: &[&str],
-) -> Result<String, String> {
+) -> villa::Result<String> {
     let out = git_bytes(repo, worktree, index, args)?;
     Ok(String::from_utf8_lossy(&out).trim().to_string())
 }
@@ -62,7 +62,7 @@ pub fn run_git(
     worktree: Option<&Path>,
     index: Option<&Path>,
     args: &[&str],
-) -> Result<String, String> {
+) -> villa::Result<String> {
     git(repo, worktree, index, args)
 }
 
@@ -72,7 +72,7 @@ fn git_bytes(
     worktree: Option<&Path>,
     index: Option<&Path>,
     args: &[&str],
-) -> Result<Vec<u8>, String> {
+) -> villa::Result<Vec<u8>> {
     let mut c = Command::new("git");
     c.env("GIT_DIR", repo)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -88,19 +88,22 @@ fn git_bytes(
     if let Some(i) = index {
         c.env("GIT_INDEX_FILE", i);
     }
-    let out = c.args(args).output().map_err(|e| format!("git: {e}"))?;
+    let out = c
+        .args(args)
+        .output()
+        .map_err(|e| villa::Error::invalid(format!("git: {e}")))?;
     if !out.status.success() {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "git {}: {}",
             args.first().unwrap_or(&""),
             String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        )));
     }
     Ok(out.stdout)
 }
 
 /// PATH's bytes in TREE of WORKTREE's shadow repository (the worktree is not looked at).
-pub fn blob(root: &Path, worktree: &Path, tree: &str, path: &str) -> Result<Vec<u8>, String> {
+pub fn blob(root: &Path, worktree: &Path, tree: &str, path: &str) -> villa::Result<Vec<u8>> {
     let repo = repo_of(root, worktree);
     git_bytes(
         &repo,
@@ -130,7 +133,7 @@ pub fn patch(
     from_tree: &str,
     to_tree: &str,
     path: &str,
-) -> Result<String, String> {
+) -> villa::Result<String> {
     let repo = repo_of(root, worktree);
     let out = git_bytes(
         &repo,
@@ -178,14 +181,14 @@ pub fn take(
     sid: &str,
     seq: u64,
     extra: &[String],
-) -> Result<String, String> {
+) -> villa::Result<String> {
     let (_, tree) = write_tree(root, worktree, sid, extra)?;
     put(root, worktree, sid, seq, &tree)?;
     Ok(tree)
 }
 
 /// TREE kept as SID's step SEQ (`refs/drgnx/s/<SID>/<SEQ>`) in WORKTREE's shadow repository under ROOT.
-fn put(root: &Path, worktree: &Path, sid: &str, seq: u64, tree: &str) -> Result<(), String> {
+fn put(root: &Path, worktree: &Path, sid: &str, seq: u64, tree: &str) -> villa::Result<()> {
     let name = format!("refs/drgnx/s/{}/{seq}", safe(sid));
     git(
         &repo_of(root, worktree),
@@ -204,7 +207,7 @@ fn turn_ref(sid: &str) -> String {
 /// A tree of WORKTREE as it is before SID's turn reaches its agent, through an index of its own (the step writer's is
 /// never shared) and held by a ref until [`put_turn_tree`] keeps it as the turn's first step, so a collection in
 /// between does not remove it.
-pub fn turn_tree(root: &Path, worktree: &Path, sid: &str) -> Result<String, String> {
+pub fn turn_tree(root: &Path, worktree: &Path, sid: &str) -> villa::Result<String> {
     let (repo, tree) = write_tree(root, worktree, &format!("turn-{sid}"), &[])?;
     git(&repo, None, None, &["update-ref", &turn_ref(sid), &tree])?;
     Ok(tree)
@@ -217,7 +220,7 @@ pub fn put_turn_tree(
     sid: &str,
     seq: u64,
     tree: &str,
-) -> Result<(), String> {
+) -> villa::Result<()> {
     put_held(root, worktree, sid, seq, tree, &turn_ref(sid))
 }
 
@@ -229,7 +232,7 @@ fn write_refs(sid: &str) -> String {
 /// A tree of WORKTREE as it is before the hub serves one of SID's agent's writes: the checkpoint of the edit steps that
 /// closed before it and whose rows are not written yet.  Through an index of its own, and held by a ref until
 /// [`put_write_tree`] keeps it as a step's.
-pub fn write_tree_before(root: &Path, worktree: &Path, sid: &str) -> Result<String, String> {
+pub fn write_tree_before(root: &Path, worktree: &Path, sid: &str) -> villa::Result<String> {
     let (repo, tree) = write_tree(root, worktree, &format!("write-{sid}"), &[])?;
     git(
         &repo,
@@ -247,7 +250,7 @@ pub fn put_write_tree(
     sid: &str,
     seq: u64,
     tree: &str,
-) -> Result<(), String> {
+) -> villa::Result<()> {
     put_held(
         root,
         worktree,
@@ -266,7 +269,7 @@ fn put_held(
     seq: u64,
     tree: &str,
     held: &str,
-) -> Result<(), String> {
+) -> villa::Result<()> {
     put(root, worktree, sid, seq, tree)?;
     git(
         &repo_of(root, worktree),
@@ -279,7 +282,7 @@ fn put_held(
 
 /// A tree of WORKTREE when the user took SID's wheel, kept as `refs/drgnx/s/<SID>/wheel` (so it goes with the
 /// session's other refs); answers the tree id.  Blocking.
-pub fn take_held(root: &Path, worktree: &Path, sid: &str) -> Result<String, String> {
+pub fn take_held(root: &Path, worktree: &Path, sid: &str) -> villa::Result<String> {
     let (repo, tree) = write_tree(root, worktree, &format!("wheel-{sid}"), &[])?;
     let name = format!("refs/drgnx/s/{}/wheel", safe(sid));
     git(&repo, None, None, &["update-ref", &name, &tree])?;
@@ -288,12 +291,7 @@ pub fn take_held(root: &Path, worktree: &Path, sid: &str) -> Result<String, Stri
 
 /// The unified diff of every file of WORKTREE from FROM_TREE to what it holds now (a tree written through an index of its
 /// own, never the step writer's, kept nowhere).  Blocking.
-pub fn diff_now(
-    root: &Path,
-    worktree: &Path,
-    sid: &str,
-    from_tree: &str,
-) -> Result<String, String> {
+pub fn diff_now(root: &Path, worktree: &Path, sid: &str, from_tree: &str) -> villa::Result<String> {
     let (repo, tree) = write_tree(root, worktree, &format!("diff-{sid}"), &[])?;
     let out = git_bytes(
         &repo,
@@ -311,7 +309,7 @@ fn write_tree(
     worktree: &Path,
     key: &str,
     extra: &[String],
-) -> Result<(PathBuf, String), String> {
+) -> villa::Result<(PathBuf, String)> {
     let repo = repo_of(root, worktree);
     let tree = write_tree_in(&repo, worktree, key, extra)?;
     Ok((repo, tree))
@@ -323,7 +321,7 @@ fn write_tree_in(
     worktree: &Path,
     key: &str,
     extra: &[String],
-) -> Result<String, String> {
+) -> villa::Result<String> {
     made(repo)?;
     let index = repo.join(format!("index-{}", safe(key)));
     let mut add: Vec<String> = ["add", "-A", "--ignore-errors", "--", "."]
@@ -337,7 +335,7 @@ fn write_tree_in(
 }
 
 /// WORKTREE's shadow repository under ROOT, made when it is missing: its path (a sent debug run's files go in).
-pub fn ensure_repo(root: &Path, worktree: &Path) -> Result<PathBuf, String> {
+pub fn ensure_repo(root: &Path, worktree: &Path) -> villa::Result<PathBuf> {
     let repo = repo_of(root, worktree);
     made(&repo)?;
     Ok(repo)
@@ -346,14 +344,17 @@ pub fn ensure_repo(root: &Path, worktree: &Path) -> Result<PathBuf, String> {
 /// The shadow repository REPO, made when it is missing: `git init` in a folder of its own beside it, then renamed into
 /// place, so snapshots taken at once (a turn's and a base's, a session's first two) never init the same folder, where
 /// one's template copy fails on the other's files.  A rename that loses to another's leaves that one.
-fn made(repo: &Path) -> Result<(), String> {
+fn made(repo: &Path) -> villa::Result<()> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     if repo.join("HEAD").exists() {
         return Ok(());
     }
-    let parent = repo.parent().ok_or("a shadow repository needs a folder")?;
-    std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    let parent = repo
+        .parent()
+        .ok_or_else(|| villa::Error::invalid("a shadow repository needs a folder"))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", parent.display())))?;
     let mut name = repo.file_name().unwrap_or_default().to_owned();
     name.push(format!(
         ".init-{}-{}",
@@ -363,12 +364,12 @@ fn made(repo: &Path) -> Result<(), String> {
     let tmp = parent.join(name);
     crate::soft::done(std::fs::remove_dir_all(&tmp), "std::fs::remove_dir_all");
     let done = std::fs::create_dir(&tmp)
-        .map_err(|e| format!("{}: {e}", tmp.display()))
+        .map_err(|e| villa::Error::io(format!("{}: {e}", tmp.display())))
         .and_then(|()| git(&tmp, None, None, &["init", "--bare", "-q", "."]))
         .and_then(|_| match crate::fsio::rename(&tmp, repo) {
             Ok(()) => Ok(()),
             Err(_) if repo.join("HEAD").exists() => Ok(()),
-            Err(e) => Err(format!("{}: {e}", repo.display())),
+            Err(e) => Err(villa::Error::io(format!("{}: {e}", repo.display()))),
         });
     crate::soft::done(std::fs::remove_dir_all(&tmp), "std::fs::remove_dir_all");
     done
@@ -503,7 +504,7 @@ pub fn changed(
     worktree: &Path,
     from: &str,
     to: &str,
-) -> Result<Vec<TreeChange>, String> {
+) -> villa::Result<Vec<TreeChange>> {
     use std::os::unix::ffi::OsStrExt;
     let repo = repo_of(root, worktree);
     let out = git_bytes(
@@ -525,7 +526,9 @@ pub fn changed(
         let meta = String::from_utf8_lossy(meta);
         let f: Vec<&str> = meta.trim_start_matches(':').split(' ').collect();
         let [from_mode, to_mode, _, to_blob, _] = f[..] else {
-            return Err(format!("diff-tree: an unknown line {meta:?}"));
+            return Err(villa::Error::invalid(format!(
+                "diff-tree: an unknown line {meta:?}"
+            )));
         };
         let mode = |m: &str| u32::from_str_radix(m, 8).unwrap_or(0);
         let to_mode = mode(to_mode);
@@ -587,7 +590,7 @@ pub fn tree_now(
     source: &Path,
     target: &Path,
     extra: &[String],
-) -> Result<String, String> {
+) -> villa::Result<String> {
     let key = repo_of(Path::new(""), target)
         .to_string_lossy()
         .trim_end_matches(".git")
@@ -601,7 +604,7 @@ pub fn tree_now(
 }
 
 /// TREE kept as the ref NAME (`refs/drgnx/…`) of WORKTREE's shadow repository under ROOT, so it is never pruned.
-pub fn keep(root: &Path, worktree: &Path, name: &str, tree: &str) -> Result<(), String> {
+pub fn keep(root: &Path, worktree: &Path, name: &str, tree: &str) -> villa::Result<()> {
     git(
         &repo_of(root, worktree),
         None,
@@ -613,14 +616,14 @@ pub fn keep(root: &Path, worktree: &Path, name: &str, tree: &str) -> Result<(), 
 
 /// A tree of WORKTREE written through the persistent index of KEY and kept as the ref NAME (`refs/drgnx/…`) of its
 /// shadow repository under ROOT, so it is never pruned (a debug run's launch snapshot); answers the tree id. Blocking.
-pub fn take_kept(root: &Path, worktree: &Path, key: &str, name: &str) -> Result<String, String> {
+pub fn take_kept(root: &Path, worktree: &Path, key: &str, name: &str) -> villa::Result<String> {
     let (repo, tree) = write_tree(root, worktree, key, &[])?;
     git(&repo, None, None, &["update-ref", name, &tree])?;
     Ok(tree)
 }
 
 /// The ref NAME of WORKTREE's shadow repository under ROOT gone (its tree is collected with the next prune). Blocking.
-pub fn drop_kept(root: &Path, worktree: &Path, name: &str) -> Result<(), String> {
+pub fn drop_kept(root: &Path, worktree: &Path, name: &str) -> villa::Result<()> {
     git(
         &repo_of(root, worktree),
         None,
@@ -643,7 +646,7 @@ pub fn restore_into(
     to: &str,
     only: Option<&[PathBuf]>,
     extra: &[String],
-) -> Result<Restored, String> {
+) -> villa::Result<Restored> {
     use std::os::fd::AsFd;
     let repo = repo_of(root, source);
     let now = tree_now(root, source, target, extra)?;
@@ -653,7 +656,7 @@ pub fn restore_into(
         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
     )
-    .map_err(|e| format!("{}: {e}", target.display()))?;
+    .map_err(|e| villa::Error::io(format!("{}: {e}", target.display())))?;
     let dir = dir.as_fd();
     let mut r = Restored::default();
     for c in changes {

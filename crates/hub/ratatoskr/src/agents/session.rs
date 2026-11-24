@@ -96,18 +96,18 @@ pub(crate) fn no_session(id: &str) -> Error {
     invalid("id", format!("no session {id}"))
 }
 
-pub(crate) fn invalid(path: &str, message: impl Into<String>) -> Error {
+pub(crate) fn invalid(path: &str, message: impl ToString) -> Error {
     Error {
         code: ErrorCode::InvalidParams,
-        message: message.into(),
+        message: message.to_string(),
         path: Some(path.into()),
     }
 }
 
-pub(crate) fn internal(message: impl Into<String>) -> Error {
+pub(crate) fn internal(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }

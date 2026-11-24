@@ -78,7 +78,7 @@ pub fn job_web(
 /// The podman machine connection drgnx names on a Mac (S8): from `podman system connection list --format json`, the
 /// default when it is rootless, else the first rootless machine connection.  A rootful default is no reason to refuse;
 /// a machine without a rootless connection is (design §6).
-pub fn rootless_connection(list: &serde_json::Value) -> Result<String, String> {
+pub fn rootless_connection(list: &serde_json::Value) -> villa::Result<String> {
     let rows = list.as_array().cloned().unwrap_or_default();
     let rootless = |r: &serde_json::Value| {
         let uri = r["URI"].as_str().unwrap_or("");
@@ -100,10 +100,10 @@ pub fn rootless_connection(list: &serde_json::Value) -> Result<String, String> {
         .next()
         .map(|n| n.trim_end_matches("-root").to_string())
         .unwrap_or_else(|| "podman-machine-default".into());
-    Err(format!(
+    Err(villa::Error::invalid(format!(
         "drgnx runs containers rootless, and podman machine `{m}` has no rootless connection: re-create the machine, \
          or add one with `podman system connection add`."
-    ))
+    )))
 }
 
 /// This host's podman architecture name.
@@ -455,7 +455,8 @@ mod tests {
         ]);
         let e = rootless_connection(&none).unwrap_err();
         assert!(
-            e.contains("podman machine `podman-machine-default` has no rootless connection"),
+            e.message()
+                .contains("podman machine `podman-machine-default` has no rootless connection"),
             "{e}"
         );
     }

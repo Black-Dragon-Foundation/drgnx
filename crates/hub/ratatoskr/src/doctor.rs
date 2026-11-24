@@ -613,7 +613,7 @@ pub fn status(env: &Env, json_out: bool) -> i32 {
             Some(pid) => {
                 if json_out {
                     crate::soft::out_line(
-                        &(json!({"running": true, "pid": pid, "error": e})).to_string(),
+                        &(json!({"running": true, "pid": pid, "error": e.message()})).to_string(),
                     );
                 } else {
                     crate::soft::out_line(&format!("running (pid {pid}), but status failed: {e}"));

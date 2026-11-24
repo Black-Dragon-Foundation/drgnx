@@ -15,7 +15,7 @@ struct Fake {
 }
 
 impl Probe for Fake {
-    fn variables(&self, reference: i64) -> BoxFut<'_, Result<Vec<Value>, String>> {
+    fn variables(&self, reference: i64) -> BoxFut<'_, villa::Result<Vec<Value>>> {
         self.asked
             .lock()
             .unwrap()
@@ -24,15 +24,15 @@ impl Probe for Fake {
             .children
             .get(&reference)
             .cloned()
-            .ok_or("no such reference".to_owned());
+            .ok_or_else(|| villa::Error::not_found("no such reference"));
         Box::pin(async move { r })
     }
-    fn evaluate(&self, expression: String) -> BoxFut<'_, Result<String, String>> {
+    fn evaluate(&self, expression: String) -> BoxFut<'_, villa::Result<String>> {
         let r = self
             .values
             .get(&expression)
             .cloned()
-            .ok_or(format!("cannot evaluate {expression}"));
+            .ok_or_else(|| villa::Error::invalid(format!("cannot evaluate {expression}")));
         self.asked
             .lock()
             .unwrap()
@@ -363,13 +363,13 @@ async fn javascript_objects_are_named_by_the_hidden_maps_tag() {
 struct Slow(Fake);
 
 impl Probe for Slow {
-    fn variables(&self, reference: i64) -> BoxFut<'_, Result<Vec<Value>, String>> {
+    fn variables(&self, reference: i64) -> BoxFut<'_, villa::Result<Vec<Value>>> {
         Box::pin(async move {
             crate::clock::sleep(std::time::Duration::from_secs(1)).await;
             self.0.variables(reference).await
         })
     }
-    fn evaluate(&self, expression: String) -> BoxFut<'_, Result<String, String>> {
+    fn evaluate(&self, expression: String) -> BoxFut<'_, villa::Result<String>> {
         self.0.evaluate(expression)
     }
 }

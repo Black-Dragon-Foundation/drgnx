@@ -224,9 +224,9 @@ async fn with_the_key_gone_runs_cannot_be_read_and_prune_still_works() {
     // still listed (its record's plain fields), never read
     assert_eq!(rec2.list(&root).len(), 1);
     let e = rec2.past_stop(&run, stop, None).unwrap_err();
-    assert!(e.contains("cannot be read"), "{e}");
+    assert!(e.message().contains("cannot be read"), "{e}");
     let e = rec2.get(&run, 0, 50).unwrap_err();
-    assert!(e.contains("cannot be read"), "{e}");
+    assert!(e.message().contains("cannot be read"), "{e}");
     assert!(rec2.run(&run).is_none());
     // retention goes on: 15 days after its end the run goes
     let now = crate::clock::wall_secs() + 15.0 * 86400.0;
@@ -259,7 +259,9 @@ async fn a_sent_run_opens_with_its_code_read_only_under_the_other_keyring() {
     let root2 = root_b.to_string_lossy().into_owned();
     let wrong = rec2.import_run(&root2, &out, "AAAA").await;
     assert!(
-        wrong.as_ref().is_err_and(|e| e.contains("share code")),
+        wrong
+            .as_ref()
+            .is_err_and(|e| e.message().contains("share code")),
         "{wrong:?}"
     );
     let got = rec2

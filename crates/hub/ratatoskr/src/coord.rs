@@ -665,7 +665,9 @@ impl Hub for ToolHub {
         let front = self.front();
         Box::pin(async move {
             match front {
-                Some(f) => crate::hook_points::at_hub_server(&f, sid, server, tool, args).await,
+                Some(f) => crate::hook_points::at_hub_server(&f, sid, server, tool, args)
+                    .await
+                    .map_err(|e| e.message().to_owned()),
                 None => Err("drgnx refused the tool call: the hub is starting".into()),
             }
         })
@@ -784,7 +786,9 @@ impl Hub for ToolHub {
                 .get()
                 .and_then(std::sync::Weak::upgrade)
                 .ok_or("the hub is starting")?;
-            crate::manager::tool(&front, &sid, op, args).await
+            crate::manager::tool(&front, &sid, op, args)
+                .await
+                .map_err(|e| e.message().to_owned())
         })
     }
 
@@ -798,7 +802,9 @@ impl Hub for ToolHub {
         let (front, sid) = (self.front(), sid.to_owned());
         Box::pin(async move {
             let f = front.ok_or("the hub is starting")?;
-            crate::debug::agent::tool(&f, &sid, op, args).await
+            crate::debug::agent::tool(&f, &sid, op, args)
+                .await
+                .map_err(|e| e.message().to_owned())
         })
     }
 
@@ -841,6 +847,7 @@ impl Hub for ToolHub {
                 .huddles
                 .reply(&f, &sid, &huddle, text, proposal)
                 .await
+                .map_err(|e| e.message().to_owned())
         })
     }
 
@@ -854,7 +861,9 @@ impl Hub for ToolHub {
         let (front, sid) = (self.front(), sid.to_owned());
         Box::pin(async move {
             let f = front.ok_or("the hub is starting")?;
-            crate::work::comments::reply_from(&f, &sid, &comment, &text).await
+            crate::work::comments::reply_from(&f, &sid, &comment, &text)
+                .await
+                .map_err(|e| e.message().to_owned())
         })
     }
 

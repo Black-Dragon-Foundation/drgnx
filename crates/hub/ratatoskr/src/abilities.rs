@@ -132,7 +132,7 @@ async fn before_tool(
     ctx: &AbilityCtx,
     name: &str,
     args: Value,
-) -> Result<Value, String> {
+) -> villa::Result<Value> {
     crate::hook_points::at_hub_server(front, &ctx.sid, "drgnx-plugins", name, args).await
 }
 
@@ -184,12 +184,7 @@ impl Drop for Withdraw {
 }
 
 /// The matrix's answer to this call: through, or why not. An Ask waits for the card's answer.
-async fn gate(
-    front: &Arc<Front>,
-    ctx: &AbilityCtx,
-    name: &str,
-    args: &Value,
-) -> Result<(), String> {
+async fn gate(front: &Arc<Front>, ctx: &AbilityCtx, name: &str, args: &Value) -> villa::Result<()> {
     let facts = serde_json::from_value(what(name, args)).unwrap_or_default();
     let action = ActionCtx {
         facts,
@@ -208,10 +203,12 @@ async fn gate(
         .await;
     let card = match first {
         Gate::Allow => return Ok(()),
-        Gate::Never(why) => return Err(why),
+        Gate::Never(why) => return Err(villa::Error::refused(why)),
         Gate::Ask(card) if card > 0 => card,
         Gate::Ask(_) => {
-            return Err("plugin.abilities needs the user's yes and no card could be made".into());
+            return Err(villa::Error::invalid(
+                "plugin.abilities needs the user's yes and no card could be made",
+            ));
         }
     };
     let _withdraw = Withdraw {
@@ -227,10 +224,10 @@ async fn gate(
             .db
             .read(move |c| Ok(gate.recheck(c, card, at)))
             .await
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| villa::Error::invalid(format!("{e:?}")))?;
         match now {
             Gate::Allow => return Ok(()),
-            Gate::Never(why) => return Err(why),
+            Gate::Never(why) => return Err(villa::Error::refused(why)),
             Gate::Ask(_) => {
                 crate::soft::done((&mut wait.settled).await, "abilities");
             }
@@ -239,30 +236,35 @@ async fn gate(
 }
 
 impl AbilityTool {
-    async fn run(&self, ctx: &AbilityCtx, args: Value) -> Result<Value, String> {
-        let front = ctx.front.upgrade().ok_or("the hub is ending")?;
+    async fn run(&self, ctx: &AbilityCtx, args: Value) -> villa::Result<Value> {
+        let front = ctx
+            .front
+            .upgrade()
+            .ok_or_else(|| villa::Error::invalid("the hub is ending"))?;
         let project = project_of(&front, &ctx.sid);
         let enabled = front.core.plugins.abilities_for(project.as_deref());
         if !enabled.iter().any(|p| p.hash == self.plugin.hash) {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{} is not enabled for this project",
                 self.plugin.manifest.name.as_str()
-            ));
+            )));
         }
         let args = before_tool(&front, ctx, &self.name, args).await?;
         brokkr::schema::check(&self.decl.input_schema, &args)
-            .map_err(|e| format!("{}: {}", e.path, e.message))?;
+            .map_err(|e| villa::Error::invalid(format!("{}: {}", e.path, e.message)))?;
         gate(&front, ctx, &self.name, &args).await?;
         // the hub's one host, and the plugin as loaded for its approved hash
         let plugins = &front.core.plugins;
         let (loaded, failed) =
             crate::hook_points::load(plugins, std::slice::from_ref(&self.plugin));
         let Some(loaded) = loaded.into_iter().next() else {
-            return Err(failed
-                .into_iter()
-                .next()
-                .map(|(_, why)| why)
-                .unwrap_or_default());
+            return Err(villa::Error::unavailable(
+                failed
+                    .into_iter()
+                    .next()
+                    .map(|(_, why)| why)
+                    .unwrap_or_default(),
+            ));
         };
         let host = plugins.host()?;
         let io = crate::plugins::host_io(
@@ -270,12 +272,12 @@ impl AbilityTool {
             Some((IoCtx::Session(ctx.sid.clone()), NetCell::ProviderOnly)),
             &[&self.plugin.manifest],
         )
-        .map_err(|e| e.message)?;
+        .map_err(|e| villa::Error::unavailable(e.message))?;
         host.call_ability(&loaded, self.decl.name.as_str(), args, io)
             .await
             .map_err(|e| match e {
-                CallError::Plugin(m) => m,
-                other => other.to_string(),
+                CallError::Plugin(m) => villa::Error::refused(m),
+                other => villa::Error::refused(other.to_string()),
             })
     }
 }
@@ -307,7 +309,7 @@ impl Tool<AbilityCtx> for AbilityTool {
                     text: v.to_string(),
                     structured: v.is_object().then_some(v),
                 },
-                Err(e) => ToolResult::Err(e),
+                Err(e) => ToolResult::Err(e.message().to_owned()),
             }
         })
     }

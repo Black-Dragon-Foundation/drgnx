@@ -98,23 +98,24 @@ fn random_id() -> String {
 
 impl Book {
     /// The notebook at PATH whose text is TEXT (the file's, read by the caller); ids are minted for cells that lack one.
-    pub fn open(path: &Path, text: String) -> Result<Book, String> {
+    pub fn open(path: &Path, text: String) -> villa::Result<Book> {
         if text.len() > MAX_NOTEBOOK_BYTES {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{}: too large for a notebook ({} MiB; the limit is {} MiB)",
                 path.display(),
                 text.len() >> 20,
                 MAX_NOTEBOOK_BYTES >> 20
-            ));
+            )));
         }
-        let nb = Notebook::parse(text, &mut random_id)
-            .map_err(|e| format!("{}: not a notebook: {e:?}", path.display()))?;
+        let nb = Notebook::parse(text, &mut random_id).map_err(|e| {
+            villa::Error::invalid(format!("{}: not a notebook: {e:?}", path.display()))
+        })?;
         if nb.cells().len() > MAX_CELLS {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{}: too many cells ({}; the limit is {MAX_CELLS})",
                 path.display(),
                 nb.cells().len()
-            ));
+            )));
         }
         let (language, kernelspec) = (short(nb.language()), short(nb.kernelspec_name()));
         let index = nb
@@ -369,7 +370,7 @@ impl Book {
     }
 
     /// Write the notebook to its file by a temporary file and a rename.
-    pub fn save(&mut self) -> Result<(), String> {
+    pub fn save(&mut self) -> villa::Result<()> {
         let text = self.render();
         let dir = self
             .path
@@ -379,7 +380,7 @@ impl Book {
         let name = self
             .path
             .file_name()
-            .ok_or("the notebook has no file name")?;
+            .ok_or_else(|| villa::Error::invalid("the notebook has no file name"))?;
         let d = rustix::fs::open(
             dir,
             rustix::fs::OFlags::RDONLY
@@ -387,12 +388,12 @@ impl Book {
                 | rustix::fs::OFlags::CLOEXEC,
             rustix::fs::Mode::empty(),
         )
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
+        .map_err(|e| villa::Error::io(format!("{}: {e}", dir.display())))?;
         let mode = std::fs::metadata(&self.path)
             .map(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o777)
             .unwrap_or(0o644);
         eitri::write_regular(d.as_fd(), Path::new(name), text.as_bytes(), mode)
-            .map_err(|e| format!("{}: {e}", self.path.display()))
+            .map_err(|e| villa::Error::io(format!("{}: {e}", self.path.display())))
     }
 }
 

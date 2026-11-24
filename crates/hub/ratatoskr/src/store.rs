@@ -46,8 +46,8 @@ impl WorkDb {
 
     async fn run<R: Send + 'static>(
         &self,
-        f: impl FnOnce(Option<&urdr::Connection>) -> Result<R, String> + Send + 'static,
-    ) -> Result<R, String> {
+        f: impl FnOnce(Option<&urdr::Connection>) -> villa::Result<R> + Send + 'static,
+    ) -> villa::Result<R> {
         let (reply, answer) = oneshot::channel();
         let job: Job = Box::new(move |c| {
             crate::soft::done(reply.send(f(c)), "reply send");
@@ -55,34 +55,34 @@ impl WorkDb {
         self.tx
             .send(job)
             .await
-            .map_err(|_| "the work.db thread is gone".to_string())?;
+            .map_err(|_| villa::Error::invalid("the work.db thread is gone"))?;
         answer
             .await
-            .map_err(|_| "the work.db thread dropped a read".to_string())?
+            .map_err(|_| villa::Error::invalid("the work.db thread dropped a read"))?
     }
 
     /// `meta.schema` of work.db; 0 when there is no file (or no `meta` yet).
-    pub async fn schema(&self) -> Result<u32, String> {
+    pub async fn schema(&self) -> villa::Result<u32> {
         self.run(|c| match c {
             None => Ok(0),
             Some(c) => urdr::meta(c, "schema")
                 .map(|v| v.and_then(|s| s.trim().parse().ok()).unwrap_or(0))
-                .map_err(|e| e.to_string()),
+                .map_err(|e| villa::Error::invalid(e.to_string())),
         })
         .await
     }
 
     /// `meta.KEY` of work.db (the `kv` table behind schema 7's `meta` view); none without a file or the key.
-    pub async fn meta(&self, key: &'static str) -> Result<Option<String>, String> {
+    pub async fn meta(&self, key: &'static str) -> villa::Result<Option<String>> {
         self.run(move |c| match c {
             None => Ok(None),
-            Some(c) => urdr::meta(c, key).map_err(|e| e.to_string()),
+            Some(c) => urdr::meta(c, key).map_err(|e| villa::Error::invalid(e.to_string())),
         })
         .await
     }
 
     /// The newest event's id: where the front's `events` broadcast starts (0 without a file, a table or a row).
-    pub async fn last_event_id(&self) -> Result<u64, String> {
+    pub async fn last_event_id(&self) -> villa::Result<u64> {
         self.run(|c| match c {
             None => Ok(0),
             Some(c) => match c.query_row("select coalesce(max(id), 0) from event", [], |r| {
@@ -90,7 +90,7 @@ impl WorkDb {
             }) {
                 Ok(n) => Ok(n.max(0) as u64),
                 Err(e) if e.to_string().contains("no such table") => Ok(0),
-                Err(e) => Err(e.to_string()),
+                Err(e) => Err(villa::Error::invalid(e.to_string())),
             },
         })
         .await
@@ -103,7 +103,7 @@ impl WorkDb {
         &self,
         since: Option<u64>,
         limit: Option<u64>,
-    ) -> Result<EventsPage, String> {
+    ) -> villa::Result<EventsPage> {
         let since = since.unwrap_or(0);
         let limit = match limit {
             Some(n) if n > 0 => n.min(EVENTS_MAX),
@@ -112,7 +112,9 @@ impl WorkDb {
         let events = self
             .run(move |c| match c {
                 None => Ok(vec![]),
-                Some(c) => event_rows(c, since, limit).map_err(|e| e.to_string()),
+                Some(c) => {
+                    event_rows(c, since, limit).map_err(|e| villa::Error::invalid(e.to_string()))
+                }
             })
             .await?;
         Ok(EventsPage {

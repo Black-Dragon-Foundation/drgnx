@@ -101,15 +101,17 @@ pub fn plan(
     ports: &[u16],
     tmp: &Path,
     preload: &Path,
-) -> Result<Plan, String> {
+) -> villa::Result<Plan> {
     if config.get("request").and_then(Value::as_str) != Some("launch") {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{} inside a port block runs a launch configuration only (an attach to a running process cannot be moved into the sandbox)",
             adapter.name
-        ));
+        )));
     }
     let [a, b, children @ ..] = ports else {
-        return Err("a port block needs at least three ports".into());
+        return Err(villa::Error::invalid(
+            "a port block needs at least three ports",
+        ));
     };
     let cwd = config
         .get("cwd")
@@ -123,16 +125,16 @@ pub fn plan(
     match adapter.id.as_str() {
         "debugpy" => {
             let Found::Python(py) = found else {
-                return Err("debugpy: its Python was not found".into());
+                return Err(villa::Error::invalid("debugpy: its Python was not found"));
             };
             let py = py.display().to_string();
             let target: Vec<String> = match (s("program"), s("module")) {
                 (Some(p), _) => vec![p.to_owned()],
                 (None, Some(m)) => vec!["-m".into(), m.to_owned()],
                 (None, None) => {
-                    return Err(
-                        "debugpy inside a port block needs a program or a module to start".into(),
-                    );
+                    return Err(villa::Error::invalid(
+                        "debugpy inside a port block needs a program or a module to start",
+                    ));
                 }
             };
             let python = match config.get("python") {
@@ -195,7 +197,9 @@ pub fn plan(
             })
         }
         "js-debug" => {
-            let program = s("program").ok_or("js-debug inside a port block needs a program")?;
+            let program = s("program").ok_or_else(|| {
+                villa::Error::invalid("js-debug inside a port block needs a program")
+            })?;
             let (_, adapter_argv) = adapters::command(adapter, found, env, Some(*a))?;
             let mut argv = vec![s("runtimeExecutable").unwrap_or("node").to_owned()];
             argv.extend(strs(config.get("runtimeArgs")));
@@ -266,10 +270,10 @@ pub fn plan(
                 },
             })
         }
-        _ => Err(format!(
+        _ => Err(villa::Error::invalid(format!(
             "{} does not run inside a port block (lldb-dap runs outside the sandbox on macOS; delve needs ptrace)",
             adapter.name
-        )),
+        ))),
     }
 }
 
@@ -293,7 +297,7 @@ pub const DEBUGGEE_LISTEN_WITHIN: Duration = Duration::from_secs(30);
 
 /// What starts a process of the session inside its sandbox (macOS: Seatbelt with the block's ports): the bare
 /// command in, the sandboxed one out.
-pub type Seal = Arc<dyn Fn(Spec) -> BoxFut<'static, Result<Spec, String>> + Send + Sync>;
+pub type Seal = Arc<dyn Fn(Spec) -> BoxFut<'static, villa::Result<Spec>> + Send + Sync>;
 
 /// A session's adapter and program inside its block. The block is held for the launcher's life (the session's).
 pub struct Blocked {
@@ -333,15 +337,17 @@ impl Blocked {
     }
 
     /// SPEC through the seal, if there is one.
-    async fn seal(&self, spec: Spec) -> Result<Spec, String> {
+    async fn seal(&self, spec: Spec) -> villa::Result<Spec> {
         match &self.seal {
             Some(seal) => seal(spec).await,
             None => Ok(spec),
         }
     }
 
-    fn spec(&self, argv: &[String], add: &[(String, String)], cwd: &Path) -> Result<Spec, String> {
-        let (program, args) = argv.split_first().ok_or("an empty command line")?;
+    fn spec(&self, argv: &[String], add: &[(String, String)], cwd: &Path) -> villa::Result<Spec> {
+        let (program, args) = argv
+            .split_first()
+            .ok_or_else(|| villa::Error::invalid("an empty command line"))?;
         let mut env: Vec<(OsString, OsString)> = self
             .base
             .iter()
@@ -360,7 +366,7 @@ impl Blocked {
         })
     }
 
-    fn debuggee_spec(&self) -> Result<Spec, String> {
+    fn debuggee_spec(&self) -> villa::Result<Spec> {
         let d = &self.plan.debuggee;
         let cwd = if d.cwd.as_os_str().is_empty() {
             self.cwd.clone()
@@ -372,11 +378,11 @@ impl Blocked {
 }
 
 /// The program, started; nobody reads its stdout (the adapters send what it prints as output events): drained.
-async fn start_debuggee(spec: Spec) -> Result<draugr::Child, String> {
+async fn start_debuggee(spec: Spec) -> villa::Result<draugr::Child> {
     let shown = spec.program.display().to_string();
     let mut child = draugr::spawn(spec)
         .await
-        .map_err(|e| format!("{shown}: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("{shown}: {e}")))?;
     started(child.id());
     if let Some(mut out) = child.take_stdout() {
         crate::clock::spawn("debug:debuggee-stdout", async move {
@@ -464,20 +470,20 @@ fn local(port: u16) -> SocketAddr {
 /// Waits (at most WITHIN) until PORT listens with every listener in GROUP (a process the hub started leads its own):
 /// the hub connects to it, or starts a program that will, only then. A stranger's listener (the probe and the bind
 /// are apart) is an error at once, never connected to.
-pub(super) async fn wait_owned(port: u16, group: i32, within: Duration) -> Result<(), String> {
+pub(super) async fn wait_owned(port: u16, group: i32, within: Duration) -> villa::Result<()> {
     let deadline = crate::clock::now() + within;
     loop {
         let owned = crate::clock::blocking(move || super::ports::owned(port, &[group]))
             .await
-            .map_err(|e| e.to_string())??;
+            .map_err(|e| villa::Error::invalid(e.to_string()))??;
         if owned {
             return Ok(());
         }
         if crate::clock::now() >= deadline {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "nothing listened on port {port} within {} s",
                 within.as_secs()
-            ));
+            )));
         }
         crate::clock::sleep(Duration::from_millis(50)).await;
     }
@@ -485,16 +491,17 @@ pub(super) async fn wait_owned(port: u16, group: i32, within: Duration) -> Resul
 
 /// E (the adapter's port never listened) with what says why: whether the adapter (process PID) still runs, and the
 /// end of its stderr (a sandbox's refusal shows there).
-pub(super) fn why_not_listening(e: String, pid: i32, stderr: &str) -> String {
+pub(super) fn why_not_listening(e: villa::Error, pid: i32, stderr: &str) -> villa::Error {
     // SAFETY: kill(2) with signal 0 only asks whether the process exists.
     let alive = unsafe { libc::kill(pid, 0) } == 0;
     let state = if alive { "still runs" } else { "had exited" };
     let stderr = stderr.trim();
-    if stderr.is_empty() {
+    let message = if stderr.is_empty() {
         format!("{e} (the adapter {state}, nothing on its stderr)")
     } else {
         format!("{e} (the adapter {state}; its stderr ends:\n{stderr})")
-    }
+    };
+    villa::Error::new(e.kind(), message)
 }
 
 impl Launcher for Blocked {
@@ -505,7 +512,7 @@ impl Launcher for Blocked {
         start.request = self.plan.request;
         start.arguments = self.plan.arguments.clone();
     }
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
             let slot: Arc<Mutex<Option<draugr::Child>>> = Arc::default();
             // js-debug's program waits at its first line for the attach: it starts first
@@ -526,7 +533,8 @@ impl Launcher for Blocked {
                     .await?,
             )
             .await
-            .map_err(|e| format!("{}: {e}", self.plan.adapter[0]))?;
+            .map_err(|e| format!("{}: {e}", self.plan.adapter[0]))
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let adapter_pid = adapter.id();
             started(adapter_pid);
             *self.adapter_group.lock().unwrap_or_else(|e| e.into_inner()) = Some(adapter_pid);
@@ -605,10 +613,11 @@ impl Launcher for Blocked {
     }
 
     /// js-debug's children (`startDebugging`) are second connections to the adapter's port.
-    fn child(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn child(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
             let group = (*self.adapter_group.lock().unwrap_or_else(|e| e.into_inner()))
-                .ok_or("the session's adapter is not running")?;
+                .ok_or("the session's adapter is not running")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             wait_owned(self.plan.port, group, DEBUGGEE_LISTEN_WITHIN).await?;
             Ok(super::wire::over_tcp(
                 super::wire::connect_tcp(local(self.plan.port)).await?,

@@ -75,7 +75,10 @@ fn when_every_block_is_taken_the_session_is_refused_with_the_range() {
     let blocks = Blocks::with(46300..46316, 8, |p| p != 46310, &locks(&t));
     let _a = blocks.claim().unwrap();
     let e = blocks.claim().unwrap_err();
-    assert!(e.contains("46300") && e.contains("46315"), "{e}");
+    assert!(
+        e.message().contains("46300") && e.message().contains("46315"),
+        "{e}"
+    );
 }
 
 #[test]
@@ -131,7 +134,7 @@ fn a_lock_directory_others_could_empty_is_refused() {
     let e = Blocks::with(46500..46508, 8, |_| true, &d)
         .claim()
         .unwrap_err();
-    assert!(e.contains("sticky"), "{e}");
+    assert!(e.message().contains("sticky"), "{e}");
 }
 
 const HOLDER: &str = "debug::tests_ports::holder_of_a_block_for_another_test";
@@ -203,7 +206,7 @@ fn a_listener_is_the_sessions_only_when_its_process_group_is() {
     assert_eq!(ports::owned(p, &[me]), Ok(true));
     // another group's listener: never connected to, and named
     let e = ports::owned(p, &[me + 1_000_000]).unwrap_err();
-    assert!(e.contains(&p.to_string()), "{e}");
+    assert!(e.message().contains(&p.to_string()), "{e}");
     drop(held);
 }
 
@@ -258,7 +261,7 @@ fn a_listener_that_another_process_of_the_account_could_join_is_refused() {
     let (shared, p) = listen(0, true);
     let e = ports::exclusively_owned(p, &[me]).unwrap_err();
     assert!(
-        e.contains(&p.to_string()) && e.contains("SO_REUSEPORT"),
+        e.message().contains(&p.to_string()) && e.message().contains("SO_REUSEPORT"),
         "{e}"
     );
     // a second same-uid listener on the port (it joined the group): the group's check names it as well, and it is refused too
@@ -325,7 +328,8 @@ fn a_command_that_does_not_answer_is_killed_at_its_deadline() {
     c.arg("30");
     let r = ports::output_within(c, std::time::Duration::from_millis(300));
     assert!(
-        r.as_ref().is_err_and(|e| e.contains("did not answer")),
+        r.as_ref()
+            .is_err_and(|e| e.message().contains("did not answer")),
         "{r:?}"
     );
     let mut c = Command::new("echo");

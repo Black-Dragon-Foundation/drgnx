@@ -67,7 +67,7 @@ impl FakeTrees {
 }
 
 impl Trees for FakeTrees {
-    fn make<'a>(&'a self, _: &'a RunInfo, id: &'a str) -> BoxFut<'a, Result<PathBuf, String>> {
+    fn make<'a>(&'a self, _: &'a RunInfo, id: &'a str) -> BoxFut<'a, villa::Result<PathBuf>> {
         Box::pin(async move {
             self.made.lock().unwrap().push(id.to_owned());
             let w = self.root().join(id).join("w");
@@ -77,7 +77,7 @@ impl Trees for FakeTrees {
             Ok(w)
         })
     }
-    fn scratch(&self, id: &str) -> Result<PathBuf, String> {
+    fn scratch(&self, id: &str) -> villa::Result<PathBuf> {
         let tmp = self.root().join(id).join("tmp");
         if self.base.is_some() {
             std::fs::create_dir_all(&tmp).unwrap();
@@ -125,9 +125,15 @@ impl Launcher for OneMock {
             start.arguments = a.clone();
         }
     }
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
-            let steps = self.script.lock().unwrap().take().ok_or("no script")?;
+            let steps = self
+                .script
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or("no script")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let script: Script = serde_json::from_value(Value::Array(steps)).unwrap();
             let (a, b) = tokio::io::duplex(1 << 20);
             let (cr, cw) = tokio::io::split(a);
@@ -154,7 +160,7 @@ impl Sealer for MockSealer {
         tree: &Path,
         config: &Value,
         tmp: &Path,
-    ) -> Result<Arc<dyn Launcher>, String> {
+    ) -> villa::Result<Arc<dyn Launcher>> {
         assert_eq!(adapter, "debugpy");
         // the sandbox's temp is never inside the tree
         assert!(!tmp.starts_with(tree), "{tmp:?} in {tree:?}");
@@ -309,11 +315,11 @@ async fn what_is_refused_and_what_asks() {
     let (f, ev, _, _) = setup(vec![]);
     let mut a = ask(Change::Nothing);
     a.run = "nope".into();
-    assert!(f.fork(a).unwrap_err().contains("no recorded run"));
+    assert!(f.fork(a).unwrap_err().message().contains("no recorded run"));
     // the configuration resolves differently now: refused
     let mut a = ask(Change::Nothing);
     a.resolved["program"] = json!("/p/other.py");
-    assert!(f.fork(a).unwrap_err().contains("differently"));
+    assert!(f.fork(a).unwrap_err().message().contains("differently"));
     assert!(ev.forks().is_empty());
 }
 
@@ -535,7 +541,7 @@ async fn a_trace_reaches_its_stop_with_the_env_and_files_it_was_given() {
         )
         .await
         .unwrap_err();
-    assert!(e.contains("inside the tree"), "{e}");
+    assert!(e.message().contains("inside the tree"), "{e}");
     assert_eq!(*trees.made.lock().unwrap(), ["t1"]);
     // a configuration resolved differently is refused too
     let mut r = resolved();
@@ -544,7 +550,7 @@ async fn a_trace_reaches_its_stop_with_the_env_and_files_it_was_given() {
         .trace("r1", 2, r, |_: &Path| vec![], vec![], vec![])
         .await
         .unwrap_err();
-    assert!(e.contains("differently"), "{e}");
+    assert!(e.message().contains("differently"), "{e}");
 }
 
 /// A plain run's adapter: launch in TREE, then BODY, then the session's end.
@@ -702,7 +708,7 @@ async fn a_plain_run_past_its_time_box_is_timed_out_not_an_error() {
         )
         .await
         .unwrap_err();
-    assert!(e.contains("inside the tree"), "{e}");
+    assert!(e.message().contains("inside the tree"), "{e}");
 }
 
 #[test]
@@ -777,14 +783,14 @@ async fn a_fix_is_run_in_a_fresh_tree_with_its_files() {
         .check_fix("r1", resolved(), &bad, watch, Duration::from_secs(60))
         .await
         .unwrap_err();
-    assert!(e.contains("not a path inside the tree"), "{e}");
+    assert!(e.message().contains("not a path inside the tree"), "{e}");
 }
 
 /// A fork an agent made says whose it is in its view, which `view` reads back.
 #[tokio::test(start_paused = true)]
 async fn a_forks_view_names_the_agent_that_made_it() {
     let (f, _, _, _) = setup(vec![]);
-    assert!(f.view("f9").unwrap_err().contains("no fork f9"));
+    assert!(f.view("f9").unwrap_err().message().contains("no fork f9"));
     let Made::Fork(id) = f.fork(ask(Change::Nothing)).unwrap() else {
         panic!("no fork")
     };

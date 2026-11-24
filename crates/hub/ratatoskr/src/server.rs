@@ -607,25 +607,27 @@ pub async fn run(args: ServeArgs) -> Exit {
 /// may `ptrace` it or read its memory.  Linux and Android: `PR_SET_DUMPABLE 0`; macOS: `PT_DENY_ATTACH` (it fails
 /// when the hub was started under a debugger or tracer); elsewhere nothing can be done.  An `Err` says why: the hub
 /// then serves, but refuses every key (`Gate::set_hardened`, fail closed), and `status`/`doctor` say so.
-pub fn harden() -> Result<(), String> {
+pub fn harden() -> villa::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     let r = rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
-        .map_err(|e| format!("cannot make the hub not dumpable: {e}"));
+        .map_err(|e| villa::Error::invalid(format!("cannot make the hub not dumpable: {e}")));
     #[cfg(target_os = "macos")]
     let r = {
         // SAFETY: PT_DENY_ATTACH takes no address or data
         let denied = unsafe { libc::ptrace(libc::PT_DENY_ATTACH, 0, std::ptr::null_mut(), 0) };
         if denied != 0 {
-            Err(format!(
+            Err(villa::Error::invalid(format!(
                 "cannot deny debuggers the hub: {}",
                 std::io::Error::last_os_error()
-            ))
+            )))
         } else {
             Ok(())
         }
     };
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
-    let r = Err("this platform cannot keep other processes out of the hub's memory".to_string());
+    let r = Err(villa::Error::io(
+        "this platform cannot keep other processes out of the hub's memory",
+    ));
     if let Err(why) = &r {
         tracing::warn!("{why}: provider keys are refused");
     }
@@ -634,7 +636,7 @@ pub fn harden() -> Result<(), String> {
 
 /// Every process group `runtime.db` recorded (a crashed hub's, or an older hub's Lisp backend, purpose `backend`)
 /// reaped: a live one whose pid, start time and boot still match is killed, a reused pid is left alone.  The rows go.
-async fn reap_recorded(db: &urdr::Handle) -> Result<(), String> {
+async fn reap_recorded(db: &urdr::Handle) -> villa::Result<()> {
     let rows: Vec<draugr::Record> = db
         .read(|c| {
             let mut st = c.prepare("select pid, start_time, pgid, boot_id from proc")?;
@@ -652,7 +654,7 @@ async fn reap_recorded(db: &urdr::Handle) -> Result<(), String> {
             Ok(rows)
         })
         .await
-        .map_err(|e| format!("cannot read runtime.db's processes: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("cannot read runtime.db's processes: {e}")))?;
     let outcomes = draugr::reap(&rows, &draugr::RealSignaller).await;
     for (r, o) in rows.iter().zip(&outcomes) {
         if *o == draugr::ReapOutcome::Killed {
@@ -663,7 +665,7 @@ async fn reap_recorded(db: &urdr::Handle) -> Result<(), String> {
     }
     db.write(|c| Ok(c.execute("delete from proc", [])?))
         .await
-        .map_err(|e| format!("cannot clear runtime.db's processes: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("cannot clear runtime.db's processes: {e}")))?;
     Ok(())
 }
 
@@ -1082,22 +1084,23 @@ fn bind_agent(
     env: &Env,
     socket: &Path,
     a: &AgentSocket,
-) -> Result<(PathBuf, UnixListener, Socket), String> {
-    let dir = paths::make_session_dir(env, socket, &a.sid).map_err(|e| e.to_string())?;
+) -> villa::Result<(PathBuf, UnixListener, Socket)> {
+    let dir = paths::make_session_dir(env, socket, &a.sid)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let path = dir.join(paths::SESSION_HUB_SOCKET);
     match std::fs::remove_file(&path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(format!(
+            return Err(villa::Error::io(format!(
                 "cannot remove the stale socket {}: {e}",
                 path.display()
-            ));
+            )));
         }
         _ => {}
     }
-    let listener =
-        UnixListener::bind(&path).map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
+    let listener = UnixListener::bind(&path)
+        .map_err(|e| villa::Error::invalid(format!("cannot bind {}: {e}", path.display())))?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| format!("cannot chmod {}: {e}", path.display()))?;
+        .map_err(|e| villa::Error::io(format!("cannot chmod {}: {e}", path.display())))?;
     tracing::info!(sid = a.sid, "agent socket {}", path.display());
     let s = Socket::Agent {
         sid: a.sid.clone(),
@@ -1119,23 +1122,23 @@ fn remove_all(dirs: &[PathBuf]) {
 }
 
 /// Under the lock: the stale socket removed, the cap written, the socket bound and made 0600.
-fn bind(socket: &Path, cap_path: &Path) -> Result<(UnixListener, Cap), String> {
+fn bind(socket: &Path, cap_path: &Path) -> villa::Result<(UnixListener, Cap)> {
     match std::fs::remove_file(socket) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(format!(
+            return Err(villa::Error::io(format!(
                 "cannot remove the stale socket {}: {e}",
                 socket.display()
-            ));
+            )));
         }
         _ => {}
     }
-    let cap = Cap::generate().map_err(|e| format!("no cap: {e}"))?;
+    let cap = Cap::generate().map_err(|e| villa::Error::invalid(format!("no cap: {e}")))?;
     write_private(cap_path, cap.expose().as_bytes())
-        .map_err(|e| format!("cannot write {}: {e}", cap_path.display()))?;
-    let listener =
-        UnixListener::bind(socket).map_err(|e| format!("cannot bind {}: {e}", socket.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("cannot write {}: {e}", cap_path.display())))?;
+    let listener = UnixListener::bind(socket)
+        .map_err(|e| villa::Error::invalid(format!("cannot bind {}: {e}", socket.display())))?;
     std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| format!("cannot chmod {}: {e}", socket.display()))?;
+        .map_err(|e| villa::Error::io(format!("cannot chmod {}: {e}", socket.display())))?;
     // close-on-exec, and never a child's (call 14)
     draugr::spawn::never_pass(&listener);
     Ok((listener, cap))

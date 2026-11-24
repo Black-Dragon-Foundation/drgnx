@@ -74,7 +74,7 @@ pub fn file_uri(p: &Path) -> String {
 
 /// S with `{tools}`, `{root}`, `{root-uri}`, `{session}`, `{os}`, `{arch-suffix}` and `{glob:DIR/PATTERN}` (relative to the
 /// tools folder, one `*` in the last part, exactly one match) filled in. Another brace word is an error naming it.
-pub fn expand(s: &str, v: &Vars) -> Result<String, String> {
+pub fn expand(s: &str, v: &Vars) -> villa::Result<String> {
     let mut out = String::new();
     let mut rest = s;
     while let Some(open) = rest.find('{') {
@@ -82,7 +82,7 @@ pub fn expand(s: &str, v: &Vars) -> Result<String, String> {
         let tail = &rest[open + 1..];
         let close = tail
             .find('}')
-            .ok_or_else(|| format!("{s:?}: a {{ without its }}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("{s:?}: a {{ without its }}")))?;
         let name = &tail[..close];
         out.push_str(&match name {
             "tools" => v.tools.to_string_lossy().into_owned(),
@@ -101,8 +101,10 @@ pub fn expand(s: &str, v: &Vars) -> Result<String, String> {
                 ""
             })
             .into(),
-            g if g.starts_with("glob:") => glob(&v.tools, &g[5..])?,
-            other => return Err(format!("{s:?}: unknown {{{other}}}")),
+            g if g.starts_with("glob:") => {
+                glob(&v.tools, &g[5..]).map_err(|e| villa::Error::invalid(e.to_string()))?
+            }
+            other => return Err(villa::Error::invalid(format!("{s:?}: unknown {{{other}}}"))),
         });
         rest = &tail[close + 1..];
     }
@@ -111,26 +113,29 @@ pub fn expand(s: &str, v: &Vars) -> Result<String, String> {
 }
 
 /// The one file `REL` (a path under TOOLS whose last part may hold one `*`) names.
-fn glob(tools: &Path, rel: &str) -> Result<String, String> {
+fn glob(tools: &Path, rel: &str) -> villa::Result<String> {
     let rel = Path::new(rel);
     if rel
         .components()
         .any(|c| !matches!(c, std::path::Component::Normal(_)))
     {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{{glob:{}}}: a path under the tools folder",
             rel.display()
-        ));
+        )));
     }
     let (dir, pat) = (
         tools.join(rel.parent().unwrap_or(Path::new(""))),
         rel.file_name().and_then(|n| n.to_str()).unwrap_or_default(),
     );
-    let (pre, post) = pat
-        .split_once('*')
-        .ok_or_else(|| format!("{{glob:{}}}: the last part holds a *", rel.display()))?;
+    let (pre, post) = pat.split_once('*').ok_or_else(|| {
+        villa::Error::invalid(format!(
+            "{{glob:{}}}: the last part holds a *",
+            rel.display()
+        ))
+    })?;
     let mut hits: Vec<String> = std::fs::read_dir(&dir)
-        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .map_err(|e| villa::Error::io(format!("{}: {e}", dir.display())))?
         .flatten()
         .filter_map(|e| e.file_name().into_string().ok())
         .filter(|n| n.len() >= pre.len() + post.len() && n.starts_with(pre) && n.ends_with(post))
@@ -138,21 +143,21 @@ fn glob(tools: &Path, rel: &str) -> Result<String, String> {
     hits.sort();
     match hits.as_slice() {
         [one] => Ok(dir.join(one).to_string_lossy().into_owned()),
-        [] => Err(format!(
+        [] => Err(villa::Error::invalid(format!(
             "{{glob:{}}} matches nothing in {}",
             rel.display(),
             dir.display()
-        )),
-        many => Err(format!(
+        ))),
+        many => Err(villa::Error::invalid(format!(
             "{{glob:{}}} matches {} files",
             rel.display(),
             many.len()
-        )),
+        ))),
     }
 }
 
 /// VALUE with every string in it filled in by [`expand`].
-fn expand_value(value: &Value, v: &Vars) -> Result<Value, String> {
+fn expand_value(value: &Value, v: &Vars) -> villa::Result<Value> {
     Ok(match value {
         Value::String(s) => Value::String(expand(s, v)?),
         Value::Array(a) => Value::Array(
@@ -163,28 +168,29 @@ fn expand_value(value: &Value, v: &Vars) -> Result<Value, String> {
         Value::Object(o) => Value::Object(
             o.iter()
                 .map(|(k, x)| Ok((k.clone(), expand_value(x, v)?)))
-                .collect::<Result<Map<_, _>, String>>()?,
+                .collect::<villa::Result<Map<_, _>>>()
+                .map_err(|e| villa::Error::invalid(e.to_string()))?,
         ),
         other => other.clone(),
     })
 }
 
 /// A fill argument that is exactly `${config:KEY?}`: the launch's string KEY, or null when the launch has none.
-pub(super) fn optional_config(s: &str, arguments: &Value) -> Option<Result<Value, String>> {
+pub(super) fn optional_config(s: &str, arguments: &Value) -> Option<villa::Result<Value>> {
     let key = s.strip_prefix("${config:")?.strip_suffix("?}")?;
     Some(match arguments.get(key) {
         None | Some(Value::Null) => Ok(Value::Null),
         Some(v) if v.is_string() => Ok(v.clone()),
         // a key the launch has, of another type, is the same error `${config:KEY}` gives
-        Some(_) => Err(format!(
+        Some(_) => Err(villa::Error::invalid(format!(
             "the launch has no string {key} for ${{config:{key}}}"
-        )),
+        ))),
     })
 }
 
 /// A fill argument: `${config:KEY}` (a string key of the launch arguments), `${file}`, then [`expand`]'s braces. A value
 /// put in is never read for variables again.
-fn fill_arg(s: &str, arguments: &Value, v: &Vars) -> Result<Value, String> {
+fn fill_arg(s: &str, arguments: &Value, v: &Vars) -> villa::Result<Value> {
     let mut out = String::new();
     let mut rest = s;
     while let Some(at) = rest.find("${") {
@@ -192,22 +198,32 @@ fn fill_arg(s: &str, arguments: &Value, v: &Vars) -> Result<Value, String> {
         let tail = &rest[at + 2..];
         let close = tail
             .find('}')
-            .ok_or_else(|| format!("{s:?}: a ${{ without its }}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("{s:?}: a ${{ without its }}")))?;
         let name = &tail[..close];
         match name {
             "file" => out.push_str(
                 &v.file
                     .as_ref()
-                    .ok_or("there is no current file for ${file}")?
+                    .ok_or_else(|| villa::Error::invalid("there is no current file for ${file}"))?
                     .to_string_lossy(),
             ),
             n if n.starts_with("config:") => {
                 let key = &n[7..];
-                out.push_str(arguments.get(key).and_then(Value::as_str).ok_or_else(|| {
-                    format!("the launch has no string {key} for ${{config:{key}}}")
-                })?);
+                out.push_str(
+                    arguments
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            format!("the launch has no string {key} for ${{config:{key}}}")
+                        })
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?,
+                );
             }
-            other => return Err(format!("{s:?}: unknown ${{{other}}}")),
+            other => {
+                return Err(villa::Error::invalid(format!(
+                    "{s:?}: unknown ${{{other}}}"
+                )));
+            }
         }
         rest = &tail[close + 1..];
     }
@@ -217,18 +233,18 @@ fn fill_arg(s: &str, arguments: &Value, v: &Vars) -> Result<Value, String> {
 
 /// What a server's answer may put into the launch arguments: a plain string, or a list of plain strings, none holding a
 /// variable (`${`), none past its cap. An object, a number, a list in a list or a variable is refused with its key.
-pub fn plain(key: &str, value: &Value) -> Result<Value, String> {
+pub fn plain(key: &str, value: &Value) -> villa::Result<Value> {
     let ok_string = |s: &str| {
         if s.len() > MAX_STRING {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{key}: a string of {} bytes, over {MAX_STRING}",
                 s.len()
-            ));
+            )));
         }
         if s.contains("${") {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{key}: an answer holding a variable (${{…}}) is refused"
-            ));
+            )));
         }
         Ok(())
     };
@@ -239,24 +255,24 @@ pub fn plain(key: &str, value: &Value) -> Result<Value, String> {
         }
         Value::Array(list) => {
             if list.len() > MAX_LIST {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "{key}: a list of {} items, over {MAX_LIST}",
                     list.len()
-                ));
+                )));
             }
             for item in list {
                 let Value::String(s) = item else {
-                    return Err(format!(
+                    return Err(villa::Error::invalid(format!(
                         "{key}: the answer is not a string or a list of strings"
-                    ));
+                    )));
                 };
                 ok_string(s)?;
             }
             Ok(value.clone())
         }
-        _ => Err(format!(
+        _ => Err(villa::Error::invalid(format!(
             "{key}: the answer is not a string or a list of strings"
-        )),
+        ))),
     }
 }
 
@@ -267,7 +283,7 @@ pub async fn fill_arguments(
     mut arguments: Value,
     v: &Vars,
     within: Duration,
-) -> Result<Value, String> {
+) -> villa::Result<Value> {
     if !arguments.is_object() {
         return Ok(arguments);
     }
@@ -294,7 +310,7 @@ pub async fn fill_arguments(
                     within,
                 )
                 .await
-                .map_err(|f| format!("{}: {f}", step.command))?;
+                .map_err(|f| villa::Error::invalid(format!("{}: {f}", step.command)))?;
             let empty = answer.as_array().is_some_and(Vec::is_empty);
             match step.retry_empty {
                 Some(secs) if empty && started.elapsed() < Duration::from_secs(secs) => {
@@ -333,7 +349,7 @@ pub async fn fill_arguments(
                             client.statuses(),
                             client.log_tail().iter().rev().take(3).collect::<Vec<_>>(),
                         )
-                    })?
+                    }).map_err(|e| villa::Error::invalid(e.to_string()))?
             }
             None => answer,
         };
@@ -348,7 +364,10 @@ pub async fn fill_arguments(
                 if put.optional {
                     continue;
                 }
-                return Err(format!("{}: the answer has no {}", step.command, put.key));
+                return Err(villa::Error::invalid(format!(
+                    "{}: the answer has no {}",
+                    step.command, put.key
+                )));
             };
             let value = plain(&put.key, value)?;
             if let Some(o) = arguments.as_object_mut() {
@@ -368,14 +387,14 @@ impl Drop for Work {
     }
 }
 
-fn work_dir(base: &Path) -> Result<Work, String> {
+fn work_dir(base: &Path) -> villa::Result<Work> {
     use std::os::unix::fs::DirBuilderExt;
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(base)
-        .map_err(|e| format!("{}: {e}", base.display()))?;
+        .map_err(|e| villa::Error::io(format!("{}: {e}", base.display())))?;
     let dir = base.join(format!(
         "s{}-{}",
         std::process::id(),
@@ -384,7 +403,7 @@ fn work_dir(base: &Path) -> Result<Work, String> {
     std::fs::DirBuilder::new()
         .mode(0o700)
         .create(&dir)
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
+        .map_err(|e| villa::Error::io(format!("{}: {e}", dir.display())))?;
     Ok(Work(dir))
 }
 
@@ -486,7 +505,7 @@ impl LspLauncher {
             .map(|l| (l.pid, l.session.clone()))
     }
 
-    async fn start(&self) -> Result<Connected, String> {
+    async fn start(&self) -> villa::Result<Connected> {
         let work = work_dir(&self.work_base)?;
         let vars = Vars {
             tools: self.tools.clone(),
@@ -500,11 +519,13 @@ impl LspLauncher {
             .iter()
             .map(|a| expand(a, &vars))
             .collect::<Result<_, _>>()?;
-        let (program, args) = argv.split_first().ok_or("an empty server command")?;
+        let (program, args) = argv
+            .split_first()
+            .ok_or_else(|| villa::Error::invalid("an empty server command"))?;
         if !Path::new(program).is_file() {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{program} is not installed: install the adapter with Debug: Install Adapter"
-            ));
+            )));
         }
         let mut child = draugr::spawn(draugr::Spec {
             program: PathBuf::from(program),
@@ -516,9 +537,9 @@ impl LspLauncher {
             new_session: false,
         })
         .await
-        .map_err(|e| format!("{program}: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("{program}: {e}")))?;
         let (Some(stdin), Some(stdout)) = (child.take_stdin(), child.take_stdout()) else {
-            return Err(format!("{program}: no stdio"));
+            return Err(villa::Error::invalid(format!("{program}: no stdio")));
         };
         let client = Client::new(stdout, stdin);
         let mut proc = LspProc {
@@ -541,7 +562,7 @@ impl LspLauncher {
                 Proc::wait(&mut proc).await;
                 let log = client.log_tail();
                 let tail = Proc::stderr_tail(&proc);
-                let mut msg = e;
+                let mut msg = e.message().to_owned();
                 if let Some(last) = log.last() {
                     msg.push_str(&format!(" (the server said: {last})"));
                 }
@@ -552,7 +573,7 @@ impl LspLauncher {
                         tail.lines().last().unwrap_or(tail)
                     ));
                 }
-                Err(msg)
+                Err(villa::Error::unavailable(msg))
             }
         }
     }
@@ -563,7 +584,7 @@ impl LspLauncher {
         client: &Client,
         vars: &Vars,
         proc: &LspProc,
-    ) -> Result<(u16, tokio::net::TcpStream), String> {
+    ) -> villa::Result<(u16, tokio::net::TcpStream)> {
         let root = self
             .spec
             .root
@@ -591,15 +612,17 @@ impl LspLauncher {
                 self.within.init,
             )
             .await
-            .map_err(step("initialize"))?;
+            .map_err(step("initialize")).map_err(|e| villa::Error::invalid(e.to_string()))?;
         client
             .notify("initialized", json!({}))
             .await
-            .map_err(step("initialized"))?;
+            .map_err(step("initialized"))
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         client
             .wait_ready(self.within.ready)
             .await
-            .map_err(step("start"))?;
+            .map_err(step("start"))
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         if let (Some(open), Some(file)) = (&self.spec.open_file, &self.file) {
             // the file as it is on disk (at most 1 MiB): a server makes a lone file's project when the file is opened
             let text = std::fs::read(file)
@@ -613,7 +636,7 @@ impl LspLauncher {
                     json!({"textDocument": {"uri": file_uri(file), "languageId": open.language_id, "version": 1, "text": text}}),
                 )
                 .await
-                .map_err(step("didOpen"))?;
+                .map_err(step("didOpen")).map_err(|e| villa::Error::invalid(e.to_string()))?;
         }
         let args = self
             .spec
@@ -628,12 +651,18 @@ impl LspLauncher {
                 self.within.command,
             )
             .await
-            .map_err(step("the debug command"))?;
+            .map_err(step("the debug command"))
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let port = answer
             .as_u64()
             .and_then(|p| u16::try_from(p).ok())
             .filter(|p| *p > 0)
-            .ok_or_else(|| format!("{} answered {answer}, not a port", self.spec.debug_command))?;
+            .ok_or_else(|| {
+                villa::Error::invalid(format!(
+                    "{} answered {answer}, not a port",
+                    self.spec.debug_command
+                ))
+            })?;
         super::blocked::wait_owned(port, proc.child.id(), self.within.port).await?;
         let stream = super::wire::connect_tcp(SocketAddr::from(([127, 0, 0, 1], port))).await?;
         Ok((port, stream))
@@ -650,17 +679,21 @@ impl LspLauncher {
 }
 
 impl Launcher for LspLauncher {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(self.start())
     }
 
     /// A child session (`startDebugging`) is a second connection to the DAP server's port.
-    fn child(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn child(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
-            let (_, port) = self.live().ok_or("the language server is not running")?;
+            let (_, port) = self
+                .live()
+                .ok_or("the language server is not running")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let (pid, _) = self
                 .live_proc()
-                .ok_or("the language server is not running")?;
+                .ok_or("the language server is not running")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             // the port may have been freed and bound by another process since: only the server's own listener is joined
             super::blocked::wait_owned(port, pid, self.within.port).await?;
             let stream = super::wire::connect_tcp(SocketAddr::from(([127, 0, 0, 1], port))).await?;
@@ -672,15 +705,19 @@ impl Launcher for LspLauncher {
     }
 
     /// The launch arguments completed by the pack's `:fill` steps, asked of the running server.
-    fn fill(&self, arguments: Value) -> BoxFut<'_, Result<Value, String>> {
+    fn fill(&self, arguments: Value) -> BoxFut<'_, villa::Result<Value>> {
         Box::pin(async move {
             if self.spec.fill.is_empty() {
                 return Ok(arguments);
             }
-            let (client, _) = self.live().ok_or("the language server is not running")?;
+            let (client, _) = self
+                .live()
+                .ok_or("the language server is not running")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let (_, session) = self
                 .live_proc()
-                .ok_or("the language server is not running")?;
+                .ok_or("the language server is not running")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             fill_arguments(
                 &client,
                 &self.spec.fill,

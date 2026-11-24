@@ -31,24 +31,24 @@ pub struct Hub {
     pub views: Arc<NbViews>,
 }
 
-fn err(message: impl Into<String>) -> Error {
+fn err(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
 
 /// The folder the notebooks' private folder is made in: XDG_RUNTIME_DIR when it is an absolute path, else FALLBACK (the user's own
 /// folder in /tmp), which must itself be ours, private and not a link.
-pub(crate) fn runtime_dir(xdg: Option<PathBuf>, fallback: &Path) -> Result<PathBuf, String> {
+pub(crate) fn runtime_dir(xdg: Option<PathBuf>, fallback: &Path) -> villa::Result<PathBuf> {
     match xdg.filter(|p| p.is_absolute()) {
         Some(p) => Ok(p),
         None => spec::private_folder(fallback),
     }
 }
 
-fn make(front: &Front, views: &Arc<NbViews>) -> Result<Notebooks, String> {
+fn make(front: &Front, views: &Arc<NbViews>) -> villa::Result<Notebooks> {
     // SAFETY: geteuid has no preconditions.
     let uid = unsafe { libc::geteuid() };
     let runtime = runtime_dir(
@@ -87,7 +87,7 @@ impl Hub {
     /// The notebooks, made by MAKE the first time it works: an error is not kept.
     pub(crate) fn get_with(
         &self,
-        make: impl FnOnce() -> Result<Notebooks, String>,
+        make: impl FnOnce() -> villa::Result<Notebooks>,
     ) -> Result<Arc<Notebooks>, Error> {
         let mut slot = self
             .nb
@@ -169,7 +169,7 @@ pub async fn serve(
         Err(e) => return Ok(Err(e)),
     };
     let conn = caller.conn_id;
-    let ok = |r: Result<(), String>| r.map(|()| json!(true)).map_err(err);
+    let ok = |r: villa::Result<()>| r.map(|()| json!(true)).map_err(err);
     let views = &front.notebooks.views;
     Ok(match p {
         Params::NotebookOpen(p) => match nb.open(conn, std::path::Path::new(&p.path), p.text).await
@@ -322,10 +322,20 @@ mod tests {
         );
         // a loose one, or a link, is refused
         std::fs::set_permissions(&fallback, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(runtime_dir(None, &fallback).unwrap_err().contains("0700"));
+        assert!(
+            runtime_dir(None, &fallback)
+                .unwrap_err()
+                .message()
+                .contains("0700")
+        );
         let link = t.path().join("link");
         std::os::unix::fs::symlink(&made, &link).unwrap();
-        assert!(runtime_dir(None, &link).unwrap_err().contains("link"));
+        assert!(
+            runtime_dir(None, &link)
+                .unwrap_err()
+                .message()
+                .contains("link")
+        );
         // a runtime folder is not looked at, a relative one is not used
         assert_eq!(
             runtime_dir(Some(PathBuf::from("/run/user/1000")), &fallback).unwrap(),
@@ -342,7 +352,10 @@ mod tests {
         let hub = Hub::default();
         let t = tempfile::tempdir().unwrap();
         let sink = std::sync::Arc::new(crate::settings::agents::Editors::default());
-        assert!(hub.get_with(|| Err("no folder yet".into())).is_err());
+        assert!(
+            hub.get_with(|| Err(villa::Error::unavailable("no folder yet")))
+                .is_err()
+        );
         let made = hub.get_with(|| {
             Ok(Notebooks::new(
                 sink.clone(),
@@ -353,7 +366,9 @@ mod tests {
         });
         assert!(made.is_ok(), "the next call tries again");
         // and once made it is the same one
-        let again = hub.get_with(|| Err("not asked".into())).unwrap();
+        let again = hub
+            .get_with(|| Err(villa::Error::unavailable("not asked")))
+            .unwrap();
         assert!(std::sync::Arc::ptr_eq(&made.unwrap(), &again));
     }
 }

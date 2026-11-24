@@ -41,12 +41,12 @@ pub enum Gate {
 }
 
 /// The combined commit of BATCH on DIR's HEAD and its tree: (head, commit, tree).  Blocking.
-pub fn combined(dir: &Path, batch: &[Ready]) -> Result<(String, String, String), String> {
+pub fn combined(dir: &Path, batch: &[Ready]) -> villa::Result<(String, String, String)> {
     let head = git(dir, &["rev-parse", "HEAD"])?.trim().to_owned();
     let mut prev = head.clone();
     for m in batch {
         let tree = git(dir, &["merge-tree", "--write-tree", &prev, &m.tip])
-            .map_err(|e| format!("the batch's members don't merge: {e}"))?;
+            .map_err(|e| villa::Error::invalid(format!("the batch's members don't merge: {e}")))?;
         let tree = tree.lines().next().unwrap_or("").trim().to_owned();
         prev = git(
             dir,
@@ -153,7 +153,7 @@ async fn listing(
     head: &str,
     commit: &str,
     tree: &str,
-) -> Result<Result<Vec<Check>, Gate>, String> {
+) -> villa::Result<Result<Vec<Check>, Gate>> {
     let wt = listing_tree(dir, commit);
     let running = front.groups.running.lock().unwrap().get(tree).cloned();
     if let Some(id) = running {
@@ -205,10 +205,10 @@ async fn listing(
         .map(|_| ())
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| villa::Error::invalid(e.to_string()))??;
     let params =
         serde_json::from_value(listing_params(&wt, template, &format!("{head}..{commit}")))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let gate = crate::exec::Sealed {
         label: gate_sid("groups", &wt),
         tree: wt.clone(),
@@ -231,7 +231,7 @@ async fn listing(
                 crate::clock::blocking(move || remove_tree(&d, &wt)).await,
                 "crate::clock::blocking",
             );
-            Err(e.message)
+            Err(villa::Error::unavailable(e.message))
         }
     }
 }
@@ -256,14 +256,14 @@ pub async fn gate(
     dir: &Path,
     pack: &Pack,
     batch: &[Ready],
-) -> Result<Gate, String> {
+) -> villa::Result<Gate> {
     if pack.groups.is_empty() || !pack.on("affected-groups") || batch.is_empty() {
         return Ok(Gate::Pass);
     }
     let (d, b) = (dir.to_owned(), batch.to_vec());
     let (head, commit, tree) = crate::clock::blocking(move || combined(&d, &b))
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| villa::Error::invalid(e.to_string()))??;
     let cached = front.groups.by_tree.lock().unwrap().get(&tree).cloned();
     let groups = match cached {
         Some(g) => g,
@@ -290,7 +290,7 @@ pub async fn gate(
                             Ok(w)
                         })
                         .await
-                        .map_err(|e| e.to_string())?;
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?;
                     if vordr::gates::waived(&waivers, &tree).is_some() {
                         return Ok(Gate::Pass);
                     }
@@ -324,7 +324,7 @@ pub async fn gate(
             Ok((norn::read::evidence::of_task(c, &k)?, w))
         })
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if let Some(why) = vordr::gates::waived(&waivers, &tree) {
         tracing::info!("batch {key}: waived by the user: {why}");
         return Ok(Gate::Pass);
@@ -362,7 +362,10 @@ pub async fn gate(
         }
         Outcome::Missing(missing) => {
             for g in &missing {
-                if let Some(why) = start(front, &key, dir, &commit, &tree, &run_of(g)).await? {
+                if let Some(why) = start(front, &key, dir, &commit, &tree, &run_of(g))
+                    .await
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?
+                {
                     return Ok(Gate::Hold(format!("the group {}: {why}", g.name), tree));
                 }
             }
@@ -407,7 +410,7 @@ async fn reruns(
     red: &[Check],
     tree: &str,
     known: &(dyn Fn(&str) -> bool + Sync),
-) -> Result<Gate, String> {
+) -> villa::Result<Gate> {
     use vordr::gates::{State, selector_of, state_after};
     use vordr::reruns::{Verdict, verdict};
     // (task, commit, tree): the line's first ("" its task), then each tip alone
@@ -421,10 +424,10 @@ async fn reruns(
             let (_, c, t) = combined(&d, std::slice::from_ref(m))?;
             out.push((m.task.clone(), c, t));
         }
-        Ok::<_, String>(out)
+        Ok::<_, villa::Error>(out)
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| villa::Error::internal(e.to_string()))??;
     let keys: Vec<String> = runs
         .iter()
         .map(|(_, _, t)| format!("batch:{job}@{t}"))
@@ -439,7 +442,7 @@ async fn reruns(
                 .collect::<Result<Vec<_>, _>>()
         })
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let evidence: Vec<_> = evidence.iter().map(|e| here(e)).collect();
     let mut rows: Vec<Option<Vec<String>>> = Vec::new();
     // a one-member batch's tip alone is the batch's tree: its red groups run there once more first (a pass then is a
@@ -457,7 +460,10 @@ async fn reruns(
                     }
                 }
                 State::Missing => {
-                    if let Some(why) = start(front, &keys[i], dir, commit, t, &run_of(g)).await? {
+                    if let Some(why) = start(front, &keys[i], dir, commit, t, &run_of(g))
+                        .await
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?
+                    {
                         return Ok(Gate::Hold(
                             format!("the group {}: {why}", g.name),
                             t.clone(),

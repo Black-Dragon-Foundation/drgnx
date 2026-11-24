@@ -171,15 +171,19 @@ pub enum Sub {
 }
 
 /// The arguments after `browser`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<BrowserCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<BrowserCommand> {
     use lexopt::Arg::{Long, Value};
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let name = match p.next().map_err(e)? {
         Some(Value(v)) => v.string().map_err(e)?,
-        Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err("browser needs a subcommand: install or list".into()),
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
+        None => {
+            return Err(villa::Error::invalid(
+                "browser needs a subcommand: install or list",
+            ));
+        }
     };
     let (mut json, mut version) = (false, None);
     while let Some(arg) = p.next().map_err(e)? {
@@ -188,13 +192,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<BrowserCommand,
             Long("version") if name == "install" => {
                 version = Some(p.value().map_err(e)?.string().map_err(e)?);
             }
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let sub = match name.as_str() {
         "install" => Sub::Install { version },
         "list" => Sub::List,
-        other => return Err(format!("unknown browser subcommand {other:?}")),
+        other => {
+            return Err(villa::Error::invalid(format!(
+                "unknown browser subcommand {other:?}"
+            )));
+        }
     };
     Ok(BrowserCommand { sub, json })
 }

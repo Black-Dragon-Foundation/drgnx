@@ -28,13 +28,13 @@ use std::time::Duration;
 /// Where forks' trees come from.
 pub trait Trees: Send + Sync {
     /// A tree for fork ID with RUN's launch snapshot restored into it.
-    fn make<'a>(&'a self, run: &'a RunInfo, id: &'a str) -> BoxFut<'a, Result<PathBuf, String>>;
+    fn make<'a>(&'a self, run: &'a RunInfo, id: &'a str) -> BoxFut<'a, villa::Result<PathBuf>>;
     /// The files of TREE (relative names) that differ from the snapshot it was made from: a code what-if's edit.
     fn changed<'a>(&'a self, tree: &'a Path) -> BoxFut<'a, Vec<String>>;
     /// TREE and everything of its fork goes.
     fn remove<'a>(&'a self, tree: &'a Path) -> BoxFut<'a, ()>;
     /// A scratch folder for ID's sandbox (its tmp), outside any tree; [`Trees::remove`] of it takes it away.
-    fn scratch(&self, id: &str) -> Result<PathBuf, String>;
+    fn scratch(&self, id: &str) -> villa::Result<PathBuf>;
 }
 
 /// The sealed adapter of a fork.
@@ -48,7 +48,7 @@ pub trait Sealer: Send + Sync {
         tree: &Path,
         config: &Value,
         tmp: &Path,
-    ) -> Result<Arc<dyn Launcher>, String>;
+    ) -> villa::Result<Arc<dyn Launcher>>;
 }
 
 /// A `debug/fork` request, its configuration resolved again for the user's project.
@@ -74,13 +74,12 @@ pub enum Made {
 }
 
 /// RESOLVED is the configuration RUN ran with (its hash).
-fn same_config(run: &RunInfo, resolved: &Value) -> Result<(), String> {
+fn same_config(run: &RunInfo, resolved: &Value) -> villa::Result<()> {
     if run.config_hash.as_deref() != Some(config_hash(resolved).as_str()) {
-        return Err(
+        return Err(villa::Error::invalid(
             "the configuration resolves differently now than at the run (launch.json, an input, a setting or an \
-             environment value changed): the fork would not replay the same run"
-                .into(),
-        );
+             environment value changed): the fork would not replay the same run",
+        ));
     }
     Ok(())
 }
@@ -112,11 +111,13 @@ impl Drop for TraceTree {
 }
 
 /// REL is a relative path inside a tree: no root, no `..`.
-fn relative(rel: &str) -> Result<(), String> {
+fn relative(rel: &str) -> villa::Result<()> {
     use std::path::Component;
     let p = Path::new(rel);
     if rel.is_empty() || !p.components().all(|c| matches!(c, Component::Normal(_))) {
-        return Err(format!("{rel:?} is not a path inside the tree"));
+        return Err(villa::Error::invalid(format!(
+            "{rel:?} is not a path inside the tree"
+        )));
     }
     Ok(())
 }
@@ -190,18 +191,18 @@ impl Forks {
     }
 
     /// The fork ASK makes: checked, its tree made and run in the background (`debug-fork` says how it goes).
-    pub fn fork(&self, ask: Ask) -> Result<Made, String> {
+    pub fn fork(&self, ask: Ask) -> villa::Result<Made> {
         let run = self
             .inner
             .runs
             .run(&ask.run)
-            .ok_or_else(|| format!("no recorded run {}", ask.run))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no recorded run {}", ask.run)))?;
         match fork::check(&run, &ask.at, self.inner.sealed, ask.confirm) {
             Ok(_) => {}
-            Err(Refused::No(why)) => return Err(why),
+            Err(Refused::No(why)) => return Err(villa::Error::refused(why)),
             Err(Refused::Ask(q)) => return Ok(Made::Ask(q)),
         }
-        same_config(&run, &ask.resolved)?;
+        same_config(&run, &ask.resolved).map_err(|e| villa::Error::invalid(e.to_string()))?;
         let id = self.next_id("f");
         lock(&self.inner.forks).insert(
             id.clone(),
@@ -237,7 +238,7 @@ impl Forks {
         env: F,
         files: Vec<(String, Vec<u8>)>,
         probes: Vec<RunProbe>,
-    ) -> BoxFut<'static, Result<TraceTree, String>>
+    ) -> BoxFut<'static, villa::Result<TraceTree>>
     where
         F: FnOnce(&Path) -> Vec<(String, String)> + Send + 'static,
     {
@@ -248,10 +249,10 @@ impl Forks {
                 .inner
                 .runs
                 .run(&run_id)
-                .ok_or_else(|| format!("no recorded run {run_id}"))?;
+                .ok_or_else(|| villa::Error::not_found(format!("no recorded run {run_id}")))?;
             match fork::check(&run, &At::Stop(stop), me.inner.sealed, true) {
                 Ok(_) => {}
-                Err(Refused::No(w) | Refused::Ask(w)) => return Err(w),
+                Err(Refused::No(w) | Refused::Ask(w)) => return Err(villa::Error::refused(w)),
             }
             same_config(&run, &resolved)?;
             for (rel, _) in &files {
@@ -263,7 +264,8 @@ impl Forks {
                 .trees
                 .make(&run, &id)
                 .await
-                .map_err(|e| format!("the trace's tree: {e}"))?;
+                .map_err(|e| format!("the trace's tree: {e}"))
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let mut guard = TraceTree {
                 path: tree.clone(),
                 hits: vec![],
@@ -272,9 +274,13 @@ impl Forks {
             for (rel, bytes) in files {
                 let at = tree.join(&rel);
                 if let Some(d) = at.parent() {
-                    std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+                    std::fs::create_dir_all(d)
+                        .map_err(|e| format!("{}: {e}", d.display()))
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?;
                 }
-                crate::fsio::write(&at, bytes).map_err(|e| format!("{}: {e}", at.display()))?;
+                crate::fsio::write(&at, bytes)
+                    .map_err(|e| format!("{}: {e}", at.display()))
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?;
             }
             let extra = env(&tree);
             let ask = Ask {
@@ -304,7 +310,7 @@ impl Forks {
         tree: PathBuf,
         watch: Watch,
         limit: Duration,
-    ) -> BoxFut<'static, Result<RunEnd, String>> {
+    ) -> BoxFut<'static, villa::Result<RunEnd>> {
         let me = self.clone();
         let run_id = run.to_owned();
         Box::pin(async move {
@@ -312,15 +318,17 @@ impl Forks {
                 .inner
                 .runs
                 .run(&run_id)
-                .ok_or_else(|| format!("no recorded run {run_id}"))?;
+                .ok_or_else(|| format!("no recorded run {run_id}"))
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             if !me.inner.sealed {
-                return Err("runs in a sealed tree are Linux and macOS only".into());
+                return Err(villa::Error::invalid(
+                    "runs in a sealed tree are Linux and macOS only",
+                ));
             }
             if run.request == "attach" {
-                return Err(
-                    "an attach session cannot be run again: the hub did not start its program"
-                        .into(),
-                );
+                return Err(villa::Error::invalid(
+                    "an attach session cannot be run again: the hub did not start its program",
+                ));
             }
             same_config(&run, &resolved)?;
             let ty = resolved
@@ -392,13 +400,15 @@ impl Forks {
     }
 
     /// A code what-if, edited: run it.
-    pub fn resume(&self, id: &str) -> Result<(), String> {
+    pub fn resume(&self, id: &str) -> villa::Result<()> {
         let ready = lock(&self.inner.forks)
             .get(id)
             .map(|e| e.view.get("state") == Some(&json!("editing")))
-            .ok_or_else(|| format!("no fork {id}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no fork {id}")))?;
         if !ready {
-            return Err(format!("fork {id} is not waiting for its edit"));
+            return Err(villa::Error::invalid(format!(
+                "fork {id} is not waiting for its edit"
+            )));
         }
         // running moves it on at once: a second resume is refused
         if let Some(e) = lock(&self.inner.forks).get_mut(id)
@@ -421,10 +431,10 @@ impl Forks {
     }
 
     /// Fork ID goes, with its tree.
-    pub async fn drop_fork(&self, id: &str) -> Result<(), String> {
+    pub async fn drop_fork(&self, id: &str) -> villa::Result<()> {
         let e = lock(&self.inner.forks)
             .remove(id)
-            .ok_or_else(|| format!("no fork {id}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no fork {id}")))?;
         if let Some(t) = &e.tree {
             self.inner.trees.remove(t).await;
         }
@@ -437,21 +447,26 @@ impl Forks {
     }
 
     /// Fork B against its run A: the What-if tab's view.
-    pub fn compare(&self, a: &str, b: &str) -> Result<Value, String> {
+    pub fn compare(&self, a: &str, b: &str) -> villa::Result<Value> {
         let forks = lock(&self.inner.forks);
-        let e = forks.get(b).ok_or_else(|| format!("no fork {b}"))?;
+        let e = forks
+            .get(b)
+            .ok_or_else(|| villa::Error::invalid(format!("no fork {b}")))?;
         if e.run.id != a {
-            return Err(format!("fork {b} is of run {}, not {a}", e.run.id));
+            return Err(villa::Error::invalid(format!(
+                "fork {b} is of run {}, not {a}",
+                e.run.id
+            )));
         }
         Ok(e.view.clone())
     }
 
     /// Fork ID's view (what `debug-fork` last said of it).
-    pub fn view(&self, id: &str) -> Result<Value, String> {
+    pub fn view(&self, id: &str) -> villa::Result<Value> {
         lock(&self.inner.forks)
             .get(id)
             .map(|e| e.view.clone())
-            .ok_or_else(|| format!("no fork {id}"))
+            .ok_or_else(|| villa::Error::invalid(format!("no fork {id}")))
     }
 
     /// Fork ID is agent session AGENT's (D4): its view says so.
@@ -469,7 +484,7 @@ impl Forks {
         files: &[(String, String)],
         watch: Watch,
         limit: Duration,
-    ) -> BoxFut<'static, Result<RunEnd, String>> {
+    ) -> BoxFut<'static, villa::Result<RunEnd>> {
         let me = self.clone();
         let run_id = run.to_owned();
         let files = files.to_vec();
@@ -481,16 +496,21 @@ impl Forks {
                 .inner
                 .runs
                 .run(&run_id)
-                .ok_or_else(|| format!("no recorded run {run_id}"))?;
+                .ok_or_else(|| format!("no recorded run {run_id}"))
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let id = me.next_id("x");
             let tree = me.inner.trees.make(&info, &id).await?;
             let r = async {
                 for (rel, text) in &files {
                     let at = tree.join(rel);
                     if let Some(dir) = at.parent() {
-                        std::fs::create_dir_all(dir).map_err(|e| format!("{rel}: {e}"))?;
+                        std::fs::create_dir_all(dir)
+                            .map_err(|e| format!("{rel}: {e}"))
+                            .map_err(|e| villa::Error::invalid(e.to_string()))?;
                     }
-                    crate::fsio::write(&at, text).map_err(|e| format!("{rel}: {e}"))?;
+                    crate::fsio::write(&at, text)
+                        .map_err(|e| format!("{rel}: {e}"))
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?;
                 }
                 me.run_in(&run_id, resolved, tree.clone(), watch, limit)
                     .await
@@ -525,7 +545,8 @@ impl Forks {
         self.inner.sink.broadcast("debug-fork", view, None);
     }
 
-    fn failed(&self, id: &str, why: String) {
+    fn failed(&self, id: &str, why: villa::Error) {
+        let why = why.message().to_owned();
         // a landing that may differ only by an unreplayed value: the user may fork at this pass anyway
         let anyway = why.contains(fork::MAY_BE_UNREPLAYED);
         self.publish(
@@ -540,7 +561,9 @@ impl Forks {
         };
         let tree = match self.inner.trees.make(&run, id).await {
             Ok(t) => t,
-            Err(e) => return self.failed(id, format!("the fork's tree: {e}")),
+            Err(e) => {
+                return self.failed(id, villa::Error::io(format!("the fork's tree: {e}")));
+            }
         };
         let code = {
             let mut forks = lock(&self.inner.forks);
@@ -582,10 +605,10 @@ impl Forks {
         tree: &Path,
         extra_env: &[(String, String)],
         extra_probes: &[RunProbe],
-    ) -> Result<(Value, Vec<RunHit>), String> {
+    ) -> villa::Result<(Value, Vec<RunHit>)> {
         let target = match fork::check(run, &ask.at, self.inner.sealed, true) {
             Ok(t) => t,
-            Err(Refused::No(w) | Refused::Ask(w)) => return Err(w),
+            Err(Refused::No(w) | Refused::Ask(w)) => return Err(villa::Error::refused(w)),
         };
         let ty = ask
             .resolved
@@ -602,7 +625,7 @@ impl Forks {
         let config = with_env(config, extra_env);
         let tmp = tree
             .parent()
-            .ok_or("the fork's tree has no folder")?
+            .ok_or_else(|| villa::Error::invalid("the fork's tree has no folder"))?
             .join("tmp");
         let launcher = self
             .inner

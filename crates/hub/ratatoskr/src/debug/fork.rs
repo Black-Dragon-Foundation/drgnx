@@ -155,20 +155,19 @@ pub enum Refused {
 }
 
 /// The adapter of type TY, as forks know it: `debugpy`, `js-debug`, or the reason there is no fork.
-pub fn fork_adapter(ty: &str) -> Result<&'static str, String> {
+pub fn fork_adapter(ty: &str) -> villa::Result<&'static str> {
     match ty {
         "debugpy" | "python" => Ok("debugpy"),
         "pwa-node" | "node" => Ok("js-debug"),
-        "go" => Err(
-            "Go runs under delve, which needs ptrace, and the sandbox always denies it: Go forks wait for rr".into(),
-        ),
-        "lldb-dap" | "lldb-vscode" | "lldb" | "gdb" | "cppdbg" => Err(
-            "native code runs under a debugger that needs ptrace, and the sandbox always denies it: native forks wait for rr"
-                .into(),
-        ),
-        other => Err(format!(
-            "forks replay Python (debugpy) and JavaScript (js-debug) runs; \"{other}\" is neither"
+        "go" => Err(villa::Error::invalid(
+            "Go runs under delve, which needs ptrace, and the sandbox always denies it: Go forks wait for rr",
         )),
+        "lldb-dap" | "lldb-vscode" | "lldb" | "gdb" | "cppdbg" => Err(villa::Error::invalid(
+            "native code runs under a debugger that needs ptrace, and the sandbox always denies it: native forks wait for rr",
+        )),
+        other => Err(villa::Error::invalid(format!(
+            "forks replay Python (debugpy) and JavaScript (js-debug) runs; \"{other}\" is neither"
+        ))),
     }
 }
 
@@ -189,7 +188,7 @@ pub fn check(run: &RunInfo, at: &At, sealed: bool, confirmed: bool) -> Result<Ta
             "an attach session cannot be replayed: the hub did not start its program".into(),
         ));
     }
-    fork_adapter(&run.adapter_id).map_err(Refused::No)?;
+    fork_adapter(&run.adapter_id).map_err(|e| Refused::No(e.message().to_owned()))?;
     if !sealed {
         return Err(Refused::No(
             "forks run sealed on Linux (Gleipnir's full tier) and macOS (Seatbelt) only".into(),
@@ -496,7 +495,7 @@ fn top(stop: &Stop) -> (String, u32) {
 
 impl Drive {
     /// The next update that matters (see [`next_of`]).
-    async fn next(&self, t: &mut Tree) -> Result<Next, String> {
+    async fn next(&self, t: &mut Tree) -> villa::Result<Next> {
         next_of(&self.start, &self.launcher, t).await
     }
 }
@@ -507,10 +506,10 @@ async fn next_of(
     start0: &Start,
     launcher: &Arc<dyn Launcher>,
     t: &mut Tree,
-) -> Result<Next, String> {
+) -> villa::Result<Next> {
     loop {
         let Some((i, u)) = t.rx.recv().await else {
-            return Err("the fork's session is gone".into());
+            return Err(villa::Error::invalid("the fork's session is gone"));
         };
         match u {
             Update::Caps(c) => t.sessions[i].caps = c,
@@ -549,7 +548,7 @@ async fn next_of(
             }
             Update::RunInTerminal { reply, .. } => {
                 crate::soft::done(
-                    reply.send(Err("a fork has no terminal".into())),
+                    reply.send(Err(villa::Error::invalid("a fork has no terminal"))),
                     "reply send",
                 );
             }
@@ -606,12 +605,12 @@ impl Drive {
 
     /// The adapter's count landed the fork at STOP: it must have had the run's probe hits before that pass, the
     /// run's stack there (names and lines), and, where no probe hit says which pass it is, the run's plain locals.
-    fn landed(&self, t: &Tree, stop: &Stop) -> Result<(), String> {
+    fn landed(&self, t: &Tree, stop: &Stop) -> villa::Result<()> {
         let not = |why: String| {
-            Err(format!(
+            Err(villa::Error::invalid(format!(
                 "the adapter stopped at pass {} of line {} by its own count, but that is not the run's pass: {why}",
                 self.target.hit, self.target.line
-            ))
+            )))
         };
         if let Some(want) = self.target.before
             && t.hits.len() != want
@@ -761,8 +760,10 @@ impl Drive {
 }
 
 /// The value at PATH in STOP's scopes of session H: (its container's reference, the variable).
-async fn find_var(h: &Handle, stop: &Stop, path: &[String]) -> Result<(i64, Value), String> {
-    let (first, rest) = path.split_first().ok_or("no value named")?;
+async fn find_var(h: &Handle, stop: &Stop, path: &[String]) -> villa::Result<(i64, Value)> {
+    let (first, rest) = path
+        .split_first()
+        .ok_or_else(|| villa::Error::invalid("no value named"))?;
     let mut found = None;
     for s in &stop.scopes {
         let reference = s
@@ -782,21 +783,26 @@ async fn find_var(h: &Handle, stop: &Stop, path: &[String]) -> Result<(i64, Valu
             break;
         }
     }
-    let (mut parent, mut var) =
-        found.ok_or_else(|| format!("no value {first} at the fork point"))?;
+    let (mut parent, mut var) = found
+        .ok_or_else(|| villa::Error::invalid(format!("no value {first} at the fork point")))?;
     for name in rest {
         let reference = var
             .get("variablesReference")
             .and_then(Value::as_i64)
             .unwrap_or(0);
         if reference == 0 {
-            return Err(format!("{} has no member {name}", path.join(".")));
+            return Err(villa::Error::invalid(format!(
+                "{} has no member {name}",
+                path.join(".")
+            )));
         }
         let vars = h.variables(stop.epoch, reference).await?;
         var = vars
             .into_iter()
             .find(|v| v.get("name").and_then(Value::as_str) == Some(name.as_str()))
-            .ok_or_else(|| format!("no value {name} in {}", path.join(".")))?;
+            .ok_or_else(|| {
+                villa::Error::invalid(format!("no value {name} in {}", path.join(".")))
+            })?;
         parent = reference;
     }
     Ok((parent, var))
@@ -810,7 +816,7 @@ async fn apply(
     stop: &Stop,
     path: &[String],
     text: &str,
-) -> Result<String, String> {
+) -> villa::Result<String> {
     let (parent, var) = find_var(h, stop, path).await?;
     let frame = stop.frames.first().and_then(|f| f.get("id")).cloned();
     let expr = var.get("evaluateName").and_then(Value::as_str);
@@ -829,7 +835,7 @@ async fn apply(
             )
             .await?
         }
-        _ => return Err("the adapter cannot set values".into()),
+        _ => return Err(villa::Error::invalid("the adapter cannot set values")),
     };
     Ok(body
         .get("value")
@@ -839,7 +845,7 @@ async fn apply(
 }
 
 /// Runs D: the launch, the point (hit N of its line, then the steps), the change, the end.
-pub async fn drive(d: Drive) -> Result<Outcome, String> {
+pub async fn drive(d: Drive) -> villa::Result<Outcome> {
     let (tx, rx) = mpsc::unbounded_channel();
     let mut t = Tree {
         sessions: vec![],
@@ -874,27 +880,31 @@ pub async fn drive(d: Drive) -> Result<Outcome, String> {
         }
     }
     t.bps = start.breakpoints.clone();
-    let c = d.launcher.connect().await?;
+    let c = d
+        .launcher
+        .connect()
+        .await
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     t.add(start, c);
     let r = reach_and_run(&d, &mut t).await;
     Drive::finish(&mut t).await;
     r
 }
 
-async fn reach_and_run(d: &Drive, t: &mut Tree) -> Result<Outcome, String> {
+async fn reach_and_run(d: &Drive, t: &mut Tree) -> villa::Result<Outcome> {
     // 1. hit N of the fork line, counted by the hub
     let mut count = 0u32;
     let (mut si, mut stop) = loop {
         match d.next(t).await? {
             Next::Hit(_) => {}
             Next::Ended(code) => {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "the fork ended after {count} of {} hits of line {} (exit {}; its last output: {:?})",
                     d.target.hit,
                     d.target.line,
                     code.map_or_else(|| "unknown".to_owned(), |c| c.to_string()),
                     t.said
-                ));
+                )));
             }
             Next::Stopped(i, s) => {
                 let (path, line) = top(&s);
@@ -909,10 +919,10 @@ async fn reach_and_run(d: &Drive, t: &mut Tree) -> Result<Outcome, String> {
                         break (i, s);
                     }
                     if count >= HIT_CAP {
-                        return Err(format!(
+                        return Err(villa::Error::invalid(format!(
                             "line {} passed {HIT_CAP} times without hit {}",
                             d.target.line, d.target.hit
-                        ));
+                        )));
                     }
                 }
                 // any other stop (an entry, an exception filter) runs on; the error of a fork that ends names it
@@ -953,7 +963,11 @@ async fn reach_and_run(d: &Drive, t: &mut Tree) -> Result<Outcome, String> {
             match d.next(t).await? {
                 Next::Hit(_) => {}
                 Next::Stopped(i, s) => break (i, s),
-                Next::Ended(_) => return Err("the fork ended during the recorded steps".into()),
+                Next::Ended(_) => {
+                    return Err(villa::Error::invalid(
+                        "the fork ended during the recorded steps",
+                    ));
+                }
             }
         };
     }
@@ -1128,7 +1142,7 @@ fn raised_filter(adapter: &str) -> &'static str {
 }
 
 /// W's run to the program's end (or the watched exception, or the time box), its sessions stopped after.
-pub async fn watch(w: Watched) -> Result<RunEnd, String> {
+pub async fn watch(w: Watched) -> villa::Result<RunEnd> {
     let (tx, rx) = mpsc::unbounded_channel();
     let mut t = Tree {
         sessions: vec![],
@@ -1154,7 +1168,11 @@ pub async fn watch(w: Watched) -> Result<RunEnd, String> {
         start.exception_filters = Some(vec![raised_filter(&w.adapter).to_owned()]);
     }
     t.bps = start.breakpoints.clone();
-    let c = w.launcher.connect().await?;
+    let c = w
+        .launcher
+        .connect()
+        .await
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     t.add(start.clone(), c);
     let r = crate::clock::timeout(w.limit, watch_run(&w, &start, &mut t)).await;
     Drive::finish(&mut t).await;
@@ -1173,7 +1191,7 @@ pub async fn watch(w: Watched) -> Result<RunEnd, String> {
     }
 }
 
-async fn watch_run(w: &Watched, start: &Start, t: &mut Tree) -> Result<RunEnd, String> {
+async fn watch_run(w: &Watched, start: &Start, t: &mut Tree) -> villa::Result<RunEnd> {
     loop {
         match next_of(start, &w.launcher, t).await? {
             Next::Hit(_) => {}

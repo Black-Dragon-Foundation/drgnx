@@ -61,28 +61,32 @@ pub enum Sub {
 }
 
 /// `--budget`'s text as USD: digits with at most one point (`5`, `.5`, `2.50`), nothing else.
-fn budget(text: &str) -> Result<Usd, String> {
+fn budget(text: &str) -> villa::Result<Usd> {
     let digits = text.chars().filter(char::is_ascii_digit).count();
     let points = text.chars().filter(|c| *c == '.').count();
     if digits == 0 || points > 1 || text.chars().any(|c| !c.is_ascii_digit() && c != '.') {
-        return Err(format!("--budget wants a number of USD, not {text:?}"));
+        return Err(villa::Error::invalid(format!(
+            "--budget wants a number of USD, not {text:?}"
+        )));
     }
     Ok(Usd(text.to_string()))
 }
 
 /// The arguments after `job`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<JobCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<JobCommand> {
     use lexopt::Arg::{Long, Value as Word};
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let name = match p.next().map_err(e)? {
         Some(Word(v)) => v.string().map_err(e)?,
-        Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err("job needs a subcommand".into()),
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
+        None => return Err(villa::Error::invalid("job needs a subcommand")),
     };
     if !["propose", "approve", "status", "stop", "resume"].contains(&name.as_str()) {
-        return Err(format!("unknown job subcommand {name:?}"));
+        return Err(villa::Error::invalid(format!(
+            "unknown job subcommand {name:?}"
+        )));
     }
     let (mut json, mut auto) = (false, false);
     let (mut repo, mut budget_text, mut gate) = (None, None, None);
@@ -99,7 +103,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<JobCommand, Str
                     "review" => MergeGate::Review,
                     "review+accept" => MergeGate::ReviewAccept,
                     other => {
-                        return Err(format!("--gate is review or review+accept, not {other:?}"));
+                        return Err(villa::Error::invalid(format!(
+                            "--gate is review or review+accept, not {other:?}"
+                        )));
                     }
                 });
             }
@@ -107,40 +113,48 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<JobCommand, Str
                 budget_text = Some(p.value().map_err(e)?.string().map_err(e)?);
             }
             Word(v) => words.push(v.string().map_err(e)?),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
-    let budget = budget_text.as_deref().map(budget).transpose()?;
-    let one = |what: &str| -> Result<String, String> {
+    let budget = budget_text
+        .as_deref()
+        .map(budget)
+        .transpose()
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let one = |what: &str| -> villa::Result<String> {
         match words.as_slice() {
             [w] => Ok(w.clone()),
-            [] => Err(format!("job {name} needs {what}")),
-            [_, extra, ..] => Err(format!("job {name}: unexpected argument {extra:?}")),
+            [] => Err(villa::Error::invalid(format!("job {name} needs {what}"))),
+            [_, extra, ..] => Err(villa::Error::invalid(format!(
+                "job {name}: unexpected argument {extra:?}"
+            ))),
         }
     };
     let sub = match name.as_str() {
         "propose" => Sub::Propose {
-            plan: one("a plan")?.into(),
+            plan: one("a plan")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?
+                .into(),
             repo: repo.map(PathBuf::from),
             budget,
             auto,
             gate,
         },
         "approve" => Sub::Approve {
-            id: one("a job id")?,
+            id: one("a job id").map_err(|e| villa::Error::invalid(e.to_string()))?,
             budget,
         },
         "resume" => Sub::Resume {
-            id: one("a job id")?,
+            id: one("a job id").map_err(|e| villa::Error::invalid(e.to_string()))?,
             budget,
         },
         "stop" => Sub::Stop {
-            id: one("a job id")?,
+            id: one("a job id").map_err(|e| villa::Error::invalid(e.to_string()))?,
         },
         _ => Sub::Status {
             id: match words.as_slice() {
                 [] => None,
-                _ => Some(one("a job id")?),
+                _ => Some(one("a job id").map_err(|e| villa::Error::invalid(e.to_string()))?),
             },
         },
     };
@@ -356,17 +370,21 @@ pub fn format_job(job: &JobSummary) -> String {
 }
 
 /// What a successful call prints without `--json`.
-fn render(sub: &Sub, answer: &Value) -> Result<String, String> {
+fn render(sub: &Sub, answer: &Value) -> villa::Result<String> {
     let bad = |e: serde_json::Error| format!("the hub's answer does not fit: {e}");
     if let Sub::Status { id: None } = sub {
-        let all: JobStatusResult = serde_json::from_value(answer.clone()).map_err(bad)?;
+        let all: JobStatusResult = serde_json::from_value(answer.clone())
+            .map_err(bad)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         return Ok(match all {
             JobStatusResult::All { jobs } if jobs.is_empty() => "No jobs.\n".into(),
             JobStatusResult::All { jobs } => jobs.iter().map(format_job).collect(),
             JobStatusResult::One(job) => format_job(&job),
         });
     }
-    let job: JobSummary = serde_json::from_value(answer.clone()).map_err(bad)?;
+    let job: JobSummary = serde_json::from_value(answer.clone())
+        .map_err(bad)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let mut out = format_job(&job);
     if matches!(sub, Sub::Propose { .. }) && job.status.as_deref() == Some("proposed") {
         out.push_str(&format!("Approve with: drgnx job approve {}\n", job.id));
@@ -416,7 +434,7 @@ pub fn run(env: &Env, cmd: JobCommand) -> i32 {
 mod tests {
     use super::*;
 
-    fn p(args: &[&str]) -> Result<JobCommand, String> {
+    fn p(args: &[&str]) -> villa::Result<JobCommand> {
         parse(args.iter().map(OsString::from))
     }
 

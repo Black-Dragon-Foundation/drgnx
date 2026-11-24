@@ -600,18 +600,18 @@ pub(crate) fn now() -> f64 {
     crate::clock::wall_secs()
 }
 
-pub(crate) fn invalid(message: impl Into<String>) -> Error {
+pub(crate) fn invalid(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::InvalidParams,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
 
-pub(crate) fn internal(message: impl Into<String>) -> Error {
+pub(crate) fn internal(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
@@ -1588,10 +1588,10 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         };
         let verdict = match &forecast {
             Some(f) => crate::say::may_start_alone(front, f, tasks.len(), ctx).await,
-            None => Err("no forecast".to_owned()),
+            None => Err(villa::Error::unavailable("no forecast")),
         };
         if let Err(why) = &verdict {
-            data["waits"] = json!(why);
+            data["waits"] = json!(why.message());
         }
         verdict.is_ok()
     } else {

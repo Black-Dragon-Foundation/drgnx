@@ -114,18 +114,18 @@ impl Hub {
     }
 }
 
-fn err(message: impl Into<String>) -> Error {
+fn err(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
 
-fn bad(path: &str, message: impl Into<String>) -> Error {
+fn bad(path: &str, message: impl ToString) -> Error {
     Error {
         code: ErrorCode::InvalidParams,
-        message: message.into(),
+        message: message.to_string(),
         path: Some(path.into()),
     }
 }
@@ -422,18 +422,20 @@ fn launcher(
     file: Option<&str>,
     config: &Value,
     adapter: &Adapter,
-) -> Result<Arc<dyn Launcher>, String> {
+) -> villa::Result<Arc<dyn Launcher>> {
     if let Some(addr) = launch::debug_server(config)? {
         return Ok(Arc::new(Server { addr }));
     }
     let env_os = front.shell_env.vars_os();
     let env = adapter_env(front);
-    let found = adapters::find(adapter, &env).ok_or_else(|| {
-        format!(
-            "{} is not installed: install it with Debug: Install Adapter, or put it on PATH",
-            adapter.name
-        )
-    })?;
+    let found = adapters::find(adapter, &env)
+        .ok_or_else(|| {
+            format!(
+                "{} is not installed: install it with Debug: Install Adapter, or put it on PATH",
+                adapter.name
+            )
+        })
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if let Some(lsp) = adapter.start.as_ref().and_then(|s| s.lsp_command.clone()) {
         let base = runstav::paths::data_dir(&front.shell_env.paths_env()).join("debug-lsp");
         return Ok(Arc::new(super::lsp_command::LspLauncher::new(
@@ -447,7 +449,10 @@ fn launcher(
     }
     let tcp = adapter.start.as_ref().is_some_and(|s| s.stdio.is_none());
     let port = if tcp {
-        Some(adapters::free_port().map_err(|e| format!("no free port: {e}"))?)
+        Some(
+            adapters::free_port()
+                .map_err(|e| villa::Error::invalid(format!("no free port: {e}")))?,
+        )
     } else {
         None
     };
@@ -1201,7 +1206,7 @@ pub async fn serve(
 }
 
 /// A TCP connection to ADDR, waiting up to [`LISTEN_WITHIN`] for the adapter to listen.
-pub(super) async fn connect_tcp(addr: SocketAddr) -> Result<tokio::net::TcpStream, String> {
+pub(super) async fn connect_tcp(addr: SocketAddr) -> villa::Result<tokio::net::TcpStream> {
     connect_tcp_within(addr, LISTEN_WITHIN).await
 }
 
@@ -1209,13 +1214,15 @@ pub(super) async fn connect_tcp(addr: SocketAddr) -> Result<tokio::net::TcpStrea
 async fn connect_tcp_within(
     addr: SocketAddr,
     within: Duration,
-) -> Result<tokio::net::TcpStream, String> {
+) -> villa::Result<tokio::net::TcpStream> {
     let deadline = crate::clock::now() + within;
     loop {
         match tokio::net::TcpStream::connect(addr).await {
             Ok(s) => return Ok(s),
             Err(e) if crate::clock::now() >= deadline => {
-                return Err(format!("the adapter did not listen on {addr}: {e}"));
+                return Err(villa::Error::invalid(format!(
+                    "the adapter did not listen on {addr}: {e}"
+                )));
             }
             Err(_) => crate::clock::sleep(Duration::from_millis(50)).await,
         }
@@ -1241,9 +1248,13 @@ pub(super) struct Spawned {
 }
 
 impl Launcher for Spawned {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
-            let (program, args) = self.argv.split_first().ok_or("an empty command line")?;
+            let (program, args) = self
+                .argv
+                .split_first()
+                .ok_or("an empty command line")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let mut child = draugr::spawn(draugr::Spec {
                 program: PathBuf::from(program),
                 args: args.iter().map(OsString::from).collect(),
@@ -1254,7 +1265,8 @@ impl Launcher for Spawned {
                 new_session: false,
             })
             .await
-            .map_err(|e| format!("{program}: {e}"))?;
+            .map_err(|e| format!("{program}: {e}"))
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
             if let Some(port) = self.port {
                 // the hub freed the port for the adapter, so another process could have taken it: connected only once
                 // the listener is the adapter's (its process group), never a stranger's
@@ -1272,7 +1284,7 @@ impl Launcher for Spawned {
                 };
             }
             let (Some(stdin), Some(stdout)) = (child.take_stdin(), child.take_stdout()) else {
-                return Err(format!("{program}: no stdio"));
+                return Err(villa::Error::unavailable(format!("{program}: no stdio")));
             };
             let (client, incoming) = vor::Client::new(stdout, stdin);
             Ok(Connected {
@@ -1284,7 +1296,7 @@ impl Launcher for Spawned {
     }
 
     /// A TCP adapter's child sessions are second connections to its port.
-    fn child(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn child(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
             match self.port {
                 Some(port) => Ok(over_tcp(
@@ -1303,7 +1315,7 @@ pub(super) struct Server {
 }
 
 impl Launcher for Server {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move { Ok(over_tcp(connect_tcp(self.addr).await?, Box::new(NoProc))) })
     }
 }
@@ -1321,7 +1333,7 @@ impl Terminals for TermDoor {
         cwd: String,
         args: Vec<String>,
         env: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<Opened, String>> {
+    ) -> BoxFut<'_, villa::Result<Opened>> {
         Box::pin(async move {
             let mut all: Vec<(String, String)> = self
                 .base
@@ -1400,7 +1412,7 @@ async fn run_tasks(
     conn: u64,
     tab: bool,
     steps: &[super::tasks::Step],
-) -> Result<Vec<super::tasks::Watch>, String> {
+) -> villa::Result<Vec<super::tasks::Watch>> {
     let env = front.shell_env.vars_os();
     let mut watches = vec![];
     for chunk in steps.chunk_by(|a, b| a.background.is_some() == b.background.is_some()) {

@@ -96,10 +96,10 @@ pub struct Hub {
 /// none of them costs a request to the server. Tier 2 probes before every batch on its own.
 const PROBE_TTL: Duration = Duration::from_secs(10);
 
-fn error(code: ErrorCode, message: impl Into<String>, path: Option<&str>) -> Error {
+fn error(code: ErrorCode, message: impl ToString, path: Option<&str>) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: path.map(str::to_owned),
     }
 }
@@ -248,8 +248,8 @@ fn scope_of(s: Option<w::Scope>) -> Scope {
 
 /// `.drgnx/search.toml` of ROOT as a layer ([`hrafn::files::read_repo`], at most 64 KiB, read as data). No file is an
 /// empty layer; a file that does not read is an `Err`.
-pub fn config_file(root: &Path) -> Result<hrafn::rules::RuleSet, String> {
-    hrafn::files::read_repo(root).map_err(|e| e.to_string())
+pub fn config_file(root: &Path) -> villa::Result<hrafn::rules::RuleSet> {
+    hrafn::files::read_repo(root).map_err(|e| villa::Error::invalid(e.to_string()))
 }
 
 impl Hub {

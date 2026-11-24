@@ -126,13 +126,13 @@ pub(super) fn wire(
 
 impl Heaps {
     /// P read for the editor on connection CONN: a new graph, or an open one again.
-    pub async fn read(&self, d: &Debug, conn: u64, p: DebugHeap) -> Result<DebugHeapGraph, String> {
+    pub async fn read(&self, d: &Debug, conn: u64, p: DebugHeap) -> villa::Result<DebugHeapGraph> {
         let (id, session, expr, lim, before) = match &p.graph {
             Some(g) => {
                 let open = self.open.lock().expect("heaps");
                 let k = open
                     .get(g)
-                    .ok_or_else(|| format!("no open heap graph {g}"))?;
+                    .ok_or_else(|| villa::Error::invalid(format!("no open heap graph {g}")))?;
                 (
                     g.clone(),
                     k.session.clone(),
@@ -218,17 +218,17 @@ impl Heaps {
             };
             let v = match self.read(d, conn, p).await {
                 Ok(g) => json!(g),
-                Err(e) => json!({"graph": id, "session": session, "error": e}),
+                Err(e) => json!({"graph": id, "session": session, "error": e.message()}),
             };
             d.send_to(conn, "debug-heap", v);
         }
     }
 }
 
-fn err(message: impl Into<String>) -> Error {
+fn err(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }

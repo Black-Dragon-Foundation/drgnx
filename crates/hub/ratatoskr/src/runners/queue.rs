@@ -394,10 +394,11 @@ struct QJob {
 
 impl QJob {
     fn new(s: Submit, submitted: u64, state: QState, attempt: u32) -> QJob {
-        let shared_why = s
-            .inputs
-            .as_ref()
-            .and_then(|f| sync::overlay_for(f, RunnerTrust::Shared).err());
+        let shared_why = s.inputs.as_ref().and_then(|f| {
+            sync::overlay_for(f, RunnerTrust::Shared)
+                .err()
+                .map(|e| e.message().to_owned())
+        });
         let machine = match &state {
             QState::Remote(r) => Some(r.clone()),
             QState::Local => Some(LOCAL.into()),
@@ -1464,7 +1465,7 @@ impl Queue {
     }
 
     /// Runner NAME forgotten (its session ends). Refused, with the reason, while a job is on it.
-    pub fn remove_runner(&self, name: &str) -> Result<(), String> {
+    pub fn remove_runner(&self, name: &str) -> villa::Result<()> {
         let mut st = self.lock();
         let busy = st
             .jobs
@@ -1472,9 +1473,9 @@ impl Queue {
             .filter(|j| matches!(&j.state, QState::Remote(r) if r == name))
             .count();
         if busy > 0 {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "{busy} job(s) are on {name}: stop them or wait for them to end"
-            ));
+            )));
         }
         st.runners.remove(name);
         Ok(())
@@ -1745,7 +1746,7 @@ impl Queue {
 
     /// Whether a job of SPEC (its name the job's id) may need what it names: each a job the queue holds or saw end,
     /// and none that waits on it (a cycle, named in order from the new job). The error is in the user's words.
-    pub fn check_needs(&self, spec: &JobSpec) -> Result<(), String> {
+    pub fn check_needs(&self, spec: &JobSpec) -> villa::Result<()> {
         if spec.needs.is_empty() {
             return Ok(());
         }
@@ -1755,7 +1756,9 @@ impl Queue {
             .iter()
             .find(|n| !st.jobs.contains_key(&n.0) && !st.ended.contains_key(&n.0))
         {
-            return Err(format!("it needs job {n}, which the queue doesn't know"));
+            return Err(villa::Error::invalid(format!(
+                "it needs job {n}, which the queue doesn't know"
+            )));
         }
         let mut jobs: Vec<Job> = st.jobs.values().map(Self::forseti_job).collect();
         // the new job too, so a cycle through it shows
@@ -1777,7 +1780,7 @@ impl Queue {
                 cycle.push(first);
             }
             let names: Vec<String> = cycle.iter().map(|j| j.0.clone()).collect();
-            format!("its needs make a cycle: {}", names.join(" → "))
+            villa::Error::invalid(format!("its needs make a cycle: {}", names.join(" → ")))
         })
     }
 
@@ -2066,12 +2069,12 @@ impl Queue {
     /// The user moves job ID to TO: one that waits is pinned there and the tick woken ([`Moved::Requeued`]); one that
     /// runs is left running ([`Moved::Running`], where); one already there is left alone. A machine that can't take it
     /// is refused with why ([`Queue::refusal_on`]).
-    pub fn move_job(&self, id: &str, to: Machine) -> Result<Moved, String> {
+    pub fn move_job(&self, id: &str, to: Machine) -> villa::Result<Moved> {
         let mut st = self.lock();
         let q = st
             .jobs
             .get(id)
-            .ok_or_else(|| format!("no job {id} in the queue"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no job {id} in the queue")))?;
         let here = match &q.state {
             QState::Local => Some(Machine::Local),
             QState::Remote(r) => Some(Machine::Runner(r.clone())),
@@ -2081,7 +2084,7 @@ impl Queue {
             return Ok(Moved::Same);
         }
         if let Some(why) = Self::refusal_on(&st, q, &to) {
-            return Err(why);
+            return Err(villa::Error::refused(why));
         }
         if here.is_some() {
             return Ok(Moved::Running(q.machine.clone().unwrap_or_default()));
@@ -2109,17 +2112,19 @@ impl Queue {
     /// The user's Restart of job ID, which runs on a runner, on TO: its attempt there is cancelled and the job goes
     /// back to the queue pinned to TO (`Effect::Requeue`); what ended comes back as outcomes. A job that runs here is
     /// the job layer's to stop and start again.
-    pub fn restart_on(&self, id: &str, to: Machine, now: u64) -> Result<Vec<Outcome>, String> {
+    pub fn restart_on(&self, id: &str, to: Machine, now: u64) -> villa::Result<Vec<Outcome>> {
         let mut st = self.lock();
         let q = st
             .jobs
             .get(id)
-            .ok_or_else(|| format!("no job {id} in the queue"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no job {id} in the queue")))?;
         if !matches!(q.state, QState::Remote(_)) {
-            return Err(format!("job {id} doesn't run on a runner"));
+            return Err(villa::Error::invalid(format!(
+                "job {id} doesn't run on a runner"
+            )));
         }
         if let Some(why) = Self::refusal_on(&st, q, &to) {
-            return Err(why);
+            return Err(villa::Error::refused(why));
         }
         let q = st.jobs.get_mut(id).expect("the job");
         q.s.place.machine = to;
@@ -2140,15 +2145,17 @@ impl Queue {
 
     /// The user moves session SESSION: its next jobs go to TO (those started without a machine of their own), kept in
     /// `runtime.db` with the session's row. A machine the queue doesn't know is refused.
-    pub fn prefer(&self, session: &str, to: Machine) -> Result<(), String> {
+    pub fn prefer(&self, session: &str, to: Machine) -> villa::Result<()> {
         let mut st = self.lock();
         if let Machine::Runner(n) = &to
             && !st.runners.contains_key(n)
         {
-            return Err(format!("no runner {n} (`drgnx runner list` shows them)"));
+            return Err(villa::Error::invalid(format!(
+                "no runner {n} (`drgnx runner list` shows them)"
+            )));
         }
         let word = match &to {
-            Machine::Auto => return Err("name a machine".into()),
+            Machine::Auto => return Err(villa::Error::invalid("name a machine")),
             Machine::Local => LOCAL.to_owned(),
             Machine::Runner(n) => n.clone(),
         };
@@ -3538,7 +3545,7 @@ impl Queue {
                 });
                 st.syncs.entry((r.job.clone(), r.attempt)).or_default();
             }
-            Err(why) => Self::give_up(st, runner, r, &why),
+            Err(why) => Self::give_up(st, runner, r, why.message()),
         }
     }
 
@@ -3654,7 +3661,7 @@ impl Queue {
                     sync::send_bundle(&send, r, &id, &b, 0)?;
                     Ok(Some(b))
                 }
-                SyncPlan::Never(why) => Err(why),
+                SyncPlan::Never(why) => Err(villa::Error::refused(why)),
             });
             match done {
                 Ok(b) => {
@@ -3663,7 +3670,7 @@ impl Queue {
                         s.sent_at = now;
                     }
                 }
-                Err(why) => Self::give_up(st, runner, r, &why),
+                Err(why) => Self::give_up(st, runner, r, why.message()),
             }
             return;
         }
@@ -3693,7 +3700,7 @@ impl Queue {
             }
         }
         if let Some(why) = failed {
-            return Self::give_up(st, runner, r, &why);
+            return Self::give_up(st, runner, r, why.message());
         }
         if !blobs.is_empty() {
             return Self::sync_have(st, runner, r, &f);
@@ -4744,11 +4751,11 @@ mod tests {
         let err = q
             .check_needs(&needing("a", Priority::P3, &["b"]).spec)
             .unwrap_err();
-        assert!(err.contains("a → b → a"), "{err}");
+        assert!(err.message().contains("a → b → a"), "{err}");
         let err = q
             .check_needs(&needing("c", Priority::P3, &["nope"]).spec)
             .unwrap_err();
-        assert!(err.contains("nope"), "{err}");
+        assert!(err.message().contains("nope"), "{err}");
         assert!(
             q.check_needs(&needing("d", Priority::P3, &["b"]).spec)
                 .is_ok()
@@ -5752,9 +5759,9 @@ mod tests {
         let e = q
             .move_job("x1", Machine::Runner("nope".into()))
             .unwrap_err();
-        assert!(e.contains("no runner nope"), "{e}");
+        assert!(e.message().contains("no runner nope"), "{e}");
         let e = q.prefer("s1", Machine::Runner("nope".into())).unwrap_err();
-        assert!(e.contains("no runner nope"), "{e}");
+        assert!(e.message().contains("no runner nope"), "{e}");
         assert_eq!(q.lock().jobs["x1"].s.place.machine, Machine::Auto);
     }
 

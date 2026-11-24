@@ -165,7 +165,7 @@ fn a_file_over_the_size_limit_is_refused_before_it_is_parsed() {
     )
     .err()
     .unwrap();
-    assert!(e.contains("too large"), "{e}");
+    assert!(e.message().contains("too large"), "{e}");
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn a_notebook_with_too_many_cells_is_refused_and_the_language_is_read_once_and_s
         vec![cell; MAX_CELLS + 1].join(",")
     );
     let e = Book::open(Path::new("/x/many.ipynb"), many).err().unwrap();
-    assert!(e.contains("too many cells"), "{e}");
+    assert!(e.message().contains("too many cells"), "{e}");
     let lang = "p".repeat(500);
     let text = format!(
         r#"{{"cells": [], "metadata": {{"kernelspec": {{"name": "{lang}", "language": "{lang}"}}}}, "nbformat": 4, "nbformat_minor": 5}}"#

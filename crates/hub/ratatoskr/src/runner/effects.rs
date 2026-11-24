@@ -26,10 +26,10 @@ use urdr::graph::entity::{self, Changes, Ent, EntityNew, Origin};
 use urdr::graph::link;
 use urdr::graph::schema::SENTINEL;
 
-fn refuse(msg: impl Into<String>) -> Error {
+fn refuse(msg: impl ToString) -> Error {
     Error {
         code: ErrorCode::NotAllowed,
-        message: msg.into(),
+        message: msg.to_string(),
         path: None,
     }
 }
@@ -1100,7 +1100,7 @@ pub async fn record_conclusion_fallback(
 
 // ---- commits and decisions --------------------------------------------------------------------------------------
 
-pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> villa::Result<String> {
     let out = crate::proc::Command::new("git")
         .args(args)
         .current_dir(dir)
@@ -1108,12 +1108,13 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("LC_ALL", "C")
         .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| e.to_string())?;
+        .output()?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+        Err(villa::Error::unavailable(
+            String::from_utf8_lossy(&out.stderr).trim(),
+        ))
     }
 }
 

@@ -145,26 +145,26 @@ pub fn rerun_of(
         .or_else(|| evidence.iter().rev().find_map(of))
 }
 
-pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> villa::Result<String> {
     let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
         .output()
-        .map_err(|e| format!("git {}: {e}", args.join(" ")))?;
+        .map_err(|e| villa::Error::invalid(format!("git {}: {e}", args.join(" "))))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        Err(format!(
+        Err(villa::Error::invalid(format!(
             "git {}: {}",
             args.join(" "),
             String::from_utf8_lossy(&out.stderr).trim()
-        ))
+        )))
     }
 }
 
 /// The attribution trailers of the commits BASE..TIP in DIR, as `SHORT: line`.
-fn trailers_in(dir: &Path, base: &str, tip: &str) -> Result<Vec<String>, String> {
+fn trailers_in(dir: &Path, base: &str, tip: &str) -> villa::Result<Vec<String>> {
     let log = git(
         dir,
         &["log", "--format=%h%x00%B%x1e", &format!("{base}..{tip}")],
@@ -207,7 +207,7 @@ pub(crate) async fn start(
     commit: &str,
     key: &str,
     rerun: &Rerun,
-) -> Result<Option<String>, String> {
+) -> villa::Result<Option<String>> {
     let ended = |id: &str| front.core.exec.done(id).is_some();
     let Some(claim) = front.orch.claim(task, key, &rerun.selector, ended) else {
         return Ok(None);
@@ -226,14 +226,14 @@ async fn start_claimed(
     key: &str,
     rerun: &Rerun,
     claim: &str,
-) -> Result<Option<String>, String> {
+) -> villa::Result<Option<String>> {
     let t = task.to_owned();
     let evidence = front
         .writer
         .db
         .read(move |c| norn::read::evidence::of_task(c, &t))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if let Some((class, job)) = vordr::evidence::no_rerun(&evidence, key, &rerun.selector) {
         // a gate's own words on the run (its tree moved) before what the job said
         let said = evidence
@@ -255,7 +255,7 @@ async fn start_claimed(
     let (from, c, sel) = (top.to_owned(), commit.to_owned(), rerun.selector.clone());
     let dir = crate::clock::blocking(move || detached(&from, &c, &sel))
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| villa::Error::invalid(e.to_string()))??;
     let worktree = Some((top.to_owned(), dir.clone()));
     let cwd = if rerun.rel.is_empty() {
         dir.clone()
@@ -274,7 +274,7 @@ async fn start_claimed(
             .collect();
         p["env"] = json!(env);
     }
-    let params = serde_json::from_value(p).map_err(|e| e.to_string())?;
+    let params = serde_json::from_value(p).map_err(|e| villa::Error::invalid(e.to_string()))?;
     // the agent's command (or the pack's, over the agent's tree): in an agent's sandbox, the detached tree its only
     // writable folder
     let gate = crate::exec::Sealed {
@@ -300,7 +300,7 @@ async fn start_claimed(
                 crate::clock::blocking(move || cleanup(&run)).await,
                 "crate::clock::blocking",
             );
-            return Err(e.message);
+            return Err(villa::Error::unavailable(e.message));
         }
     };
     let id = started.id;
@@ -346,7 +346,7 @@ pub(crate) fn gate_sid(task: &str, dir: &Path) -> String {
 
 /// A detached worktree of the tree TOP at COMMIT, beside it, for the run with SELECTOR (one per run: each goes when
 /// its job ends).
-fn detached(top: &Path, commit: &str, selector: &str) -> Result<PathBuf, String> {
+fn detached(top: &Path, commit: &str, selector: &str) -> villa::Result<PathBuf> {
     let name = top
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -403,7 +403,7 @@ pub async fn before_merge(
     tree: &TaskTree,
     judged: Option<&str>,
     data: &Map<String, Value>,
-) -> Result<Decision, String> {
+) -> villa::Result<Decision> {
     let (j, t) = (job.to_owned(), tid.to_owned());
     let (busy, (pack, evidence)) =
         busy_then_read(front.core.exec.busy_in_tree(&tree.path), async {
@@ -417,7 +417,7 @@ pub async fn before_merge(
                     ))
                 })
                 .await
-                .map_err(|e| e.to_string())
+                .map_err(|e| villa::Error::invalid(e.to_string()))
         })
         .await?;
     let Some(pack) = pack else {
@@ -441,17 +441,17 @@ pub async fn before_merge(
         };
         let inputs = crate::orch::red_first::inputs(&top, &base, &tip, &p, &body)?;
         let commits = crate::orch::red_first::commits(&top, &base, &tip, &p)?;
-        Ok::<_, String>((tip_commit, found, unnoted, inputs, commits))
+        Ok::<_, villa::Error>((tip_commit, found, unnoted, inputs, commits))
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| villa::Error::internal(e.to_string()))??;
     // what the gate checked, for the Flow's detail (base .. tip and each commit)
     let key = tid.to_owned();
     crate::runner::update_data(front, &crate::runner::service(), job, move |d| {
         crate::runner::put_in(d, "commits", &key, Some(commits));
     })
     .await
-    .map_err(|e| e.message)?;
+    .map_err(|e| villa::Error::unavailable(e.message))?;
     if !found.is_empty() {
         return Ok(Decision::Hold(format!(
             "attribution trailers: {}",
@@ -498,7 +498,10 @@ pub async fn before_merge(
                      or say **Red:** none (reason) in the plan"
                 )));
             };
-            if let Some(why) = start(front, tid, top, commit, key, &r).await? {
+            if let Some(why) = start(front, tid, top, commit, key, &r)
+                .await
+                .map_err(|e| villa::Error::invalid(e.to_string()))?
+            {
                 return Ok(Decision::Hold(why));
             }
             return Ok(Decision::Wait(format!(
@@ -526,7 +529,10 @@ pub async fn before_merge(
             }
             State::Missing => {
                 let r = run_of(&c);
-                if let Some(why) = start(front, tid, top, &tip_commit, &inputs.tip_key, &r).await? {
+                if let Some(why) = start(front, tid, top, &tip_commit, &inputs.tip_key, &r)
+                    .await
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?
+                {
                     return Ok(Decision::Hold(format!(
                         "the author check {}: {why}",
                         c.name

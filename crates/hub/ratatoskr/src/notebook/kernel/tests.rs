@@ -131,7 +131,10 @@ async fn a_kernel_that_exits_at_once_is_an_error_with_its_stderr_and_leaves_no_f
     .await
     .err()
     .unwrap();
-    assert!(e.contains("exited with 3") && e.contains("boom"), "{e}");
+    assert!(
+        e.message().contains("exited with 3") && e.message().contains("boom"),
+        "{e}"
+    );
     assert!(
         !folder.join("kernel-a.json").exists(),
         "the connection file went with the kernel"
@@ -152,7 +155,7 @@ async fn a_kernel_that_never_binds_is_killed_with_its_group_at_the_deadline() {
         .await
         .err()
         .unwrap();
-    assert!(e.contains("not ready within"), "{e}");
+    assert!(e.message().contains("not ready within"), "{e}");
     let pid: i32 = crate::fsio::read_to_string(&pidfile)
         .unwrap()
         .trim()
@@ -484,7 +487,7 @@ async fn start_checks_the_private_folder_itself() {
     .await
     .err()
     .unwrap();
-    assert!(e.contains("0700"), "{e}");
+    assert!(e.message().contains("0700"), "{e}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -624,7 +627,9 @@ async fn a_kernel_that_refuses_ipc_is_started_once_more_over_tcp_and_the_error_n
         "one try each, in that order"
     );
     assert!(
-        e.contains("over ipc") && e.contains("over tcp") && e.contains("no ipc"),
+        e.message().contains("over ipc")
+            && e.message().contains("over tcp")
+            && e.message().contains("no ipc"),
         "{e}"
     );
     assert!(!folder.join("kernel-a.json").exists());
@@ -646,7 +651,7 @@ async fn a_kernelspec_that_says_tcp_is_tried_over_tcp_only() {
     .err()
     .unwrap();
     assert_eq!(transports(&log), ["tcp"]);
-    assert!(!e.contains("over ipc"), "{e}");
+    assert!(!e.message().contains("over ipc"), "{e}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -670,7 +675,7 @@ async fn a_kernel_that_started_and_was_not_ready_is_not_tried_over_tcp() {
     .err()
     .unwrap();
     assert_eq!(transports(&log), ["ipc"]);
-    assert!(e.contains("not ready within"), "{e}");
+    assert!(e.message().contains("not ready within"), "{e}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -696,7 +701,7 @@ async fn a_listener_that_is_not_the_kernels_is_an_error_naming_the_port_and_is_n
     .err()
     .unwrap();
     assert!(
-        e.contains(&format!("port {port}")) && e.contains("not the session's"),
+        e.message().contains(&format!("port {port}")) && e.message().contains("not the session's"),
         "{e}"
     );
     assert!(

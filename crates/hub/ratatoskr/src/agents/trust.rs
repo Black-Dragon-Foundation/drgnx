@@ -67,21 +67,22 @@ fn broad(dir: &Path, home: &Path) -> bool {
 
 impl Trusted {
     /// The file's BYTES, HOME the user's home; an error says what is wrong with the file.
-    pub fn parse(bytes: &[u8], home: &Path) -> Result<Trusted, String> {
-        let nodes =
-            read_all(bytes, Limits::default()).map_err(|r| format!("does not read: {r:?}"))?;
+    pub fn parse(bytes: &[u8], home: &Path) -> villa::Result<Trusted> {
+        let nodes = read_all(bytes, Limits::default())
+            .map_err(|r| villa::Error::invalid(format!("does not read: {r:?}")))?;
         let node = match nodes.as_slice() {
             [] => return Ok(Trusted::default()),
             [one] => one,
-            _ => return Err("holds more than one form".into()),
+            _ => return Err(villa::Error::invalid("holds more than one form")),
         };
-        let raw: Raw = huginn::de::from_node(node).map_err(|e| format!("has a mistake: {e}"))?;
+        let raw: Raw = huginn::de::from_node(node)
+            .map_err(|e| villa::Error::invalid(format!("has a mistake: {e}")))?;
         let _only_when_used_elsewhere = (&raw.allowed, &raw.denied);
         if raw.version.is_some_and(|v| v > VERSION) {
-            return Err("was written by a newer drgnx".into());
+            return Err(villa::Error::invalid("was written by a newer drgnx"));
         }
         if raw.version.is_some_and(|v| v < 1) {
-            return Err("names a version that does not exist".into());
+            return Err(villa::Error::invalid("names a version that does not exist"));
         }
         let roots = |names: &[String]| -> Vec<PathBuf> {
             names
@@ -113,7 +114,7 @@ impl Trusted {
 /// What the file said last (read when its modification time was STAMP), and whether its problem was told.
 struct Cached {
     stamp: Option<SystemTime>,
-    read: Result<Trusted, String>,
+    read: villa::Result<Trusted>,
     told: bool,
 }
 
@@ -137,7 +138,7 @@ pub fn trusts(file: &Path, home: &Path, dir: &Path) -> Answer {
         let read = match std::fs::read(file) {
             Ok(bytes) => Trusted::parse(&bytes, home),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Trusted::default()),
-            Err(e) => Err(format!("cannot be read: {e}")),
+            Err(e) => Err(villa::Error::io(format!("cannot be read: {e}"))),
         };
         files.insert(
             file.to_path_buf(),
@@ -160,7 +161,7 @@ pub fn trusts(file: &Path, home: &Path, dir: &Path) -> Answer {
             problem: None,
         },
         Err(why) => {
-            let problem = (!cached.told).then(|| format!("{} {why}", file.display()));
+            let problem = (!cached.told).then(|| format!("{} {}", file.display(), why.message()));
             cached.told = true;
             Answer {
                 trusted: false,
