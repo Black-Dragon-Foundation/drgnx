@@ -26,13 +26,16 @@ builds for every target, Android's included, and brings no runtime into jobq. It
 `JobSpec` is what a job is and needs. It carries jobq's spec (kind, weight, suite, tree, command, rows selected,
 needs, inputs, features, core and memory ranges, disk, timeout, restartable, `writes_tree`, gate, expect, outputs,
 state locks, pin, lane) plus the runners' fields: `project`, `trust`, `keys` (names only), `local_only` and
-`writes`. A job is heavy only when it is marked so: `weight: Weight::Heavy`, read by `JobSpec::heavy()`.
+`writes`. A job is heavy only when it is marked so: `weight: Weight::Heavy`, read by `JobSpec::heavy()`; any other job
+is light. `Derived::io_heavy` marks a job that writes the disk hard (the pack declares it): only such a job waits on
+IO pressure.
 
 `Job` adds the scheduler's view: its id, its own priority, when it was submitted, its state, attempt, whether it was
 evicted once, disturbed, or has a blocked caller.
 
 `MachineState` is one machine as its probe read it: profile, boot id, memory total and available, PSI, disk free and
-total, power, the last start, the running jobs, features, and `others`, the other schedulers' reservations.
+total, the running jobs' declared disk need not yet written (`disk_unused_gib`), power, the last start, the running
+jobs, features, and `others`, the other schedulers' reservations.
 
 `Limits` are the machine's thresholds, never constants in the code:
 
@@ -40,13 +43,45 @@ total, power, the last start, the running jobs, features, and `others`, the othe
 |---|---|---|
 | floor | 2 GiB | 1.5 GiB |
 | the user's reserve | none | 4 GiB (`with_reserve`: the user's own, at least `MIN_RESERVE_MIB` = 1 GiB) and 4 threads (out of `cores_usable`) |
-| PSI limits (`avg10`) | memory `some` 10 %, CPU 40 %, IO `full` 10 % | memory 2 %, the user's apps 1 %, CPU 20 %, IO 5 % |
+| PSI limits (`avg10`) | memory `some` 10 %, CPU 40 %, IO `full` 10 % | memory 2 %, the user's apps 2 %, CPU 20 %, IO 5 % |
 | CPU overcommit | up to 1.5 × while the jobs are mostly idle | none |
 | on battery | runs | no jobs |
-| disk kept free | 20 GB and 10 % of the filesystem | the same |
+| disk (`Limits::disk`) | §4.8's `DiskRules::standard()`, below | the same |
+| light only | no | no (the laptop as a runner sets `light_only`) |
 
-`Limits::fixed_slots(n)` admits by count only, for a hub with no Linux probe (macOS). jobq fills `Limits` from its
-own configuration.
+`Limits::with_io_pct(pct)` sets the IO limit from the runner's `--io-pct` (the desktop passes 35). `Limits::fixed_slots(n)`
+admits by count only, for a hub with no Linux probe (macOS). jobq fills `Limits` from its own configuration.
+
+## The disk (`disk`)
+
+The editing-model design's §4.8, as rules the runner's guard (`sleipnir::sync::guard`) and the hub's register
+(`ratatoskr::runners::disk`) both read. `DiskRules::standard()`:
+
+| rule | value |
+|---|---|
+| `evict_below_gb`: the guard evicts below this much free | 80 GB |
+| `stop_below_gb`: running jobs stop below it (`infra: disk`, the job that grew most first); admission keeps it free after a job's need | 20 GB |
+| `build_idle_s`: build output (build dirs, a job's outputs) may go after | 24 h unused |
+| `other_idle_s`: everything else may go after | 3 days unused |
+| `recording_idle_s`: a recording may go after | 30 days unused |
+| `keep_images_per_name` | the newest 2 |
+| `quota_gb`: the owner's cap on what drgnx keeps on the machine | none unless set |
+| `pace_io_full_pct`, `pace_max_s`: a removal waits while IO `full` is above 20 %, at most 60 s | |
+
+`COMPILER_CACHE_GB` is 15. Every kind of item any line keeps is reserved in `ItemKind` (the runners' `job-folder`,
+`output`, `artifact`, `build-dir`, `slot`, `cache`, `image`; the streams' `stream-worktree`, `stream-log`; the
+records' `records-backup`, `store-backup`, `recording`; and `unknown`, a folder nothing registered), so the enum is
+never edited again. `rule_of(kind)` gives each its age rule: build dirs and outputs the build age, a stream log none
+(pinned), a recording the recording age, every other kind the other age.
+
+- **`state_of(item, now, active, pinned, rules)`**: `Active` (in use) beats `Pinned` beats the age: `Evictable` once
+  unused for its rule's time, else `Idle`. An active item is never evictable (`state_of_never_calls_an_active_item_evictable`).
+- **`disk_fits(need, free, running_unused, warm_reuse, rules)`**: `free − running_unused − (need − warm_reuse)⁺ ≥
+  stop_below_gb`. The running jobs' unused need counts as taken, and the warm build dir the job would reuse as held.
+- **`classes(items, now, pins, rules)`**: per kind, the items, bytes and evictable bytes: the disk report's lines.
+- The wire's shapes live here too, pure: `DiskItem`, `Pins` (the hub's `active` and `pinned` ids, `learned_at`),
+  `Why` (`floor`, `quota`, `cache-budget`, `ordered: …`), `Evict`, `Evicted` (with `refused` when the guard kept it)
+  and `ClassUse`.
 
 `Verdict` is how a job ended; `Verdict::Infra` carries a named reason without its `infra: ` prefix (the `Display`
 adds it). `WaitReason` is why a job waits; the runners added `Trust`, `Pinned`, `NeedsLogin`, `NeedsKeys`,
@@ -86,7 +121,7 @@ carves its share at start.
 - **`admit(job, eff, exp, m, budget, limits)`** checks, in this order, and answers the first `WaitReason` that holds
   it back:
   1. with `fixed_slots(n)`: the count alone (`Threads` at `n` running), and nothing else;
-  2. power: `OnBattery` when the limits say no jobs on battery;
+  2. a `light_only` machine refuses a heavy job (`Mode`); power: `OnBattery` when the limits say no jobs on battery;
   3. `Limits::start_gap_s` (10 s) since the last start (`Gap`), except between two small jobs: none when the job's
      history peaks under `SMALL_PEAK_MIB` (1 GiB) and so did the last started job's (`MachineState::last_start_small`,
      from the scheduler's `LastStart`). A job without history keeps the gap. The hub feeds each job's history into
@@ -95,9 +130,12 @@ carves its share at start.
   4. memory: `budget ≥ mem_min` (`NoRoom`);
   5. CPU: `budget ≥` the job's expected CPU (its `cores.min` with no history), plus `(overcommit − 1) × cores_usable`
      while the running jobs use less than half their grants on average (`Threads`);
-  6. the PSI limits, each reading strictly below its limit (`Pressure` naming `memory`, `app memory`, `cpu` or `io`);
-  7. the disk: free space after the job's `disk_gib` stays at the guard, `max(disk_guard_gb, disk_guard_pct % of the
-     filesystem)` (`DiskLow`).
+  6. the PSI limits, each reading strictly below its limit (`Pressure` naming `memory`, `app memory`, `cpu` or `io`).
+     The app gate (the user's apps' memory `some`, 2 % on a workstation) holds every job; the IO gate holds only an
+     `io_heavy` job;
+  7. the disk: `disk_fits(disk_gib, free, disk_unused_gib, 0, limits.disk)`, the stop floor free after the job's need
+     and the running jobs' unused need (`DiskLow`). The warm build dir a job would reuse counts once slots are leased
+     by tree key.
 
   `eff` is the job's effective priority; none of F1's checks reads it.
 - **`size(job, exp, budget, waiting_fit)`**, the grant:
@@ -220,7 +258,10 @@ The named reasons are in `classify::infra`: `runner lost`, `preempted`, `disk`, 
 ## History (`history`)
 
 Every finished run leaves a `HistRow { key, machine, grant, wall_s, cpu_s, mem_peak_mib, verdict, disturbed, at,
-warm }`.
+warm, disk_gib }` (`disk_gib`: its build dir plus outputs, measured by the runner at its end).
+
+- **`disk_need_gib(rows, declared)`**: the p95 of `disk_gib` over the last 5 undisturbed runs that measured it, else
+  the declared need: history replaces the pack's value once it has a measurement.
 
 - **`history_key(spec)`**: the kind, then the suite (a check's stage), the class of the rows selected
   (`selector_class`: `all`, `prefix` for one `^name/` or `^name-`, `alt` for an alternation, `other`) and the tree's

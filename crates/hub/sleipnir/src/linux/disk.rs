@@ -72,12 +72,11 @@ pub fn grew_most(root: &Path) -> Option<PathBuf> {
     best.map(|(_, d)| d)
 }
 
-/// The runner folder ROOT's filesystem is below its floor, as PROBE reads it (a test build's facts file included).
+/// The runner folder ROOT's filesystem is below the stop floor (§4.8's `stop_below_gb`, 20 GB), as PROBE reads it (a
+/// test build's facts file included).
 pub fn below_floor(probe: &Probe) -> io::Result<bool> {
     let d = probe.disk_seen()?;
-    let l = forseti::Limits::for_profile(forseti::Profile::Dedicated, 0, 1);
-    let pct = (d.size_gb * u64::from(l.disk_guard_pct)).div_ceil(100);
-    Ok(d.free_gb < l.disk_guard_gb.max(pct))
+    Ok(d.free_gb < forseti::disk::DiskRules::standard().stop_below_gb)
 }
 
 /// One reading: below the floor, and DIR's job grew most, it is stopped (its reason first, then its container).

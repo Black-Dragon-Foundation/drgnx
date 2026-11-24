@@ -694,6 +694,8 @@ fn hist_row(spec: &JobSpec, machine: &str, result: &Value, now: u64) -> Option<H
         at: now,
         // set by the queue for a runner's start it knew to be warm (its slot and image there)
         warm: result["warm"].as_bool() == Some(true),
+        // the runner measures the job's folder at its end (build dir and outputs)
+        disk_gib: result["disk_gib"].as_u64(),
     })
 }
 
@@ -801,6 +803,7 @@ pub async fn kept(db: &urdr::Handle) -> Kept {
                 disturbed: false,
                 at: at.max(0.0) as u64,
                 warm,
+                disk_gib: None,
             })
         })
         .collect();
@@ -4094,6 +4097,7 @@ fn runner_state(name: &str, now: u64, running: Vec<RunningJob>) -> forseti::Mach
         psi: forseti::Psi::default(),
         disk_free_gb: 0,
         disk_total_gb: 0,
+        disk_unused_gib: 0,
         on_ac: true,
         last_start: None,
         last_start_small: false,

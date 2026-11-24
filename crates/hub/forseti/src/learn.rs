@@ -235,6 +235,7 @@ mod tests {
             disturbed: false,
             at,
             warm,
+            disk_gib: None,
         }
     }
 

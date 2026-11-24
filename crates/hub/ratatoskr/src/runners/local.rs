@@ -275,6 +275,7 @@ fn counted(running: &[RunningJob], last: LastStart, now: u64) -> MachineState {
         psi: Psi::default(),
         disk_free_gb: 0,
         disk_total_gb: 0,
+        disk_unused_gib: 0,
         on_ac: true,
         last_start: last.at,
         last_start_small: last.small,

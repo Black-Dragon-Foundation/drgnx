@@ -303,8 +303,12 @@ mod tests {
                 io_full10: 10.0,
                 app_mem_some10: None,
             },
-            disk_guard_gb: 0,
-            disk_guard_pct: 0,
+            // no disk floor here: these rows are about memory and the lock
+            disk: forseti::disk::DiskRules {
+                stop_below_gb: 0,
+                ..forseti::disk::DiskRules::standard()
+            },
+            light_only: false,
             overcommit: 1.0,
             no_jobs_on_battery: false,
             fixed_slots: None,

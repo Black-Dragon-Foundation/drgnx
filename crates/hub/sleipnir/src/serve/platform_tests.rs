@@ -42,6 +42,7 @@ impl Platform for Fake {
             psi: Default::default(),
             disk_free_gb: 500,
             disk_total_gb: 1000,
+            disk_unused_gib: 0,
             on_ac: true,
             last_start: None,
             last_start_small: false,

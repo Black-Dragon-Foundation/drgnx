@@ -75,6 +75,7 @@ fn machine(profile: Profile, avail: u64, now: u64) -> MachineState {
         psi: Psi::default(),
         disk_free_gb: 500,
         disk_total_gb: 1000,
+        disk_unused_gib: 0,
         on_ac: true,
         last_start: None,
         last_start_small: false,
@@ -766,6 +767,7 @@ fn hist(machine: &str, wall_s: f64, warm: bool, at: u64, disturbed: bool) -> His
         disturbed,
         at,
         warm,
+        disk_gib: None,
     }
 }
 
@@ -970,5 +972,40 @@ proptest! {
         let b = budget(&m, &lim);
         let bound = avail as i64 - lim.floor_mib as i64 - lim.reserve_user_mib as i64 - reserve.max(current) as i64;
         prop_assert!(b.mem_mib >= bound, "budget {} below {} (reserve {}, current {}, age {})", b.mem_mib, bound, reserve, current, age);
+    }
+}
+
+proptest! {
+    /// §4.8: whatever its kind, age, pins and the rules, an item in use is never evictable (active beats pinned beats
+    /// age).
+    #[test]
+    fn state_of_never_calls_an_active_item_evictable(
+        kind in 0usize..forseti::disk::ItemKind::ALL.len(),
+        last_used in 0u64..20_000_000,
+        now in 0u64..20_000_000,
+        pinned in any::<bool>(),
+        build_idle_s in 0u64..200_000,
+        other_idle_s in 0u64..400_000,
+    ) {
+        use forseti::disk::{DiskItem, DiskRules, ItemKind, ItemState, state_of};
+        use std::collections::BTreeSet;
+        let item = DiskItem {
+            id: "x".into(),
+            kind: ItemKind::ALL[kind],
+            owner: "alpha".into(),
+            machine: "m".into(),
+            bytes: 1,
+            last_used,
+            created: last_used,
+            name: None,
+            budget_bytes: None,
+            trust: JobTrust::Private,
+        };
+        let r = DiskRules { build_idle_s, other_idle_s, recording_idle_s: 0, ..DiskRules::standard() };
+        let active: BTreeSet<String> = ["x".to_string()].into();
+        let pins: BTreeSet<String> = if pinned { active.clone() } else { BTreeSet::new() };
+        prop_assert_eq!(state_of(&item, now, &active, &pins, &r), ItemState::Active);
+        let s = state_of(&item, now, &BTreeSet::new(), &pins, &r);
+        prop_assert!(!(pinned && s == ItemState::Evictable));
     }
 }

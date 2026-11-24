@@ -10,6 +10,7 @@ pub mod bisect;
 pub mod cachekey;
 pub mod classify;
 pub mod cost;
+pub mod disk;
 pub mod drain;
 pub mod evict;
 pub mod fair;

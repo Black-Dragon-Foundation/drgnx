@@ -119,6 +119,7 @@ impl Platform for DarwinPlatform {
             psi: Default::default(),
             disk_free_gb: gb(disk.f_bavail),
             disk_total_gb: gb(disk.f_blocks),
+            disk_unused_gib: 0,
             on_ac: probe::on_ac(&batt),
             last_start: None,
             last_start_small: false,

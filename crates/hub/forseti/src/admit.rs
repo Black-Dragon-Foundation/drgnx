@@ -2,6 +2,7 @@
 //! reservation, [`crate::backfill`]).
 
 use crate::backfill::{Reservation, backfill_ok};
+use crate::disk::disk_fits;
 use crate::model::{
     Expected, Grant, Job, JobId, Lane, Limits, MachineState, Priority, Range, RunningJob,
     WaitReason,
@@ -116,9 +117,11 @@ fn timing(job: &Job, m: &MachineState) -> Result<(), WaitReason> {
 }
 
 /// Whether `job` may start on `m` now. The checks, in order: the timing lane ([`timing`]); the count (fixed
-/// slots); power; the gap since the last start; memory (`budget ≥ mem_min`); CPU (`budget ≥` the expected CPU, with
-/// overcommit while the running jobs are mostly idle); the PSI limits; the disk after the job's need. `_eff` is the
-/// job's effective priority; F1's checks don't read it.
+/// slots); a light-only machine refuses a heavy job (`Mode`); power; the gap since the last start; memory
+/// (`budget ≥ mem_min`); CPU (`budget ≥` the expected CPU, with overcommit while the running jobs are mostly idle);
+/// the PSI limits (memory, the user's apps, CPU for every job; IO only for an `io_heavy` job); the disk: the stop
+/// floor stays free after the job's need ([`disk_fits`]). `_eff` is the job's effective priority; F1's checks don't
+/// read it.
 pub fn admit(
     job: &Job,
     _eff: Priority,
@@ -134,6 +137,9 @@ pub fn admit(
         } else {
             Ok(())
         };
+    }
+    if limits.light_only && job.spec.heavy() {
+        return Err(WaitReason::Mode);
     }
     if limits.no_jobs_on_battery && !m.on_ac {
         return Err(WaitReason::OnBattery);
@@ -174,10 +180,17 @@ pub fn admit(
         pressure("app memory", value, limit)?;
     }
     pressure("cpu", m.psi.cpu_some10, limits.psi.cpu_some10)?;
-    pressure("io", m.psi.io_full10, limits.psi.io_full10)?;
-    let pct_gb = (m.disk_total_gb * u64::from(limits.disk_guard_pct)).div_ceil(100);
-    let guard = limits.disk_guard_gb.max(pct_gb);
-    if m.disk_free_gb < guard + u64::from(job.spec.disk_gib) {
+    if job.spec.derived.io_heavy {
+        pressure("io", m.psi.io_full10, limits.psi.io_full10)?;
+    }
+    // the warm build dir a job would reuse is known once slots are leased by tree key; until then none counts
+    if !disk_fits(
+        u64::from(job.spec.disk_gib),
+        m.disk_free_gb,
+        m.disk_unused_gib,
+        0,
+        &limits.disk,
+    ) {
         return Err(WaitReason::DiskLow);
     }
     Ok(())
@@ -464,8 +477,9 @@ mod tests {
 
     #[test]
     fn psi_limits_per_limits() {
-        // [D] pure: each reading below its limit, or a Pressure naming it.
-        let j = job("j", Priority::P3, 0);
+        // [D] pure: each reading below its limit, or a Pressure naming it (IO: for an IO-heavy job).
+        let mut j = job("j", Priority::P3, 0);
+        j.spec.derived.io_heavy = true;
         let exp = known(1.0, 512);
         let check = |profile: Profile, set: &dyn Fn(&mut MachineState)| {
             let lim = Limits::for_profile(profile, 32768, 16);
@@ -503,7 +517,7 @@ mod tests {
             Some("memory")
         );
         assert_eq!(
-            what(check(Profile::Workstation, &|m| m.psi.app_mem_some10 = Some(1.5))),
+            what(check(Profile::Workstation, &|m| m.psi.app_mem_some10 = Some(2.0))),
             Some("app memory")
         );
         assert_eq!(
@@ -513,23 +527,129 @@ mod tests {
     }
 
     #[test]
-    fn disk_guard_after_the_jobs_need() {
-        // [D] pure: 20 GB and 10 % stay free after the job's declared need.
+    fn admission_reads_the_stop_floor_and_the_running_jobs_unused_need() {
+        // [D] pure (§4.8): the stop floor (20 GB) stays free after the job's need and the running jobs' unused need,
+        // on a disk of any size (the old 10 % rule is gone)
         let lim = Limits::for_profile(Profile::Dedicated, 32768, 16);
         let exp = known(1.0, 512);
         let mut j = job("j", Priority::P3, 0);
         let mut m = machine(Profile::Dedicated);
-        let mut at = |total: u64, free: u64, need: u32| {
+        let mut at = |total: u64, free: u64, unused: u64, need: u32| {
             m.disk_total_gb = total;
             m.disk_free_gb = free;
+            m.disk_unused_gib = unused;
             j.spec.disk_gib = need;
             let b = budget(&m, &lim);
             admit(&j, Priority::P3, &exp, &m, &b, &lim)
         };
-        assert_eq!(at(100, 25, 5), Ok(()));
-        assert_eq!(at(100, 25, 6), Err(WaitReason::DiskLow));
-        assert_eq!(at(1000, 105, 5), Ok(()));
-        assert_eq!(at(1000, 104, 5), Err(WaitReason::DiskLow));
+        assert_eq!(at(100, 30, 0, 10), Ok(()));
+        assert_eq!(at(100, 30, 0, 11), Err(WaitReason::DiskLow));
+        assert_eq!(at(4000, 30, 0, 10), Ok(()));
+        assert_eq!(at(100, 30, 1, 10), Err(WaitReason::DiskLow));
+    }
+
+    #[test]
+    fn the_io_gate_holds_only_io_heavy_jobs() {
+        // [D] pure: IO pressure past the limit holds a job marked io_heavy and no other
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 16);
+        let mut m = machine(Profile::Dedicated);
+        m.psi.io_full10 = 50.0;
+        let b = budget(&m, &lim);
+        let light = job("l", Priority::P3, 0);
+        assert_eq!(
+            admit(&light, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(())
+        );
+        let mut heavy_io = job("h", Priority::P3, 0);
+        heavy_io.spec.derived.io_heavy = true;
+        assert!(matches!(
+            admit(&heavy_io, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Err(WaitReason::Pressure { what: "io", .. })
+        ));
+    }
+
+    #[test]
+    fn an_io_threshold_setting_reaches_admission() {
+        // [D] pure: the runner's `--io-pct 35` (the desktop's) is the limit admission reads
+        let lim = Limits::for_profile(Profile::Dedicated, 32768, 16)
+            .with_io_pct(Some(35.0))
+            .unwrap();
+        assert_eq!(lim.psi.io_full10, 35.0);
+        let mut j = job("h", Priority::P3, 0);
+        j.spec.derived.io_heavy = true;
+        let mut m = machine(Profile::Dedicated);
+        m.psi.io_full10 = 30.0;
+        let b = budget(&m, &lim);
+        assert_eq!(
+            admit(&j, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(())
+        );
+        m.psi.io_full10 = 35.0;
+        assert!(matches!(
+            admit(&j, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Err(WaitReason::Pressure { what: "io", limit, .. }) if limit == 35.0
+        ));
+        let base = Limits::for_profile(Profile::Dedicated, 32768, 16);
+        assert_eq!(base.with_io_pct(None).unwrap(), base);
+        for bad in [0.0, -1.0, 100.5, f64::NAN] {
+            assert!(base.with_io_pct(Some(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_light_only_machine_refuses_a_heavy_job() {
+        // [D] pure: the laptop as a runner takes light jobs only
+        let mut lim = Limits::for_profile(Profile::Workstation, 32768, 16);
+        lim.light_only = true;
+        let m = machine(Profile::Workstation);
+        let b = budget(&m, &lim);
+        let light = job("l", Priority::P3, 0);
+        assert_eq!(
+            admit(&light, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(())
+        );
+        let mut heavy = job("h", Priority::P3, 0);
+        heavy.spec.weight = crate::model::Weight::Heavy;
+        assert_eq!(
+            admit(&heavy, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Err(WaitReason::Mode)
+        );
+        lim.light_only = false;
+        assert_eq!(
+            admit(&heavy, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn app_pressure_holds_every_job_on_a_workstation() {
+        // [D] pure: the user's apps' memory pressure at the workstation's 2 % holds light and heavy jobs alike
+        let lim = Limits::for_profile(Profile::Workstation, 32768, 16);
+        let mut m = machine(Profile::Workstation);
+        let mut heavy = job("h", Priority::P1, 0);
+        heavy.spec.weight = crate::model::Weight::Heavy;
+        let light = job("l", Priority::P1, 0);
+        for app in [1.9, 2.0] {
+            m.psi.app_mem_some10 = Some(app);
+            let b = budget(&m, &lim);
+            for j in [&light, &heavy] {
+                let r = admit(j, Priority::P1, &known(1.0, 512), &m, &b, &lim);
+                if app < 2.0 {
+                    assert_eq!(r, Ok(()), "{app}");
+                } else {
+                    assert!(
+                        matches!(
+                            r,
+                            Err(WaitReason::Pressure {
+                                what: "app memory",
+                                ..
+                            })
+                        ),
+                        "{app}: {r:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
