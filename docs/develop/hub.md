@@ -1579,10 +1579,11 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `plugins/list` | user | `{}` | `{plugins?: [PluginRow]}` | no |
 | `presence/set` | user | `{away: boolean}` | `boolean` | no |
 | `records/conflict` | user | `{id: Id}` | `{at: number, file: string, graph: string, id: string, path: string}` | no |
-| `records/import` | user | `{dry_run?: boolean, only?: "specs" \| "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board" \| "decisions", path?: AbsPath, root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile], warnings?: [string]}` | yes |
+| `records/forget-root` | user | `{root: AbsPath}` | `{files: natnum, pieces: natnum}` | yes |
+| `records/import` | user | `{adopt?: boolean, dry_run?: boolean, only?: "specs" \| "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board" \| "decisions", path?: AbsPath, root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile], warnings?: [string]}` | yes |
 | `records/read` | user | `{record: string}` | `RecordView` | no |
 | `records/resolve` | user | `{id: Id, keep: "file" \| "graph"}` | `{id: string, keep: "file" \| "graph", path: string}` | yes |
-| `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no |
+| `records/status` | user | `{path?: AbsPath}` | `{skipped?: [Skipped], views?: [ViewStatus]}` | no |
 | `records/write` | user | `{base_version: natnum, kind: "spec" \| "decision", path?: string, project?: string, record?: string, remove?: [string], sections?: [{after?: string, body: Text, heading: string, key?: string}], status?: Status, title?: string}` | `{path: string, record: string, sections?: [SectionId], tx: natnum, version: natnum}` | yes |
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |

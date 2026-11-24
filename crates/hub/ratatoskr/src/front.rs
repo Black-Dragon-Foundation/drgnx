@@ -1092,6 +1092,7 @@ impl Front {
             | Params::RecordsResolve(_)
             | Params::RecordsWrite(_)
             | Params::RecordsRead(_)
+            | Params::RecordsForgetRoot(_)
             | Params::OutsideBind(_)
             | Params::OutsideUnbind(_)
             | Params::OutsideBindings(_)

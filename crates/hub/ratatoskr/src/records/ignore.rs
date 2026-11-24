@@ -4,7 +4,9 @@
 
 use gix_ignore::Search;
 use gix_ignore::search::Ignore as Parse;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// The list's file, under the project root.
 pub(crate) const RECORDS_TOML: &str = ".drgnx/records.toml";
@@ -104,9 +106,136 @@ impl Ignore {
     }
 }
 
+/// The root's git ignore rules: its `.gitignore` files and `.git/info/exclude`, read through `gix-ignore` (no `git`
+/// process).  A folder's `.gitignore` is read the first time a path under it is asked about.
+pub(crate) struct GitIgnore {
+    root: PathBuf,
+    /// `.git/info/exclude`: asked after every `.gitignore`.
+    exclude: Search,
+    /// A folder under the root (`""` for the root itself, `a/b` below it) and its `.gitignore`, when it has one.
+    dirs: Mutex<HashMap<String, Option<Search>>>,
+}
+
+/// FILE's bytes, none when it is not there.
+fn read_opt(file: &Path) -> villa::Result<Option<Vec<u8>>> {
+    match std::fs::read(file) {
+        Ok(b) => Ok(Some(b)),
+        // `.git` is a file in a linked worktree: no `info/exclude` under it
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(villa::Error::io(format!("{}: {e}", file.display()))),
+    }
+}
+
+/// The patterns of FILE's BYTES, relative to FILE's folder under BASE (none: relative to the root).
+fn search_of(bytes: &[u8], file: PathBuf, base: Option<&Path>) -> Search {
+    let mut s = Search::default();
+    // an in-memory buffer cannot fail to read
+    crate::soft::done(
+        s.add_patterns_buffer(bytes, file, base, Parse::default()),
+        "git ignore patterns",
+    );
+    s
+}
+
+impl GitIgnore {
+    /// The rules of ROOT: its `.git/info/exclude` and its own `.gitignore` are read now (one that cannot be read is an
+    /// error naming it); the `.gitignore` files of folders below, when a path under them is asked about.
+    pub(crate) fn load(root: &Path) -> villa::Result<GitIgnore> {
+        let file = root.join(".git/info/exclude");
+        let exclude = match read_opt(&file)? {
+            Some(b) => search_of(&b, file, None),
+            None => Search::default(),
+        };
+        let top = root.join(".gitignore");
+        let own = read_opt(&top)?.map(|b| search_of(&b, top, Some(root)));
+        Ok(GitIgnore {
+            root: root.to_path_buf(),
+            exclude,
+            dirs: Mutex::new(HashMap::from([(String::new(), own)])),
+        })
+    }
+
+    /// The `.gitignore` of the folder DIR (relative to the root); one that cannot be read counts as none.
+    fn list_of(&self, dir: &str) -> Option<Search> {
+        let file = self.root.join(dir).join(".gitignore");
+        let bytes = read_opt(&file).ok().flatten()?;
+        Some(search_of(&bytes, file, Some(&self.root)))
+    }
+
+    /// Whether REL (a path under the root) is git-ignored: itself, or any folder above it.
+    pub(crate) fn ignored(&self, rel: &Path, is_dir: bool) -> bool {
+        let parts: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        // a folder that is ignored takes everything under it (git never looks inside); a file is judged last
+        (1..=parts.len()).any(|n| {
+            let dir = n < parts.len() || is_dir;
+            self.verdict(&parts[..n - 1], &parts[..n].join("/"), dir) == Some(true)
+        })
+    }
+
+    /// PATH (in the folders DIRS) by git's order: the nearest `.gitignore` with a matching line decides (its last
+    /// matching line, so `!` re-includes), then `.git/info/exclude`.  None: no line matches.
+    fn verdict(&self, dirs: &[String], path: &str, is_dir: bool) -> Option<bool> {
+        use gix_ignore::glob::pattern::Case;
+        let ask = |s: &Search| {
+            s.pattern_matching_relative_path(path.into(), Some(is_dir), Case::Sensitive)
+                .map(|m| !m.pattern.is_negative())
+        };
+        let mut lists = saman::lock(&self.dirs);
+        for k in (0..=dirs.len()).rev() {
+            let key = dirs[..k].join("/");
+            let list = lists.entry(key).or_insert_with_key(|key| self.list_of(key));
+            if let Some(hit) = list.as_ref().and_then(&ask) {
+                return Some(hit);
+            }
+        }
+        ask(&self.exclude)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn put(root: &Path, rel: &str, text: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        crate::fsio::write(p, text).unwrap();
+    }
+
+    #[test]
+    fn gitignore_files_apply_below_their_folder_and_exclude_everywhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        put(root, ".gitignore", "/drafts/\n*.tmp.md\n");
+        put(root, "docs/specs/.gitignore", "secret.md\n!keep.tmp.md\n");
+        put(root, ".git/info/exclude", "local.md\n");
+        let g = GitIgnore::load(root).unwrap();
+        let ig = |rel: &str| g.ignored(Path::new(rel), false);
+        assert!(ig("drafts/a.md"));
+        assert!(
+            !ig("docs/drafts/a.md"),
+            "an anchored line is the root's own"
+        );
+        assert!(ig("docs/specs/secret.md"));
+        assert!(!ig("secret.md"), "a folder's line applies below it only");
+        assert!(ig("docs/plans/x.tmp.md"));
+        assert!(
+            !ig("docs/specs/keep.tmp.md"),
+            "the deeper file's negation wins"
+        );
+        assert!(ig("docs/local.md"));
+        assert!(!ig("docs/specs/a.md"));
+    }
 
     fn with(lines: &[&str]) -> Ignore {
         let mut all: Vec<String> = DEFAULT_IGNORE.iter().map(|s| (*s).to_owned()).collect();

@@ -73,6 +73,11 @@ pub fn touches_user_only(text: &str) -> bool {
     !user_only_lines(text).is_empty()
 }
 
+/// A and B set the fields only the user may set to the same values (both may set none).
+pub fn same_user_only(a: &str, b: &str) -> bool {
+    user_only_lines(a) == user_only_lines(b)
+}
+
 /// A piece's digest as the base keeps it.
 pub fn digest_piece(text: &str) -> String {
     crate::view::digest(text)

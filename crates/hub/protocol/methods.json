@@ -36274,6 +36274,59 @@
       "classes": [
         "user"
       ],
+      "doc": "not for this project: the root's records retired and its records.adopt turned off (an import refuses it until adopt: true); the files are never touched",
+      "name": "records/forget-root",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/AbsPath",
+            "description": "The project root whose records go (\"not for this project\")."
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "ForgetRootParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What `records/forget-root` retired: the pieces, and the files they came from (the files themselves are untouched).",
+        "properties": {
+          "files": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pieces": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pieces",
+          "files"
+        ],
+        "title": "Forgotten",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a project's record files adopted into the graph (the files and the store backed up first; idempotent; the notice sent once per root); the hub never commits",
       "name": "records/import",
       "params": {
@@ -36300,6 +36353,13 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "adopt": {
+            "description": "Adopt a root that `records/forget-root` turned off (\"not for this project\") again: its `records.adopt` goes\nback on first.  Without it, an import of such a root is refused.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "dry_run": {
             "description": "Read and count, write nothing (no backup, no graph, no view).",
             "type": [
@@ -36704,6 +36764,38 @@
             ],
             "type": "string"
           },
+          "SkipWhy": {
+            "description": "Why the importer left a record file out.",
+            "oneOf": [
+              {
+                "const": "too-big",
+                "description": "Over 2 MiB (by its size; the file is never read).",
+                "type": "string"
+              },
+              {
+                "const": "git-ignored",
+                "description": "The root's git ignore rules (`.gitignore` files, `.git/info/exclude`) exclude it.",
+                "type": "string"
+              }
+            ]
+          },
+          "Skipped": {
+            "additionalProperties": false,
+            "description": "A record file the importer left out, and why.",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "why": {
+                "$ref": "#/$defs/SkipWhy"
+              }
+            },
+            "required": [
+              "path",
+              "why"
+            ],
+            "type": "object"
+          },
           "ViewStatus": {
             "additionalProperties": false,
             "description": "One view file and where it stands.",
@@ -36757,6 +36849,13 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "skipped": {
+            "description": "The files the last full import of each root left out: over 2 MiB, or git-ignored.",
+            "items": {
+              "$ref": "#/$defs/Skipped"
+            },
+            "type": "array"
+          },
           "views": {
             "default": [],
             "items": {
