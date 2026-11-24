@@ -61,7 +61,10 @@ caches are not the upstream's). Refused: a shallow clone (`git fetch --unshallow
 like a root), the same repository a second time, and a name already taken. Only you register or remove projects; an
 agent's connection is refused.
 
-Feature opt-ins, and later allow-lists, budgets, caches and fairness, name a project by its id. A job's project comes
+Feature opt-ins (`sandbox`, `udmabuf`, `render`, `kvm`, `build-net`, `ptrace`; `ptrace` and the others are only for a
+`mine` runner) and allow-lists (`drgnx jobs allow PROJECT image|tool|host|fetch VALUE`: what a project's jobs may pull
+or run; an image digest not on the list makes its job wait and say the command that allows it) name a project by its
+id. Budgets, caches and fairness do too. A job's project comes
 only from this registry, never from its folder's name or from what its job pack says (a pack whose `project` is not the
 registered name is refused). A job whose tree is in no registered project still runs on this machine as before; it never
 goes to a runner, and while it waits its row says so, with the command that registers it (or, for a shallow clone or a

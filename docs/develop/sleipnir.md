@@ -237,8 +237,9 @@ systemd manager, `memory pids cpu` delegated); `limits_enforced(info)` is its pu
 design's words ("Networked container jobs need podman 5.0 or newer; this host has `4.9.4`.", "drgnx runs containers
 rootless; this podman is rootful."). A job without network never runs it.
 
-Opt-in features (`podman::Feature`: `Sandbox`, `Udmabuf`, `Render`, `BuildNet`, `Kvm`; `Feature::parse`/`name` use the
-placement names, `build-net` for the last): `ContainerReq.features` is what the job asks, `RunnerArgs.allowed` what the
+Opt-in features (`podman::Feature`: `Sandbox`, `Udmabuf`, `Render`, `BuildNet`, `Kvm`, `Ptrace`; `Feature::parse`/`name`
+use the placement names, `build-net` for `BuildNet`; `Ptrace` → `--cap-add=SYS_PTRACE`, for debugger and tracer tests,
+and the hub offers it only on a `mine` runner whose user enabled it for the project, as for `sandbox`): `ContainerReq.features` is what the job asks, `RunnerArgs.allowed` what the
 user allowed for its project (`serve --feature PROJECT:FEATURE`, repeatable, from the registry record's
 `enabled_features`; `LinuxPlatform::start` keeps the ones of the job's `spec.project`), and `argv` maps each asked
 feature only if allowed, else refuses it: `Sandbox` → `--security-opt=unmask=ALL`, `Udmabuf` → `--device=/dev/udmabuf`,
@@ -696,12 +697,43 @@ aside and renamed. It is the `Blobs` a slot update reads.
 take a `bundle`, and `fetch_origin` serves an `origin-fetch` ("serve" below). `sleipnir sync-bundle` (`test-hooks`
 only) takes one bundle on stdin and announces `at OFFSET` after every chunk, for the fleet row.
 
+## Artifacts (`artifact`, `serve::platform::artifacts`)
+
+An artifact is a build output a later job uses; the runner builds it itself and the hub only schedules the job.
+
+- **The store** (`artifact::store`): `<root>/artifacts/<project>@<role>@<kind>@<key>`. A build writes
+  `<name>.part`; `commit` makes the files read-only and renames it, so a part is never visible as an artifact and a
+  committed key is never written again. A commit registers a `DiskItem` (`artifact:<role>:<project>:<key>`, kind
+  `Artifact`, private-keys trust) with the disk register; the hub pins the ids its queued jobs (pinned) and running jobs
+  (active) use (`forseti::artifact::item_ids`), so the guard never plans them out from under a job.
+- **`command`** (`artifact::command`): the steps run in order in one container job whose `{out}` is the part folder; a
+  non-zero step stops the rest and nothing is committed. `keep = { from, paths }` copies only matching regular files
+  (no `..`, no absolute path). The job's verdict decides: `Platform::artifact_done` commits on a pass and drops the
+  part otherwise (a commit that fails turns a pass into `infra: artifact`).
+- **`image`** (`artifact::image`): the key is `image_key` over CI's tag rule (`image_tag`, a port of
+  `test/container/image-tag.sh`, proven equal by a test that runs the script) and the entry's `tag-inputs` files. The hub
+  asks the registry for this tree's tag only: with a digest the runner pulls by digest (`guard::check_pull`, repository on
+  the project's allow-list), without one it runs `podman build --pull=never --layers --label org.drgnx.artifact=<key>`
+  (`podman::build_argv`; `--network=none` unless the runner allows `build-net` for the project). The store folder holds
+  `image.json` (the image ID, built or pulled). An image runs **by ID**, and only when its label names the key
+  (`ImageRef::Id`), so a registry's older image under another tag never runs for a newer key.
+- **Toolchains are images by digest.** `Derived::toolchain` is the platform digest (`toolchain_identity`): it is in the
+  key and in the slot family, and no host path is mounted for a tool.
+- **Placeholders** (`artifact::expand`), expanded on the runner where the paths are: `{src}`, `{out}`, `{build}`,
+  `{art:NAME}` (`/art/NAME`, read-only), `{cache:NAME}`, `{gate:NAME}`, `{input.NAME}`, `{jobs}`, `{deadline}`,
+  `{island}` and `{key:NAME}`. An unknown or unset one is refused by name and nothing expands to an empty string; `{{`
+  and `}}` are literal braces. A key is only the whole value of an environment entry and goes through
+  `drgnx-key exec NAME=VAR`: its value is in no argv, stamp, evidence or log.
+
 ## Disk and caches
 
-### Caches by trust (`sync::cache`)
+### Caches by trust and role (`sync::cache`)
 
-Every writable cache a job's suite declares is a folder `<root>/cache/<project>/<trust>/<name>/`, the trust being the
-job's (`public`, `private`, `private+keys`). So a job never reads a cache that a job of another trust wrote. Each word
+Every writable cache a job declares (a pack's `[[caches]]`, as `forseti::CacheSpec`) is a folder
+`<root>/cache/<project>/<trust>/<role>/<name>/`, the trust being the job's (`public`, `private`, `private+keys`) and the
+role its author's or gate's. So a job never reads a cache that a job of another trust wrote, and a **gate never reads
+what an author's run wrote**: an author's job writes its own partition and also sees the gate's, read-only, at
+`/cache-gate/<name>` (`{gate:NAME}`, `Mount::gate_ro`); a gate sees only its own. Each word
 of the path is one component: letters, digits, `_`, `-` and `.` (not first) stay, and every other byte is `%XX`. So
 no two words share a folder, and none leaves its parent.
 
@@ -712,11 +744,12 @@ inside:
 - a `private+keys` job gets a fresh one in its own job folder (`jobs/<id>/target`). A keyed release job never runs
   what an unkeyed job's `build.rs` left.
 
-Then comes one mount per declared cache. A `CacheKind::Shared` cache (cargo home, ccache, the Lisp cache) is shared by
-the project's jobs of that trust. A `CacheKind::PerJob` cache (dnf and other package caches) is
-`<name>@<job id>`, one per running job, since two runs on one dnf cache fail. A cache's budget is what its suite
-declares (`SuiteCache::budget_bytes`; the compiler cache's is `forseti::disk::COMPILER_CACHE_GB`); none means only its
-age and the floor decide. `register(reg, job, suite_caches, mounts, now)` puts each cache in the disk register with
+Then comes one mount per declared cache, by its `Sharing`. `shared` (cargo home, ccache) is one folder for the project's
+jobs of that trust and role. `locked` is the same folder, and the hub lets one job hold it at a time (it waits as
+`state`). `private` (dnf and other package caches) is `<name>@<job id>`, one per running job, since two runs on one dnf
+cache fail. A cache's budget is its `budget_gib` (`CacheSpec::budget_bytes`; the default of a `compiler` kind is
+`forseti::disk::COMPILER_CACHE_GB`, 15); none means only its age and the floor decide. A cache's `env` variables are set
+in the job, and its `readonly_env` ones only for an author, pointing at the gate's partition. `register(reg, job, suite_caches, mounts, now)` puts each cache in the disk register with
 its budget (`cache:<path under the runner folder>`).
 
 ### The disk register (`sync::register`)

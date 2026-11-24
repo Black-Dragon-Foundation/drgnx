@@ -524,6 +524,7 @@ params! {
     JobsProjectAdd(jobs_q::ProjectAddParams),
     JobsProjectList(Empty),
     JobsProjectRemove(jobs_q::ProjectRemoveParams),
+    JobsAllow(jobs_q::AllowParams),
     PairAnswer(pair::PairAnswer),
     PairReadAnswer(pair::PairReadAnswer),
     PairOpen(pair::OpenParams),
