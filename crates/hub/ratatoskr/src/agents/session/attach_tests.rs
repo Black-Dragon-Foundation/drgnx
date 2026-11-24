@@ -267,6 +267,14 @@ fn a_write_that_waits_on_the_disk_holds_no_worker() {
         crate::clock::spawn_untracked(module_path!(), async move { w.persist_queue() })
             .await
             .unwrap();
+        // the write is now waiting on the held disk (on the blocking pool); without this the assertion below only held
+        // when the write lost a race against the two tasks, so it failed under load
+        let slow = crate::clock::blocking(move || {
+            slow.reached();
+            slow
+        })
+        .await
+        .unwrap();
         // the state is free for the next reader, on a worker
         let r = s.clone();
         crate::clock::spawn_untracked(module_path!(), async move {
