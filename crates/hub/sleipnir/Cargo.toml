@@ -61,6 +61,11 @@ name = "drgnx-key"
 path = "src/bin/drgnx-key.rs"
 required-features = ["std-owners"]
 
+# `drgnx-key` run on its own against a stand-in helper
+[[test]]
+name = "key_bin"
+required-features = ["std-owners"]
+
 # the job helper's rows inside a fake runner: its keys, its socket, its disk watch, drgnx-key in a container
 [[test]]
 name = "runner_host_helper"
