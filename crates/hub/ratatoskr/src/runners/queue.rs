@@ -5323,25 +5323,27 @@ mod tests {
 
     // [D] pure: a job whose tree is in no registered project never goes to a runner, even one that is free while this
     // machine is busy: it waits saying why; the same job of a registered project goes
-    #[tokio::test]
-    async fn an_unregistered_job_waits_as_not_registered() {
-        let dir = tempfile::tempdir().unwrap();
-        let (q, _rx) = test_queue(dir.path(), None, true);
-        add(&q, "r1", 600);
-        hello(&q, "r1", true, 100);
-        let mut s = job("x1", Priority::P3, 64);
-        s.place.unregistered = Some("its tree is in no registered project".into());
-        q.submit(s, 100);
-        assert_eq!(placed(&q, 100), None);
-        assert_eq!(
-            q.row("x1").unwrap().waiting.as_deref(),
-            Some("its tree is in no registered project")
-        );
-        let mut s = job("x2", Priority::P3, 64);
-        s.spec.project = ProjectId::from("p1");
-        q.submit(s, 101);
-        q.tick(101);
-        assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r1"));
+    #[test]
+    fn an_unregistered_job_waits_as_not_registered() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            add(&q, "r1", 600);
+            hello(&q, "r1", true, 100);
+            let mut s = job("x1", Priority::P3, 64);
+            s.place.unregistered = Some("its tree is in no registered project".into());
+            q.submit(s, 100);
+            assert_eq!(placed(&q, 100), None);
+            assert_eq!(
+                q.row("x1").unwrap().waiting.as_deref(),
+                Some("its tree is in no registered project")
+            );
+            let mut s = job("x2", Priority::P3, 64);
+            s.spec.project = ProjectId::from("p1");
+            q.submit(s, 101);
+            q.tick(101);
+            assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r1"));
+        });
     }
 
     // [D] pure: an opt-in feature (`render`, with the GPU its probe found) is offered to a job of the project it was

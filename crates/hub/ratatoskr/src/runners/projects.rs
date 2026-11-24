@@ -721,29 +721,31 @@ mod tests {
         assert!(p.remove(&a.id).is_err());
     }
 
-    #[tokio::test]
-    async fn the_registry_survives_a_restart() {
+    #[test]
+    fn the_registry_survives_a_restart() {
         // [D] a file: what add wrote is what the next hub reads
-        let t = tempfile::tempdir().unwrap();
-        let r = repo(t.path(), "r", "a", Some("o"));
-        let (_store, h) = crate::runtime_db::open(t.path()).unwrap();
-        let mut p = Projects::open(Some(h.clone())).await;
-        let a = p.add(&r, Some("name")).unwrap();
-        // the writes are queued in order: once flushed, a read sees them
-        p.flushed().await;
-        drop(p);
-        let seen = h
-            .read(|c| {
-                Ok(c.query_row("select count(*) from project_clones", [], |r| {
-                    r.get::<_, i64>(0)
-                })?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(seen, 1);
-        let mut p = Projects::open(Some(h)).await;
-        assert_eq!(p.list(), vec![a.clone()]);
-        assert_eq!(id(&p.resolve(&r)), a.id);
-        assert_eq!(p.walks(), 0);
+        saman::block_on_current(async move {
+            let t = tempfile::tempdir().unwrap();
+            let r = repo(t.path(), "r", "a", Some("o"));
+            let (_store, h) = crate::runtime_db::open(t.path()).unwrap();
+            let mut p = Projects::open(Some(h.clone())).await;
+            let a = p.add(&r, Some("name")).unwrap();
+            // the writes are queued in order: once flushed, a read sees them
+            p.flushed().await;
+            drop(p);
+            let seen = h
+                .read(|c| {
+                    Ok(c.query_row("select count(*) from project_clones", [], |r| {
+                        r.get::<_, i64>(0)
+                    })?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(seen, 1);
+            let mut p = Projects::open(Some(h)).await;
+            assert_eq!(p.list(), vec![a.clone()]);
+            assert_eq!(id(&p.resolve(&r)), a.id);
+            assert_eq!(p.walks(), 0);
+        });
     }
 }
