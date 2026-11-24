@@ -247,15 +247,71 @@ impl Command {
         draugr::spawn_std(&spec, &opts)
     }
 
+    /// Start the child with its stdin and stdout as async pipes (its stderr is ours): for a child that is a control
+    /// channel (an `ssh`), inside a runtime. It is killed when the [`Piped`] is dropped.
+    pub fn spawn_piped(&mut self) -> io::Result<Piped> {
+        let mut child = self.spawn(Io::Pipe, Io::Pipe, Io::Inherit)?;
+        let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+            return Err(io::Error::other("the child has no pipes"));
+        };
+        Ok(Piped {
+            stdin: Some(tokio::process::ChildStdin::from_std(stdin)?),
+            stdout: Some(tokio::process::ChildStdout::from_std(stdout)?),
+            child,
+        })
+    }
+
     /// [`Command::status`] for an async caller.
     pub async fn status_async(&mut self) -> io::Result<ExitStatus> {
         self.output_async().await.map(|o| o.status)
     }
 }
 
+/// A child whose stdin and stdout are async pipes ([`Command::spawn_piped`]). Dropped, it is killed and reaped.
+pub struct Piped {
+    pub stdin: Option<tokio::process::ChildStdin>,
+    pub stdout: Option<tokio::process::ChildStdout>,
+    child: std::process::Child,
+}
+
+impl Piped {
+    /// End the child now (its whole group) and reap it.
+    pub async fn kill(&mut self) -> io::Result<()> {
+        // SAFETY: the child leads a group of its own (draugr), so its pid names only it and what it started.
+        unsafe { libc::kill(-(self.child.id() as i32), libc::SIGKILL) };
+        self.child.wait().map(|_| ())
+    }
+}
+
+impl Drop for Piped {
+    fn drop(&mut self) {
+        // SAFETY: as in `kill`.
+        unsafe { libc::kill(-(self.child.id() as i32), libc::SIGKILL) };
+        crate::soft::done(self.child.wait(), "a piped child");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_piped_child_answers_over_its_pipes_and_dies_with_its_handle() {
+        saman::block_on_current(async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut c = Command::new("cat").spawn_piped().unwrap();
+            let (mut w, mut r) = (c.stdin.take().unwrap(), c.stdout.take().unwrap());
+            w.write_all(b"ping").await.unwrap();
+            let mut got = [0u8; 4];
+            r.read_exact(&mut got).await.unwrap();
+            assert_eq!(&got, b"ping");
+            c.kill().await.unwrap();
+            // killed: its output ends
+            let mut rest = Vec::new();
+            r.read_to_end(&mut rest).await.unwrap();
+            assert!(rest.is_empty());
+        });
+    }
 
     #[test]
     fn a_child_gives_its_output_and_status() {
@@ -297,7 +353,7 @@ mod tests {
                 .unwrap();
             String::from_utf8(out.stdout).unwrap()
         };
-        if let Ok(ours) = std::env::var("HOME") {
+        if let Ok(ours) = std::env::var(stig::HOME_VAR) {
             assert_eq!(home(&mut Command::new("/bin/sh")), ours);
         }
         assert_eq!(home(Command::new("/bin/sh").env_clear()), "unset");

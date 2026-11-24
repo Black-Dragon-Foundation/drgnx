@@ -54,7 +54,7 @@ pub struct Graph {
 #[derive(Clone, Debug)]
 pub struct RepoState {
     pub found: Found,
-    pub status: Option<Result<status::Status, GitError>>,
+    pub status: Option<Result<status::Status, Arc<GitError>>>,
     pub graph: Option<Graph>,
     /// How many commits the graph reads.
     pub graph_limit: usize,
@@ -166,7 +166,7 @@ fn invalid(path: &str, message: &str) -> Error {
     }
 }
 
-fn failed(message: GitError) -> Error {
+fn failed(message: String) -> Error {
     Error {
         code: ErrorCode::Internal,
         message,
@@ -208,7 +208,7 @@ pub fn read_repo(
     root: &Path,
     graph: bool,
     limit: usize,
-) -> (Result<status::Status, GitError>, Option<Graph>) {
+) -> (Result<status::Status, Arc<GitError>>, Option<Graph>) {
     let args = [
         "status",
         "--porcelain=v2",
@@ -216,7 +216,9 @@ pub fn read_repo(
         "-z",
         "--untracked-files=all",
     ];
-    let st = run::git(root, As::Reader, &args, None, Some(LOCAL), None).map(|o| status::parse(&o));
+    let st = run::git(root, As::Reader, &args, None, Some(LOCAL), None)
+        .map(|o| status::parse(&o))
+        .map_err(Arc::new);
     let g = match (&st, graph) {
         (Ok(st), true) => Some(read_graph(root, st, limit)),
         _ => None,
@@ -557,7 +559,7 @@ async fn git_quiet(
     })
     .await
     .map_err(|e| failed(e.to_string()))?
-    .map_err(failed)
+    .map_err(|e| failed(e.message().to_owned()))
 }
 
 /// Run the user's git ARGS in ROOT on a blocking thread (STDIN, DEADLINE), then have the views showing it read it.
@@ -744,8 +746,8 @@ pub fn remote(f: &Front, c: &Caller, p: Remote) -> Result<RemoteId, Error> {
         lock(&f.core.views.scms.remotes).remove(&id);
         match result {
             Ok(_) => event(&f, "done", None),
-            Err(e) if e == run::STOPPED => event(&f, "stopped", None),
-            Err(e) => event(&f, "failed", Some(e)),
+            Err(e) if e.kind() == villa::Kind::Cancelled => event(&f, "stopped", None),
+            Err(e) => event(&f, "failed", Some(e.message().to_owned())),
         }
         reread_everywhere(&f, &root2);
     })
@@ -817,7 +819,7 @@ pub async fn branches(p: Root) -> Result<Branches, Error> {
     })
     .await
     .map_err(|e| failed(e.to_string()))?
-    .map_err(failed)?;
+    .map_err(|e| failed(e.message().to_owned()))?;
     Ok(Branches {
         branches: parse_branches(&out),
     })

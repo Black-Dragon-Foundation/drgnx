@@ -134,6 +134,11 @@ pub const HOME_VAR: &str = "HOME";
 /// The name of the variable that holds the system's runtime directory (`XDG_RUNTIME_DIR`): where a Wayland compositor
 /// puts its socket, for a child process to be pointed at another one. Not drgnx's own [`runtime`] folder.
 pub const SYSTEM_RUNTIME_VAR: &str = "XDG_RUNTIME_DIR";
+/// The name of the variable that holds the system's data search path (`XDG_DATA_DIRS`): where a tool the editor runs
+/// (a Jupyter kernel) finds the kernels and data other programs installed. Passed through by name, never read as drgnx's.
+pub const SYSTEM_DATA_DIRS_VAR: &str = "XDG_DATA_DIRS";
+/// The name of the variable that holds the system's config search path (`XDG_CONFIG_DIRS`), as [`SYSTEM_DATA_DIRS_VAR`].
+pub const SYSTEM_CONFIG_DIRS_VAR: &str = "XDG_CONFIG_DIRS";
 
 /// The system's runtime directory (see [`SYSTEM_RUNTIME_VAR`]), when the environment gives an absolute one.
 pub fn system_runtime_dir() -> Option<PathBuf> {

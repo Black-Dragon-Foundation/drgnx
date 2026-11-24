@@ -15,6 +15,7 @@
 //! DRGNX_FLEET_TEST_BIN=<binary> fleet.sh test --exact transport::needs_login_from_a_forcecommand_banner
 //! ```
 
+use ratatoskr::proc::{Command, Io};
 use ratatoskr::runners::ssh_config as generated;
 use ratatoskr::runners::transport::{LinkError, Login, OpensshTransport, Transport, effective};
 use ratatoskr::runners::{Remote, RunnerCfg};
@@ -22,7 +23,7 @@ use std::ffi::{CStr, OsStr};
 use std::io::{BufRead, Read};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -143,8 +144,7 @@ mod ssh_config {
                 .arg("-D")
                 .arg("-a")
                 .arg(&sock)
-                .stdout(Stdio::null())
-                .spawn()
+                .spawn(Io::Inherit, Io::Null, Io::Inherit)
                 .unwrap();
             skuld::wait_until("the agent's socket", 30, || sock.exists().then_some(()));
 
@@ -243,11 +243,7 @@ mod ssh_config {
             ));
             // the user's own ssh opens the forward before its session starts
             let mut plain = h.plain_ssh(&["echo ready; exec cat"]);
-            let mut child = plain
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap();
+            let mut child = plain.spawn(Io::Pipe, Io::Pipe, Io::Inherit).unwrap();
             let mut out = std::io::BufReader::new(child.stdout.take().unwrap());
             let mut s = String::new();
             out.read_line(&mut s).unwrap();
@@ -345,7 +341,7 @@ mod transport {
             // with all three open, the round trip rides the control channel: a fourth session would be refused by sshd.
             // Lines go back and forth on it until the round trip has seen one; each is a real trip to the runner.
             let t2 = t.clone();
-            let rt = tokio::spawn(async move { t2.round_trip("r1").await });
+            let rt = saman::spawn("round-trip", async move { t2.round_trip("r1").await });
             let mut n = 0u32;
             while !rt.is_finished() {
                 n += 1;

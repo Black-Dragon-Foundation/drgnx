@@ -1497,7 +1497,7 @@ mod tests {
             [
                 format!("HOME={d}"),
                 format!("TMPDIR={d}"),
-                format!("XDG_CACHE_HOME={d}")
+                format!("{}={d}", stig::Xdg::Cache.var())
             ]
         );
     }

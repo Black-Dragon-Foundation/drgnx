@@ -237,14 +237,13 @@ impl Machine {
     }
 
     /// SCRIPT's stdout on the machine, or its stderr as the error.
-    fn try_sh(&self, script: &str) -> villa::Result<String> {
+    fn try_sh(&self, script: &str) -> Result<String, String> {
         let out = ratatoskr::proc::Command::new("ssh")
             .arg("-F")
             .arg(self.ssh_config())
             .arg(&self.cfg.host)
             .arg(script)
-            .output_async()
-            .await
+            .output()
             .expect("ssh");
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -319,8 +318,8 @@ impl Machine {
 
     /// `serve --watchdog WD` in ROOT for HUB over one `ssh` of the hub's (its stdin and stdout are the control
     /// channel); killing the child is the hub dying with no `bye`.
-    fn serve(&self, root: &str, hub: &str, wd: &str) -> (Channels, tokio::process::Child) {
-        let mut child = tokio::process::Command::new("ssh")
+    fn serve(&self, root: &str, hub: &str, wd: &str) -> (Channels, ratatoskr::proc::Piped) {
+        let mut child = ratatoskr::proc::Command::new("ssh")
             .arg("-F")
             .arg(self.ssh_config())
             .arg(&self.cfg.host)
@@ -328,10 +327,7 @@ impl Machine {
                 "{root}/bin/test/sleipnir serve --root {root} --prefix fl{hub} --hub-id {hub} --profile dedicated \
                  --watchdog {wd}"
             ))
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+            .spawn_piped()
             .expect("ssh");
         let control = Channel::new(
             Box::new(child.stdin.take().unwrap()),
@@ -487,7 +483,7 @@ mod cloud {
         hub: &str,
         wd: &str,
         img: &str,
-    ) -> tokio::process::Child {
+    ) -> ratatoskr::proc::Piped {
         let (channels, child) = m.serve(root, hub, wd);
         let session = Session::start(m.name(), channels, q.route(), q.link_events());
         q.add_runner(
@@ -812,8 +808,11 @@ mod cloud {
             let card = Meter::new(Rates::default(), 0.0)
                 .gate(now(), 50.0, "m7g.large", 0.1, 600, 900, &[], Some(&cmd))
                 .expect_err("the gate refuses every start while the credentials need a login");
-            assert_eq!(card, needs_login_text(&cmd));
-            assert!(card.ends_with("then Runners: Retry Cloud"), "{card}");
+            assert_eq!(card.message(), needs_login_text(&cmd));
+            assert!(
+                card.message().ends_with("then Runners: Retry Cloud"),
+                "{card}"
+            );
 
             let bounds = Bounds {
                 lifetime_s: DESIGN.lifetime,

@@ -76,9 +76,15 @@ fn random<const N: usize>() -> [u8; N] {
 }
 
 /// An SSH public key, as its wire blob.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PublicKey {
     blob: Vec<u8>,
+}
+
+impl std::fmt::Debug for PublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PublicKey({} bytes)", self.blob.len())
+    }
 }
 
 impl PublicKey {
@@ -441,10 +447,16 @@ pub mod pin {
     const MAX_KEYS: usize = 16;
 
     /// A host key: its algorithm and wire blob.
-    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[derive(Clone, PartialEq, Eq)]
     pub struct HostKey {
         pub algo: String,
         pub blob: Vec<u8>,
+    }
+
+    impl std::fmt::Debug for HostKey {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "HostKey({}, {} bytes)", self.algo, self.blob.len())
+        }
     }
 
     impl HostKey {

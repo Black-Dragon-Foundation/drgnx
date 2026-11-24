@@ -42,7 +42,6 @@ use serde_json::{Value, json};
 use sleipnir::proto::Frame;
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -106,7 +105,7 @@ fn ssh_config() -> String {
     format!("{}/.ssh/config", std::env::var(stig::HOME_VAR).unwrap())
 }
 
-fn ssh(runner: &str, script: &str) -> std::process::Output {
+fn ssh(runner: &str, script: &str) -> ratatoskr::proc::Output {
     ratatoskr::proc::Command::new("ssh")
         .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
         .arg(script)
@@ -736,7 +735,7 @@ impl Drill {
         self.unlink().await;
         self.t.stop(&self.runner).await;
         if let Some(s) = self.store.take() {
-            tokio::task::spawn_blocking(move || s.shutdown())
+            saman::spawn_blocking("shut-store", move || s.shutdown())
                 .await
                 .unwrap();
         }
@@ -989,7 +988,7 @@ mod drill {
         d.unlink().await;
         d.q.flush().await;
         let store = d.store.take().unwrap();
-        tokio::task::spawn_blocking(move || store.shutdown())
+        saman::spawn_blocking("shut-store", move || store.shutdown())
             .await
             .unwrap();
         let masters = d.masters();
@@ -1165,13 +1164,10 @@ mod drill {
 
     impl Drop for OtherHubGoes {
         fn drop(&mut self) {
-            ratatoskr::soft::done(
-                ssh(
-                    "r1",
-                    "systemctl --user stop dr-other-hub; \
+            ssh(
+                "r1",
+                "systemctl --user stop dr-other-hub; \
                  rm -f $XDG_RUNTIME_DIR/forseti/reservations/drgnx-hub-other.xother-1.json",
-                ),
-                "ssh",
             );
         }
     }
@@ -1487,7 +1483,7 @@ mod drill {
     fn a_set_spreads_over_two_runners_within_its_bound() {
         saman::Executor::new(2).unwrap().block_on(async move {
             const SET: usize = (WAIT / 2 / forseti::admit::START_GAP_S) as usize + 1;
-            let clock = std::time::Instant::now;
+            let clock = stund::real::instant;
             let one = set_wall("set1", &["r1"], SET, &clock).await;
             let two = set_wall("set2", &["r1", "r2"], SET, &clock).await;
             ratatoskr::soft::out_line(&format!(

@@ -64,7 +64,7 @@ fn make(front: &Front, views: &Arc<NbViews>) -> villa::Result<Notebooks> {
     let dirs = spec::standard_dirs(
         &home,
         std::env::var("JUPYTER_PATH").ok().as_deref(),
-        std::env::var("XDG_DATA_DIRS").ok().as_deref(),
+        std::env::var(stig::SYSTEM_DATA_DIRS_VAR).ok().as_deref(),
     );
     Ok(Notebooks::new(
         Arc::new(WatchSink {

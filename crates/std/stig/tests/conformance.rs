@@ -79,6 +79,12 @@ fn the_home_variable_is_named_for_children() {
 }
 
 #[test]
+fn the_system_search_paths_are_named_by_the_xdg_variables() {
+    assert_eq!(stig::SYSTEM_DATA_DIRS_VAR, "XDG_DATA_DIRS");
+    assert_eq!(stig::SYSTEM_CONFIG_DIRS_VAR, "XDG_CONFIG_DIRS");
+}
+
+#[test]
 fn the_system_runtime_dir_is_the_xdg_one_and_absolute() {
     assert_eq!(stig::SYSTEM_RUNTIME_VAR, "XDG_RUNTIME_DIR");
     assert!(stig::system_runtime_dir().is_none_or(|p| p.is_absolute()));

@@ -2257,7 +2257,7 @@ impl Inner {
             .await
             .map_err(|e| setup(format!("reading the sandbox status: {e}")))?;
             if let Err(e) = read {
-                let _ =
+                let _group_ended =
                     draugr::kill_group(pid, Duration::from_secs(1), &draugr::RealSignaller).await;
                 return Err(e);
             }
@@ -2265,7 +2265,7 @@ impl Inner {
         let start_time = match start_time_or_refuse(draugr::start_time(pid), pid) {
             Ok(t) => t,
             Err(e) => {
-                let _ =
+                let _group_ended =
                     draugr::kill_group(pid, Duration::from_secs(1), &draugr::RealSignaller).await;
                 return Err(e);
             }

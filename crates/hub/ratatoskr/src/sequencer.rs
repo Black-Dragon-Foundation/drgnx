@@ -108,7 +108,7 @@ impl Line {
 
 /// Where a pending line stands: sequenced lines by N (then read order), then the others in read order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Key {
+enum Rank {
     Seq(u64, u64),
     Read(u64),
 }
@@ -119,7 +119,7 @@ type HeldKey = (u64, String, u64, u64);
 /// The order, without I/O: the lines read and not served, which one is next, and the held writes.
 pub(crate) struct Order<L> {
     /// Each with its connection and the drain that read it.
-    pending: BTreeMap<Key, (u64, u64, L)>,
+    pending: BTreeMap<Rank, (u64, u64, L)>,
     reads: u64,
     /// The N after the highest served.
     next: u64,
@@ -158,8 +158,8 @@ impl<L> Order<L> {
     pub(crate) fn read(&mut self, conn: u64, seq: Option<u64>, line: L) {
         self.reads += 1;
         let key = match seq {
-            Some(n) => Key::Seq(n, self.reads),
-            None => Key::Read(self.reads),
+            Some(n) => Rank::Seq(n, self.reads),
+            None => Rank::Read(self.reads),
         };
         self.pending.insert(key, (conn, self.round, line));
     }
@@ -201,7 +201,7 @@ impl<L> Order<L> {
     /// sequencer drains again at once rather than waiting for a socket to become readable.
     pub(crate) fn wants_drain(&self) -> bool {
         match self.pending.first_key_value() {
-            Some((Key::Seq(n, _), (_, round, _))) => {
+            Some((Rank::Seq(n, _), (_, round, _))) => {
                 *n > self.next && self.partial.is_empty() && self.drained <= *round
             }
             _ => false,
@@ -215,7 +215,7 @@ impl<L> Order<L> {
     /// connection that closed).
     pub(crate) fn next(&mut self) -> Option<(u64, L)> {
         let (&key, &(_, round, _)) = self.pending.first_key_value()?;
-        if let Key::Seq(n, _) = key {
+        if let Rank::Seq(n, _) = key {
             if n > self.next && (!self.partial.is_empty() || self.drained <= round) {
                 return None;
             }

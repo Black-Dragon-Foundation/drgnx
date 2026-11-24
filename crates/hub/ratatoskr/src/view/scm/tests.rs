@@ -319,14 +319,16 @@ fn deadline_and_cancel_stop_a_hung_git() {
     c.args(["-c", "sleep 30"]);
     // the deadline stopped it: the command would run 30 s, and the error says it was cut at the deadline
     let e = run::run(c, tmp.path(), None, Some(Duration::from_millis(200)), None).unwrap_err();
-    assert!(e.contains("longer than"), "{e}");
+    assert!(e.message().contains("longer than"), "{e}");
     // a cancel already set: the run stops at its first look instead of running the 30 s
     let cancel = Arc::new(AtomicBool::new(true));
     let mut c = crate::proc::Command::new("/bin/sh");
     c.args(["-c", "sleep 30"]);
     assert_eq!(
-        run::run(c, tmp.path(), None, None, Some(&cancel)).unwrap_err(),
-        run::STOPPED
+        run::run(c, tmp.path(), None, None, Some(&cancel))
+            .unwrap_err()
+            .kind(),
+        villa::Kind::Cancelled
     );
 }
 

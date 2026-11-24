@@ -137,8 +137,8 @@ enum Plan {
     Snapshot,
 }
 
-fn refused(e: String) -> verdandi::Error {
-    verdandi::Error::Refused(e)
+fn refused(e: villa::Error) -> verdandi::Error {
+    verdandi::Error::Refused(e.message().to_owned())
 }
 
 /// The changes that turn OLD into NEW, ascending, each in the coordinates the document has after the earlier ones.

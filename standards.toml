@@ -55,6 +55,7 @@ hlaup = { clean = true }
 stund = { clean = true }
 eitri = { clean = true }
 draugr = { clean = true }
+ratatoskr = { clean = true }
 vegvisir = { clean = true }
 hrafn-embed = { clean = true }
 hermod = { clean = true }

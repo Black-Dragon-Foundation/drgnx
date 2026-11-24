@@ -17,6 +17,7 @@
 #![cfg(target_os = "linux")]
 
 use forseti::{Expect, JobSpec, Kind, Lane, Priority, Range, RunnerTrust, Weight};
+use ratatoskr::proc::{Command, Io};
 use ratatoskr::runners::link::{LinkEvent, Session};
 use ratatoskr::runners::local::{Admission, LocalRunner};
 use ratatoskr::runners::queue::{
@@ -29,7 +30,6 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -49,8 +49,7 @@ fn sh(runner: &str, script: &str) -> String {
     let out = ratatoskr::proc::Command::new("ssh")
         .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
         .arg(script)
-        .output_async()
-        .await
+        .output()
         .expect("ssh");
     assert!(
         out.status.success(),
@@ -90,16 +89,13 @@ fn image(runner: &str) -> String {
 }
 
 /// `serve` in ROOT on RUNNER over one `ssh`: its stdin and stdout are the control channel.
-fn serve(runner: &str, root: &str, prefix: &str, hub: &str) -> (Channels, tokio::process::Child) {
-    let mut child = tokio::process::Command::new("ssh")
+fn serve(runner: &str, root: &str, prefix: &str, hub: &str) -> (Channels, ratatoskr::proc::Piped) {
+    let mut child = ratatoskr::proc::Command::new("ssh")
             .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
             .arg(format!(
                 "{root}/bin/test/sleipnir serve --root {root} --prefix {prefix} --hub-id {hub} --profile dedicated"
             ))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+            .spawn_piped()
             .expect("ssh");
     let control = Channel::new(
         Box::new(child.stdin.take().unwrap()),
@@ -158,8 +154,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
             "init.defaultBranch=main",
         ])
         .args(args)
-        .output_async()
-        .await
+        .output()
         .unwrap();
     assert!(
         out.status.success(),
@@ -181,11 +176,12 @@ fn harness_addr(runner: &str) -> IpAddr {
 fn origin_server(root: PathBuf) -> u16 {
     let l = TcpListener::bind("0.0.0.0:0").unwrap();
     let port = l.local_addr().unwrap().port();
-    std::thread::spawn(move || {
+    saman::spawn_thread("origin-server", move || {
         for s in l.incoming().flatten() {
             serve_one(s, &root);
         }
-    });
+    })
+    .unwrap();
     port
 }
 
@@ -241,9 +237,7 @@ fn serve_one(mut s: TcpStream, root: &Path) {
         .env("QUERY_STRING", query)
         .env("REQUEST_METHOD", &method)
         .env("REMOTE_ADDR", "127.0.0.1")
-        .env("CONTENT_LENGTH", body.len().to_string())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped());
+        .env("CONTENT_LENGTH", body.len().to_string());
     for (h, var) in [
         ("content-type", "CONTENT_TYPE"),
         ("content-encoding", "HTTP_CONTENT_ENCODING"),
@@ -253,7 +247,7 @@ fn serve_one(mut s: TcpStream, root: &Path) {
             cgi.env(var, v);
         }
     }
-    let mut child = cgi.spawn().unwrap();
+    let mut child = cgi.spawn(Io::Pipe, Io::Pipe, Io::Inherit).unwrap();
     child.stdin.take().unwrap().write_all(&body).unwrap();
     let out = child.wait_with_output().unwrap();
     let o = out.stdout;
@@ -354,7 +348,7 @@ fn queue_shared(
 ) -> (
     Arc<Queue>,
     UnboundedReceiver<LinkEvent>,
-    tokio::process::Child,
+    ratatoskr::proc::Piped,
 ) {
     queue_on(dir, root, prefix, hub, img, RunnerTrust::Shared)
 }
@@ -370,7 +364,7 @@ fn queue_on(
 ) -> (
     Arc<Queue>,
     UnboundedReceiver<LinkEvent>,
-    tokio::process::Child,
+    ratatoskr::proc::Piped,
 ) {
     let (q, events) = Queue::new(QueueCfg {
         hub_id: hub.into(),

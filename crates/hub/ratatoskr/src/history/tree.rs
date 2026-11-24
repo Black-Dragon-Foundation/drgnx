@@ -195,7 +195,7 @@ async fn sandboxed_run(
     let exit = match crate::clock::timeout(COMMIT_TIMEOUT, child.wait()).await {
         Ok(Ok(Some(s))) => s.code(),
         _ => {
-            let _ =
+            let _group_ended =
                 draugr::kill_group(child.id(), draugr::reap::GRACE, &draugr::RealSignaller).await;
             None
         }

@@ -19,7 +19,6 @@ use glugg::registry::{self, Record};
 use ratatoskr::term::{Sink, Spawn, Terms};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 

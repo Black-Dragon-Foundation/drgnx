@@ -22,7 +22,7 @@ pub const LOCAL: Duration = Duration::from_secs(10);
 pub const COMMIT: Duration = Duration::from_secs(300);
 
 /// What git said when it failed, or why it did not run.
-pub type GitError = String;
+pub type GitError = villa::Error;
 
 /// Overrides for the user's commands: no editor, no pager, no `ext` protocol.
 const USER_OVERRIDES: [&str; 6] = [
@@ -62,7 +62,7 @@ pub fn git(
     deadline: Option<Duration>,
     cancel: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, GitError> {
-    let program = git_program().map_err(|e| e.to_string())?;
+    let program = git_program().map_err(|e| villa::Error::refused(e.to_string()))?;
     let mut cmd = crate::proc::Command::new(&program.path);
     match how {
         As::Reader => {
@@ -71,7 +71,8 @@ pub fn git(
                 allow_protocols: vec![],
                 args: args.iter().map(OsString::from).collect(),
             };
-            let (argv, env) = command(&call).map_err(|e| format!("{e:?}"))?;
+            let (argv, env) =
+                command(&call).map_err(|e| villa::Error::refused(format!("{e:?}")))?;
             cmd.args(argv).envs(env).env("GIT_OPTIONAL_LOCKS", "0");
         }
         As::User => {
@@ -99,7 +100,7 @@ pub fn run(
     let feed = if stdin.is_some() { Io::Pipe } else { Io::Null };
     let mut child = cmd
         .spawn(feed, Io::Pipe, Io::Pipe)
-        .map_err(|e| format!("git: {e}"))?;
+        .map_err(|e| villa::Error::io(format!("git: {e}")))?;
     let pid = child.id();
     if let (Some(text), Some(mut w)) = (stdin, child.stdin.take()) {
         let text = text.to_vec();
@@ -118,7 +119,7 @@ pub fn run(
             }
             buf
         })
-        .map_err(|e| e.message().to_owned())
+        .map_err(|e| villa::Error::io(e.message().to_owned()))
     };
     let out = drain(
         child
@@ -138,18 +139,21 @@ pub fn run(
         match child.try_wait() {
             Ok(Some(s)) => break s,
             Ok(None) => {}
-            Err(e) => return Err(format!("git: {e}")),
+            Err(e) => return Err(villa::Error::io(format!("git: {e}"))),
         }
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             stop(pid);
             crate::soft::done(child.wait(), "run");
-            return Err(STOPPED.to_owned());
+            return Err(villa::Error::cancelled(STOPPED));
         }
         if end.is_some_and(|e| crate::clock::real_now() >= e) {
             stop(pid);
             crate::soft::done(child.wait(), "run");
             let secs = deadline.unwrap_or_default().as_secs();
-            return Err(format!("git took longer than {secs} s and was stopped"));
+            return Err(villa::Error::new(
+                villa::Kind::Timeout,
+                format!("git took longer than {secs} s and was stopped"),
+            ));
         }
         stund::real::sleep_blocking(Duration::from_millis(5));
     };
@@ -160,14 +164,14 @@ pub fn run(
     }
     let text = String::from_utf8_lossy(&err);
     let text = text.trim();
-    Err(if text.is_empty() {
+    Err(villa::Error::io(if text.is_empty() {
         match status.code() {
             Some(c) => format!("git failed (exit {c})"),
             None => "git was stopped".to_owned(),
         }
     } else {
         text.to_owned()
-    })
+    }))
 }
 
 /// What a stopped command answers.

@@ -21,7 +21,6 @@ use ratatoskr::runners::transport::OpensshTransport;
 use runstav::methods::runners::AddParams;
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 

@@ -15,6 +15,7 @@
 #![cfg(target_os = "linux")]
 
 use forseti::{Expect, JobSpec, JobTrust, Kind, Lane, Priority, Range, Weight};
+use ratatoskr::proc::Command;
 use ratatoskr::runners::link::{LinkEvent, Route, Session};
 use ratatoskr::runners::local::{Admission, LocalRunner};
 use ratatoskr::runners::queue::{
@@ -24,7 +25,6 @@ use ratatoskr::runners::transport::{Channel, Channels};
 use serde_json::json;
 use sleipnir::proto::{AttemptState, Frame, JobRef, Nonce, PROTO_VERSION};
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -147,7 +147,7 @@ impl Route for OneLog {
 struct Link {
     session: Session,
     events: UnboundedReceiver<LinkEvent>,
-    child: tokio::process::Child,
+    child: ratatoskr::proc::Piped,
 }
 
 impl Link {
@@ -163,7 +163,7 @@ impl Link {
 }
 
 /// `serve` in ROOT on RUNNER over one `ssh`: its stdin and stdout are the control channel.
-fn serve(runner: &str, root: &str, prefix: &str, hub: &str) -> (Channels, tokio::process::Child) {
+fn serve(runner: &str, root: &str, prefix: &str, hub: &str) -> (Channels, ratatoskr::proc::Piped) {
     serve_with(runner, root, prefix, hub, "")
 }
 
@@ -174,16 +174,13 @@ fn serve_with(
     prefix: &str,
     hub: &str,
     extra: &str,
-) -> (Channels, tokio::process::Child) {
-    let mut child = tokio::process::Command::new("ssh")
+) -> (Channels, ratatoskr::proc::Piped) {
+    let mut child = ratatoskr::proc::Command::new("ssh")
             .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
             .arg(format!(
                 "{root}/bin/test/sleipnir serve --root {root} --prefix {prefix} --hub-id {hub} --profile dedicated {extra}"
             ))
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+            .spawn_piped()
             .expect("ssh");
     let control = Channel::new(
         Box::new(child.stdin.take().unwrap()),
@@ -292,7 +289,7 @@ fn queue_with_r1(
 ) -> (
     Arc<Queue>,
     UnboundedReceiver<LinkEvent>,
-    tokio::process::Child,
+    ratatoskr::proc::Piped,
 ) {
     let (q, events) = Queue::new(QueueCfg {
         hub_id: hub.into(),

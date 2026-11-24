@@ -223,7 +223,10 @@ impl Hub {
                     verdandi::Error::Refused("git blame gave output it could not read".into())
                 })?,
                 // git holds no such file (new, untracked): every line is the user's, not committed
-                Err(e) if e.contains("no such path") || e.contains("does not exist") => {
+                Err(e)
+                    if e.message().contains("no such path")
+                        || e.message().contains("does not exist") =>
+                {
                     let n = match &mirror {
                         Some(t) => line_count(t),
                         None => crate::fsio::read_to_string(tree.root.join(rel))

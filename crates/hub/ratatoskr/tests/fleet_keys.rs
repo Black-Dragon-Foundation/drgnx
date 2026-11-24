@@ -26,7 +26,6 @@ use runstav::methods::runners::AuditKind;
 use secrecy::SecretString;
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -46,8 +45,7 @@ fn sh(runner: &str, script: &str) -> String {
     let out = ratatoskr::proc::Command::new("ssh")
         .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
         .arg(script)
-        .output_async()
-        .await
+        .output()
         .expect("ssh");
     assert!(
         out.status.success(),
@@ -90,16 +88,13 @@ fn image(runner: &str) -> String {
 }
 
 /// `serve` in ROOT on RUNNER over one `ssh`: its stdin and stdout are the control channel.
-fn serve(runner: &str, root: &str, prefix: &str, hub: &str) -> (Channels, tokio::process::Child) {
-    let mut child = tokio::process::Command::new("ssh")
+fn serve(runner: &str, root: &str, prefix: &str, hub: &str) -> (Channels, ratatoskr::proc::Piped) {
+    let mut child = ratatoskr::proc::Command::new("ssh")
             .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
             .arg(format!(
                 "{root}/bin/test/sleipnir serve --root {root} --prefix {prefix} --hub-id {hub} --profile dedicated"
             ))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+            .spawn_piped()
             .expect("ssh");
     let control = Channel::new(
         Box::new(child.stdin.take().unwrap()),
@@ -131,7 +126,7 @@ fn without_key_frames(
         len: Option<u64>,
     }
     let (tx, rx) = tokio::io::duplex(1 << 20);
-    tokio::spawn(async move {
+    saman::spawn("fleet-keys-relay", async move {
         let mut rx = tokio::io::BufReader::new(rx);
         let mut line = Vec::new();
         loop {
@@ -157,7 +152,8 @@ fn without_key_frames(
                 break;
             }
         }
-    });
+    })
+    .detach("the relay ends when its pipe does");
     Box::new(tx)
 }
 
@@ -230,7 +226,7 @@ fn queue_r1(
 ) -> (
     Arc<Queue>,
     UnboundedReceiver<LinkEvent>,
-    tokio::process::Child,
+    ratatoskr::proc::Piped,
 ) {
     queue_r1_with(dir, root, prefix, hub, img, trust, false)
 }
@@ -247,7 +243,7 @@ fn queue_r1_with(
 ) -> (
     Arc<Queue>,
     UnboundedReceiver<LinkEvent>,
-    tokio::process::Child,
+    ratatoskr::proc::Piped,
 ) {
     let (q, events) = Queue::new(QueueCfg {
         hub_id: hub.into(),
