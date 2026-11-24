@@ -407,6 +407,8 @@ mod relay_keys {
             owner: String::new(),
             job_labels: false,
             cargo_jobs: 0,
+            allowed: vec![],
+            render_node: None,
         }
     }
 
