@@ -19,6 +19,11 @@ on:
 permissions:
   contents: read
 
+# No incremental data: a live session builds once per round, and the incremental store adds memory and disk on a
+# runner with about 7 GB.
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   live:
     name: macOS live session
