@@ -13,7 +13,7 @@ static SAID: Mutex<Vec<String>> = Mutex::new(Vec::new());
 #[test]
 fn a_pack_with_no_built_grammar_reads_as_text_and_is_named_once() {
     skald::registry::install(Vec::new());
-    on_missing(|pack, why| SAID.lock().unwrap().push(format!("{pack}: {why}")));
+    on_missing(|pack, why| saman::lock(&SAID).push(format!("{pack}: {why}")));
     let text = "pub fn alpha() {}\n\nfn beta() { alpha(); }\n";
     let (lang, _) = classify("a.rs", text.as_bytes());
     assert_eq!(lang, Lang::Rust);
@@ -24,7 +24,7 @@ fn a_pack_with_no_built_grammar_reads_as_text_and_is_named_once() {
         assert!(chunks.iter().all(|c| c.symbol.is_none()));
     }
     assert!(hrafn::structural::language(Lang::Rust).is_none());
-    let said = SAID.lock().unwrap();
+    let said = saman::lock(&SAID);
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(said[0].starts_with("rust: "), "{said:?}");
     // Lisp has no pack grammar: it still chunks

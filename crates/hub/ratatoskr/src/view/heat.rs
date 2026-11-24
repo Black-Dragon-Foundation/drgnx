@@ -300,9 +300,12 @@ pub fn profile(bytes: &[u8], file: &str) -> Vec<Span> {
     let w = if bytes.starts_with(&[0x1f, 0x8b]) {
         let mut out = Vec::new();
         use std::io::Read;
-        let _ = flate2::read::GzDecoder::new(bytes)
-            .take(REPORT_MAX)
-            .read_to_end(&mut out);
+        crate::soft::done(
+            flate2::read::GzDecoder::new(bytes)
+                .take(REPORT_MAX)
+                .read_to_end(&mut out),
+            "flate2::read::GzDecoder::new",
+        );
         pprof(&out)
     } else if bytes.trim_ascii_start().starts_with(b"{") {
         serde_json::from_slice::<Value>(bytes)

@@ -541,7 +541,7 @@ mod tests {
     fn edits_carry_both_ranges_and_their_old_text() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("a.rs");
-        std::fs::write(&f, "été pending\nx pending y\n").unwrap();
+        crate::fsio::write(&f, "été pending\nx pending y\n").unwrap();
         let p = f.to_string_lossy().into_owned();
         let mut gone = want("m:1:2", 2, 0, "pendant", "queued");
         gone.new = Some("q".into());
@@ -574,7 +574,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("a.txt");
         let text: String = (1..=20).map(|i| format!("line {i} food\n")).collect();
-        std::fs::write(&f, &text).unwrap();
+        crate::fsio::write(&f, &text).unwrap();
         let p = f.to_string_lossy().into_owned();
         let (answer, skipped) = preview(
             plan(
@@ -643,7 +643,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("a.txt");
         let text: String = (1..=20).map(|i| format!("line {i} food\n")).collect();
-        std::fs::write(&f, &text).unwrap();
+        crate::fsio::write(&f, &text).unwrap();
         let p = f.to_string_lossy().into_owned();
         let around = Around {
             defs: [("m:1:0".to_owned(), (2, "line".to_owned()))].into(),
@@ -677,7 +677,7 @@ mod tests {
     fn overlaps_keep_the_first() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("a.txt");
-        std::fs::write(&f, "aaaa\n").unwrap();
+        crate::fsio::write(&f, "aaaa\n").unwrap();
         let p = f.to_string_lossy().into_owned();
         let (planned, skipped) = file_edits(plan(
             &p,
@@ -706,7 +706,7 @@ mod tests {
         let w = || vec![want("m:1:0", 1, 0, "ab", "x")];
         let at = |name: &str, bytes: &[u8]| {
             let f = d.path().join(name);
-            std::fs::write(&f, bytes).unwrap();
+            crate::fsio::write(&f, bytes).unwrap();
             f.to_string_lossy().into_owned()
         };
         let why = |p: FilePlan| {
@@ -732,7 +732,8 @@ mod tests {
         assert_eq!(why(plan(&at("bin", b"ab\0\n"), w())), BINARY);
         assert_eq!(why(plan(&at("latin", b"ab \xe9\n"), w())), NOT_UTF8);
         let big = d.path().join("big");
-        std::fs::File::create(&big)
+        eitri::create_exclusive(&big, 0o666)
+            .map_err(std::io::Error::from)
             .unwrap()
             .set_len(WRITE_MAX + 1)
             .unwrap();
@@ -803,7 +804,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("a.txt");
         let text: String = (1..=10).map(|i| format!("l{i}\n")).collect();
-        std::fs::write(&f, text.trim_end()).unwrap();
+        crate::fsio::write(&f, text.trim_end()).unwrap();
         let p = f.to_string_lossy().into_owned();
         let mut next = 5;
         let lines = doc_lines(doc(&p, vec![1, 3, 4, 10]), 1, &mut next).unwrap();

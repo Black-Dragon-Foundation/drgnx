@@ -4,6 +4,7 @@
 //! timing, sandbox and fleet files are modules of three more binaries (`tests/groups/<name>.rs`), also in `APART`.
 
 mod debug_lsp_command;
+mod embed_serve;
 mod gated;
 mod gated_exit;
 mod hrafn_parse;
@@ -13,12 +14,17 @@ mod runners_orders;
 mod sandbox_check;
 mod search_cache;
 mod search_download;
+mod search_engine_pick;
 mod search_eval_sources;
+mod search_extra_gpus;
 mod search_fingerprint;
+mod search_manage;
 mod search_modes_rows;
+mod search_packs;
 mod search_prefer;
 mod search_query;
-mod search_servers;
+mod search_sources;
+mod search_tei_support;
 mod search_tools;
 mod server;
 mod support;
@@ -43,6 +49,7 @@ const APART: &[&str] = &[
     "pair_timing",
     "sandbox_inner",
     "sandbox_run",
+    "search_engine",
     "search_index",
     "term_scope",
     "timing",
@@ -59,7 +66,7 @@ fn every_test_file_is_a_module_here_or_a_declared_binary() {
     // the group binaries' roots (tests/groups/*.rs) name their member files by `#[path = "../<file>.rs"]`
     let groups: String = std::fs::read_dir(dir.join("groups"))
         .unwrap()
-        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .map(|e| ratatoskr::fsio::read_to_string(e.unwrap().path()).unwrap())
         .collect();
     let mut unlisted = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap() {

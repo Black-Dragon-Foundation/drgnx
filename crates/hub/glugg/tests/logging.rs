@@ -14,7 +14,7 @@ struct Log(Arc<Mutex<Vec<u8>>>);
 
 impl Write for Log {
     fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(b);
+        saman::lock(&self.0).extend_from_slice(b);
         Ok(b.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -48,14 +48,15 @@ fn pty_bytes_never_logged() {
     .expect("spawn");
     let sink = log.clone();
     // the engine is made on the thread that owns it (its handles are not Send)
-    let t = std::thread::spawn(move || {
+    let t = saman::spawn_thread("worker-loop", move || {
         let worker = Worker::new(&opts).expect("engine");
         let sub = tracing_subscriber::fmt()
             .with_writer(move || sink.clone())
             .with_max_level(tracing::Level::TRACE)
             .finish();
         tracing::subscriber::with_default(sub, || run(worker, pty, Some(ctl), None))
-    });
+    })
+    .unwrap();
     let mut w = hub.try_clone().unwrap();
     let send = |w: &mut UnixStream, m: In| {
         let mut l = serde_json::to_vec(&m).unwrap();
@@ -103,7 +104,7 @@ fn pty_bytes_never_logged() {
     assert_eq!(exit, Some(Some(0)));
     assert_eq!(status.0, Some(0));
     assert!(seen.contains("secret-typed"), "the screen reached the hub");
-    let log = String::from_utf8_lossy(&log.0.lock().unwrap()).into_owned();
+    let log = String::from_utf8_lossy(&saman::lock(&log.0)).into_owned();
     assert!(
         log.contains("program output"),
         "the loop logged at trace level: {log}"

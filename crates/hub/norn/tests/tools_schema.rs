@@ -91,8 +91,10 @@ fn listing(mut all: Vec<Box<dyn Tool<Ctx>>>) -> Value {
 /// has) and the 18 without the tracker set, each the size measured when the settings tools came (unified-settings
 /// Task 32: 15,564 and 8,930 bytes) plus 10 %, at most 40,000 bytes (call 10).
 /// Re-measured 17,295 when `links` joined every tracker tool, `task_read` took `kind` and `work_status` took its paging
-/// arguments (174 bytes over the old figure).
-const BUDGET_BYTES: usize = 17_295;
+/// arguments (174 bytes over the old figure); 17,365 when `task_write` named the states accepted, superseded and parked
+/// and a plan task took a status `reason` (user doors, Task 3b: 70 bytes); 17,686 when `my_grants` joined the tracker
+/// set (hub flakes: 321 bytes).
+const BUDGET_BYTES: usize = 17_686;
 /// Re-measured 10,047 when `work_status` took its paging arguments (224 bytes over 9,823).
 const BUDGET_BYTES_16: usize = 10_047;
 /// The four job tools (agent system part 1, Task 15) on top of the 18; the whole list stays under 40,000 bytes.
@@ -102,8 +104,9 @@ const BUDGET_JOBS: usize = 6_000;
 /// 4,105 bytes together (report_submit 2,058, plan_write 1,756, plan_read 277, plus the list's own brackets); 4,266
 /// since a plan's task names its role, profile and body (161 bytes, no descriptions); 4,448 since `plan_write` takes
 /// a new plan's view file, `path` (182 bytes with its description); 6,868 since every session also gets
-/// `records_read` and `records_write` (norn outside agents, Task 11: 2,420 bytes, their schemas the record methods').
-const BUDGET_PART1: usize = 6_900;
+/// `records_read` and `records_write` (norn outside agents, Task 11: 2,420 bytes, their schemas the record methods').; 6,920 since a plan task takes a
+/// status `reason` (user doors, Task 3b: 20 bytes, no description).
+const BUDGET_PART1: usize = 6_950;
 /// `extensions_suggest`, which every agent has (the Extensions view: an agent suggests, the user installs).
 const BUDGET_EXTENSIONS: usize = 800;
 /// `huddle_reply`, which every agent has (a huddle's position).
@@ -167,7 +170,10 @@ fn the_tool_list_fits_the_budget() {
     let outside = json!({"tools": listing(norn::tools::records::outside_tools())})
         .to_string()
         .len();
-    eprintln!("the outside tools: {outside} bytes (budget {BUDGET_OUTSIDE})");
+    annall::cli_err(&format!(
+        "the outside tools: {outside} bytes (budget {BUDGET_OUTSIDE})"
+    ))
+    .unwrap();
     assert!(
         outside <= BUDGET_OUTSIDE,
         "the outside tools are {outside} bytes, over {BUDGET_OUTSIDE}"
@@ -176,7 +182,10 @@ fn the_tool_list_fits_the_budget() {
     let debug = json!({"tools": listing(norn::tools::debug::tools())})
         .to_string()
         .len();
-    eprintln!("the debugger tools: {debug} bytes (budget {BUDGET_DEBUG})");
+    annall::cli_err(&format!(
+        "the debugger tools: {debug} bytes (budget {BUDGET_DEBUG})"
+    ))
+    .unwrap();
     assert!(
         debug <= BUDGET_DEBUG,
         "the debugger tools are {debug} bytes, over {BUDGET_DEBUG}"
@@ -218,9 +227,10 @@ fn the_tool_list_fits_the_budget() {
         "report_submit and the plan tools are {part1} bytes, over {BUDGET_PART1}"
     );
     // the numbers go in the ledger
-    eprintln!(
+    annall::cli_err(&format!(
         "tools/list for the 23 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 18, the jobs, part 1's three and extensions_suggest: {bytes16} (the 18 alone: budget {BUDGET_BYTES_16}; the 4 job tools {jobs} of {BUDGET_JOBS} + the 3 part-1 tools {part1} of {BUDGET_PART1} + extensions_suggest {ext} of {BUDGET_EXTENSIONS})"
-    );
+    ))
+    .unwrap();
     assert!(
         bytes <= BUDGET_BYTES,
         "tools/list is {bytes} bytes, over the {BUDGET_BYTES} budget: trim the descriptions"

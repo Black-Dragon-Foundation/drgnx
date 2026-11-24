@@ -182,7 +182,7 @@ pub fn check_in(d: &Drawn, find: impl Fn(&str) -> Option<AgentProfile>) -> Resul
         }
     }
     if let Err(e) = plan::check(&tasks_of(d)) {
-        bad.push(e);
+        bad.push(e.message().to_owned());
     }
     for l in &d.budget {
         if !(l.amount.is_finite() && l.amount > 0.0) {
@@ -314,13 +314,13 @@ pub(crate) fn rule(
     subscriptions: &[String],
     ctx: &crate::matrix_gate::ActionCtx,
     now: f64,
-) -> Result<(), String> {
+) -> villa::Result<()> {
     let preset = g.active_preset(now);
     if preset != Preset::Autonomous {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "the matrix preset is {}, not autonomous",
             format!("{preset:?}").to_lowercase()
-        ));
+        )));
     }
     let manager = Who {
         role: Some(Role::Manager),
@@ -338,10 +338,10 @@ pub(crate) fn rule(
         f64::from(u32::try_from(tasks).unwrap_or(u32::MAX)),
     );
     if agents.verdict != Verdict::Allow {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{tasks} agents: {}",
             agents.why.unwrap_or_default()
-        ));
+        )));
     }
     let spend: f64 = f
         .cost
@@ -351,13 +351,16 @@ pub(crate) fn rule(
         .sum();
     let s = cell(Action::Spend, spend);
     if s.verdict != Verdict::Allow {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "a spend of ${spend:.2} at p90: {}",
             s.why.unwrap_or_default()
-        ));
+        )));
     }
     if !f.unpriced.is_empty() {
-        return Err(format!("no price for {}", f.unpriced.join(", ")));
+        return Err(villa::Error::invalid(format!(
+            "no price for {}",
+            f.unpriced.join(", ")
+        )));
     }
     // every window: Claude's one meter blends the week and its 5 h window, and the week's last day reads as Short
     if let Some(p) = f.pace.iter().find(|p| p.runs_out_p90) {
@@ -365,17 +368,19 @@ pub(crate) fn rule(
             PaceWindow::Week => "week",
             PaceWindow::Short => "limit's current window",
         };
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "the {} {window}: the plan's p90 would use it up before it resets",
             p.provider
-        ));
+        )));
     }
     if let Some(s) = subscriptions.iter().find(|s| {
         !f.pace
             .iter()
             .any(|p| &p.provider == *s && p.added_share.is_some())
     }) {
-        return Err(format!("{s}: no pace yet, so its week cannot be checked"));
+        return Err(villa::Error::invalid(format!(
+            "{s}: no pace yet, so its week cannot be checked"
+        )));
     }
     Ok(())
 }
@@ -401,7 +406,7 @@ pub(crate) async fn may_start_alone(
     f: &Forecast,
     tasks: usize,
     ctx: crate::matrix_gate::ActionCtx,
-) -> Result<(), String> {
+) -> villa::Result<()> {
     front.core.matrix.refresh(front);
     let subs = subscriptions(front, f);
     let (g, f, now) = (
@@ -414,7 +419,7 @@ pub(crate) async fn may_start_alone(
         .db
         .read(move |c| Ok(rule(&g, c, &f, tasks, &subs, &ctx, now)))
         .await
-        .unwrap_or_else(|e| Err(format!("the store: {e:?}")))
+        .unwrap_or_else(|e| Err(villa::Error::invalid(format!("the store: {e:?}"))))
 }
 
 // ---- the order of one planning session, pure ----------------------------------------------------------------------
@@ -723,7 +728,7 @@ impl Default for Say {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(m)
 }
 
 /// What a session holds of [`Say`]: its turn's end goes to [`run`] when it is a planning session.
@@ -737,10 +742,13 @@ impl SayTx {
     /// Session SID's turn ended with MESSAGE (its last agent message; empty when the turn failed).
     pub(crate) fn turn_ended(&self, sid: &str, message: &str) {
         if lock(&self.live).contains(sid) {
-            let _ = self.tx.send(Input::Turn {
-                sid: sid.to_owned(),
-                message: message.to_owned(),
-            });
+            crate::soft::done(
+                self.tx.send(Input::Turn {
+                    sid: sid.to_owned(),
+                    message: message.to_owned(),
+                }),
+                "tx send",
+            );
         }
     }
 }
@@ -761,9 +769,12 @@ impl Say {
     /// The user stopped session SID (`agents/stop`, `agents/kill`): a planning session's planning stops.
     pub fn stopped(&self, sid: &str) {
         if self.has(sid) {
-            let _ = self.tx.send(Input::Stop {
-                sid: sid.to_owned(),
-            });
+            crate::soft::done(
+                self.tx.send(Input::Stop {
+                    sid: sid.to_owned(),
+                }),
+                "tx send",
+            );
         }
     }
 
@@ -771,11 +782,11 @@ impl Say {
         if let Input::Start { sid, .. } = &input {
             lock(&self.live).insert(sid.clone());
         }
-        let _ = self.tx.send(input);
+        crate::soft::done(self.tx.send(input), "tx send");
     }
 
     fn send(&self, input: Input) {
-        let _ = self.tx.send(input);
+        crate::soft::done(self.tx.send(input), "tx send");
     }
 
     fn forget(&self, sid: &str) {
@@ -903,7 +914,7 @@ async fn perform(
             SayEffect::Propose => {
                 let made = propose(front, sid, p).await;
                 let started = matches!(made, Ok((_, true)));
-                let job = made.map(|(j, _)| j);
+                let job = made.map(|(j, _)| j).map_err(|e| e.message().to_owned());
                 if let Ok(j) = &job {
                     // before the event: a revision the event prompts is refused with the job's id
                     if started {
@@ -937,7 +948,10 @@ async fn perform(
                 front.core.say.forget(sid);
                 let by_id: ById =
                     serde_json::from_value(json!({ "id": sid })).expect("a session id is an id");
-                let _ = crate::agents::session::stop(front, &crate::runner::user(), by_id).await;
+                crate::soft::done(
+                    crate::agents::session::stop(front, &crate::runner::user(), by_id).await,
+                    "crate::agents::session::stop",
+                );
                 return;
             }
         };
@@ -969,8 +983,11 @@ async fn stop_proposal(front: &Front, job: &str) -> bool {
 /// The plan P's last block drew, written and proposed as the user would, in the repository `say/start` named: the
 /// job's id, and whether it started at once (the Autonomous preset).  The dollar budget is the smallest of the block's
 /// (`usd` or `usd-est`); the planning session's own use goes in `data.planning`, as numbers.
-async fn propose(front: &Front, sid: &str, p: &Planning) -> Result<(String, bool), String> {
-    let d = p.drawn.as_ref().ok_or("no proposal to make")?;
+async fn propose(front: &Front, sid: &str, p: &Planning) -> villa::Result<(String, bool)> {
+    let d = p
+        .drawn
+        .as_ref()
+        .ok_or_else(|| villa::Error::invalid("no proposal to make"))?;
     let tasks: Vec<Value> = d
         .tasks
         .iter()
@@ -983,22 +1000,29 @@ async fn propose(front: &Front, sid: &str, p: &Planning) -> Result<(String, bool
     if let Some(project) = &p.project {
         w["project"] = json!(project);
     }
-    let w: WriteParams = serde_json::from_value(w).map_err(|e| e.to_string())?;
+    let w: WriteParams =
+        serde_json::from_value(w).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let user = crate::runner::user();
     let written = crate::runner::effects::plans_write(front, &user, w)
         .await
-        .map_err(|e| e.message)?;
-    let plan: PlanRef = serde_json::from_value(json!(written.plan)).map_err(|e| e.to_string())?;
+        .map_err(|e| e.message)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let plan: PlanRef = serde_json::from_value(json!(written.plan))
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let limits = (!d.budget.is_empty()).then(|| d.budget.clone());
     let s = crate::runner::propose_graph(front, &user, &plan, &p.repo, limits, d.gate)
         .await
-        .map_err(|e| e.message)?;
+        .map_err(|e| e.message)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let s_id = sid.to_owned();
     if let Ok(line) = front.writer.db.read(move |c| planning_of(c, &s_id)).await {
-        let _ = crate::runner::update_data(front, &user, &s.id, move |data| {
-            data.insert("planning".into(), line);
-        })
-        .await;
+        crate::soft::done(
+            crate::runner::update_data(front, &user, &s.id, move |data| {
+                data.insert("planning".into(), line);
+            })
+            .await,
+            "crate::runner::update_data",
+        );
     }
     let started = s.status.as_deref() != Some("proposed");
     Ok((s.id, started))

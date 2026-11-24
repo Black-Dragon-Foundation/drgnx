@@ -68,7 +68,7 @@ fn file(dir: &Path, rel: &str, at: &str, problems: &mut Vec<Problem>) -> Option<
         problems.push(p(ProblemKind::Schema, at, format!("{rel} is over 4 MiB")));
         return None;
     }
-    match std::fs::read_to_string(&path) {
+    match eitri::read_string(&path, 4 << 20) {
         Ok(t) => Some(t),
         Err(e) => {
             problems.push(p(ProblemKind::Missing, at, format!("{rel}: {e}")));

@@ -18,7 +18,7 @@ pub struct Ledger {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
 /// FNV-1a of TEXT in hex: a short, stable name for a title.
@@ -85,14 +85,16 @@ impl Ledger {
 
     /// Take grant ID back: the revoked grant and what is left of the agent's rule; an error (its reason) when the
     /// session has no such grant, or it was revoked already.  RESTART: whether the session has a step to restart at.
-    pub fn revoke(&self, id: &str, restart: bool) -> Result<(Grant, Revoked), String> {
+    pub fn revoke(&self, id: &str, restart: bool) -> villa::Result<(Grant, Revoked)> {
         let mut rows = lock(&self.rows);
         let g = rows
             .iter_mut()
             .find(|g| g.id == id)
-            .ok_or_else(|| format!("this session has no grant {id}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("this session has no grant {id}")))?;
         if g.revoked {
-            return Err(format!("grant {id} is revoked already"));
+            return Err(villa::Error::invalid(format!(
+                "grant {id} is revoked already"
+            )));
         }
         g.revoked = true;
         let out = Revoked {
@@ -153,11 +155,13 @@ mod tests {
         assert!(
             l.revoke(&g.id, true)
                 .unwrap_err()
+                .message()
                 .contains("revoked already")
         );
         assert!(
             l.revoke("always:s1:none", true)
                 .unwrap_err()
+                .message()
                 .contains("no grant")
         );
         // giving it again lifts the revoke

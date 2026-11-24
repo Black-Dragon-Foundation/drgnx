@@ -26,7 +26,6 @@ use runstav::methods::runners::AuditKind;
 use secrecy::SecretString;
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -38,12 +37,12 @@ const QUIET_MACHINE: &str = r#"{"psi": {"mem_some10": 0.0, "cpu_some10": 0.0, "i
 "disk_free_gb": 100, "disk_total_gb": 200, "mem_available_mib": 8192}"#;
 
 fn ssh_config() -> String {
-    format!("{}/.ssh/config", std::env::var("HOME").unwrap())
+    format!("{}/.ssh/config", std::env::var(stig::HOME_VAR).unwrap())
 }
 
 /// SCRIPT's stdout on RUNNER; panics when it fails.
 fn sh(runner: &str, script: &str) -> String {
-    let out = Command::new("ssh")
+    let out = ratatoskr::proc::Command::new("ssh")
         .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
         .arg(script)
         .output()
@@ -89,16 +88,13 @@ fn image(runner: &str) -> String {
 }
 
 /// `serve` in ROOT on RUNNER over one `ssh`: its stdin and stdout are the control channel.
-fn serve(runner: &str, root: &str, prefix: &str, hub: &str) -> (Channels, tokio::process::Child) {
-    let mut child = tokio::process::Command::new("ssh")
+fn serve(runner: &str, root: &str, prefix: &str, hub: &str) -> (Channels, ratatoskr::proc::Piped) {
+    let mut child = ratatoskr::proc::Command::new("ssh")
             .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
             .arg(format!(
                 "{root}/bin/test/sleipnir serve --root {root} --prefix {prefix} --hub-id {hub} --profile dedicated"
             ))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+            .spawn_piped()
             .expect("ssh");
     let control = Channel::new(
         Box::new(child.stdin.take().unwrap()),
@@ -130,7 +126,7 @@ fn without_key_frames(
         len: Option<u64>,
     }
     let (tx, rx) = tokio::io::duplex(1 << 20);
-    tokio::spawn(async move {
+    saman::spawn("fleet-keys-relay", async move {
         let mut rx = tokio::io::BufReader::new(rx);
         let mut line = Vec::new();
         loop {
@@ -156,7 +152,8 @@ fn without_key_frames(
                 break;
             }
         }
-    });
+    })
+    .detach("the relay ends when its pipe does");
     Box::new(tx)
 }
 
@@ -229,7 +226,7 @@ fn queue_r1(
 ) -> (
     Arc<Queue>,
     UnboundedReceiver<LinkEvent>,
-    tokio::process::Child,
+    ratatoskr::proc::Piped,
 ) {
     queue_r1_with(dir, root, prefix, hub, img, trust, false)
 }
@@ -246,7 +243,7 @@ fn queue_r1_with(
 ) -> (
     Arc<Queue>,
     UnboundedReceiver<LinkEvent>,
-    tokio::process::Child,
+    ratatoskr::proc::Piped,
 ) {
     let (q, events) = Queue::new(QueueCfg {
         hub_id: hub.into(),
@@ -365,7 +362,7 @@ fn hold(q: &Queue, pairs: &[(&str, &str)]) {
 
 /// The hub's copy of job ID's log.
 fn hub_log(dir: &Path, id: &str) -> String {
-    std::fs::read_to_string(dir.join("exec").join(id).join("log")).unwrap_or_default()
+    ratatoskr::fsio::read_to_string(dir.join("exec").join(id).join("log")).unwrap_or_default()
 }
 
 /// The sha256 of V as `sha256sum` prints it.
@@ -383,191 +380,200 @@ mod keys {
     /// [C] Two keys: one `key` frame and one `key_sent` row each, after `started`; the job's one read of each through
     /// `drgnx-key` comes back as one runner-reported `key_use` row each; the job had the right values (their hashes);
     /// and once it is done no file under the runner's root holds either value.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn one_key_sent_per_key_and_key_use_per_read_and_no_key_bytes_on_the_runner() {
-        let (prefix, hub) = ("flkeys", "hubkeys");
-        let root = root("r1", "fl-keys");
-        let img = image("r1");
-        let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (throwaway(), throwaway());
-        let (q, mut events, _child) =
-            queue_r1(dir.path(), &root, prefix, hub, &img, RunnerTrust::Mine);
-        let mut outcomes = vec![];
-        ready(&q, &mut events, &mut outcomes).await;
-        hold(&q, &[("FLEET_A", &a), ("FLEET_B", &b)]);
-        let script = "printf %s \"$FLEET_A\" | sha256sum; printf %s \"$FLEET_B\" | sha256sum";
-        q.submit(job("xkeys", script, &["FLEET_A", "FLEET_B"], &img), now());
-        let r = result(&q, &mut events, &mut outcomes, "xkeys").await;
-        assert_eq!(r["verdict"], "Pass", "{r}");
-        let log = hub_log(dir.path(), "xkeys");
-        assert!(
-            log.contains(&sha256(&a)) && log.contains(&sha256(&b)),
-            "{log}"
-        );
-        let audit = q.keys().audit(Some("xkeys"), None);
-        let count = |kind: AuditKind, key: &str| {
-            audit
-                .iter()
-                .filter(|x| x.kind == kind && x.key.as_str() == key)
-                .count()
-        };
-        for k in ["FLEET_A", "FLEET_B"] {
-            assert_eq!(count(AuditKind::Sent, k), 1, "{k}: {audit:?}");
-            assert_eq!(count(AuditKind::Use, k), 1, "{k}: {audit:?}");
-        }
-        assert!(
-            audit
-                .iter()
-                .all(|x| x.runner == "r1" && x.runner_reported == (x.kind == AuditKind::Use))
-        );
-        // fixed strings, so neither value is a pattern; grep's status 1 (nothing found) is what the row wants
-        for v in [&a, &b] {
-            let found = sh(
-                "r1",
-                &format!("grep -rlF -- '{v}' {root} /tmp 2>/dev/null; true"),
+    fn one_key_sent_per_key_and_key_use_per_read_and_no_key_bytes_on_the_runner() {
+        saman::block_on_current(async move {
+            let (prefix, hub) = ("flkeys", "hubkeys");
+            let root = root("r1", "fl-keys");
+            let img = image("r1");
+            let dir = tempfile::tempdir().unwrap();
+            let (a, b) = (throwaway(), throwaway());
+            let (q, mut events, _child) =
+                queue_r1(dir.path(), &root, prefix, hub, &img, RunnerTrust::Mine);
+            let mut outcomes = vec![];
+            ready(&q, &mut events, &mut outcomes).await;
+            hold(&q, &[("FLEET_A", &a), ("FLEET_B", &b)]);
+            let script = "printf %s \"$FLEET_A\" | sha256sum; printf %s \"$FLEET_B\" | sha256sum";
+            q.submit(job("xkeys", script, &["FLEET_A", "FLEET_B"], &img), now());
+            let r = result(&q, &mut events, &mut outcomes, "xkeys").await;
+            assert_eq!(r["verdict"], "Pass", "{r}");
+            let log = hub_log(dir.path(), "xkeys");
+            assert!(
+                log.contains(&sha256(&a)) && log.contains(&sha256(&b)),
+                "{log}"
             );
-            assert_eq!(found, "", "a key's bytes stayed on the runner");
-        }
+            let audit = q.keys().audit(Some("xkeys"), None);
+            let count = |kind: AuditKind, key: &str| {
+                audit
+                    .iter()
+                    .filter(|x| x.kind == kind && x.key.as_str() == key)
+                    .count()
+            };
+            for k in ["FLEET_A", "FLEET_B"] {
+                assert_eq!(count(AuditKind::Sent, k), 1, "{k}: {audit:?}");
+                assert_eq!(count(AuditKind::Use, k), 1, "{k}: {audit:?}");
+            }
+            assert!(
+                audit
+                    .iter()
+                    .all(|x| x.runner == "r1" && x.runner_reported == (x.kind == AuditKind::Use))
+            );
+            // fixed strings, so neither value is a pattern; grep's status 1 (nothing found) is what the row wants
+            for v in [&a, &b] {
+                let found = sh(
+                    "r1",
+                    &format!("grep -rlF -- '{v}' {root} /tmp 2>/dev/null; true"),
+                );
+                assert_eq!(found, "", "a key's bytes stayed on the runner");
+            }
+        })
     }
 
     /// [C] A job that prints its key raw and in base64: the hub's copy of the log holds neither form, and the raw one
     /// is masked where it was (the line keeps its length).
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn the_keys_bytes_are_redacted_from_the_returned_log() {
-        let (prefix, hub) = ("flredact", "hubredact");
-        let root = root("r1", "fl-redact");
-        let img = image("r1");
-        let dir = tempfile::tempdir().unwrap();
-        let v = throwaway();
-        let (q, mut events, _child) =
-            queue_r1(dir.path(), &root, prefix, hub, &img, RunnerTrust::Mine);
-        let mut outcomes = vec![];
-        ready(&q, &mut events, &mut outcomes).await;
-        hold(&q, &[("FLEET_TOKEN", &v)]);
-        let script =
-            "echo \"raw=$FLEET_TOKEN.\"; printf %s \"$FLEET_TOKEN\" | base64 -w0; echo; echo end";
-        q.submit(job("xredact", script, &["FLEET_TOKEN"], &img), now());
-        let r = result(&q, &mut events, &mut outcomes, "xredact").await;
-        assert_eq!(r["verdict"], "Pass", "{r}");
-        let log = hub_log(dir.path(), "xredact");
-        assert!(log.ends_with("end\n"), "the whole log came back: {log}");
-        assert!(!log.contains(&v), "the raw value: {log}");
-        assert!(!log.contains(&base64(v.as_bytes())), "its base64: {log}");
-        let mask = "*".repeat(v.len());
-        assert!(log.contains(&format!("raw={mask}.")), "{log}");
+    fn the_keys_bytes_are_redacted_from_the_returned_log() {
+        saman::block_on_current(async move {
+            let (prefix, hub) = ("flredact", "hubredact");
+            let root = root("r1", "fl-redact");
+            let img = image("r1");
+            let dir = tempfile::tempdir().unwrap();
+            let v = throwaway();
+            let (q, mut events, _child) =
+                queue_r1(dir.path(), &root, prefix, hub, &img, RunnerTrust::Mine);
+            let mut outcomes = vec![];
+            ready(&q, &mut events, &mut outcomes).await;
+            hold(&q, &[("FLEET_TOKEN", &v)]);
+            let script = "echo \"raw=$FLEET_TOKEN.\"; printf %s \"$FLEET_TOKEN\" | base64 -w0; echo; echo end";
+            q.submit(job("xredact", script, &["FLEET_TOKEN"], &img), now());
+            let r = result(&q, &mut events, &mut outcomes, "xredact").await;
+            assert_eq!(r["verdict"], "Pass", "{r}");
+            let log = hub_log(dir.path(), "xredact");
+            assert!(log.ends_with("end\n"), "the whole log came back: {log}");
+            assert!(!log.contains(&v), "the raw value: {log}");
+            assert!(!log.contains(&base64(v.as_bytes())), "its base64: {log}");
+            let mask = "*".repeat(v.len());
+            assert!(log.contains(&format!("raw={mask}.")), "{log}");
+        })
     }
 
     /// [C] A `shared` runner never gets a keyed job, so never a `key` frame: with this machine full (`xbusy`) the job
     /// waits and says why, and the audit has no row.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn a_shared_runner_never_receives_a_key_frame() {
-        let (prefix, hub) = ("flshared", "hubshared");
-        let root = root("r1", "fl-kshared");
-        let img = image("r1");
-        let dir = tempfile::tempdir().unwrap();
-        let v = throwaway();
-        let (q, mut events, _child) =
-            queue_r1(dir.path(), &root, prefix, hub, &img, RunnerTrust::Shared);
-        let mut outcomes = vec![];
-        ready(&q, &mut events, &mut outcomes).await;
-        hold(&q, &[("FLEET_TOKEN", &v)]);
-        q.submit(job("xshared", "true", &["FLEET_TOKEN"], &img), now());
-        for _ in 0..5 {
-            q.tick(now());
-            let row = q.row("xshared").expect("the row");
-            assert_eq!(
-                (row.machine.as_deref(), row.attempt),
-                (None, None),
-                "{row:?}"
-            );
-            let w = row.waiting.clone().unwrap_or_default();
-            assert!(!w.is_empty(), "{row:?}");
-        }
-        assert!(q.keys().audit(None, None).is_empty());
+    fn a_shared_runner_never_receives_a_key_frame() {
+        saman::block_on_current(async move {
+            let (prefix, hub) = ("flshared", "hubshared");
+            let root = root("r1", "fl-kshared");
+            let img = image("r1");
+            let dir = tempfile::tempdir().unwrap();
+            let v = throwaway();
+            let (q, mut events, _child) =
+                queue_r1(dir.path(), &root, prefix, hub, &img, RunnerTrust::Shared);
+            let mut outcomes = vec![];
+            ready(&q, &mut events, &mut outcomes).await;
+            hold(&q, &[("FLEET_TOKEN", &v)]);
+            q.submit(job("xshared", "true", &["FLEET_TOKEN"], &img), now());
+            for _ in 0..5 {
+                q.tick(now());
+                let row = q.row("xshared").expect("the row");
+                assert_eq!(
+                    (row.machine.as_deref(), row.attempt),
+                    (None, None),
+                    "{row:?}"
+                );
+                let w = row.waiting.clone().unwrap_or_default();
+                assert!(!w.is_empty(), "{row:?}");
+            }
+            assert!(q.keys().audit(None, None).is_empty());
+        })
     }
 
     /// [C] A key the hub held and sent, that didn't arrive on a link that stayed up (its `key` frame is held back on
     /// the way; pings and everything else go through): the job's `drgnx-key` gives up after its 60 s, which pass on
     /// the runner while the row waits on the announced result; the verdict is infra (`key not delivered`), never red;
     /// the audit has the send and no read; the link was never lost (a lost link fails the row inside `drive`).
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn a_key_that_never_arrives_is_infra_not_red() {
-        let (prefix, hub) = ("flnokey", "hubnokey");
-        let root = root("r1", "fl-nokey");
-        let img = image("r1");
-        let dir = tempfile::tempdir().unwrap();
-        let v = throwaway();
-        let (q, mut events, _child) = queue_r1_with(
-            dir.path(),
-            &root,
-            prefix,
-            hub,
-            &img,
-            RunnerTrust::Mine,
-            true,
-        );
-        let mut outcomes = vec![];
-        ready(&q, &mut events, &mut outcomes).await;
-        hold(&q, &[("FLEET_LOST", &v)]);
-        q.submit(job("xnokey", "true", &["FLEET_LOST"], &img), now());
-        let r = result(&q, &mut events, &mut outcomes, "xnokey").await;
-        assert_eq!(
-            r["verdict"],
-            serde_json::json!({"Infra": forseti::classify::infra::KEY_NOT_DELIVERED}),
-            "{r}"
-        );
-        let audit = q.keys().audit(Some("xnokey"), None);
-        let count = |kind: AuditKind| audit.iter().filter(|x| x.kind == kind).count();
-        assert_eq!(count(AuditKind::Sent), 1, "the hub sent it: {audit:?}");
-        assert_eq!(count(AuditKind::Use), 0, "the job never read it: {audit:?}");
-        assert_eq!(
-            q.runner("r1").map(|r| r.state),
-            Some("ready".to_string()),
-            "the link stayed up"
-        );
+    fn a_key_that_never_arrives_is_infra_not_red() {
+        saman::block_on_current(async move {
+            let (prefix, hub) = ("flnokey", "hubnokey");
+            let root = root("r1", "fl-nokey");
+            let img = image("r1");
+            let dir = tempfile::tempdir().unwrap();
+            let v = throwaway();
+            let (q, mut events, _child) = queue_r1_with(
+                dir.path(),
+                &root,
+                prefix,
+                hub,
+                &img,
+                RunnerTrust::Mine,
+                true,
+            );
+            let mut outcomes = vec![];
+            ready(&q, &mut events, &mut outcomes).await;
+            hold(&q, &[("FLEET_LOST", &v)]);
+            q.submit(job("xnokey", "true", &["FLEET_LOST"], &img), now());
+            let r = result(&q, &mut events, &mut outcomes, "xnokey").await;
+            assert_eq!(
+                r["verdict"],
+                serde_json::json!({"Infra": forseti::classify::infra::KEY_NOT_DELIVERED}),
+                "{r}"
+            );
+            let audit = q.keys().audit(Some("xnokey"), None);
+            let count = |kind: AuditKind| audit.iter().filter(|x| x.kind == kind).count();
+            assert_eq!(count(AuditKind::Sent), 1, "the hub sent it: {audit:?}");
+            assert_eq!(count(AuditKind::Use), 0, "the job never read it: {audit:?}");
+            assert_eq!(
+                q.runner("r1").map(|r| r.state),
+                Some("ready".to_string()),
+                "the link stayed up"
+            );
+        })
     }
 
     /// [C] While a keyed job runs (parked on a FIFO after it read its key), `podman inspect` of its container holds
     /// the key's name and never its value, and the container's cgroup has `memory.swap.max` 0.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn podman_inspect_shows_names_only_and_memory_swap_max_is_0() {
-        let (prefix, hub) = ("flinsp", "hubinsp");
-        let root = root("r1", "fl-insp");
-        let img = image("r1");
-        let dir = tempfile::tempdir().unwrap();
-        let v = throwaway();
-        let (q, mut events, _child) =
-            queue_r1(dir.path(), &root, prefix, hub, &img, RunnerTrust::Mine);
-        let mut outcomes = vec![];
-        ready(&q, &mut events, &mut outcomes).await;
-        hold(&q, &[("FLEET_TOKEN", &v)]);
-        let script = "test -n \"$FLEET_TOKEN\" && echo parked; mkfifo /tmp/gate; read x < /tmp/gate; echo released";
-        q.submit(job("xinsp", script, &["FLEET_TOKEN"], &img), now());
-        drive(&q, &mut events, &mut outcomes, "the job parks", |_, _| {
-            hub_log(dir.path(), "xinsp")
-                .contains("parked\n")
-                .then_some(())
+    fn podman_inspect_shows_names_only_and_memory_swap_max_is_0() {
+        saman::block_on_current(async move {
+            let (prefix, hub) = ("flinsp", "hubinsp");
+            let root = root("r1", "fl-insp");
+            let img = image("r1");
+            let dir = tempfile::tempdir().unwrap();
+            let v = throwaway();
+            let (q, mut events, _child) =
+                queue_r1(dir.path(), &root, prefix, hub, &img, RunnerTrust::Mine);
+            let mut outcomes = vec![];
+            ready(&q, &mut events, &mut outcomes).await;
+            hold(&q, &[("FLEET_TOKEN", &v)]);
+            let script = "test -n \"$FLEET_TOKEN\" && echo parked; mkfifo /tmp/gate; read x < /tmp/gate; echo released";
+            q.submit(job("xinsp", script, &["FLEET_TOKEN"], &img), now());
+            drive(&q, &mut events, &mut outcomes, "the job parks", |_, _| {
+                hub_log(dir.path(), "xinsp")
+                    .contains("parked\n")
+                    .then_some(())
+            })
+            .await;
+            let c = format!("{prefix}-xinsp");
+            let inspect = sh("r1", &format!("podman inspect {c}"));
+            assert!(inspect.contains("FLEET_TOKEN"), "the name is there");
+            assert!(!inspect.contains(&v), "the value is not");
+            let swap = sh(
+                "r1",
+                &format!("podman exec {c} cat /sys/fs/cgroup/memory.swap.max"),
+            );
+            assert_eq!(swap, "0");
+            sh(
+                "r1",
+                &format!("podman exec {c} sh -c 'echo go > /tmp/gate'"),
+            );
+            let r = result(&q, &mut events, &mut outcomes, "xinsp").await;
+            assert_eq!(r["verdict"], "Pass", "{r}");
         })
-        .await;
-        let c = format!("{prefix}-xinsp");
-        let inspect = sh("r1", &format!("podman inspect {c}"));
-        assert!(inspect.contains("FLEET_TOKEN"), "the name is there");
-        assert!(!inspect.contains(&v), "the value is not");
-        let swap = sh(
-            "r1",
-            &format!("podman exec {c} cat /sys/fs/cgroup/memory.swap.max"),
-        );
-        assert_eq!(swap, "0");
-        sh(
-            "r1",
-            &format!("podman exec {c} sh -c 'echo go > /tmp/gate'"),
-        );
-        let r = result(&q, &mut events, &mut outcomes, "xinsp").await;
-        assert_eq!(r["verdict"], "Pass", "{r}");
     }
 }

@@ -12,6 +12,7 @@ mod chunk_other;
 mod door;
 mod eval;
 mod files;
+mod gitfx;
 mod graph;
 mod index;
 mod map;
@@ -26,6 +27,7 @@ mod store;
 mod structural;
 mod symbol_at;
 mod symbols;
+mod vector_pack;
 mod view_query;
 
 /// The test files that are binaries of their own (Cargo.toml says why).

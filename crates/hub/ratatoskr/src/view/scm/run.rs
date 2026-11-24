@@ -13,7 +13,6 @@ use draugr::git::{GitCall, Place, command, git_program};
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -23,7 +22,7 @@ pub const LOCAL: Duration = Duration::from_secs(10);
 pub const COMMIT: Duration = Duration::from_secs(300);
 
 /// What git said when it failed, or why it did not run.
-pub type GitError = String;
+pub type GitError = villa::Error;
 
 /// Overrides for the user's commands: no editor, no pager, no `ext` protocol.
 const USER_OVERRIDES: [&str; 6] = [
@@ -63,8 +62,8 @@ pub fn git(
     deadline: Option<Duration>,
     cancel: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, GitError> {
-    let program = git_program().map_err(|e| e.to_string())?;
-    let mut cmd = Command::new(&program.path);
+    let program = git_program().map_err(|e| villa::Error::refused(e.to_string()))?;
+    let mut cmd = crate::proc::Command::new(&program.path);
     match how {
         As::Reader => {
             let call = GitCall {
@@ -72,7 +71,8 @@ pub fn git(
                 allow_protocols: vec![],
                 args: args.iter().map(OsString::from).collect(),
             };
-            let (argv, env) = command(&call).map_err(|e| format!("{e:?}"))?;
+            let (argv, env) =
+                command(&call).map_err(|e| villa::Error::refused(format!("{e:?}")))?;
             cmd.args(argv).envs(env).env("GIT_OPTIONAL_LOCKS", "0");
         }
         As::User => {
@@ -86,74 +86,76 @@ pub fn git(
 
 /// CMD in ROOT: see [`git`].
 pub fn run(
-    mut cmd: Command,
+    mut cmd: crate::proc::Command,
     root: &Path,
     stdin: Option<&[u8]>,
     deadline: Option<Duration>,
     cancel: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, GitError> {
-    use std::os::unix::process::CommandExt;
+    use crate::proc::Io;
     for v in LEAKS {
         cmd.env_remove(v);
     }
-    cmd.current_dir(root)
-        .stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    let mut child = cmd.spawn().map_err(|e| format!("git: {e}"))?;
+    cmd.current_dir(root);
+    let feed = if stdin.is_some() { Io::Pipe } else { Io::Null };
+    let mut child = cmd
+        .spawn(feed, Io::Pipe, Io::Pipe)
+        .map_err(|e| villa::Error::io(format!("git: {e}")))?;
     let pid = child.id();
     if let (Some(text), Some(mut w)) = (stdin, child.stdin.take()) {
         let text = text.to_vec();
-        std::thread::spawn(move || {
-            let _ = w.write_all(&text);
-        });
+        crate::soft::done(
+            saman::spawn_thread("ratatoskr:run", move || {
+                crate::soft::done(w.write_all(&text), "run");
+            }),
+            "thread",
+        );
     }
     let drain = |r: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
+        saman::spawn_thread("ratatoskr:run", move || {
             let mut buf = Vec::new();
             if let Some(mut r) = r {
-                let _ = r.read_to_end(&mut buf);
+                crate::soft::done(r.read_to_end(&mut buf), "run");
             }
             buf
         })
+        .map_err(|e| villa::Error::io(e.message().to_owned()))
     };
     let out = drain(
         child
             .stdout
             .take()
             .map(|r| Box::new(r) as Box<dyn Read + Send>),
-    );
+    )?;
     let err = drain(
         child
             .stderr
             .take()
             .map(|r| Box::new(r) as Box<dyn Read + Send>),
-    );
+    )?;
     // a thread of its own waits for git: real time, whatever clock the hub runs on
     let end = deadline.map(|d| crate::clock::real_now() + d);
     let status = loop {
         match child.try_wait() {
             Ok(Some(s)) => break s,
             Ok(None) => {}
-            Err(e) => return Err(format!("git: {e}")),
+            Err(e) => return Err(villa::Error::io(format!("git: {e}"))),
         }
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             stop(pid);
-            let _ = child.wait();
-            return Err(STOPPED.to_owned());
+            crate::soft::done(child.wait(), "run");
+            return Err(villa::Error::cancelled(STOPPED));
         }
         if end.is_some_and(|e| crate::clock::real_now() >= e) {
             stop(pid);
-            let _ = child.wait();
+            crate::soft::done(child.wait(), "run");
             let secs = deadline.unwrap_or_default().as_secs();
-            return Err(format!("git took longer than {secs} s and was stopped"));
+            return Err(villa::Error::new(
+                villa::Kind::Timeout,
+                format!("git took longer than {secs} s and was stopped"),
+            ));
         }
-        std::thread::sleep(Duration::from_millis(5));
+        stund::real::sleep_blocking(Duration::from_millis(5));
     };
     let out = out.join().unwrap_or_default();
     let err = err.join().unwrap_or_default();
@@ -162,14 +164,14 @@ pub fn run(
     }
     let text = String::from_utf8_lossy(&err);
     let text = text.trim();
-    Err(if text.is_empty() {
+    Err(villa::Error::io(if text.is_empty() {
         match status.code() {
             Some(c) => format!("git failed (exit {c})"),
             None => "git was stopped".to_owned(),
         }
     } else {
         text.to_owned()
-    })
+    }))
 }
 
 /// What a stopped command answers.

@@ -66,8 +66,7 @@ pub struct CapWrite {
 /// One tick toward `target`. Raising: `MemoryMax` first (to `target + 512`), then `MemoryHigh = target`. Lowering:
 /// `MemoryHigh = target` at once, then `MemoryMax` down by at most `step_mib` toward `target + 512`, which gives the
 /// ladder time to evict by choice before the kernel kills inside our slice.
-pub fn cap_step(cur_high: u64, cur_max: u64, target: u64, step_mib: u64) -> CapWrite {
-    let _ = cur_high;
+pub fn cap_step(_cur_high: u64, cur_max: u64, target: u64, step_mib: u64) -> CapWrite {
     let want_max = target + MAX_ABOVE_HIGH_MIB;
     if want_max > cur_max {
         CapWrite {

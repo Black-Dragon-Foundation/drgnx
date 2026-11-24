@@ -11,7 +11,7 @@ use std::sync::Mutex;
 static EMACS: Mutex<()> = Mutex::new(());
 
 fn lock() -> std::sync::MutexGuard<'static, ()> {
-    EMACS.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(&EMACS)
 }
 
 fn ok(op: i32, args: &[SjaArg]) -> Ans {
@@ -263,7 +263,7 @@ fn held_view_lock_answers_resync_not_block() {
     assert_eq!(put("held", 1, &small_map()), Ans::Int(0));
     let slot = sja::guard::with_table(|t| t.slot("held")).unwrap();
     {
-        let _held = slot.view.lock().unwrap();
+        let _held = saman::lock(&slot.view);
         assert_eq!(
             put("held", 2, &small_map()),
             Ans::Int(Status::Resync as i64)

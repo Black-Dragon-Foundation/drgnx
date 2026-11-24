@@ -33,7 +33,7 @@ pub struct Editors {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(m)
 }
 
 /// How many bytes may wait in a client's queue before [`Editors::send_to_lossy`] drops an event (a quarter of the queue's limit).
@@ -277,7 +277,7 @@ impl Editors {
     /// The editor's `settings/confirm` of TX: to the tool waiting for it, if one is.
     pub fn confirmed(&self, tx: i64, ok: bool, error: Option<String>) {
         if let Some(s) = lock(&self.confirms).remove(&tx) {
-            let _ = s.send(EditorAnswer::Confirmed { ok, error });
+            crate::soft::done(s.send(EditorAnswer::Confirmed { ok, error }), "s send");
         }
     }
 
@@ -394,113 +394,123 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn no_subscriber_is_no_editor() {
-        let e = Editors::default();
-        assert_eq!(
-            e.propose(proposed(1), Duration::from_secs(5)).await,
-            EditorAnswer::NoEditor
-        );
-        assert_eq!(
-            e.explain(SettingScope::Global, None, None, Duration::from_secs(5))
-                .await,
-            None
-        );
-        assert!(!e.explained(1, vec![]));
+    #[test]
+    fn no_subscriber_is_no_editor() {
+        saman::block_on_current(async move {
+            let e = Editors::default();
+            assert_eq!(
+                e.propose(proposed(1), Duration::from_secs(5)).await,
+                EditorAnswer::NoEditor
+            );
+            assert_eq!(
+                e.explain(SettingScope::Global, None, None, Duration::from_secs(5))
+                    .await,
+                None
+            );
+            assert!(!e.explained(1, vec![]));
+        })
     }
 
-    #[tokio::test]
-    async fn a_confirm_reaches_the_waiting_tool() {
-        let e = Arc::new(Editors::default());
-        let out = Arc::new(Outbox::new(7));
-        e.subscribe(7, out.clone());
-        assert!(e.present());
-        let waiting = {
-            let e = e.clone();
-            tokio::spawn(async move { e.propose(proposed(5), Duration::from_secs(10)).await })
-        };
-        // the event goes out first: on this single-threaded runtime the spawned `propose` runs as soon as this task
-        // yields, and it sends the event before its first wait (the answer's)
-        tokio::task::yield_now().await;
-        let sent = lines(&out);
-        assert_eq!(sent[0]["event"], "settings/proposed");
-        assert_eq!(sent[0]["data"]["tx"], 5);
-        e.confirmed(4, true, None); // another tx's: nobody waits for it
-        e.confirmed(5, false, Some("not an integer".into()));
-        assert_eq!(
-            waiting.await.unwrap(),
-            EditorAnswer::Confirmed {
-                ok: false,
-                error: Some("not an integer".into())
-            }
-        );
-        // no wait: sent, nothing waits
-        assert_eq!(
-            e.propose(proposed(6), Duration::ZERO).await,
-            EditorAnswer::Sent
-        );
-        assert!(lock(&e.confirms).is_empty());
-        // no answer in time: sent, the waiter gone
-        assert_eq!(
-            e.propose(proposed(8), Duration::from_millis(20)).await,
-            EditorAnswer::Sent
-        );
-        assert!(lock(&e.confirms).is_empty());
-        e.gone(7);
-        assert!(!e.present());
+    #[test]
+    fn a_confirm_reaches_the_waiting_tool() {
+        saman::block_on_current(async move {
+            let e = Arc::new(Editors::default());
+            let out = Arc::new(Outbox::new(7));
+            e.subscribe(7, out.clone());
+            assert!(e.present());
+            let waiting = {
+                let e = e.clone();
+                crate::clock::spawn_untracked(module_path!(), async move {
+                    e.propose(proposed(5), Duration::from_secs(10)).await
+                })
+            };
+            // the event goes out first: on this single-threaded runtime the spawned `propose` runs as soon as this task
+            // yields, and it sends the event before its first wait (the answer's)
+            tokio::task::yield_now().await;
+            let sent = lines(&out);
+            assert_eq!(sent[0]["event"], "settings/proposed");
+            assert_eq!(sent[0]["data"]["tx"], 5);
+            e.confirmed(4, true, None); // another tx's: nobody waits for it
+            e.confirmed(5, false, Some("not an integer".into()));
+            assert_eq!(
+                waiting.await.unwrap(),
+                EditorAnswer::Confirmed {
+                    ok: false,
+                    error: Some("not an integer".into())
+                }
+            );
+            // no wait: sent, nothing waits
+            assert_eq!(
+                e.propose(proposed(6), Duration::ZERO).await,
+                EditorAnswer::Sent
+            );
+            assert!(lock(&e.confirms).is_empty());
+            // no answer in time: sent, the waiter gone
+            assert_eq!(
+                e.propose(proposed(8), Duration::from_millis(20)).await,
+                EditorAnswer::Sent
+            );
+            assert!(lock(&e.confirms).is_empty());
+            e.gone(7);
+            assert!(!e.present());
+        })
     }
 
-    #[tokio::test]
-    async fn a_proposal_goes_to_one_editor() {
-        let e = Editors::default();
-        let (a, b) = (Arc::new(Outbox::new(1)), Arc::new(Outbox::new(2)));
-        e.subscribe(2, b.clone());
-        e.subscribe(1, a.clone());
-        assert_eq!(
-            e.propose(proposed(9), Duration::ZERO).await,
-            EditorAnswer::Sent
-        );
-        assert_eq!(lines(&a).len(), 1);
-        assert!(lines(&b).is_empty());
+    #[test]
+    fn a_proposal_goes_to_one_editor() {
+        saman::block_on_current(async move {
+            let e = Editors::default();
+            let (a, b) = (Arc::new(Outbox::new(1)), Arc::new(Outbox::new(2)));
+            e.subscribe(2, b.clone());
+            e.subscribe(1, a.clone());
+            assert_eq!(
+                e.propose(proposed(9), Duration::ZERO).await,
+                EditorAnswer::Sent
+            );
+            assert_eq!(lines(&a).len(), 1);
+            assert!(lines(&b).is_empty());
+        })
     }
 
-    #[tokio::test]
-    async fn an_explain_answer_reaches_the_waiting_tool() {
-        let e = Arc::new(Editors::default());
-        let out = Arc::new(Outbox::new(3));
-        e.subscribe(3, out.clone());
-        let waiting = {
-            let e = e.clone();
-            tokio::spawn(async move {
-                e.explain(
-                    SettingScope::Shared,
-                    Some(vec!["tab-width".into()]),
-                    Some("/w/a".into()),
-                    Duration::from_secs(10),
-                )
-                .await
-            })
-        };
-        // as above: the request goes out before the spawned `explain` first waits
-        tokio::task::yield_now().await;
-        let sent = lines(&out);
-        assert_eq!(sent[0]["event"], "settings/explain");
-        assert_eq!(
-            sent[0]["data"],
-            json!({"req": 1, "scope": "shared", "names": ["tab-width"], "root": "/w/a"})
-        );
-        assert!(!e.explained(2, vec![]));
-        assert!(e.explained(1, vec![json!({"name": "tab-width", "value": "4"})]));
-        assert_eq!(
-            waiting.await.unwrap(),
-            Some(vec![json!({"name": "tab-width", "value": "4"})])
-        );
-        // no answer in time
-        assert_eq!(
-            e.explain(SettingScope::Global, None, None, Duration::from_millis(20))
-                .await,
-            None
-        );
-        assert!(lock(&e.explains).is_empty());
+    #[test]
+    fn an_explain_answer_reaches_the_waiting_tool() {
+        saman::block_on_current(async move {
+            let e = Arc::new(Editors::default());
+            let out = Arc::new(Outbox::new(3));
+            e.subscribe(3, out.clone());
+            let waiting = {
+                let e = e.clone();
+                crate::clock::spawn_untracked(module_path!(), async move {
+                    e.explain(
+                        SettingScope::Shared,
+                        Some(vec!["tab-width".into()]),
+                        Some("/w/a".into()),
+                        Duration::from_secs(10),
+                    )
+                    .await
+                })
+            };
+            // as above: the request goes out before the spawned `explain` first waits
+            tokio::task::yield_now().await;
+            let sent = lines(&out);
+            assert_eq!(sent[0]["event"], "settings/explain");
+            assert_eq!(
+                sent[0]["data"],
+                json!({"req": 1, "scope": "shared", "names": ["tab-width"], "root": "/w/a"})
+            );
+            assert!(!e.explained(2, vec![]));
+            assert!(e.explained(1, vec![json!({"name": "tab-width", "value": "4"})]));
+            assert_eq!(
+                waiting.await.unwrap(),
+                Some(vec![json!({"name": "tab-width", "value": "4"})])
+            );
+            // no answer in time
+            assert_eq!(
+                e.explain(SettingScope::Global, None, None, Duration::from_millis(20))
+                    .await,
+                None
+            );
+            assert!(lock(&e.explains).is_empty());
+        })
     }
 }

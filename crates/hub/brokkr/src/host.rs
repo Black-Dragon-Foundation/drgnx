@@ -293,12 +293,7 @@ impl Host {
         wasm: &[u8],
         hash: [u8; 32],
     ) -> Result<Arc<Compiled>, HostError> {
-        if let Some(c) = self
-            .compiled
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&hash)
-        {
+        if let Some(c) = saman::lock(&self.compiled).get(&hash) {
             return Ok(c.clone());
         }
         let component =
@@ -325,10 +320,7 @@ impl Host {
             Some(hook::GuestIndices::new(&pre).map_err(export)?)
         };
         let c = Arc::new(Compiled { pre, ability, hook });
-        self.compiled
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(hash, c.clone());
+        saman::lock(&self.compiled).insert(hash, c.clone());
         Ok(c)
     }
 
@@ -340,7 +332,7 @@ impl Host {
         left: Duration,
         out: Arc<Mutex<Output>>,
     ) -> Result<Store<State>, CallError> {
-        let hub = tokio::runtime::Handle::try_current()
+        let hub = saman::Handle::current()
             .map_err(|_| CallError::Refused("no runtime to run the call's I/O on".into()))?;
         let limits = StoreLimitsBuilder::new()
             .memory_size(self.limits.memory_bytes)
@@ -371,9 +363,9 @@ impl Host {
         F: FnOnce(Store<State>, Arc<Compiled>) -> Fut,
         Fut: std::future::Future<Output = Result<T, CallError>> + Send + 'static,
     {
-        let until = tokio::time::Instant::now() + deadline;
+        let until = stund::Instant::now() + deadline;
         let permits = self.guest.admit(&p.name, until).await?;
-        let left = until.saturating_duration_since(tokio::time::Instant::now());
+        let left = until.saturating_duration_since(stund::Instant::now());
         if left.is_zero() {
             return Err(CallError::Busy);
         }

@@ -10,6 +10,10 @@ autotests = false  # tests/main.rs is the one binary of the files that need no p
 
 [dependencies]
 bytemuck.workspace = true
+eitri.workspace = true
+saman.workspace = true
+stund.workspace = true
+villa.workspace = true
 gemm.workspace = true
 half.workspace = true
 pollster.workspace = true
@@ -21,6 +25,9 @@ tokenizers.workspace = true
 wgpu.workspace = true
 
 [dev-dependencies]
+draugr.workspace = true
+stig.workspace = true
+annall.workspace = true
 tempfile.workspace = true
 
 
@@ -40,3 +47,6 @@ name = "parity_gpu"
 # timing rows (ignored): latency and memory of the process (/proc/self/status), re-exec of current_exe
 [[test]]
 name = "timing"
+
+[lints]
+workspace = true

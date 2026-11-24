@@ -157,7 +157,10 @@ pub async fn settle(front: &Front, id: &str, run: crate::orch::gates::Run) {
             no_evidence(&front.core.exec, id)
         ),
     }
-    let _ = crate::clock::blocking(move || crate::orch::gates::cleanup(&run)).await;
+    crate::soft::done(
+        crate::clock::blocking(move || crate::orch::gates::cleanup(&run)).await,
+        "crate::clock::blocking",
+    );
 }
 
 /// `orch/evidence`: a task's evidence, oldest first.

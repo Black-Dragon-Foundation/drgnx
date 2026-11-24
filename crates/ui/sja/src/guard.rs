@@ -81,8 +81,8 @@ fn install_hook() {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if IN_GUARD.try_with(Cell::get).unwrap_or(0) > 0 {
-                use std::io::Write;
-                let _ = writeln!(std::io::stderr(), "sja: {info}");
+                // a panic caught by a guard is reported once on stderr; with stderr gone there is nowhere to say it
+                annall::cli_err(&format!("sja: {info}")).unwrap_or_default();
             } else {
                 previous(info);
             }
@@ -112,7 +112,7 @@ pub(crate) fn now_ms() -> u64 {
     if let Some(t) = TEST_NOW.with(Cell::get) {
         return t;
     }
-    use std::time::Instant;
+    use stund::Instant;
     static ORIGIN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     let origin = *ORIGIN.get_or_init(Instant::now);
     u64::try_from(origin.elapsed().as_millis()).unwrap_or(u64::MAX)
@@ -142,25 +142,24 @@ pub struct Slot {
 
 impl Slot {
     pub fn broken(&self) -> bool {
-        self.breaker.lock().map(|b| b.1).unwrap_or(true)
+        saman::lock(&self.breaker).1
     }
 
     /// A panic happened in a call on this view: drop its model, clear the poison, count it toward the breaker.
     fn panicked(&self) {
         self.panics.fetch_add(1, Ordering::Relaxed);
-        let mut v = self.view.lock().unwrap_or_else(|e| e.into_inner());
+        let mut v = saman::lock(&self.view);
         v.model = None;
         v.queue.lose();
         drop(v);
         self.view.clear_poison();
         self.bytes.store(0, Ordering::Relaxed);
         let now = now_ms();
-        if let Ok(mut b) = self.breaker.lock() {
-            b.0.retain(|t| now.saturating_sub(*t) < BREAKER_MS);
-            b.0.push(now);
-            if b.0.len() >= 2 {
-                b.1 = true;
-            }
+        let mut b = saman::lock(&self.breaker);
+        b.0.retain(|t| now.saturating_sub(*t) < BREAKER_MS);
+        b.0.push(now);
+        if b.0.len() >= 2 {
+            b.1 = true;
         }
     }
 }

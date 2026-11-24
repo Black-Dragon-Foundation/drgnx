@@ -1,0 +1,87 @@
+[crates]
+owner = { clean = true }
+villa = { clean = true }
+bad = { clean = true }
+app = { clean = true }
+glitnir = { clean = true }
+canvas = { clean = true }
+uiapp = { clean = true, ui = true }
+reactive = { clean = true, ui = true }
+
+[[standard]]
+id = "processes"
+owner = "owner"
+clippy = ["std::process::Command::new", "std::fs::OpenOptions::open"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "logging"
+owner = "owner"
+lints = ["print_stdout"]
+scan = ["no-print"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "errors"
+owner = "villa"
+lints = ["let_underscore_must_use"]
+scan = ["no-string-error", "no-let-underscore-result"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "paths"
+owner = "villa"
+scan = ["no-env-home"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "concurrency"
+owner = "villa"
+scan = ["no-blocking-recv-on-ui"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "data-hygiene"
+owner = "villa"
+scan = ["secret-has-redact"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "api-versioning"
+owner = "villa"
+scan = ["no-hand-luau-binding"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "keys"
+owner = "villa"
+scan = ["no-raw-key-event"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "kit"
+owner = "villa"
+scan = ["no-colour-literal"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "commands"
+owner = "villa"
+scan = ["command-has-doc"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "scale-zoom"
+owner = "villa"
+scan = ["no-raw-scale-mul"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[standard]]
+id = "ui-reactivity"
+owner = "villa"
+scan = ["no-ui-observer", "no-dependency-list-api"]
+conformance = "crates/owner/tests/conformance.rs"
+
+[[layer]]
+crate = "app"
+may_not_depend = ["glitnir"]

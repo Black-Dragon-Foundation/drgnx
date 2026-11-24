@@ -26,7 +26,7 @@ use std::fs;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -281,13 +281,10 @@ fn schema_of(conn: &Connection) -> Result<u32, String> {
 }
 
 /// Migrate the schema-6 file at PATH, open on CONN (the writer's connection).
-pub fn run(
-    conn: &mut Connection,
-    path: &Path,
-    opts: &MigrateOpts,
-) -> Result<MigrateReport, String> {
+pub fn run(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> villa::Result<MigrateReport> {
     migrate(conn, path, opts).map_err(|s| match s {
-        Stop::Busy(t) | Stop::Failed(t) => t,
+        Stop::Busy(t) => villa::Error::unavailable(t),
+        Stop::Failed(t) => villa::Error::internal(t),
     })
 }
 
@@ -301,21 +298,25 @@ pub(crate) fn make_fresh(conn: &mut Connection) -> Result<(), String> {
 }
 
 /// `ratatoskr store migrate-check`: migrate the copy DB in place, its pre-migration backup in `opts.backup_dir`.
-pub fn check_copy(db: &Path, opts: &MigrateOpts) -> Result<MigrateReport, String> {
+pub fn check_copy(db: &Path, opts: &MigrateOpts) -> villa::Result<MigrateReport> {
     if !db.is_file() {
-        return Err(format!("{}: no such file", db.display()));
+        return Err(villa::Error::not_found(format!(
+            "{}: no such file",
+            db.display()
+        )));
     }
     // An existing file (checked above): `open` creates none here.
-    let mut conn = Connection::open(db).map_err(|e| e.to_string())?;
+    let sql = |e: urdr::SqliteError| villa::Error::io(e.to_string()).with_source(e);
+    let mut conn = Connection::open(db).map_err(sql)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
-        .map_err(|e| e.to_string())?;
+        .map_err(sql)?;
     conn.pragma_update(None, "secure_delete", "ON")
-        .map_err(|e| e.to_string())?;
-    match schema_of(&conn)? {
+        .map_err(sql)?;
+    match schema_of(&conn).map_err(villa::Error::io)? {
         6 => run(&mut conn, db, opts),
-        s => Err(format!(
+        s => Err(villa::Error::invalid(format!(
             "the copy is schema {s}; migrate-check moves a schema-6 file"
-        )),
+        ))),
     }
 }
 
@@ -524,12 +525,12 @@ fn finish<T>(conn: &Connection, out: Result<T, Stop>) -> Result<T, Stop> {
         Ok(v) => match conn.execute_batch("commit") {
             Ok(()) => Ok(v),
             Err(e) => {
-                let _ = conn.execute_batch("rollback");
+                crate::rollback(conn);
                 Err(e.into())
             }
         },
         Err(e) => {
-            let _ = conn.execute_batch("rollback");
+            crate::rollback(conn);
             Err(e)
         }
     }
@@ -896,7 +897,7 @@ fn stamp(db: &Path) -> Stamp {
 static COPIES: Mutex<Vec<(PathBuf, Stamp, PathBuf)>> = Mutex::new(Vec::new());
 
 fn unix_now() -> f64 {
-    SystemTime::now()
+    stund::wall()
         .duration_since(UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
 }
@@ -909,7 +910,7 @@ fn backup(conn: &Connection, db: &Path, dir: &Path) -> Result<PathBuf, Stop> {
         Stop::Failed(format!("the pre-migration copy: {what}: {e}"))
     };
     let now = stamp(db);
-    let mut copies = COPIES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut copies = saman::lock(&COPIES);
     if let Some(i) = copies.iter().position(|(p, _, _)| p == db) {
         let (_, then, copy) = &copies[i];
         if *then == now && copy.is_file() {
@@ -933,9 +934,9 @@ fn backup(conn: &Connection, db: &Path, dir: &Path) -> Result<PathBuf, Stop> {
     let mut tmp = dest.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    let _ = fs::remove_file(&tmp);
+    crate::removed(fs::remove_file(&tmp), "a stale copy");
     if let Err(e) = conn.execute("vacuum into ?1", [tmp.to_string_lossy().as_ref()]) {
-        let _ = fs::remove_file(&tmp);
+        crate::removed(fs::remove_file(&tmp), "the failed copy");
         return Err(failed("VACUUM INTO", &e));
     }
     fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
@@ -949,7 +950,7 @@ fn backup(conn: &Connection, db: &Path, dir: &Path) -> Result<PathBuf, Stop> {
             checked.error.unwrap_or_default()
         )));
     }
-    fs::rename(&tmp, &dest).map_err(|e| failed("its rename", &e))?;
+    eitri::rename_file(&tmp, &dest).map_err(|e| failed("its rename", &e))?;
     copies.push((db.to_path_buf(), now, dest.clone()));
     Ok(dest)
 }
@@ -972,7 +973,9 @@ fn hook(path: &Path, step: &'static str) -> Result<(), Stop> {
             && let Some((at, file)) = v.split_once(':')
             && at == step
         {
-            let _ = fs::write(file, b"paused");
+            if let Err(e) = eitri::replace_file(Path::new(file), b"paused") {
+                tracing::warn!(error = %e, "the pause hook's file was not written");
+            }
             loop {
                 std::thread::park();
             }
@@ -1035,7 +1038,7 @@ fn norn_guard() -> Arc<Guard> {
 }
 
 fn migrate(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> Result<MigrateReport, Stop> {
-    let started = Instant::now();
+    let started = stund::Instant::now();
     match schema_of(conn).map_err(Stop::Failed)? {
         6 => {}
         s => {
@@ -1050,7 +1053,7 @@ fn migrate(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> Result<Mig
     for dir in project_dirs(conn, &deny)? {
         hook(path, "resolve")?;
         // git that cannot answer now: nothing moved, the next tick tries again
-        cache.fill(&dir).map_err(Stop::Busy)?;
+        cache.fill(&dir).map_err(|e| Stop::Busy(e.to_string()))?;
     }
     // 1. The checked copy.
     let copy = backup(conn, path, &opts.backup_dir)?;

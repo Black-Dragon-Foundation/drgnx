@@ -65,11 +65,14 @@ impl Proc for draugr::Child {
             Sig::Kill => libc::SIGKILL,
         };
         // the adapter's process group (its pid is the group's id)
-        let _ = draugr::Signaller::kill(&draugr::RealSignaller, -self.id(), s);
+        crate::soft::done(
+            draugr::Signaller::kill(&draugr::RealSignaller, -self.id(), s),
+            "draugr::Signaller::kill",
+        );
     }
     fn wait(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            let _ = draugr::Child::wait(self).await;
+            crate::soft::done(draugr::Child::wait(self).await, "draugr::Child::wait");
         })
     }
     fn stderr_tail(&self) -> String {
@@ -226,12 +229,12 @@ pub enum Update {
     /// `runInTerminal`: open a terminal; answer its pid.
     RunInTerminal {
         arguments: Value,
-        reply: oneshot::Sender<Result<i64, String>>,
+        reply: oneshot::Sender<villa::Result<i64>>,
     },
     /// `startDebugging`: start a child session.
     StartDebugging {
         arguments: Value,
-        reply: oneshot::Sender<Result<(), String>>,
+        reply: oneshot::Sender<villa::Result<()>>,
     },
     /// The end, once; nothing follows.
     Ended(End),
@@ -243,22 +246,22 @@ pub enum Update {
 }
 
 enum Cmd {
-    Op(Op, oneshot::Sender<Result<(), String>>),
+    Op(Op, oneshot::Sender<villa::Result<()>>),
     Variables {
         epoch: u64,
         /// `variables`' arguments: the reference, and a page's `filter`, `start` and `count`.
         args: Value,
-        reply: oneshot::Sender<Result<Vec<Value>, String>>,
+        reply: oneshot::Sender<villa::Result<Vec<Value>>>,
     },
     MoreFrames {
         epoch: u64,
         thread: i64,
-        reply: oneshot::Sender<Result<Vec<Value>, String>>,
+        reply: oneshot::Sender<villa::Result<Vec<Value>>>,
     },
     Request {
         command: String,
         arguments: Value,
-        reply: oneshot::Sender<Result<Value, String>>,
+        reply: oneshot::Sender<villa::Result<Value>>,
     },
 }
 
@@ -274,32 +277,35 @@ pub const ENDED: &str = "the session has ended";
 impl Handle {
     async fn ask<T>(
         &self,
-        make: impl FnOnce(oneshot::Sender<Result<T, String>>) -> Cmd,
-    ) -> Result<T, String> {
+        make: impl FnOnce(oneshot::Sender<villa::Result<T>>) -> Cmd,
+    ) -> villa::Result<T> {
         let (tx, rx) = oneshot::channel();
-        self.tx.send(make(tx)).map_err(|_| ENDED.to_owned())?;
-        rx.await.unwrap_or_else(|_| Err(ENDED.to_owned()))
+        self.tx
+            .send(make(tx))
+            .map_err(|_| villa::Error::cancelled(ENDED))?;
+        rx.await
+            .unwrap_or_else(|_| Err(villa::Error::cancelled(ENDED)))
     }
 
     /// Carry out OP; resolves when the adapter answered (a stop: when the session has ended).
-    pub async fn op(&self, op: Op) -> Result<(), String> {
+    pub async fn op(&self, op: Op) -> villa::Result<()> {
         self.ask(|r| Cmd::Op(op, r)).await
     }
 
     /// The variables of REFERENCE, from the stop EPOCH (refused unless it is the current one).
-    pub async fn variables(&self, epoch: u64, reference: i64) -> Result<Vec<Value>, String> {
+    pub async fn variables(&self, epoch: u64, reference: i64) -> villa::Result<Vec<Value>> {
         self.variables_with(epoch, json!({"variablesReference": reference}))
             .await
     }
 
     /// [`Handle::variables`] with `variables`' whole ARGS (a page: `filter`, `start`, `count`).
-    pub async fn variables_with(&self, epoch: u64, args: Value) -> Result<Vec<Value>, String> {
+    pub async fn variables_with(&self, epoch: u64, args: Value) -> villa::Result<Vec<Value>> {
         self.ask(|reply| Cmd::Variables { epoch, args, reply })
             .await
     }
 
     /// The next page of THREAD's frames in stop EPOCH.
-    pub async fn more_frames(&self, epoch: u64, thread: i64) -> Result<Vec<Value>, String> {
+    pub async fn more_frames(&self, epoch: u64, thread: i64) -> villa::Result<Vec<Value>> {
         self.ask(|reply| Cmd::MoreFrames {
             epoch,
             thread,
@@ -309,7 +315,7 @@ impl Handle {
     }
 
     /// Any other request (`evaluate`, `completions`, `source`, `setBreakpoints` …): its answer's body.
-    pub async fn request(&self, command: &str, arguments: Value) -> Result<Value, String> {
+    pub async fn request(&self, command: &str, arguments: Value) -> villa::Result<Value> {
         let command = command.to_owned();
         self.ask(|reply| Cmd::Request {
             command,
@@ -387,6 +393,10 @@ fn msg(e: vor::Error) -> String {
     }
 }
 
+fn msg_err(e: vor::Error) -> villa::Error {
+    villa::Error::unavailable(msg(e))
+}
+
 impl Session {
     fn cap(&self, name: &str) -> bool {
         self.caps
@@ -396,7 +406,7 @@ impl Session {
     }
 
     fn send(&self, u: Update) {
-        let _ = self.up.send(u);
+        crate::soft::done(self.up.send(u), "up send");
     }
 
     async fn run(mut self, mut cmds: mpsc::UnboundedReceiver<Cmd>) {
@@ -507,7 +517,7 @@ impl Session {
                         if event == "initialized" && !configured {
                             configured = true;
                             if let Err(e) = self.configure().await {
-                                return self.fail(e);
+                                return self.fail(e.message().to_owned());
                             }
                             if launch.is_none() {
                                 self.send(Update::Running { thread: None, all: true });
@@ -522,7 +532,7 @@ impl Session {
                                 self.start.exception_filters = s.exception_filters;
                             }
                             if let Err(e) = self.configure().await {
-                                return self.fail(e);
+                                return self.fail(e.message().to_owned());
                             }
                         } else if let Some(end) = self.event(&event, body).await {
                             return end;
@@ -571,7 +581,7 @@ impl Session {
         }
     }
 
-    async fn configure(&mut self) -> Result<(), String> {
+    async fn configure(&mut self) -> villa::Result<()> {
         for s in self.start.breakpoints.clone() {
             let r = self
                 .client
@@ -586,7 +596,7 @@ impl Session {
                     path: s.path,
                     breakpoints: arr(&body, "breakpoints"),
                 }),
-                Err(vor::Error::Closed(why)) => return Err(why),
+                Err(vor::Error::Closed(why)) => return Err(villa::Error::unavailable(why)),
                 Err(e) => {
                     tracing::debug!(target: "drgnx::debug", "setBreakpoints {}: {}", s.path, msg(e))
                 }
@@ -602,7 +612,7 @@ impl Session {
                 )
                 .await
         {
-            return Err(why);
+            return Err(villa::Error::unavailable(why));
         }
         let has_filters = self
             .caps
@@ -617,14 +627,14 @@ impl Session {
                 .request("setExceptionBreakpoints", json!({"filters": filters}))
                 .await
             {
-                return Err(why);
+                return Err(villa::Error::unavailable(why));
             }
         }
         if self.cap("supportsConfigurationDoneRequest")
             && let Err(vor::Error::Closed(why)) =
                 self.client.request("configurationDone", Value::Null).await
         {
-            return Err(why);
+            return Err(villa::Error::unavailable(why));
         }
         Ok(())
     }
@@ -640,7 +650,7 @@ impl Session {
                 clock::spawn("debug:run-in-terminal", async move {
                     match rx.await {
                         Ok(Ok(pid)) => r.ok(json!({"processId": pid})),
-                        Ok(Err(e)) => r.err(&e),
+                        Ok(Err(e)) => r.err(e.message()),
                         Err(_) => r.err("no terminal"),
                     }
                 });
@@ -654,7 +664,7 @@ impl Session {
                 clock::spawn("debug:start-debugging", async move {
                     match rx.await {
                         Ok(Ok(())) => r.ok(json!({})),
-                        Ok(Err(e)) => r.err(&e),
+                        Ok(Err(e)) => r.err(e.message()),
                         Err(_) => r.err("no child session"),
                     }
                 });
@@ -873,11 +883,13 @@ impl Session {
                         .request("variables", args)
                         .await
                         .map(|b| arr(&b, "variables"))
-                        .map_err(msg)
+                        .map_err(msg_err)
                 } else {
-                    Err(format!("stop {epoch} is over; its variables are gone"))
+                    Err(villa::Error::conflict(format!(
+                        "stop {epoch} is over; its variables are gone"
+                    )))
                 };
-                let _ = reply.send(r);
+                crate::soft::done(reply.send(r), "reply send");
                 None
             }
             Cmd::MoreFrames {
@@ -902,12 +914,12 @@ impl Session {
                                 }
                                 Ok(more)
                             }
-                            Err(e) => Err(msg(e)),
+                            Err(e) => Err(msg_err(e)),
                         }
                     }
-                    _ => Err(format!("stop {epoch} is over")),
+                    _ => Err(villa::Error::conflict(format!("stop {epoch} is over"))),
                 };
-                let _ = reply.send(r);
+                crate::soft::done(reply.send(r), "reply send");
                 None
             }
             Cmd::Request {
@@ -915,13 +927,21 @@ impl Session {
                 arguments,
                 reply,
             } => {
-                let _ = reply.send(self.client.request(&command, arguments).await.map_err(msg));
+                crate::soft::done(
+                    reply.send(
+                        self.client
+                            .request(&command, arguments)
+                            .await
+                            .map_err(msg_err),
+                    ),
+                    "reply send",
+                );
                 None
             }
         }
     }
 
-    async fn op(&mut self, op: Op, reply: oneshot::Sender<Result<(), String>>) -> Option<Ending> {
+    async fn op(&mut self, op: Op, reply: oneshot::Sender<villa::Result<()>>) -> Option<Ending> {
         let thread = |t: Option<i64>, s: &Session| {
             t.or(s.stop.as_ref().map(|s| s.thread))
                 .or(s.stopped_thread)
@@ -951,22 +971,22 @@ impl Session {
                         .request("restart", json!({"arguments": self.start.arguments}))
                         .await;
                     self.stop = None;
-                    let _ = reply.send(r.map(|_| ()).map_err(msg));
+                    crate::soft::done(reply.send(r.map(|_| ()).map_err(msg_err)), "reply send");
                     return None;
                 }
                 let mut e = self.stopping("restarting".into(), None);
                 if let Ending::Stop { restart, .. } = &mut e {
                     *restart = Some(Value::Null);
                 }
-                let _ = reply.send(Ok(()));
+                crate::soft::done(reply.send(Ok(())), "reply send");
                 return Some(e);
             }
             Op::Stop { kill_debuggee } => {
-                let _ = reply.send(Ok(()));
+                crate::soft::done(reply.send(Ok(())), "reply send");
                 return Some(self.stopping("stopped".into(), kill_debuggee));
             }
             Op::Disconnect => {
-                let _ = reply.send(Ok(()));
+                crate::soft::done(reply.send(Ok(())), "reply send");
                 return Some(Ending::Stop {
                     reason: "disconnected".into(),
                     terminate: false,
@@ -981,7 +1001,10 @@ impl Session {
                     .as_ref()
                     .is_some_and(|s| t.is_none_or(|t| t == s.thread));
                 if !ok {
-                    let _ = reply.send(Err("not stopped there".into()));
+                    crate::soft::done(
+                        reply.send(Err(villa::Error::invalid("not stopped there"))),
+                        "reply send",
+                    );
                     return None;
                 }
                 let scopes = self.scopes(frame).await;
@@ -990,7 +1013,7 @@ impl Session {
                     s.scopes = scopes;
                 }
                 self.publish();
-                let _ = reply.send(Ok(()));
+                crate::soft::done(reply.send(Ok(())), "reply send");
                 return None;
             }
         };
@@ -1005,10 +1028,10 @@ impl Session {
                             .unwrap_or(true);
                     self.running(t, all);
                 }
-                let _ = reply.send(Ok(()));
+                crate::soft::done(reply.send(Ok(())), "reply send");
             }
             Err(e) => {
-                let _ = reply.send(Err(msg(e)));
+                crate::soft::done(reply.send(Err(msg_err(e))), "reply send");
             }
         }
         None
@@ -1033,7 +1056,7 @@ impl Session {
                     }
                 }
             };
-            let _ = clock::timeout(POLITE, wait).await;
+            crate::soft::done(clock::timeout(POLITE, wait).await, "clock::timeout");
             drop(t);
         }
         // a JavaScript program that runs on: the heap graph's hidden map goes first (the user's ruling, 2026-11-13)
@@ -1045,7 +1068,7 @@ impl Session {
                 "evaluate",
                 json!({"expression": super::heap::JS_FORGET, "context": "repl"}),
             );
-            let _ = clock::timeout(POLITE, forget).await;
+            crate::soft::done(clock::timeout(POLITE, forget).await, "clock::timeout");
         }
         // disconnect, and 2 s for its answer and the process's exit; then SIGTERM, 1 s, SIGKILL
         let d = (!self.client.is_closed()).then(|| {
@@ -1104,11 +1127,11 @@ impl Session {
 
 fn refuse(c: Cmd) {
     match c {
-        Cmd::Op(_, r) => drop(r.send(Err(ENDED.into()))),
+        Cmd::Op(_, r) => drop(r.send(Err(villa::Error::cancelled(ENDED)))),
         Cmd::Variables { reply, .. } | Cmd::MoreFrames { reply, .. } => {
-            drop(reply.send(Err(ENDED.into())))
+            drop(reply.send(Err(villa::Error::cancelled(ENDED))))
         }
-        Cmd::Request { reply, .. } => drop(reply.send(Err(ENDED.into()))),
+        Cmd::Request { reply, .. } => drop(reply.send(Err(villa::Error::cancelled(ENDED)))),
     }
 }
 

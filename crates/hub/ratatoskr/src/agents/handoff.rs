@@ -73,7 +73,7 @@ pub fn compose(f: &Facts) -> String {
 
 /// HEAD of the repository at CWD, `<short sha> <subject>`.
 fn head_of(cwd: &Path) -> Option<String> {
-    let o = std::process::Command::new("git")
+    let o = crate::proc::Command::new("git")
         .arg("-C")
         .arg(cwd)
         .args(["log", "-1", "--format=%h %s"])
@@ -356,8 +356,9 @@ mod tests {
     /// A summary at a step of the conversation a revert began names nothing of the steps that revert abandoned, nor of
     /// what came after the step: not their tools, snapshot, head or decisions.
     // test-pattern: D
-    #[tokio::test(flavor = "multi_thread")]
-    async fn summary_up_to_names_nothing_of_an_abandoned_line() {
+    #[test]
+    fn summary_up_to_names_nothing_of_an_abandoned_line() {
+        saman::Executor::new(2).unwrap().block_on(async move {
         let d = tempfile::tempdir().unwrap();
         let f = crate::runner::graph_plan_tests::front(d.path());
         f.writer
@@ -420,6 +421,7 @@ mod tests {
         for gone in ["gone", "bbbb222", "cccc333", "after", "eeee555"] {
             assert!(!s.contains(gone), "{gone:?} named in {s}");
         }
+})
     }
 
     #[test]

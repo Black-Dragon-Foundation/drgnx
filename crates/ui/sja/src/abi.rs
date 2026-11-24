@@ -725,7 +725,7 @@ fn call(op: i32, args: &[Arg]) -> Result<Ans, Refused> {
             let (view, group) = (arg(args, 0).str()?, arg(args, 1).opt_str()?);
             let (h, slot) = with_table(|t| t.open(view))?;
             // a broken or busy view still gets its handle: the instance opens when the view is whole again
-            let _ = on_view(&slot, |v| v.open(h, group));
+            let _view_busy_or_broken = on_view(&slot, |v| v.open(h, group));
             Ok(Ans::Int(i64::from(h)))
         }
         SJA_CLOSE => {
@@ -779,7 +779,7 @@ fn call(op: i32, args: &[Arg]) -> Result<Ans, Refused> {
         SJA_HUB_LOST => {
             let slots: Vec<_> = with_table(|t| t.views.values().cloned().collect())?;
             for s in slots {
-                let _ = on_view(&s, View::hub_lost);
+                let _view_busy_or_broken = on_view(&s, View::hub_lost);
             }
             Ok(Ans::Nil)
         }
@@ -923,7 +923,7 @@ fn call(op: i32, args: &[Arg]) -> Result<Ans, Refused> {
             let (view, n) = (arg(args, 0).str()?, arg(args, 1).int()?);
             let n = u64::try_from(n).map_err(|_| Refused::Arg)?;
             if let Some(slot) = with_table(|t| t.views.get(view).cloned())? {
-                let _ = on_view(&slot, |v| v.queue.named = v.queue.named.max(n));
+                let _view_busy_or_broken = on_view(&slot, |v| v.queue.named = v.queue.named.max(n));
             }
             Ok(Ans::Nil)
         }

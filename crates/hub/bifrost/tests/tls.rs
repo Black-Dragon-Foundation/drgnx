@@ -26,7 +26,7 @@ fn fixture() -> &'static Fixture {
         let ca = make_ca("bifrost test ca");
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ca.pem");
-        std::fs::write(&path, &ca.pem).unwrap();
+        eitri::replace_file(&path, ca.pem.as_bytes()).unwrap();
         // SAFETY: every test calls `fixture()` before it reads the environment or builds a client, and
         // `get_or_init` blocks them until this has run.
         unsafe { std::env::set_var("SSL_CERT_FILE", &path) };
@@ -46,57 +46,65 @@ fn get(port: u16) -> http::Request<Full<Bytes>> {
         .unwrap()
 }
 
-#[tokio::test]
-async fn https_with_the_fixture_ca_through_ssl_cert_file() {
-    let srv = tls_server(localhost_leaf(&fixture().ca)).await;
-    let resp = client().send(get(srv.port)).await.unwrap();
-    assert_eq!(resp.status(), 200);
-    assert_eq!(
-        &resp.into_body().collect().await.unwrap().to_bytes()[..],
-        b"ok"
-    );
-    assert_eq!(srv.requests.load(Ordering::SeqCst), 1);
+#[test]
+fn https_with_the_fixture_ca_through_ssl_cert_file() {
+    saman::block_on_current(async {
+        let srv = tls_server(localhost_leaf(&fixture().ca)).await;
+        let resp = client().send(get(srv.port)).await.unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            &resp.into_body().collect().await.unwrap().to_bytes()[..],
+            b"ok"
+        );
+        assert_eq!(srv.requests.load(Ordering::SeqCst), 1);
+    });
 }
 
-#[tokio::test]
-async fn an_unknown_ca_is_refused() {
-    let other = make_ca("some other ca");
-    let srv = tls_server(localhost_leaf(&other)).await;
-    let err = client().send(get(srv.port)).await.unwrap_err();
-    assert!(matches!(err, UpstreamError::Tls(_)), "{err}");
-    assert_eq!(
-        srv.requests.load(Ordering::SeqCst),
-        0,
-        "no request bytes may reach an unverified server"
-    );
+#[test]
+fn an_unknown_ca_is_refused() {
+    saman::block_on_current(async {
+        let other = make_ca("some other ca");
+        let srv = tls_server(localhost_leaf(&other)).await;
+        let err = client().send(get(srv.port)).await.unwrap_err();
+        assert!(matches!(err, UpstreamError::Tls(_)), "{err}");
+        assert_eq!(
+            srv.requests.load(Ordering::SeqCst),
+            0,
+            "no request bytes may reach an unverified server"
+        );
+    });
 }
 
-#[tokio::test]
-async fn a_wrong_hostname_is_refused() {
-    let leaf = make_leaf(
-        &fixture().ca,
-        &["wrong.test"],
-        false,
-        (2020, 1, 1),
-        (2046, 1, 1),
-    );
-    let srv = tls_server(leaf).await;
-    let err = client().send(get(srv.port)).await.unwrap_err();
-    assert!(matches!(err, UpstreamError::Tls(_)), "{err}");
-    assert_eq!(srv.requests.load(Ordering::SeqCst), 0);
+#[test]
+fn a_wrong_hostname_is_refused() {
+    saman::block_on_current(async {
+        let leaf = make_leaf(
+            &fixture().ca,
+            &["wrong.test"],
+            false,
+            (2020, 1, 1),
+            (2046, 1, 1),
+        );
+        let srv = tls_server(leaf).await;
+        let err = client().send(get(srv.port)).await.unwrap_err();
+        assert!(matches!(err, UpstreamError::Tls(_)), "{err}");
+        assert_eq!(srv.requests.load(Ordering::SeqCst), 0);
+    });
 }
 
-#[tokio::test]
-async fn an_expired_leaf_is_refused() {
-    let leaf = make_leaf(
-        &fixture().ca,
-        &["localhost"],
-        true,
-        (2019, 1, 1),
-        (2020, 1, 1),
-    );
-    let srv = tls_server(leaf).await;
-    let err = client().send(get(srv.port)).await.unwrap_err();
-    assert!(matches!(err, UpstreamError::Tls(_)), "{err}");
-    assert_eq!(srv.requests.load(Ordering::SeqCst), 0);
+#[test]
+fn an_expired_leaf_is_refused() {
+    saman::block_on_current(async {
+        let leaf = make_leaf(
+            &fixture().ca,
+            &["localhost"],
+            true,
+            (2019, 1, 1),
+            (2020, 1, 1),
+        );
+        let srv = tls_server(leaf).await;
+        let err = client().send(get(srv.port)).await.unwrap_err();
+        assert!(matches!(err, UpstreamError::Tls(_)), "{err}");
+        assert_eq!(srv.requests.load(Ordering::SeqCst), 0);
+    });
 }

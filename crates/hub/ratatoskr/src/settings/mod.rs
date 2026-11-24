@@ -178,6 +178,23 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-search-off", "bool", OnError::Strict),
     setting("drgnx-search-base", "Option<String>", OnError::Strict),
     setting("drgnx-search-cache-cap", "Option<u64>", OnError::Strict),
+    setting("drgnx-search-battery-engine", "bool", OnError::Strict),
+    setting("drgnx-search-gpus", "Option<String>", OnError::Strict),
+    setting(
+        "drgnx-search-battery-gpu",
+        "Option<String>",
+        OnError::Strict,
+    ),
+    setting("drgnx-search-no-gpu", "Option<String>", OnError::Strict),
+    setting(
+        "drgnx-search-gpus-noticed",
+        "Option<String>",
+        OnError::Strict,
+    ),
+    setting("drgnx-search-cpu-limit", "Option<u32>", OnError::Strict),
+    setting("drgnx-search-memory-limit", "Option<u64>", OnError::Strict),
+    setting("drgnx-search-vram-limit", "Option<u64>", OnError::Strict),
+    setting("drgnx-search-gpu-busy", "Option<u32>", OnError::Strict),
     setting("drgnx-search-ignore-rules", "String", OnError::Strict),
     setting("drgnx-agents-plugins", "Vec<String>", OnError::Strict),
     setting("drgnx-agents-hook-rules", "Vec<HookRule>", OnError::Strict),
@@ -192,14 +209,18 @@ pub const RUNTIME: &[RuntimeSetting] = &[
 /// refused.
 pub(crate) fn search_rules(
     pairs: Vec<(String, Vec<String>)>,
-) -> Result<hrafn::rules::RuleSet, String> {
+) -> villa::Result<hrafn::rules::RuleSet> {
     let mut out = hrafn::rules::RuleSet::default();
     for (key, globs) in pairs {
         match key.as_str() {
             "include" => out.include = globs,
             "ignore" => out.ignore = globs,
             "no-embed" => out.no_embed = globs,
-            other => return Err(format!("{other:?} is not include, ignore or no-embed")),
+            other => {
+                return Err(villa::Error::invalid(format!(
+                    "{other:?} is not include, ignore or no-embed"
+                )));
+            }
         }
     }
     Ok(out)
@@ -305,6 +326,24 @@ pub struct RuntimeValues {
     pub search_base: Option<String>,
     /// The bytes of vectors no repo holds that each vector cache keeps (none: twice the held bytes, at least 1 GiB).
     pub search_cache_cap: Option<u64>,
+    /// Whether the local sources (the built-in model, the local engine) embed on battery (default: they wait for AC).
+    pub search_battery_engine: bool,
+    /// `drgnx-search-gpus`: Which GPUs the local engine pool uses: `all`, `top:N` or `ids:DEVICE,...` (none: the fastest only, and `doctor` offers the others).
+    pub search_gpus: Option<String>,
+    /// `drgnx-search-battery-gpu`: What the local engine does on battery: `pause` (default), `igpu` (the integrated GPU) or `dgpu` (the chosen GPUs).
+    pub search_battery_gpu: Option<String>,
+    /// `drgnx-search-no-gpu`: What a machine with no usable GPU does: `cpu`, `cpu-idle` or `pack` (none: bulk indexing waits for the choice).
+    pub search_no_gpu: Option<String>,
+    /// `drgnx-search-gpus-noticed`: The set of extra GPUs the one-time notice was answered for (written by the hub when the user uses or dismisses the notice; a different set shows it once more).
+    pub search_gpus_noticed: Option<String>,
+    /// `drgnx-search-cpu-limit`: The share of the machine's CPUs the engine may use, in percent (threads and `cpu.max`).
+    pub search_cpu_limit: Option<u32>,
+    /// `drgnx-search-memory-limit`: The RAM the engine may use, in MiB (`memory.max`).
+    pub search_memory_limit: Option<u64>,
+    /// `drgnx-search-vram-limit`: The video memory the engine may take, in MiB (sizing and a check before a start).
+    pub search_vram_limit: Option<u64>,
+    /// `drgnx-search-gpu-busy`: How busy the GPU may be while the engine embeds, in percent (batches are paced).
+    pub search_gpu_busy: Option<u32>,
     /// Which files Quick Open, Find and the text search list: `index` (the index's filters) or `real`
     /// ([`crate::view::files::ignore_of`]).
     pub search_ignore_rules: String,
@@ -343,23 +382,25 @@ pub(crate) fn hook_rules(v: &Value) -> Result<Value, (String, String)> {
 }
 
 /// The browser program setting: absolute, or none.
-pub(crate) fn check_browser_program(p: &Option<String>) -> Result<(), String> {
+pub(crate) fn check_browser_program(p: &Option<String>) -> villa::Result<()> {
     match p {
-        Some(p) if !p.starts_with('/') => Err(format!("{p:?} is not an absolute path")),
+        Some(p) if !p.starts_with('/') => Err(villa::Error::invalid(format!(
+            "{p:?} is not an absolute path"
+        ))),
         _ => Ok(()),
     }
 }
 
 /// The local ports setting: each 1 to 65535 (a u16 already holds the upper bound).
-pub(crate) fn check_browser_ports(ports: &[u16]) -> Result<(), String> {
+pub(crate) fn check_browser_ports(ports: &[u16]) -> villa::Result<()> {
     match ports.iter().find(|p| **p == 0) {
-        Some(_) => Err("a port is 1 to 65535, not 0".into()),
+        Some(_) => Err(villa::Error::invalid("a port is 1 to 65535, not 0")),
         None => Ok(()),
     }
 }
 
 /// A memory cap like `4G` or `512M`: digits (no leading 0) and an optional K, M, G or T.
-pub(crate) fn check_memory(m: &str) -> Result<(), String> {
+pub(crate) fn check_memory(m: &str) -> villa::Result<()> {
     let digits = m.strip_suffix(['K', 'M', 'G', 'T']).unwrap_or(m);
     let ok = !digits.is_empty()
         && !digits.starts_with('0')
@@ -367,25 +408,29 @@ pub(crate) fn check_memory(m: &str) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
-        Err(format!("{m:?} is not a size like \"4G\" or \"512M\""))
+        Err(villa::Error::invalid(format!(
+            "{m:?} is not a size like \"4G\" or \"512M\""
+        )))
     }
 }
 
 /// The high mark: a percent from 1 to 99.
-pub(crate) fn check_memory_high(n: u32) -> Result<(), String> {
+pub(crate) fn check_memory_high(n: u32) -> villa::Result<()> {
     if (1..=99).contains(&n) {
         Ok(())
     } else {
-        Err(format!("{n} is not a percent from 1 to 99"))
+        Err(villa::Error::invalid(format!(
+            "{n} is not a percent from 1 to 99"
+        )))
     }
 }
 
 /// The browser max message: at least 1 byte.
-pub(crate) fn check_max_message(n: u64) -> Result<(), String> {
+pub(crate) fn check_max_message(n: u64) -> villa::Result<()> {
     if n >= 1 {
         Ok(())
     } else {
-        Err("a message limit is at least 1 byte".into())
+        Err(villa::Error::invalid("a message limit is at least 1 byte"))
     }
 }
 
@@ -422,7 +467,7 @@ pub struct ModelPrice {
 }
 
 /// The rows of the price table with their keys, each price a finite number of 0 or more.
-pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> Result<Vec<ModelPrice>, String> {
+pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> villa::Result<Vec<ModelPrice>> {
     pairs
         .into_iter()
         .map(|(key, mut p)| {
@@ -439,10 +484,10 @@ pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> Result<Vec<ModelPrice>
                 .flatten()
                 .find(|x| !(x.is_finite() && *x >= 0.0))
             {
-                Some(_) => Err(format!(
+                Some(_) => Err(villa::Error::invalid(format!(
                     "{}: a price is dollars per million tokens, a number of 0 or more",
                     p.key
-                )),
+                ))),
                 None => Ok(p),
             }
         })
@@ -450,7 +495,7 @@ pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> Result<Vec<ModelPrice>
 }
 
 /// An `agents-matrix` value that is valid, as a message when it is not.
-pub(crate) fn check_matrix(v: &Value) -> Result<(), String> {
+pub(crate) fn check_matrix(v: &Value) -> villa::Result<()> {
     matrix::decode(v).map(drop)
 }
 
@@ -525,7 +570,7 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-ai-roles" => values.ai_roles = providers::roles(node)?,
         "drgnx-agents-matrix" => {
             let v: Value = de(node)?;
-            check_matrix(&v).map_err(|m| Bad::at(node, None, m))?;
+            check_matrix(&v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_matrix = v;
         }
         "drgnx-agents-away-after" => values.agents_away_after = de(node)?,
@@ -551,7 +596,8 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-manager-context" => values.agents_manager_context = de(node)?,
         "drgnx-agents-model-prices" => {
             let profiles::Alist(pairs) = de::<profiles::Alist<ModelPrice>>(node)?;
-            values.agents_model_prices = prices(pairs).map_err(|m| Bad::at(node, None, m))?;
+            values.agents_model_prices =
+                prices(pairs).map_err(|m| Bad::at(node, None, m.message()))?;
         }
         "drgnx-runners-send" => {
             let v: String = de(node)?;
@@ -583,11 +629,21 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-search-builtin" => values.search_builtin = de(node)?,
         "drgnx-search-rules" => {
             let profiles::Alist(pairs) = de::<profiles::Alist<Vec<String>>>(node)?;
-            values.search_rules = search_rules(pairs).map_err(|why| Bad::at(node, None, why))?;
+            values.search_rules =
+                search_rules(pairs).map_err(|why| Bad::at(node, None, why.message()))?;
         }
         "drgnx-search-off" => values.search_off = de(node)?,
         "drgnx-search-base" => values.search_base = de(node)?,
         "drgnx-search-cache-cap" => values.search_cache_cap = de(node)?,
+        "drgnx-search-battery-engine" => values.search_battery_engine = de(node)?,
+        "drgnx-search-gpus" => values.search_gpus = de(node)?,
+        "drgnx-search-battery-gpu" => values.search_battery_gpu = de(node)?,
+        "drgnx-search-no-gpu" => values.search_no_gpu = de(node)?,
+        "drgnx-search-gpus-noticed" => values.search_gpus_noticed = de(node)?,
+        "drgnx-search-cpu-limit" => values.search_cpu_limit = de(node)?,
+        "drgnx-search-memory-limit" => values.search_memory_limit = de(node)?,
+        "drgnx-search-vram-limit" => values.search_vram_limit = de(node)?,
+        "drgnx-search-gpu-busy" => values.search_gpu_busy = de(node)?,
         "drgnx-search-ignore-rules" => {
             let v: String = de(node)?;
             if !["index", "real"].contains(&v.as_str()) {
@@ -607,30 +663,30 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-hook-rules-off" => values.agents_hook_rules_off = de(node)?,
         "drgnx-agents-browser-program" => {
             let v = de(node)?;
-            check_browser_program(&v).map_err(|m| Bad::at(node, None, m))?;
+            check_browser_program(&v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_browser_program = v;
         }
         "drgnx-agents-browser-local-ports" => {
             let v: Vec<u16> = de(node)?;
-            check_browser_ports(&v).map_err(|m| Bad::at(node, None, m))?;
+            check_browser_ports(&v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_browser_local_ports = v;
         }
         "drgnx-agents-browser-deny-hosts" => values.agents_browser_deny_hosts = de(node)?,
         "drgnx-agents-browser-max-message" => {
             let v = de(node)?;
-            check_max_message(v).map_err(|m| Bad::at(node, None, m))?;
+            check_max_message(v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_browser_max_message = v;
         }
         "drgnx-agents-browser-idle" => values.agents_browser_idle = de(node)?,
         "drgnx-agents-browser-once-window" => values.agents_browser_once_window = de(node)?,
         "drgnx-agents-session-memory" => {
             let v: String = de(node)?;
-            check_memory(&v).map_err(|m| Bad::at(node, None, m))?;
+            check_memory(&v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_session_memory = v;
         }
         "drgnx-agents-browser-memory-high" => {
             let v = de(node)?;
-            check_memory_high(v).map_err(|m| Bad::at(node, None, m))?;
+            check_memory_high(v).map_err(|m| Bad::at(node, None, m.message()))?;
             values.agents_browser_memory_high = v;
         }
         other => {
@@ -818,11 +874,11 @@ impl Settings {
 
     /// Read from CONFIG_DIR, keeping the last good values in RUNTIME (`runtime.db`).
     pub fn open(&self, config_dir: PathBuf, runtime: urdr::Handle) {
-        let _ = self.store.set((config_dir, runtime));
+        crate::soft::done(self.store.set((config_dir, runtime)), "mod");
     }
 
     pub fn current(&self) -> Arc<Current> {
-        self.current.lock().expect("settings").clone()
+        saman::lock(&self.current).clone()
     }
 
     /// Whether [`Settings::open`] was called (the hub; a test front has no config folder).
@@ -833,8 +889,8 @@ impl Settings {
     /// Put the global overrides over the file's values: what is in effect now. The file is copied under the overrides'
     /// lock, which is held until the result is published.
     fn compose(&self) {
-        let overrides = self.overrides.lock().expect("settings");
-        let file = self.file.lock().expect("settings").clone();
+        let overrides = saman::lock(&self.overrides);
+        let file = saman::lock(&self.file).clone();
         let current = match overrides.scope(None) {
             None | Some([]) => file,
             Some(list) => {
@@ -853,14 +909,14 @@ impl Settings {
                 })
             }
         };
-        *self.current.lock().expect("settings") = current;
+        *saman::lock(&self.current) = current;
     }
 
     /// NAME's value in effect for PROJECT (none: global), as JSON of its runtime type, and whether PROJECT has ever
     /// sent its values (phase 6's card asks).  The project's override, else the global one, else `settings.el`, else
     /// the shipped default.  None for a name that is not a runtime setting.
     pub fn effective(&self, name: &str, project: Option<&str>) -> Option<(Value, bool)> {
-        let overrides = self.overrides.lock().expect("settings");
+        let overrides = saman::lock(&self.overrides);
         let seen = project.is_none_or(|p| overrides.scope(Some(p)).is_some());
         let own = project
             .and_then(|p| overrides.scope(Some(p)))
@@ -875,7 +931,7 @@ impl Settings {
     /// NAME's value in PROJECT's own set, or none when PROJECT never sent one for it (unlike [`Self::effective`], which
     /// falls back to the global value): a setting a project's value is added to, not put in place of.
     pub fn project_value(&self, name: &str, project: &str) -> Option<Value> {
-        let overrides = self.overrides.lock().expect("settings");
+        let overrides = saman::lock(&self.overrides);
         overrides
             .scope(Some(project))?
             .iter()
@@ -888,7 +944,7 @@ impl Settings {
     /// nothing): what a runner set up for all projects at once needs (a Mac's toolchains).
     pub fn values_everywhere(&self, name: &str) -> Vec<Value> {
         let projects: Vec<String> = {
-            let overrides = self.overrides.lock().expect("settings");
+            let overrides = saman::lock(&self.overrides);
             overrides.projects().map(String::from).collect()
         };
         self.effective(name, None)
@@ -896,6 +952,14 @@ impl Settings {
             .into_iter()
             .chain(projects.iter().filter_map(|p| self.project_value(name, p)))
             .collect()
+    }
+
+    /// The global set of overrides now (empty when the editor never sent one).
+    pub fn global_overrides(&self) -> Vec<overrides::Override> {
+        saman::lock(&self.overrides)
+            .scope(None)
+            .map(<[_]>::to_vec)
+            .unwrap_or_default()
     }
 
     /// `config/settings`: LIST is the whole set of PROJECT (none: global), kept as the last good one.  A name that
@@ -928,7 +992,7 @@ impl Settings {
                 .await;
         }
         let n = list.len() as u64;
-        self.overrides.lock().expect("settings").set(project, list);
+        saman::lock(&self.overrides).set(project, list);
         self.compose();
         Ok(n)
     }
@@ -942,7 +1006,7 @@ impl Settings {
         let _one = self.reading.lock().await;
         if !self.overrides_loaded.swap(true, Ordering::Relaxed) {
             let kept = overrides::Overrides::load(db).await;
-            let mut mine = self.overrides.lock().expect("settings");
+            let mut mine = saman::lock(&self.overrides);
             // a set sent before the first read stays
             for scope in std::iter::once(None).chain(kept.projects().map(Some)) {
                 if mine.scope(scope).is_none()
@@ -952,7 +1016,7 @@ impl Settings {
                 }
             }
         }
-        let before = self.file.lock().expect("settings").clone();
+        let before = saman::lock(&self.file).clone();
         let stamp = load::stamp(&dir.join(load::FILE));
         if before.stamp.is_some() && before.stamp == Some(stamp) {
             self.compose();
@@ -983,7 +1047,7 @@ impl Settings {
             .filter(|p| !before.loaded.problems.contains(p))
             .map(notice)
             .collect();
-        *self.file.lock().expect("settings") = Arc::new(Current {
+        *saman::lock(&self.file) = Arc::new(Current {
             stamp: Some(stamp),
             loaded,
         });

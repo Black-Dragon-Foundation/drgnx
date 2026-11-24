@@ -148,14 +148,45 @@ pub struct StatusAnswer {
     pub lag: Lag,
     /// Models that have vectors here: the model, and how many.
     pub models: Vec<ModelCount>,
+    /// Where each fingerprint's vectors come from here: its chain of sources as the last pass of tier 2 left it.
+    pub sources: Vec<ChainStatus>,
     pub worker: WorkerStatus,
-    /// `stopped`, `idle`, `running`, `typing`, `battery` or `failed`.
+    /// `stopped`, `idle`, `running`, `typing`, `battery`, `load`, `disk-floor`, `paused` or `failed`.
     pub tier2: String,
+    /// The root's state as the user sees it: `idle`, `running`, `paused` or `stopped` (Hrafn redesign §11A).
+    pub state: String,
+    /// Why it waits, while `paused`: `user`, `battery`, `load`, `disk-floor` or `no-embedder`, and its words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<PauseReason>,
     /// Vectors tier 2 wrote since the hub opened the project.
     pub embedded: u64,
     /// The project's worktree overlays.
     pub trees: Vec<TreeInfo>,
     pub watch: SearchWatch,
+}
+
+/// One fingerprint's chain of sources, in the order they are asked.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChainStatus {
+    /// The fingerprint (64 hex characters).
+    pub model: String,
+    pub entries: Vec<SourceEntry>,
+}
+
+/// One source of a chain.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SourceEntry {
+    /// A provider id, or `cache` or `builtin`.
+    pub id: String,
+    /// `cache`, `lookup`, `embed`, `engine` or `builtin`.
+    pub kind: String,
+    /// `answering`, `down`, `held` (battery) or `no text` (a remote not allowed text).
+    pub state: String,
+    /// Why it is down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// One worktree overlay.
@@ -201,13 +232,152 @@ pub struct ModelCount {
     pub vectors: u64,
 }
 
+/// Why a root's index waits.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PauseReason {
+    /// `user`, `battery`, `load`, `disk-floor` or `no-embedder`.
+    pub name: String,
+    pub text: String,
+}
+
+/// One root the hub keeps an index of.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RootInfo {
+    /// The checkout the index is built from.
+    pub root: String,
+    /// The store's id.
+    pub id: String,
+    /// `idle`, `running`, `paused` or `stopped`.
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<PauseReason>,
+    /// Whether this hub has it open (a closed root's state is what the user set).
+    pub open: bool,
+    pub files: u64,
+    pub chunks: u64,
+    /// The store's bytes on disk.
+    pub bytes: u64,
+}
+
+/// `search/list`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListAnswer {
+    pub roots: Vec<RootInfo>,
+}
+
+/// `search/pause`, `search/resume`, `search/stop`: ROOT, or every root with ALL.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ManageParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<AbsPath>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all: Option<bool>,
+}
+
+/// The roots a pause, resume or stop reached, as they are after it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ManageAnswer {
+    pub roots: Vec<RootInfo>,
+}
+
+/// What the user answered to the notice about GPUs beyond the chosen one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ExtraGpusChoice {
+    /// Turn `drgnx-search-gpus` to `"all"`.
+    Use,
+    /// Leave it; the notice is not shown again for this set of GPUs.
+    Dismiss,
+}
+
+/// `search/extra-gpus`: the answer to the one-time notice.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExtraGpusParams {
+    pub answer: ExtraGpusChoice,
+}
+
+/// The GPUs the answer was for (none: there was nothing to answer, and nothing changed).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExtraGpusAnswer {
+    pub gpus: Vec<String>,
+    pub changed: bool,
+}
+
+/// `search/delete`: ROOT's index, once the user CONFIRMed (the CLI asks).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteParams {
+    pub root: AbsPath,
+    pub confirm: bool,
+}
+
+/// What a delete freed.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteAnswer {
+    pub root: String,
+    pub bytes: u64,
+    /// Vectors no other root held.
+    pub vectors: u64,
+    pub packs: u64,
+}
+
+/// `search/forget-pin`: the `vectors` provider whose pinned certificate is forgotten.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ForgetPinParams {
+    pub provider: String,
+}
+
+/// `embed/serve-start`: serve this machine's vectors on LISTEN (`ADDR:PORT`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServeStartParams {
+    pub listen: String,
+    /// Plain HTTP: loopback or a Tailscale address only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plain: Option<bool>,
+    /// Lookups only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_embed: Option<bool>,
+}
+
+/// A running vector server.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServeAnswer {
+    pub url: String,
+    /// The certificate's sha256 (none when plain).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert_sha256: Option<String>,
+    /// The token, the first time only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+/// `embed/serve-token`: a new token, shown once.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ServeToken {
+    #[serde(with = "crate::secret_text")]
+    #[schemars(with = "String")]
+    pub token: hulda::Secret<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct IndexParams {
     pub root: AbsPath,
     /// Drop the index and build it again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rebuild: Option<bool>,
-    /// Overrides the battery gate: tier 2 runs until nothing is missing.
+    /// Overrides the battery and load gates (not the disk floor): tier 2 runs until nothing is missing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub now: Option<bool>,
 }
@@ -300,79 +470,6 @@ pub struct ConsentParam {
 pub struct DownloadParams {
     pub model: Id,
     pub consent: ConsentParam,
-}
-
-/// A server the wizard can start on request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum ServerKind {
-    Tei,
-    Ollama,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ServerKindParams {
-    pub kind: ServerKind,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ServerStartParams {
-    pub kind: ServerKind,
-    /// The user agreed to what `search/server-plan` showed; a start without it is refused.
-    pub confirm: bool,
-}
-
-/// What a start would do, shown before the user agrees. A plan runs and writes nothing.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ServerPlan {
-    pub available: bool,
-    /// Why not, when it is not available.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub why: Option<String>,
-    /// The GPU image would run.
-    pub gpu: bool,
-    /// The memory cap of the container (TEI) as podman writes it, e.g. `4g`; empty for Ollama.
-    pub memory_cap: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image: Option<String>,
-    pub model: String,
-    /// About what the model weighs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bytes: Option<u64>,
-    /// The Quadlet file a start writes (TEI).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unit_path: Option<String>,
-    /// The commands a start runs, in order.
-    pub commands: Vec<String>,
-}
-
-/// An entry for the settings' provider table; the editor's settings writer adds it, the hub never does.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ProviderEntry {
-    pub id: String,
-    pub kind: String,
-    pub base: String,
-    pub auth: String,
-    pub caps: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ServerStarted {
-    pub started: bool,
-    /// The service that runs it.
-    pub unit: String,
-    pub provider: ProviderEntry,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ServerStopped {
-    pub stopped: bool,
 }
 
 /// Which files a text search and the ranked file query look in (the setting `drgnx-search-ignore-rules`).
@@ -1577,6 +1674,61 @@ pub struct ScopeBases {
     pub detached: bool,
 }
 
+/// A vector pack of a repo's vectors (`search/export`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ExportParams {
+    pub root: AbsPath,
+    /// Where to write it. Without it the pack goes into the repo's `.drgnx/packs/`; a place outside the repo is the
+    /// user's to name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out: Option<AbsPath>,
+    /// The tree of this branch instead of the folder's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Every key of every tree the repo's index has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all_trees: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportAnswer {
+    pub path: AbsPath,
+    /// The file's sha256, hex: its name among packs.
+    pub sha256: String,
+    /// Vectors in it, chunk and path.
+    pub keys: u64,
+    /// What a pack is: a file that can recreate the code's text. Shown before the path.
+    pub warning: String,
+}
+
+/// A vector pack merged into the machine's cache (`search/import`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ImportParams {
+    pub file: AbsPath,
+    /// A project whose index is current before the keys are matched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<AbsPath>,
+    /// Keep the whole pack, for a repo opened later, and for a model no source here can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_all: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportAnswer {
+    /// The pack's fingerprint (64 hex characters) and its model.
+    pub fingerprint: String,
+    pub label: String,
+    pub keys_in_pack: u64,
+    /// Written to the cache now.
+    pub kept: u64,
+    /// No repo here references them.
+    pub skipped_unreferenced: u64,
+    /// Referenced, and the cache had them.
+    pub already_had: u64,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -1592,7 +1744,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "search/index", SearchIndex(IndexParams) -> Started,
             classes: [User], writes: true,
-            doc: "start or rebuild a project's index; now overrides the battery gate",
+            doc: "start or rebuild a project's index; now overrides the battery and load gates",
         ),
         method!(
             "search/embed-retry", SearchEmbedRetry(Empty) -> bool,
@@ -1770,19 +1922,84 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "the editor's keystroke signal: the vectors wait between requests while typing holds",
         ),
         method!(
-            "search/server-plan", SearchServerPlan(ServerKindParams) -> ServerPlan,
-            classes: [User], writes: false,
-            doc: "what starting TEI or Ollama would run, shown before the user agrees; runs and writes nothing",
+            "search/export", SearchExport(ExportParams) -> ExportAnswer,
+            classes: [User], writes: true,
+            doc: "write a vector pack: the vectors (no paths, no text) of the keys a repo's tree references, from the cache; the file is source-equivalent and the answer says so",
         ),
         method!(
-            "search/server-start", SearchServerStart(ServerStartParams) -> ServerStarted,
-            classes: [User], writes: false,
-            doc: "start TEI (a capped podman Quadlet) or Ollama after the user confirmed the plan; the hub never starts one by itself",
+            "search/import", SearchImport(ImportParams) -> ImportAnswer,
+            classes: [User], writes: true,
+            doc: "merge a vector pack into the cache: only the keys a repo store here references (or all with keep_all); a model no source here can use is refused unless keep_all",
         ),
         method!(
-            "search/server-stop", SearchServerStop(ServerKindParams) -> ServerStopped,
+            "search/list", SearchList(Empty) -> ListAnswer,
             classes: [User], writes: false,
-            doc: "stop the server a start began",
+            doc: "every root this machine keeps an index of: its state, why it waits, its files, chunks and bytes",
+        ),
+        method!(
+            "search/pause", SearchPause(ManageParams) -> ManageAnswer,
+            classes: [User], writes: true,
+            doc: "pause a root's index (or every root's with all): the batch in flight finishes, then tier 2 holds until resume; kept across restarts and changes; the user's, never an MCP tool's",
+        ),
+        method!(
+            "search/extra-gpus", SearchExtraGpus(ExtraGpusParams) -> ExtraGpusAnswer,
+            classes: [User], writes: true,
+            doc: "answer the one-time notice about GPUs beyond the chosen one: use turns drgnx-search-gpus to all, dismiss leaves it; either is stored (drgnx-search-gpus-noticed) so the notice is not shown again for that set; the user's, never an MCP tool's",
+        ),
+        method!(
+            "search/resume", SearchResume(ManageParams) -> ManageAnswer,
+            classes: [User], writes: true,
+            doc: "resume a paused or stopped index: it goes on with the keys still missing; the user's, never an MCP tool's",
+        ),
+        method!(
+            "search/stop", SearchStop(ManageParams) -> ManageAnswer,
+            classes: [User], writes: true,
+            doc: "stop a root's index now: what it finished stays; the next change or search/index goes on; the user's, never an MCP tool's",
+        ),
+        method!(
+            "search/delete", SearchDelete(DeleteParams) -> DeleteAnswer,
+            classes: [User], writes: true,
+            doc: "delete a root's index (confirm must be true): its store, its packs and the vectors no other root holds; recorded with its reason; the user's, never an MCP tool's",
+        ),
+        method!(
+            "search/forget-pin", SearchForgetPin(ForgetPinParams) -> bool,
+            classes: [User], writes: true,
+            doc: "forget a vectors provider's pinned certificate: the next answer pins the one it shows",
+        ),
+        method!(
+            "embed/serve-start", EmbedServeStart(ServeStartParams) -> ServeAnswer,
+            classes: [User], writes: true,
+            doc: "serve this machine's vector cache and embedders over the vector protocol v1 (TLS, or plain HTTP on loopback or a Tailscale address); the token is shown the first time only",
+        ),
+        method!(
+            "embed/serve-stop", EmbedServeStop(Empty) -> bool,
+            classes: [User], writes: true,
+            doc: "stop serving vectors; false when none was served",
+        ),
+        method!(
+            "embed/serve-token", EmbedServeToken(Empty) -> ServeToken,
+            classes: [User], writes: true,
+            doc: "a new token for the vector server, shown once; the old one is refused from the next request",
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_serve_token_never_prints() {
+        let t = ServeToken {
+            token: hulda::Secret::new("tok-0123456789".into()),
+        };
+        for shown in [format!("{t:?}"), format!("{:#?}", t), t.token.to_string()] {
+            assert!(!shown.contains("tok-0123456789"), "{shown}");
+        }
+        assert!(format!("{t:?}").contains(hulda::REDACTED));
+        let wire = serde_json::to_value(&t).unwrap();
+        assert_eq!(wire["token"], "tok-0123456789");
+        let back: ServeToken = serde_json::from_value(wire).unwrap();
+        assert_eq!(back.token.expose(), "tok-0123456789");
+    }
 }

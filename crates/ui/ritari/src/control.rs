@@ -43,7 +43,7 @@ pub fn write_reply(state: &State, stream: &UnixStream, reply: &Value) {
                     return;
                 };
                 let bytes = line.into_bytes();
-                let _ = state.handle.insert_source(
+                let _registered = state.handle.insert_source(
                     Generic::new(clone, Interest::WRITE, Mode::Level),
                     move |_, s, _| {
                         let mut w: &UnixStream = s;
@@ -117,10 +117,7 @@ pub fn handle(state: &mut State, line: &str, stream: &UnixStream) -> Option<Valu
         "outstanding" => crate::clock::outstanding(state),
         "globals" => json!({"ok": true, "globals": state.globals}),
         "clients" => {
-            let list: Vec<Value> = state
-                .clients
-                .lock()
-                .unwrap()
+            let list: Vec<Value> = saman::lock(&state.clients)
                 .iter()
                 .map(|c| json!({"id": c.id, "pid": c.pid}))
                 .collect();

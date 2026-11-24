@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 /// What the walk asks the stopped session: a reference's children, and an expression's value in the stopped frame.
 pub trait Probe: Send + Sync {
-    fn variables(&self, reference: i64) -> BoxFut<'_, Result<Vec<Value>, String>>;
-    fn evaluate(&self, expression: String) -> BoxFut<'_, Result<String, String>>;
+    fn variables(&self, reference: i64) -> BoxFut<'_, villa::Result<Vec<Value>>>;
+    fn evaluate(&self, expression: String) -> BoxFut<'_, villa::Result<String>>;
 }
 
 /// How an adapter tells objects apart.
@@ -278,10 +278,10 @@ pub struct SessionProbe {
 }
 
 impl Probe for SessionProbe {
-    fn variables(&self, reference: i64) -> BoxFut<'_, Result<Vec<Value>, String>> {
+    fn variables(&self, reference: i64) -> BoxFut<'_, villa::Result<Vec<Value>>> {
         Box::pin(self.handle.variables(self.epoch, reference))
     }
-    fn evaluate(&self, expression: String) -> BoxFut<'_, Result<String, String>> {
+    fn evaluate(&self, expression: String) -> BoxFut<'_, villa::Result<String>> {
         Box::pin(async move {
             let body = self
                 .handle
@@ -331,10 +331,10 @@ pub async fn read(
     frame: Option<i64>,
     expr: Option<&str>,
     limits: Limits,
-) -> Result<Graph, String> {
+) -> villa::Result<Graph> {
     let stop = d
         .stop_of(session)
-        .ok_or_else(|| format!("debug session {session} is not stopped"))?;
+        .ok_or_else(|| villa::Error::invalid(format!("debug session {session} is not stopped")))?;
     let (handle, _) = d.handle_caps(session)?;
     let frame = frame.unwrap_or(stop.frame);
     let ident = Ident::of(&d.adapter_of(session).unwrap_or_default());
@@ -349,7 +349,8 @@ pub async fn read(
             .request("scopes", serde_json::json!({"frameId": frame}))
             .await?;
         let scopes = body["scopes"].as_array().cloned().unwrap_or_default();
-        let scope = locals_scope(&scopes).ok_or("the frame has no locals")?;
+        let scope = locals_scope(&scopes)
+            .ok_or_else(|| villa::Error::invalid("the frame has no locals"))?;
         return Ok(locals(&probe, ident, scope, limits).await);
     };
     let body = probe

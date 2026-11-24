@@ -40,7 +40,7 @@ fn list(expanded: &[&str], compact: bool, reads: &mut Vec<String>) -> Option<Vec
 fn explorer_lists_folders_first_in_natural_order() {
     let dir = tempfile::tempdir().unwrap();
     for f in ["file10", "File2", ".#lock", ".DS_Store", "b.txt"] {
-        std::fs::write(dir.path().join(f), "x").unwrap();
+        crate::fsio::write(dir.path().join(f), "x").unwrap();
     }
     for d in ["Zed", "alpha", ".git", "__pycache__"] {
         std::fs::create_dir(dir.path().join(d)).unwrap();
@@ -492,15 +492,17 @@ fn a_watched_folder_under_a_link_relists() {
         compact: false,
         exclude: Exclude::default(),
     };
-    let thread = std::thread::spawn(move || {
+    let thread = saman::spawn_thread("ratatoskr:tests", move || {
         let cancel = AtomicBool::new(false);
         list_and_watch(first, &cancel, (tx, rx), &mut |_, es, _| {
             out.send(es).is_ok()
         });
-    });
+    })
+    .unwrap();
     next_listing(&got, 10.0).expect("the first listing");
     let new = open.join("new.txt");
-    std::fs::write(&new, "x").unwrap();
+    // made by its real path (eitri follows no link); the watch sees it under the link
+    crate::fsio::write(real.join("open").join("new.txt"), "x").unwrap();
     let after = next_listing(&got, 5.0).expect("a relisting after the file was made");
     assert!(
         after.contains(&new.to_string_lossy().into_owned()),
@@ -534,12 +536,13 @@ fn explorer_watch_relists_open_folders_only() {
     };
     let first = listing(1, expanded.clone());
     let (id_out, ids) = std::sync::mpsc::channel();
-    let thread = std::thread::spawn(move || {
+    let thread = saman::spawn_thread("ratatoskr:tests", move || {
         let cancel = AtomicBool::new(false);
         list_and_watch(first, &cancel, (tx, rx), &mut |l, es, _| {
             id_out.send(l.id).is_ok() && out.send(es).is_ok()
         });
-    });
+    })
+    .unwrap();
     let first = next_listing(&got, 10.0).expect("the first listing");
     assert_eq!(
         first,
@@ -547,7 +550,7 @@ fn explorer_watch_relists_open_folders_only() {
     );
 
     let new = root.join("open").join("new.txt");
-    std::fs::write(&new, "x").unwrap();
+    crate::fsio::write(&new, "x").unwrap();
     let after = next_listing(&got, 5.0).expect("a relisting after the file was made");
     assert!(after.contains(&id(&new)), "{after:?}");
 
@@ -555,7 +558,7 @@ fn explorer_watch_relists_open_folders_only() {
     let gone = next_listing(&got, 5.0).expect("a relisting after the file went");
     assert!(!gone.contains(&id(&new)), "{gone:?}");
 
-    std::fs::write(root.join("shut").join("hidden.txt"), "x").unwrap();
+    crate::fsio::write(root.join("shut").join("hidden.txt"), "x").unwrap();
     assert_eq!(
         next_listing(&got, 0.5),
         None,
@@ -573,17 +576,18 @@ fn explorer_watch_relists_open_folders_only() {
     );
     assert_eq!(ids.try_iter().last(), Some(2), "sent as listing 2");
     let more = root.join("shut").join("more.txt");
-    std::fs::write(&more, "x").unwrap();
+    crate::fsio::write(&more, "x").unwrap();
     let seen = next_listing(&got, 5.0).expect("a change in the folder the relisting opened");
     assert!(seen.contains(&id(&more)), "{seen:?}");
 
     stop.send(Heard::Stop).unwrap();
     // Stop ends the thread promptly: it is joined well within the bound (which only bounds a failure)
     let (joined_tx, joined) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    saman::spawn_thread("ratatoskr:tests", move || {
         thread.join().unwrap();
-        let _ = joined_tx.send(());
-    });
+        crate::soft::done(joined_tx.send(()), "joined_tx send");
+    })
+    .unwrap();
     joined
         .recv_timeout(std::time::Duration::from_secs(2))
         .expect("Stop ends the watch's thread");
@@ -604,7 +608,7 @@ fn exclude_takes_names_and_globs() {
     assert!(!e.matches("main.oo") && !e.matches("ab.tmp") && !e.matches(".git"));
     let dir = tempfile::tempdir().unwrap();
     for f in ["main.o", "main.c", ".DS_Store"] {
-        std::fs::write(dir.path().join(f), "x").unwrap();
+        crate::fsio::write(dir.path().join(f), "x").unwrap();
     }
     let names = |e: &Exclude| -> Vec<String> {
         read_folder(dir.path(), e)

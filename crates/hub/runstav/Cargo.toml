@@ -22,6 +22,10 @@ getrandom.workspace = true
 rustix.workspace = true
 secrecy.workspace = true
 zeroize.workspace = true
+villa.workspace = true
+stig.workspace = true
+eitri.workspace = true
+hulda.workspace = true
 # the row and patch types of hub-built views (`view-patch`), re-exported as `methods::view`
 rodd = { path = "../../core/rodd", version = "0.1.0", features = ["schema"] }
 
@@ -29,3 +33,6 @@ rodd = { path = "../../core/rodd", version = "0.1.0", features = ["schema"] }
 skuld = { path = "../skuld", version = "0.1.0" }
 proptest.workspace = true
 tempfile.workspace = true
+
+[lints]
+workspace = true

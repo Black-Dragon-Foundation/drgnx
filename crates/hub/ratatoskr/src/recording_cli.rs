@@ -14,16 +14,26 @@ pub struct RecordingCommand {
 }
 
 /// `lint DIR…`.
-pub fn parse(args: impl Iterator<Item = OsString>) -> Result<RecordingCommand, String> {
+pub fn parse(args: impl Iterator<Item = OsString>) -> villa::Result<RecordingCommand> {
     let mut args = args;
     match args.next().and_then(|a| a.into_string().ok()).as_deref() {
         Some("lint") => {}
-        Some(other) => return Err(format!("unknown recording subcommand {other:?}")),
-        None => return Err("recording needs a subcommand: lint DIR…".into()),
+        Some(other) => {
+            return Err(villa::Error::invalid(format!(
+                "unknown recording subcommand {other:?}"
+            )));
+        }
+        None => {
+            return Err(villa::Error::invalid(
+                "recording needs a subcommand: lint DIR…",
+            ));
+        }
     }
     let dirs: Vec<PathBuf> = args.map(PathBuf::from).collect();
     if dirs.is_empty() {
-        return Err("recording lint needs at least one DIR".into());
+        return Err(villa::Error::invalid(
+            "recording lint needs at least one DIR",
+        ));
     }
     Ok(RecordingCommand { dirs })
 }
@@ -35,14 +45,14 @@ pub fn run(cmd: &RecordingCommand) -> i32 {
         match runstav::recording::lint_run(dir) {
             Ok(findings) => {
                 for f in &findings {
-                    println!("{}: {f}", dir.display());
+                    crate::soft::out_line(&format!("{}: {f}", dir.display()));
                 }
                 if !findings.is_empty() {
                     status = 1;
                 }
             }
             Err(e) => {
-                eprintln!("ratatoskr recording lint: {e}");
+                crate::soft::err_line(&format!("ratatoskr recording lint: {e}"));
                 status = 1;
             }
         }

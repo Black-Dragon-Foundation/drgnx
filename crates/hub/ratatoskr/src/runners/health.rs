@@ -177,7 +177,7 @@ impl Facts {
 }
 
 /// The check's verdict on F: a pass, or every part that failed, in words (`; ` between them).
-pub fn judge(f: &Facts) -> Result<(), String> {
+pub fn judge(f: &Facts) -> villa::Result<()> {
     let mut failed = Vec::new();
     if !f.probed {
         failed.push("the probe didn't answer".to_string());
@@ -211,7 +211,7 @@ pub fn judge(f: &Facts) -> Result<(), String> {
     if failed.is_empty() {
         Ok(())
     } else {
-        Err(failed.join("; "))
+        Err(villa::Error::unavailable(failed.join("; ")))
     }
 }
 
@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(judge(&ok), Ok(()));
         let fails = |f: Facts, word: &str| {
             let e = judge(&f).unwrap_err();
-            assert!(e.contains(word), "{e}");
+            assert!(e.message().contains(word), "{e}");
         };
         fails(
             Facts {

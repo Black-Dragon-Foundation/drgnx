@@ -21,6 +21,7 @@
 //!   spend, so a request over the nested minimum is refused with `budget_exceeded`.
 //! - **Pace** is linear over the last 24 h of a meter's readings; the clock is an argument, never read here.
 
+use crate::agents::HoldSource;
 use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::matrix::{Limit, Unit};
@@ -33,7 +34,7 @@ use runstav::wire::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::mpsc;
 
 /// The window a pace is read over, in seconds.
@@ -308,7 +309,7 @@ impl Default for Budgets {
 const KV: &str = "budgets";
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }
 
 /// KEY and its ancestors, nearest first.
@@ -447,7 +448,7 @@ impl Budgets {
     /// Tell the consumer of HITS.
     pub fn notify(&self, hits: Vec<Hit>) {
         for h in hits {
-            let _ = self.0.tx.send(Note::Hit(h));
+            crate::soft::done(self.0.tx.send(Note::Hit(h)), "tx send");
         }
     }
 
@@ -461,7 +462,7 @@ impl Budgets {
                 Err(e) => tracing::warn!("the saved budgets do not read: {e}"),
             }
         }
-        let _ = self.0.db.set(db);
+        crate::soft::done(self.0.db.set(db), "budget");
     }
 
     /// Read S back; the number of entries migrated (an old state's per-job `plan` scopes, now `run`).
@@ -576,7 +577,9 @@ impl Budgets {
         let Ok(text) = serde_json::to_string(&self.saved()) else {
             return;
         };
-        tokio::spawn(async move { crate::gateway::kv_set(&db, KV, &text).await });
+        crate::clock::spawn_untracked(module_path!(), async move {
+            crate::gateway::kv_set(&db, KV, &text).await
+        });
     }
 
     /// SCOPE's limits are LIMITS (empty clears); the limits already reached are reported again.
@@ -718,7 +721,7 @@ impl Budgets {
         }
         let mut sums: BTreeMap<Unit, f64> = BTreeMap::new();
         for (t, unit, amount) in ring.iter().filter(|(t, ..)| *t >= from) {
-            let _ = t;
+            let _only_when_used_elsewhere = &t;
             *sums.entry(*unit).or_default() += amount;
         }
         sums.into_iter()
@@ -989,7 +992,7 @@ impl Budgets {
             return Vec::new();
         };
         let hits = self.spend(&scope, Unit::Usd, amount);
-        let _ = self.0.tx.send(Note::Usd(job.to_string()));
+        crate::soft::done(self.0.tx.send(Note::Usd(job.to_string())), "tx send");
         hits
     }
 
@@ -1379,8 +1382,13 @@ pub async fn raise(f: &Front, c: &Caller, p: BudgetRaiseParams) -> Result<Budget
     // each session the card paused: still held, or (with resume) sent the continue
     let mut go_on = |sid: String, resume: bool| match b.holder_of_session(&sid) {
         Some(by) => held.push(BudgetHeld { id: sid, by }),
-        None if resume && f.core.agents.resume_paused(&sid).unwrap_or(false) => resumed.push(sid),
-        None => {}
+        None => {
+            // the raise lifts the budget's own hold on a turn running (not the supervisor's, a manager's, ...)
+            crate::soft::done(f.core.agents.clear_hold(&sid, HoldSource::Budget), "budget");
+            if resume && f.core.agents.resume_paused(&sid).unwrap_or(false) {
+                resumed.push(sid);
+            }
+        }
     };
     match card.job.clone() {
         Some(job) => {
@@ -1487,7 +1495,10 @@ async fn reached_limit(f: &Front, h: &Hit) {
         .collect();
     for sid in &sessions {
         // a session that has exited or is unknown is not paused
-        let _ = f.core.agents.cancel_after_tool(sid);
+        crate::soft::done(
+            f.core.agents.cancel_after_tool(sid, HoldSource::Budget),
+            "budget",
+        );
     }
     for sid in &sessions {
         for j in f.core.budgets.job_of(sid) {

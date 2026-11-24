@@ -189,7 +189,7 @@ fn a_clean_same_file_merge_is_no_clash() {
 // ---- the texts ----
 
 fn sh(dir: &Path, script: &str) {
-    let ok = std::process::Command::new("sh")
+    let ok = crate::proc::Command::new("sh")
         .args(["-c", script])
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -213,7 +213,7 @@ fn uncommitted_work_counts() {
          git -c user.name=t -c user.email=t@t commit -q -m init && git worktree add -q -b b ../wt",
     );
     let head = String::from_utf8(
-        std::process::Command::new("git")
+        crate::proc::Command::new("git")
             .args(["rev-parse", "HEAD"])
             .current_dir(&main)
             .output()
@@ -228,13 +228,13 @@ fn uncommitted_work_counts() {
         None,
         "neither changed it"
     );
-    std::fs::write(main.join("x.rs"), "from a\n").unwrap();
+    crate::fsio::write(main.join("x.rs"), "from a\n").unwrap();
     assert_eq!(
         texts(&main, (&main, &head), (&wt, &head), "x.rs"),
         None,
         "b did not change it"
     );
-    std::fs::write(wt.join("x.rs"), "from b\n").unwrap();
+    crate::fsio::write(wt.join("x.rs"), "from b\n").unwrap();
     let (base, a, b) = texts(&main, (&main, &head), (&wt, &head), "x.rs").unwrap();
     assert_eq!(
         (base.as_str(), a.as_str(), b.as_str()),
@@ -250,8 +250,9 @@ fn uncommitted_work_counts() {
 /// [D] A check's bases come from `work.db` when the session's row is there, and from the edit history when it is not
 /// written yet (the hub writes it after the session starts, unordered with the agent's first edit: the clash row
 /// `clash/sessions-outside-a-run-get-clashes` missed its card when B's row came late).
-#[tokio::test(flavor = "multi_thread")]
-async fn a_tree_whose_base_row_is_not_written_yet_has_a_base() {
+#[test]
+fn a_tree_whose_base_row_is_not_written_yet_has_a_base() {
+    saman::Executor::new(2).unwrap().block_on(async move {
     let fx = crate::agents::session::attach_tests::Fx::new();
     let (main, wt) = (fx.work(), fx.dir.path().join("wt-b"));
     sh(
@@ -266,4 +267,5 @@ async fn a_tree_whose_base_row_is_not_written_yet_has_a_base() {
         .map(|t| (t.to_string_lossy().into_owned(), head.clone()))
         .collect();
     assert_eq!(got, want);
+})
 }

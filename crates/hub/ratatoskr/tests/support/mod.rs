@@ -3,13 +3,14 @@
 //! line client.  Each test file uses part of it.
 #![allow(dead_code)]
 
+use ratatoskr::proc::{Command, Io};
 use runstav::paths::{self, Env};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -28,22 +29,30 @@ impl Root {
         }
         std::fs::set_permissions(dir.path().join("r"), std::fs::Permissions::from_mode(0o700))
             .unwrap();
+        // the stand-in machine the hub reads for the battery, the load and the disk floor (`search::power::root`): on AC,
+        // quiet, and a disk with room, whatever the build machine's own state (a full desktop disk paused tier 2)
+        let q = dir.path().join("q");
+        std::fs::create_dir_all(q.join("devices/system/cpu")).unwrap();
+        ratatoskr::fsio::write(q.join("devices/system/cpu/online"), "0-3\n").unwrap();
+        ratatoskr::fsio::write(q.join("loadavg"), "0.00 0.00 0.00 1/100 1\n").unwrap();
+        ratatoskr::fsio::write(q.join("statvfs"), "1099511627776 2199023255552\n").unwrap();
         Root { dir }
     }
 
     pub fn vars(&self) -> Vec<(String, String)> {
         let p = |s: &str| self.dir.path().join(s).to_string_lossy().into_owned();
         let mut v = vec![
-            ("HOME".to_string(), p("h")),
-            ("XDG_RUNTIME_DIR".into(), p("r")),
-            ("XDG_STATE_HOME".into(), p("s")),
-            ("XDG_DATA_HOME".into(), p("h/xd")),
-            ("XDG_CONFIG_HOME".into(), p("h/xc")),
-            ("XDG_CACHE_HOME".into(), p("h/xk")),
+            (stig::HOME_VAR.to_string(), p("h")),
+            (stig::SYSTEM_RUNTIME_VAR.into(), p("r")),
+            (stig::Xdg::State.var().into(), p("s")),
+            (stig::Xdg::Data.var().into(), p("h/xd")),
+            (stig::Xdg::Config.var().into(), p("h/xc")),
+            (stig::Xdg::Cache.var().into(), p("h/xk")),
             ("DRGNX_DATA_DIR".into(), p("d")),
             ("DRGNX_CONFIG_DIR".into(), p("h/c")),
             ("TMPDIR".into(), p("t")),
             ("RATATOSKR_SUPERVISOR".into(), "none".into()),
+            ("DRGNX_TEST_POWER_ROOT".into(), p("q")),
         ];
         if let Ok(path) = std::env::var("PATH") {
             v.push(("PATH".into(), path));
@@ -102,16 +111,18 @@ impl Hub {
             .env_clear()
             .envs(root.vars())
             .current_dir(root.dir.path())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(std::fs::File::create(&stderr).unwrap())
-            .spawn()
+            .spawn(
+                Io::Null,
+                Io::Null,
+                Io::file(eitri::open_append(&stderr, Some(0o666)).unwrap()),
+            )
             .unwrap();
         let pid = child.id();
         let (tx, ended) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(child.wait().unwrap());
-        });
+        saman::spawn_thread("hub-wait", move || {
+            ratatoskr::soft::done(tx.send(child.wait().unwrap()), "tx send");
+        })
+        .unwrap();
         Hub {
             pid,
             ended,
@@ -162,7 +173,7 @@ impl Hub {
     }
 
     pub fn stderr_text(&self) -> String {
-        std::fs::read_to_string(&self.stderr).unwrap_or_default()
+        ratatoskr::fsio::read_to_string(&self.stderr).unwrap_or_default()
     }
 
     pub fn term(&mut self) {
@@ -178,7 +189,7 @@ impl Drop for Hub {
         if self.status.is_none() && self.ended.recv_timeout(FAILED_AFTER).is_err() {
             // it ignored SIGTERM: a failure of its own, and no process is left behind
             unsafe { libc::kill(self.pid() as i32, libc::SIGKILL) };
-            let _ = self.ended.recv_timeout(FAILED_AFTER);
+            ratatoskr::soft::done(self.ended.recv_timeout(FAILED_AFTER), "mod");
         }
     }
 }
@@ -263,7 +274,10 @@ pub fn ping(socket: &Path) -> bool {
     let Ok(stream) = UnixStream::connect(socket) else {
         return false;
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    ratatoskr::soft::done(
+        stream.set_read_timeout(Some(Duration::from_millis(500))),
+        "mod",
+    );
     let mut c = Client {
         reader: BufReader::new(stream.try_clone().unwrap()),
         stream,
@@ -295,7 +309,7 @@ impl ExecHandshake {
     /// Spawn CMD; the handshake ends when the child has exec'd.
     pub fn spawn(cmd: &mut Command) -> std::io::Result<(std::process::Child, ExecHandshake)> {
         let (reader, writer) = std::io::pipe()?;
-        let child = cmd.spawn()?;
+        let child = cmd.spawn(Io::Inherit, Io::Inherit, Io::Inherit)?;
         drop(writer);
         let pid = child.id();
         Ok((child, ExecHandshake(reader, pid)))

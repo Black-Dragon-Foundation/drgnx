@@ -53,7 +53,7 @@ pub fn init(dir: &Path) -> io::Result<Guard> {
     let (file, guard) = tracing_appender::non_blocking(Daily::open(dir)?);
     let targets = targets(&std::env::var("DRGNX_RATATOSKR_LOG").unwrap_or_default())?;
     let journal = std::env::var_os("JOURNAL_STREAM").is_some();
-    let (stderr, stderr_flush) = to_stderr(io::stderr(), journal, STDERR_LINES);
+    let (stderr, stderr_flush) = to_stderr(annall::raw_err(), journal, STDERR_LINES);
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
@@ -186,7 +186,7 @@ impl ToStderr {
         if line.is_empty() {
             return;
         }
-        let _ = self.to.clone().write_all(&line);
+        crate::soft::done(self.to.clone().write_all(&line), "log");
         if telling && self.dropped.dropped_lines() > dropped {
             self.told.fetch_sub(dropped - told, SeqCst);
         }
@@ -262,13 +262,7 @@ impl Daily {
 }
 
 fn open_day(dir: &Path, day: &str) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(dir.join(format!("hub-{day}.jsonl")))
+    eitri::open_append(&dir.join(format!("hub-{day}.jsonl")), Some(0o600)).map_err(io::Error::from)
 }
 
 /// Keep the newest [`KEEP`] `hub-YYYY-MM-DD.jsonl` (their names sort by day).
@@ -289,7 +283,7 @@ fn prune(dir: &Path) {
     logs.sort();
     let extra = logs.len().saturating_sub(KEEP);
     for old in &logs[..extra] {
-        let _ = std::fs::remove_file(old);
+        crate::soft::done(std::fs::remove_file(old), "std::fs::remove_file");
     }
 }
 
@@ -359,14 +353,15 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         for d in 1..=9 {
-            std::fs::write(dir.path().join(format!("hub-2020-01-0{d}.jsonl")), "old\n").unwrap();
+            crate::fsio::write(dir.path().join(format!("hub-2020-01-0{d}.jsonl")), "old\n")
+                .unwrap();
         }
-        std::fs::write(dir.path().join("other.txt"), "kept").unwrap();
+        crate::fsio::write(dir.path().join("other.txt"), "kept").unwrap();
         let mut w = Daily::open(dir.path()).unwrap();
         w.write_all(b"{\"a\":1}\n").unwrap();
         w.flush().unwrap();
         let today = dir.path().join(format!("hub-{}.jsonl", w.day));
-        assert_eq!(std::fs::read_to_string(&today).unwrap(), "{\"a\":1}\n");
+        assert_eq!(crate::fsio::read_to_string(&today).unwrap(), "{\"a\":1}\n");
         assert_eq!(
             std::fs::metadata(&today).unwrap().permissions().mode() & 0o777,
             0o600

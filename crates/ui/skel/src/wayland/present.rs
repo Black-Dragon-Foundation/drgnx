@@ -56,10 +56,12 @@ use crate::wayland::shm::ShmBuf;
 use crate::wayland::{MainState, WaylandShell};
 use glitnir::geom::Rect;
 use glitnir::pool::{BufferSlot, GROWN_BUFFERS, Pool, merged};
+use kvardi::Px;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 use wayland_client::protocol::wl_buffer::{self, WlBuffer};
 use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_compositor::WlCompositor;
@@ -265,7 +267,7 @@ pub(crate) fn lock(p: &Mutex<Present>) -> Locked<'_> {
         Err(TryLockError::Poisoned(e)) => e.into_inner(),
         Err(TryLockError::WouldBlock) => {
             let t = Instant::now();
-            let g = p.lock().unwrap_or_else(|e| e.into_inner());
+            let g = saman::lock(p);
             if let Some(link) = &g.link {
                 link.note_wait(t.elapsed().as_nanos() as u64);
             }
@@ -752,7 +754,7 @@ impl Present {
     ) -> u64 {
         // a buffer that was never written has no age: the whole of it is new
         let all = if slot.age == 0 {
-            vec![Rect::new(0, 0, buf.w, buf.h)]
+            vec![Rect::new(Px(0), Px(0), Px(buf.w), Px(buf.h))]
         } else {
             merged(damage)
         };
@@ -1997,7 +1999,7 @@ impl WaylandShell {
             }
             if let Some(p) = &own {
                 let mut p = lock(p);
-                p.rec.input = Some(vec![Rect::new(0, 0, 0, 0)]);
+                p.rec.input = Some(vec![Rect::new(Px(0), Px(0), Px(0), Px(0))]);
                 p.owed = true;
             }
             destroy(&mut self.main);
@@ -2021,12 +2023,13 @@ impl WaylandShell {
     pub fn hold_tree(&self, id: WindowId, ms: u64) -> Option<std::thread::JoinHandle<()>> {
         let tree = self.main.present_of(self.main.tree_root(id))?;
         let (tx, rx) = std::sync::mpsc::channel();
-        let held = std::thread::spawn(move || {
+        let held = saman::spawn_thread("skel-thread", move || {
             let _held = lock(&tree);
-            let _ = tx.send(());
-            std::thread::sleep(Duration::from_millis(ms));
-        });
-        let _ = rx.recv();
+            let _receiver_gone = tx.send(());
+            stund::sleep_blocking(Duration::from_millis(ms));
+        })
+        .unwrap();
+        let _sender_gone = rx.recv();
         Some(held)
     }
 

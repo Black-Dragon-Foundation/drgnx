@@ -73,10 +73,10 @@ pub struct DebugViews {
     again: AtomicBool,
 }
 
-fn err(message: impl Into<String>) -> Error {
+fn err(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
@@ -138,7 +138,7 @@ async fn fetch(h: &Handle, epoch: u64, view: &mut SessionView, calls: &mut usize
                 view.thread_frames.insert(tid, frames);
             }
             Err(e) => {
-                view.tree.failed.insert(w.path, e);
+                view.tree.failed.insert(w.path, e.message().to_owned());
             }
         }
         return;
@@ -150,7 +150,7 @@ async fn fetch(h: &Handle, epoch: u64, view: &mut SessionView, calls: &mut usize
                 .insert(w.path, vs.iter().map(Var::of).collect());
         }
         Err(e) => {
-            view.tree.failed.insert(w.path, e);
+            view.tree.failed.insert(w.path, e.message().to_owned());
         }
     }
 }
@@ -169,7 +169,8 @@ async fn evaluate_all(
                 json!({"expression": e, "frameId": frame, "context": "watch"}),
             )
             .await
-            .map(|b| Var::of(&b));
+            .map(|b| Var::of(&b))
+            .map_err(|e| e.message().to_owned());
         out.push((e.clone(), r));
     }
     out
@@ -696,7 +697,7 @@ async fn set_value(f: &Front, c: &Caller, p: DebugSetValue) -> Result<DebugValue
             )
             .await
         }
-        _ => Err("the adapter cannot set this value".to_owned()),
+        _ => Err(villa::Error::invalid("the adapter cannot set this value")),
     }
     .map_err(err)?;
     // what changed may show anywhere: the open nodes and the watches are fetched again

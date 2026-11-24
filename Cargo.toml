@@ -3,7 +3,7 @@
 # crates/ext (the extension API and hosts), crates/std (the standards); app/ is the editor binary. Members write
 # `x.workspace = true`. The fuzz crates and the plugin fixtures and template are their own workspaces.
 [workspace]
-members = ["app", "crates/core/*", "crates/hub/*", "crates/std/*", "crates/ui/*", "xtask"]
+members = ["app", "crates/core/*", "crates/ext/*", "crates/hub/*", "crates/std/*", "crates/ui/*", "xtask"]
 exclude = [
     "crates/hub/hrista",
     "crates/hub/plugins",
@@ -130,6 +130,47 @@ wasmtime-wasi-io = { version = "=48.0.10", default-features = false, features = 
 bytes = "1"
 # brokkr's tests only: component text for what no toolchain emits on purpose (a disabled proposal, many handles)
 wat = "=1.263.0"
+# xtask's standards scanner (docs/develop/standards/README.md): every .rs parsed, with line numbers; the table in TOML
+syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+toml = "0.9"
+# the standards' own crates (crates/std, docs/develop/standards/)
+villa = { path = "crates/std/villa", version = "0.1.0" }
+annall = { path = "crates/std/annall", version = "0.1.0" }
+stig = { path = "crates/std/stig", version = "0.1.0" }
+raun = { path = "crates/std/raun", version = "0.1.0" }
+saman = { path = "crates/std/saman", version = "0.1.0" }
+hulda = { path = "crates/std/hulda", version = "0.1.0" }
+stund = { path = "crates/hub/stund", version = "0.1.0" }
+eitri = { path = "crates/hub/eitri", version = "0.1.0" }
+draugr = { path = "crates/hub/draugr", version = "0.1.0" }
+bod = { path = "crates/std/bod", version = "0.1.0" }
+kvardi = { path = "crates/std/kvardi", version = "0.1.0" }
+mal = { path = "crates/ext/mal", version = "0.1.0" }
+mal-gen = { path = "crates/ext/mal-gen", version = "0.1.0" }
+# the commands registry's link-time registration (bod's `command!`)
+inventory = "0.3"
+# the extension API (sattr): Luau bound from the WIT by mal-gen; the WIT read by wit-parser (the version already in the
+# lock through wasmtime's bindgen). mlua builds the Luau VM from C++ (the image carries gcc-c++)
+mlua = { version = "0.12", features = ["luau"] }
+wit-parser = "=0.254.2"
+# sattr's tests wrap a core module into a component (a real guest that calls the API's imports)
+wit-component = "=0.254.2"
+
+# kvardi's compile-fail test: Glitnir takes pixels, never a logical length
+trybuild = "1"
+
+# The standards' clippy lints (standards.toml's `lints`, and the two disallowed-* lints its `clippy` rows feed), denied
+# for every crate that has `[lints] workspace = true`: a clean crate must (cargo xtask standards checks it). Each is
+# legal to silence only in the crate that owns its standard.
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+disallowed_types = "deny"
+let_underscore_must_use = "deny"
+unused_result_ok = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro = "deny"
 
 [profile.release]
 strip = true

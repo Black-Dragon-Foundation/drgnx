@@ -41,7 +41,7 @@ use origin::Origins;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use verdandi::{BranchId, DocId, History, PeerId, Settler, WorktreeId};
 
 /// One worktree: where it is, the git directory its history is read through, and the commit its branch starts from.
@@ -329,7 +329,7 @@ impl Hub {
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+        saman::lock(&self.inner)
     }
 
     /// The store, for a reader that needs more than the methods below give.
@@ -344,7 +344,7 @@ impl Hub {
 
     pub(crate) fn publish(&self, v: &[FileVersion]) {
         for e in v {
-            let _ = self.events.send(e.clone());
+            crate::soft::done(self.events.send(e.clone()), "events send");
         }
     }
 

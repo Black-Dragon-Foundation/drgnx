@@ -7,6 +7,7 @@ use super::{Empty, method};
 use crate::registry::Method;
 use crate::types::{AgentName, Bounded, Id, ProviderKeys, SessionId, TaskRef, Usd, null_as_empty};
 use crate::url::{ProviderBase, UrlRefusal, provider_base};
+use hulda::Secret;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
@@ -131,11 +132,23 @@ pub struct KeysHeld {
 }
 
 /// The editor's token (class `editor`: the `/p/PROVIDER/…` paths only) and the loopback URL it is good on.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+// The token is a `Secret` (a plain string on the wire); `Debug` is written by hand because the URL is not secret.
+#[derive(Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EditorToken {
-    pub token: String,
+    #[serde(with = "crate::secret_text")]
+    #[schemars(with = "String")]
+    pub token: Secret<String>,
     pub url: String,
+}
+
+impl std::fmt::Debug for EditorToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditorToken")
+            .field("token", &self.token)
+            .field("url", &self.url)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -150,9 +163,16 @@ pub struct SetBudgetParams {
 pub enum ProviderKind {
     Openai,
     Ollama,
+    /// A llama.cpp server the user runs.
     Llamacpp,
     Tei,
     Anthropic,
+    /// drgnx's own engine (Hrafn's llama.cpp, a process the hub starts after the download's consent): no URL, so the
+    /// gateway never forwards to it.
+    Llama,
+    /// Another machine's vector server (`ratatoskr embed serve`): Hrafn asks it for vectors by key, and for texts only
+    /// when the entry is `trusted`. The gateway never forwards to it.
+    Vectors,
 }
 
 /// How a provider takes its key; `none` is a keyless (local) provider.
@@ -189,22 +209,21 @@ impl ProviderUrl {
     /// The longest URL, in characters.
     pub const MAX: usize = 2048;
 
-    pub fn new(s: impl Into<String>) -> Result<Self, String> {
+    pub fn new(s: impl Into<String>) -> villa::Result<Self> {
         let s = s.into();
         if s.chars().count() > Self::MAX {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "not a provider's URL: at most {} characters",
                 Self::MAX
-            ));
+            )));
         }
         provider_base(&s).map_err(|r| {
-            match r {
+            villa::Error::invalid(match r {
                 UrlRefusal::Scheme => "not a provider's URL: https, or http for any host",
                 UrlRefusal::Transport | UrlRefusal::Malformed => {
                     "not a provider's URL: a host, and no user, password, fragment or control character"
                 }
-            }
-            .to_string()
+            })
         })?;
         Ok(Self(s))
     }
@@ -247,6 +266,10 @@ pub struct ProviderConfig {
     pub caps: Bounded<Vec<ProviderCap>, 3>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub price: Option<ProviderPrice>,
+    /// Document text may be sent to it (a `vectors`, `tei` or `ollama` server not on this machine); a server on
+    /// loopback is trusted without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted: Option<bool>,
 }
 
 /// A warning about one provider (a keyed one whose key travels in clear text).
@@ -304,6 +327,7 @@ pub(crate) fn methods() -> Vec<Method> {
 
 #[cfg(test)]
 mod tests {
+    use super::{EditorToken, ProviderUrl, Secret};
     use crate::registry::find;
     use serde_json::json;
 
@@ -348,5 +372,40 @@ mod tests {
             let v = json!({"input": 1, "output": 2, "cost": cost, "requests": 1});
             assert_eq!((spend.check_result)(&v).unwrap()["cost"], json!(2.0));
         }
+    }
+
+    #[test]
+    fn the_editor_token_never_prints() {
+        let t = EditorToken {
+            token: Secret::new("tok-0123456789".into()),
+            url: "http://127.0.0.1:1/".into(),
+        };
+        for shown in [
+            format!("{t:?}"),
+            format!("{:#?}", t),
+            format!("{:?}", t.token),
+            t.token.to_string(),
+        ] {
+            assert!(!shown.contains("tok-0123456789"), "{shown}");
+        }
+        assert!(format!("{t:?}").contains(hulda::REDACTED));
+        assert!(format!("{t:?}").contains("http://127.0.0.1:1/"));
+        // the wire form carries it, as the plain string the protocol has, and reads back
+        let wire = serde_json::to_value(&t).unwrap();
+        assert_eq!(wire["token"], "tok-0123456789");
+        let back: EditorToken = serde_json::from_value(wire).unwrap();
+        assert_eq!(back.token.expose(), "tok-0123456789");
+    }
+
+    #[test]
+    fn a_refused_provider_url_is_an_invalid_error_naming_why() {
+        let e = ProviderUrl::new("ftp://example.com").unwrap_err();
+        assert_eq!(e.kind(), villa::Kind::Invalid);
+        assert!(e.message().contains("https, or http"), "{e}");
+        let long = format!("https://h/{}", "a".repeat(ProviderUrl::MAX));
+        let e = ProviderUrl::new(long).unwrap_err();
+        assert_eq!(e.kind(), villa::Kind::Invalid);
+        assert!(e.message().contains("at most 2048 characters"), "{e}");
+        assert!(ProviderUrl::new("https://openrouter.ai/api/v1").is_ok());
     }
 }

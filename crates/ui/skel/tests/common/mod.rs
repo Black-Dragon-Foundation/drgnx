@@ -4,6 +4,7 @@
 
 pub mod backing;
 
+use kvardi::Px;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fd::BorrowedFd;
 use rustix::process::{Pid, Signal, kill_process};
@@ -15,15 +16,15 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 /// `open` reads `NIDHOGG_SHELL_FORCE_CSD`; a test that sets it holds this lock, and every open takes it.
 pub static ENV: Mutex<()> = Mutex::new(());
 
 pub struct Recorder {
-    child: Child,
+    child: raun::proc::TestChild,
     pub dir: PathBuf,
 }
 
@@ -53,21 +54,30 @@ impl Recorder {
         let profile = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../ritari/profiles")
             .join(format!("{profile}.json"));
-        let mut child = Command::new(bin)
-            .args(["--socket", "wl", "--clock", clock, "--control"])
-            .arg(dir.join("control"))
-            .arg("--profile")
-            .arg(&profile)
-            .args(["--refresh-mhz", &refresh_mhz.to_string()])
-            .env("XDG_RUNTIME_DIR", &dir)
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("spawn nh-recorder");
-        let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
-        assert_eq!(line, "READY\n");
+        let control = dir.join("control");
+        let refresh = refresh_mhz.to_string();
+        let mut child = raun::proc::TestChild::start(
+            Path::new(&bin),
+            &[
+                "--socket".as_ref(),
+                "wl".as_ref(),
+                "--clock".as_ref(),
+                clock.as_ref(),
+                "--control".as_ref(),
+                control.as_ref(),
+                "--profile".as_ref(),
+                profile.as_ref(),
+                "--refresh-mhz".as_ref(),
+                refresh.as_ref(),
+            ],
+            &[(stig::SYSTEM_RUNTIME_VAR, dir.as_os_str())],
+        )
+        .expect("spawn nh-recorder");
+        assert_eq!(
+            child.read_line().unwrap(),
+            "READY
+"
+        );
         Recorder { child, dir }
     }
 
@@ -76,7 +86,7 @@ impl Recorder {
     }
 
     pub fn open(&self) -> WaylandShell {
-        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = saman::lock(&ENV);
         self.open_locked()
     }
 
@@ -102,7 +112,7 @@ impl Recorder {
             if reply.contains("\"ok\":true") || Instant::now() > deadline {
                 return reply;
             }
-            std::thread::sleep(Duration::from_millis(5));
+            stund::sleep_blocking(Duration::from_millis(5));
         }
     }
 
@@ -178,7 +188,7 @@ impl Recorder {
                 Instant::now() < deadline,
                 "{what} never matched; last: {node:?}"
             );
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
     }
 
@@ -200,16 +210,15 @@ impl Recorder {
     }
 
     pub fn signal(&self, sig: Signal) {
-        let pid = Pid::from_raw(self.child.id() as i32).unwrap();
+        let pid = Pid::from_raw(self.child.pid()).unwrap();
         kill_process(pid, sig).unwrap();
     }
 }
 
 impl Drop for Recorder {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.dir);
+        self.child.kill();
+        let _scratch_dir_may_be_gone = std::fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -329,7 +338,7 @@ pub fn draw(shell: &mut WaylandShell, id: u64, w: i32, h: i32) {
     // SAFETY: the buffer is `stride * h` writable bytes.
     unsafe { std::ptr::write_bytes(b.pixels, 0x80, (b.stride * b.h) as usize) };
     shell
-        .present_commit(id, &[glitnir::geom::Rect::new(0, 0, w, h)])
+        .present_commit(id, &[glitnir::geom::Rect::new(Px(0), Px(0), Px(w), Px(h))])
         .unwrap();
     shell.flush().unwrap();
 }
@@ -356,7 +365,7 @@ const PF_EXITING: u64 = 0x4;
 pub fn live_threads() -> usize {
     std::fs::read_dir("/proc/self/task")
         .unwrap()
-        .filter_map(|e| std::fs::read_to_string(e.ok()?.path().join("stat")).ok())
+        .filter_map(|e| eitri::read_string(&e.ok()?.path().join("stat"), 1 << 16).ok())
         .filter(|stat| {
             // after the name's ")": state, ppid, pgrp, session, tty_nr, tpgid, flags
             let flags = stat

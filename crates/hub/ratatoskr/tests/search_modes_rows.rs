@@ -9,11 +9,10 @@ use crate::support;
 
 use serde_json::{Value, json};
 use std::path::Path;
-use std::process::Command;
 use support::{Client, FAILED_AFTER, Hub, Root};
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = ratatoskr::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -35,8 +34,8 @@ fn a_symbol_search_s_first_patch_is_a_reset_with_its_first_rows() {
     let proj = root.dir.path().join("h/proj");
     std::fs::create_dir_all(&proj).unwrap();
     git(&proj, &["init", "-q"]);
-    std::fs::write(proj.join("a.rs"), "fn needle() -> u32 {\n    1\n}\n").unwrap();
-    std::fs::write(
+    ratatoskr::fsio::write(proj.join("a.rs"), "fn needle() -> u32 {\n    1\n}\n").unwrap();
+    ratatoskr::fsio::write(
         proj.join("b.rs"),
         "fn other() -> u32 {\n    needle() + 1\n}\n",
     )

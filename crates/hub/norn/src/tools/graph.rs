@@ -1,4 +1,4 @@
-//! The graph tools — `graph_read`, `access_request` (Task 14; storage §6.1, §6.4).
+//! The graph tools — `graph_read`, `access_request` (Task 14; storage §6.1, §6.4) and `my_grants`.
 
 use std::collections::HashMap;
 
@@ -21,7 +21,7 @@ use crate::write::cards::{NewCard, card_create};
 
 /// This file's tools.
 pub fn tools() -> Vec<Box<dyn Tool<Ctx>>> {
-    vec![rich(GraphRead), rich(AccessRequest)]
+    vec![rich(GraphRead), rich(AccessRequest), rich(MyGrants)]
 }
 
 // ------------------------------------------------------------------------------------------------------ graph_read
@@ -175,12 +175,8 @@ async fn graph_read(coord: &Coord, who: &Identity, a: GraphReadArgs) -> Result<A
                         return Err(CoordError::Refused(format!("no such entity: {id}")));
                     }
                     let versions = urdr::graph::hist::history(c, n, since)?;
-                    let mut text = vec![format!("{} ({} versions)", e.id, versions.len())];
-                    for v in &versions {
-                        text.push(format!("ver {} tx {} by {} ({}): {}", v.ver, v.tx, v.actor, v.class.as_str(), v.fields.join(", ")));
-                    }
                     Ok(Answer {
-                        text: text.join("\n"),
+                        text: format!("{} versions (rows in the structured result)", versions.len()),
                         structured: json!({"id": e.id, "versions": versions, "truncated": null, "hidden": 0}),
                         links: vec![e.id],
                     })
@@ -209,19 +205,16 @@ async fn walk_answer(coord: &Coord, out: WalkOut) -> Result<Answer, String> {
         .db()
         .read(move |c| {
             let mut ids: HashMap<i64, String> = HashMap::new();
-            let (mut nodes, mut text, mut links) = (Vec::new(), Vec::new(), Vec::new());
+            let (mut nodes, mut links) = (Vec::new(), Vec::new());
             for n in &out.nodes {
                 ids.insert(n.n, n.id.clone());
                 let title = match entity::by_n(c, n.n)? {
                     Some(e) => authored(c, &e, "title")?,
                     None => None,
                 };
-                let shown = title.as_ref().map(|t| t.render()).unwrap_or_default();
-                text.push(format!("{} ({}) depth {} {shown}", n.id, n.kind, n.depth));
                 let mut o = json!({"id": n.id, "kind": n.kind, "depth": n.depth, "title": title, "seen": n.seen});
                 if let Some(h) = n.hot {
                     o["hot"] = json!(h);
-                    text.push(format!("  {} has {h} links: not expanded", n.id));
                 }
                 nodes.push(o);
                 links.push(n.id.clone());
@@ -231,16 +224,15 @@ async fn walk_answer(coord: &Coord, out: WalkOut) -> Result<Answer, String> {
                 .iter()
                 .filter_map(|e| Some(json!({"src": ids.get(&e.src)?, "kind": e.kind, "dst": ids.get(&e.dst)?})))
                 .collect();
-            for e in &edges {
-                text.push(format!("{} -{}-> {}", e["src"].as_str().unwrap_or(""), e["kind"].as_str().unwrap_or(""), e["dst"].as_str().unwrap_or("")));
-            }
-            text.push(format!(
-                "truncated: {}; hidden: {}",
+            let text = format!(
+                "{} nodes, {} links; truncated: {}; hidden: {} (rows in the structured result)",
+                nodes.len(),
+                edges.len(),
                 out.truncated.map_or("no".to_owned(), |t| json!(t).as_str().unwrap_or("").to_owned()),
                 out.hidden
-            ));
+            );
             Ok(Answer {
-                text: text.join("\n"),
+                text,
                 structured: json!({"nodes": nodes, "links": edges, "truncated": out.truncated, "hidden": out.hidden}),
                 links,
             })
@@ -321,23 +313,15 @@ fn who_touched(
             }
         }
     }
-    let mut text = vec![format!(
-        "{id}: {state}{}",
+    let text = format!(
+        "{id}: {state}{}; {} sessions touched it; hidden: {hidden} (rows in the structured result)",
         moved_to
             .as_ref()
-            .map_or(String::new(), |m| format!(" to {m}"))
-    )];
-    for t in &touched {
-        text.push(format!(
-            "{} (agent {}) tx {}",
-            t["session"].as_str().unwrap_or(""),
-            t["agent"].as_str().unwrap_or("?"),
-            t["tx"]
-        ));
-    }
-    text.push(format!("truncated: no; hidden: {hidden}"));
+            .map_or(String::new(), |m| format!(" to {m}")),
+        touched.len()
+    );
     Ok(Answer {
-        text: text.join("\n"),
+        text,
         structured: json!({"path": id, "state": state, "moved_to": moved_to, "touched": touched, "truncated": null, "hidden": hidden}),
         links: live.map(|e| e.id).into_iter().collect(),
     })
@@ -443,6 +427,84 @@ async fn access_request(
     Ok(Answer {
         text: format!("requested: card {card}. The user decides; go on without it for now"),
         structured: json!({"requested": card}),
+        links: Vec::new(),
+    })
+}
+
+// ------------------------------------------------------------------------------------------------------- my_grants
+
+#[derive(Deserialize, JsonSchema)]
+struct MyGrantsArgs {}
+
+struct MyGrants;
+
+impl RichTool for MyGrants {
+    type Args = MyGrantsArgs;
+    const NAME: &'static str = "my_grants";
+    const DESCRIPTION: &'static str = "The user's grants that apply to you now: what each lets you do (read a project, write tasks with these operations, change settings), where, and until when. Only yours; never another agent's";
+
+    fn run<'a>(
+        &'a self,
+        coord: &'a Coord,
+        who: &'a Identity,
+        _: MyGrantsArgs,
+    ) -> BoxFuture<'a, Result<Answer, String>> {
+        Box::pin(my_grants(coord, who))
+    }
+}
+
+async fn my_grants(coord: &Coord, who: &Identity) -> Result<Answer, String> {
+    let caller = caller_of(coord, who, false).await?;
+    let now = coord.now();
+    let filter = crate::grants::Filter {
+        who: None,
+        active: Some(true),
+    };
+    let grants = coord
+        .db()
+        .read(move |c| Ok(crate::grants::list(c, &caller, &filter, now)?))
+        .await
+        .map_err(err)?;
+    let rows: Vec<Value> = grants
+        .iter()
+        .map(|g| {
+            json!({
+                "id": g.id, "who": g.who.to_string(), "what": g.what.to_string(), "access": g.access.as_str(),
+                "ops": g.ops, "names": g.names, "expires": g.expires,
+            })
+        })
+        .collect();
+    let text = if grants.is_empty() {
+        "no grants apply to you".to_owned()
+    } else {
+        let lines: Vec<String> = grants
+            .iter()
+            .map(|g| {
+                let until = g
+                    .expires
+                    .map_or("no expiry".to_owned(), |t| format!("until {t:.0}"));
+                let ops = g
+                    .ops
+                    .as_ref()
+                    .map_or(String::new(), |o| format!(" [{}]", o.join(", ")));
+                format!(
+                    "{} {} on {}{ops}, {until} ({})",
+                    g.access.as_str(),
+                    g.who,
+                    g.what,
+                    g.id
+                )
+            })
+            .collect();
+        format!(
+            "{} grants apply to you:\n{}",
+            grants.len(),
+            lines.join("\n")
+        )
+    };
+    Ok(Answer {
+        text,
+        structured: json!({"grants": rows}),
         links: Vec::new(),
     })
 }

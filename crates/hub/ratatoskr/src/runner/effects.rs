@@ -26,10 +26,10 @@ use urdr::graph::entity::{self, Changes, Ent, EntityNew, Origin};
 use urdr::graph::link;
 use urdr::graph::schema::SENTINEL;
 
-fn refuse(msg: impl Into<String>) -> Error {
+fn refuse(msg: impl ToString) -> Error {
     Error {
         code: ErrorCode::NotAllowed,
-        message: msg.into(),
+        message: msg.to_string(),
         path: None,
     }
 }
@@ -519,6 +519,25 @@ fn write_plan(tx: &mut WTx<'_>, p: &WriteParams, scope: &Scope) -> Result<PlanWr
     let mut written: Vec<TaskId> = Vec::new();
     for w in &p.tasks.0 {
         let number = w.number.as_str();
+        if let Some(s) = w.status.as_ref().map(|s| s.as_str()) {
+            if !norn::tracker::STATUSES.contains(&s) {
+                return Err(CoordError::Refused(format!(
+                    "{s:?} is not a task status: one of {}",
+                    norn::tracker::STATUSES.join(", ")
+                )));
+            }
+            // superseded needs the task that replaced it: a `supersedes` link ending at this one
+            if s == "superseded" {
+                let old = task_by_number(tx.sql(), plan.n, number)?;
+                if !old.as_ref().is_some_and(|e| {
+                    norn::tracker::replaced_by_link(tx.sql(), e.n).unwrap_or(false)
+                }) {
+                    return Err(CoordError::Refused(format!(
+                        "task {number} is superseded by another task: link that task first (REPLACEMENT supersedes this one)"
+                    )));
+                }
+            }
+        }
         let mut data = serde_json::Map::new();
         data.insert("number".into(), json!(number));
         for (key, v) in [
@@ -526,6 +545,7 @@ fn write_plan(tx: &mut WTx<'_>, p: &WriteParams, scope: &Scope) -> Result<PlanWr
             ("role", w.role.as_ref().map(|r| r.as_str())),
             ("profile", w.profile.as_ref().map(|p| p.as_str())),
             ("body", w.body.as_ref().map(|b| b.as_str())),
+            ("status_reason", w.reason.as_ref().map(|r| r.as_str())),
         ] {
             if let Some(v) = v {
                 data.insert(key.into(), json!(v));
@@ -562,6 +582,16 @@ fn write_plan(tx: &mut WTx<'_>, p: &WriteParams, scope: &Scope) -> Result<PlanWr
                             steps: steps.as_deref(),
                         },
                     );
+                    // the status (and its reason) go into the task's status line now, as the next sync would
+                    let new = match w.status.as_ref().map(|s| s.as_str()) {
+                        Some(s) => saga::status::task_with_status(
+                            &new,
+                            s,
+                            w.reason.as_ref().map(|r| r.as_str()),
+                        )
+                        .unwrap_or(new),
+                        None => new,
+                    };
                     if new != old {
                         body = Some(Some(new));
                     }
@@ -696,7 +726,17 @@ pub async fn plans_write(f: &Front, c: &Caller, p: WriteParams) -> Result<PlanWr
         change,
     )
     .await?;
-    may_finish(f, c, &p).await?;
+    may_finish(f, c, &p, &scope).await?;
+    if c.class == Class::Agent
+        && p.tasks
+            .0
+            .iter()
+            .any(|t| t.status.as_ref().is_some_and(|s| s.as_str() == "parked"))
+    {
+        return Err(refuse(
+            "parked is the user's own choice: agents never defer (set blocked, or add a note)",
+        ));
+    }
     if let (None, Some(rel)) = (&p.plan, &p.path) {
         let rel = rel.as_str().to_owned();
         let actor = crate::records::write::actor_for(
@@ -771,14 +811,20 @@ fn live_by_id(conn: &Tx, id: &str) -> Result<Option<Ent>, CoordError> {
 
 /// A task an agent marks `done` is the matrix's `task.done` (never for a worker), not just `graph.change`: the
 /// status is the same fact the review and the user's own close write.
-async fn may_finish(f: &Front, c: &Caller, p: &WriteParams) -> Result<(), Error> {
-    if c.class != Class::Agent
-        || !p
-            .tasks
-            .0
-            .iter()
-            .any(|t| t.status.as_ref().is_some_and(|s| s.as_str() == "done"))
-    {
+async fn may_finish(f: &Front, c: &Caller, p: &WriteParams, scope: &Scope) -> Result<(), Error> {
+    let done: Vec<String> = p
+        .tasks
+        .0
+        .iter()
+        .filter(|t| t.status.as_ref().is_some_and(|s| s.as_str() == "done"))
+        .map(|t| t.number.as_str().to_owned())
+        .collect();
+    if c.class != Class::Agent || done.is_empty() {
+        return Ok(());
+    }
+    // the user's `task-write` grant with `status.done` for every one of them stands in for the matrix's `task.done`
+    // (inert while "only I close my tasks" is on); with none, the matrix decides as before
+    if granted_done(f, c, p, scope, done).await? {
         return Ok(());
     }
     matrix_allows_done(
@@ -789,6 +835,67 @@ async fn may_finish(f: &Front, c: &Caller, p: &WriteParams) -> Result<(), Error>
         "write the plan again once it is settled",
     )
     .await
+}
+
+/// Whether C holds a `status.done` grant ([`norn::grants::may_write_task`]) for every task of plan P numbered in
+/// NUMBERS.
+async fn granted_done(
+    f: &Front,
+    c: &Caller,
+    p: &WriteParams,
+    scope: &Scope,
+    numbers: Vec<String>,
+) -> Result<bool, Error> {
+    let (Some(plan), Some(sid)) = (
+        p.plan.as_ref().map(|i| i.as_str().to_owned()),
+        c.sid.clone(),
+    ) else {
+        return Ok(false);
+    };
+    let project = match scope {
+        Scope::Project { id, .. } => id.clone(),
+        Scope::Anyone => None,
+    };
+    let at = now();
+    f.writer
+        .db
+        .read(move |conn| {
+            let Some(plan) = live_by_id(conn, &plan)? else {
+                return Ok(false);
+            };
+            let project = match project {
+                Some(id) => live_by_id(conn, &id)?.map(|e| e.n),
+                None => None,
+            };
+            let outside = crate::outside::is_ext(&sid);
+            let caller = norn::scope::Caller {
+                class: if outside {
+                    urdr::graph::Class::Ext
+                } else {
+                    urdr::graph::Class::Agent
+                },
+                actor: if outside {
+                    sid.clone()
+                } else {
+                    format!("agent:{sid}")
+                },
+                session: Some(sid),
+                profile: None,
+                job: None,
+                project,
+            };
+            for number in &numbers {
+                let Some(t) = task_by_number(conn, plan.n, number)? else {
+                    return Ok(false);
+                };
+                if !norn::grants::may_write_task(conn, &caller, t.n, &["status.done"], at)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })
+        .await
+        .map_err(fail)
 }
 
 /// Whether the matrix lets the agent C approve a record (`task.done`, the same fact as closing a task): `Ok`, or why
@@ -1100,20 +1207,21 @@ pub async fn record_conclusion_fallback(
 
 // ---- commits and decisions --------------------------------------------------------------------------------------
 
-pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("git")
+pub(crate) fn git(dir: &Path, args: &[&str]) -> villa::Result<String> {
+    let out = crate::proc::Command::new("git")
         .args(args)
         .current_dir(dir)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("LC_ALL", "C")
         .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| e.to_string())?;
+        .output()?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+        Err(villa::Error::unavailable(
+            String::from_utf8_lossy(&out.stderr).trim(),
+        ))
     }
 }
 
@@ -1542,7 +1650,7 @@ pub(crate) mod tests {
     use runstav::types::Bounded;
 
     fn sh(dir: &Path, args: &[&str]) {
-        let ok = std::process::Command::new("git")
+        let ok = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -1566,7 +1674,7 @@ pub(crate) mod tests {
     }
 
     fn commit(dir: &Path, file: &str, text: &str, msg: &str) -> String {
-        std::fs::write(dir.join(file), text).unwrap();
+        crate::fsio::write(dir.join(file), text).unwrap();
         sh(dir, &["add", "."]);
         sh(dir, &["commit", "-q", "-m", msg]);
         git(dir, &["rev-parse", "HEAD"]).unwrap().trim().to_owned()
@@ -1614,8 +1722,9 @@ pub(crate) mod tests {
         urdr::graph::TxMeta::new("t", urdr::graph::Class::System, "test")
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn commit_links_to_the_turns_decision() {
+    #[test]
+    fn commit_links_to_the_turns_decision() {
+        saman::Executor::new(2).unwrap().block_on(async move {
         let d = repo();
         commit(d.path(), "a.txt", "x\n", "base");
         sh(d.path(), &["branch", "job/j"]);
@@ -1670,52 +1779,55 @@ pub(crate) mod tests {
         assert_eq!(made, vec![format!("commit:{first}")]);
         assert!(again.is_empty());
         assert_eq!(linked, vec!["by a1".to_owned()]);
+})
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn new_commits_are_not_read_in_a_touched_tree() {
-        let d = repo();
-        commit(d.path(), "a.txt", "x\n", "base");
-        sh(d.path(), &["branch", "job/j"]);
-        commit(d.path(), "a.txt", "y\n", "first");
-        let dir = tempfile::tempdir().unwrap();
-        let w = Writer {
-            db: CoordDb::spawn(dir.path().join("work.db")),
-            signals: Default::default(),
-        };
-        let commits = || {
-            w.db.read(|c| {
-                Ok(c.query_row(
-                    "select count(*) from entity where kind = 'commit'",
-                    [],
-                    |r| r.get::<_, i64>(0),
-                )?)
+    #[test]
+    fn new_commits_are_not_read_in_a_touched_tree() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let d = repo();
+            commit(d.path(), "a.txt", "x\n", "base");
+            sh(d.path(), &["branch", "job/j"]);
+            commit(d.path(), "a.txt", "y\n", "first");
+            let dir = tempfile::tempdir().unwrap();
+            let w = Writer {
+                db: CoordDb::spawn(dir.path().join("work.db")),
+                signals: Default::default(),
+            };
+            let commits = || {
+                w.db.read(|c| {
+                    Ok(c.query_row(
+                        "select count(*) from entity where kind = 'commit'",
+                        [],
+                        |r| r.get::<_, i64>(0),
+                    )?)
+                })
+            };
+            // a decision of the session, so a linked commit has something to implement
+            w.db.write(meta(), |tx| {
+                decide(
+                    tx,
+                    Decide {
+                        kind: "build".into(),
+                        subject: "s".into(),
+                        author: "a".into(),
+                        ..Decide::default()
+                    },
+                    1.0,
+                )?;
+                Ok(())
             })
-        };
-        // a decision of the session, so a linked commit has something to implement
-        w.db.write(meta(), |tx| {
-            decide(
-                tx,
-                Decide {
-                    kind: "build".into(),
-                    subject: "s".into(),
-                    author: "a".into(),
-                    ..Decide::default()
-                },
-                1.0,
-            )?;
-            Ok(())
+            .await
+            .unwrap();
+            link_new_commits(&w, "s1", Some("task:j#1"), d.path(), false).await;
+            assert_eq!(
+                commits().await.unwrap(),
+                0,
+                "plain git ran in a touched tree"
+            );
+            link_new_commits(&w, "s1", Some("task:j#1"), d.path(), true).await;
+            assert_eq!(commits().await.unwrap(), 1);
         })
-        .await
-        .unwrap();
-        link_new_commits(&w, "s1", Some("task:j#1"), d.path(), false).await;
-        assert_eq!(
-            commits().await.unwrap(),
-            0,
-            "plain git ran in a touched tree"
-        );
-        link_new_commits(&w, "s1", Some("task:j#1"), d.path(), true).await;
-        assert_eq!(commits().await.unwrap(), 1);
     }
 
     fn write_task(number: &str, blocks: &[&str]) -> TaskWrite {
@@ -1724,50 +1836,53 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_plan_round_trips_and_reports_feed_its_interfaces() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        let p = WriteParams {
-            plan: None,
-            project: None,
-            title: Some(serde_json::from_value(json!("P")).unwrap()),
-            tasks: Bounded(vec![write_task("1", &[]), write_task("2", &["1"])]),
-            base_version: None,
-            path: None,
-        };
-        let p2 = p.clone();
-        let (w, deps, ri, status, stale) = db
-            .write(meta(), move |tx| {
-                let w = write_plan(tx, &p2, &Scope::Anyone)?;
-                let deps = load(tx.sql(), &w.plan)?.view.tasks[1].deps.clone();
-                // task 1 reports its interfaces; plan_read shows them beside task 1
-                let r: ReportSubmit =
-                    serde_json::from_value(json!({"tip": "abc", "interfaces": "fn x()"})).unwrap();
-                norn::write::reports::file(tx, &w.tasks[0].id, "a1", Some("s1"), &r, 5.0)?;
-                let view = load(tx.sql(), &w.plan)?.view;
-                let stale = WriteParams {
-                    plan: Some(serde_json::from_value(json!(w.plan)).unwrap()),
-                    tasks: Bounded(vec![write_task("1", &[])]),
-                    base_version: Some(0),
-                    ..p2.clone()
-                };
-                let stale = write_plan(tx, &stale, &Scope::Anyone).is_err();
-                Ok((
-                    w.clone(),
-                    deps,
-                    view.tasks[0].report_interfaces.clone(),
-                    view.tasks[0].status.clone(),
-                    stale,
-                ))
-            })
-            .await
-            .unwrap();
-        assert_eq!(w.tasks.len(), 2);
-        assert_eq!(deps, vec!["1".to_owned()]);
-        assert_eq!(ri.as_deref(), Some("fn x()"));
-        assert_eq!(status, "in-review");
-        assert!(stale);
+    #[test]
+    fn a_plan_round_trips_and_reports_feed_its_interfaces() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            let p = WriteParams {
+                plan: None,
+                project: None,
+                title: Some(serde_json::from_value(json!("P")).unwrap()),
+                tasks: Bounded(vec![write_task("1", &[]), write_task("2", &["1"])]),
+                base_version: None,
+                path: None,
+            };
+            let p2 = p.clone();
+            let (w, deps, ri, status, stale) = db
+                .write(meta(), move |tx| {
+                    let w = write_plan(tx, &p2, &Scope::Anyone)?;
+                    let deps = load(tx.sql(), &w.plan)?.view.tasks[1].deps.clone();
+                    // task 1 reports its interfaces; plan_read shows them beside task 1
+                    let r: ReportSubmit =
+                        serde_json::from_value(json!({"tip": "abc", "interfaces": "fn x()"}))
+                            .unwrap();
+                    norn::write::reports::file(tx, &w.tasks[0].id, "a1", Some("s1"), &r, 5.0)?;
+                    let view = load(tx.sql(), &w.plan)?.view;
+                    let stale = WriteParams {
+                        plan: Some(serde_json::from_value(json!(w.plan)).unwrap()),
+                        tasks: Bounded(vec![write_task("1", &[])]),
+                        base_version: Some(0),
+                        ..p2.clone()
+                    };
+                    let stale = write_plan(tx, &stale, &Scope::Anyone).is_err();
+                    Ok((
+                        w.clone(),
+                        deps,
+                        view.tasks[0].report_interfaces.clone(),
+                        view.tasks[0].status.clone(),
+                        stale,
+                    ))
+                })
+                .await
+                .unwrap();
+            assert_eq!(w.tasks.len(), 2);
+            assert_eq!(deps, vec!["1".to_owned()]);
+            assert_eq!(ri.as_deref(), Some("fn x()"));
+            assert_eq!(status, "in-review");
+            assert!(stale);
+        })
     }
 
     pub(crate) fn front_in(dir: &Path) -> Front {
@@ -1792,41 +1907,46 @@ pub(crate) mod tests {
     }
 
     /// Pure (D): a temp store.  A graph task's role, profile and body reach the job's plan.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_graph_task_keeps_its_role_profile_and_body() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front_in(dir.path());
-        let plan = written(
-            &f,
-            json!([{"number": "1", "title": "look", "role": "review", "profile": "opus",
+    #[test]
+    fn a_graph_task_keeps_its_role_profile_and_body() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front_in(dir.path());
+            let plan = written(
+                &f,
+                json!([{"number": "1", "title": "look", "role": "review", "profile": "opus",
                     "model": "claude-opus-5-5", "body": "Read the settings code."}]),
-        )
-        .await;
-        let (_, read) = plan_for_job(&f, &plan).await.unwrap();
-        let t = &read.tasks[0];
-        assert_eq!(t.role, "review");
-        assert_eq!(t.profile.as_deref(), Some("opus"));
-        assert_eq!(t.model.as_deref(), Some("claude-opus-5-5"));
-        assert_eq!(t.body, "Read the settings code.");
+            )
+            .await;
+            let (_, read) = plan_for_job(&f, &plan).await.unwrap();
+            let t = &read.tasks[0];
+            assert_eq!(t.role, "review");
+            assert_eq!(t.profile.as_deref(), Some("opus"));
+            assert_eq!(t.model.as_deref(), Some("claude-opus-5-5"));
+            assert_eq!(t.body, "Read the settings code.");
+        })
     }
 
     /// Pure (D): a temp store.  With a body and steps, the body comes first.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_body_comes_first_then_steps() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front_in(dir.path());
-        let plan = written(
+    #[test]
+    fn a_body_comes_first_then_steps() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front_in(dir.path());
+            let plan = written(
             &f,
             json!([{"number": "1", "body": "Do it.", "steps": [{"done": false, "text": "write"}]}]),
         )
         .await;
-        let (_, read) = plan_for_job(&f, &plan).await.unwrap();
-        assert_eq!(read.tasks[0].body, "Do it.\n\n- [ ] write");
+            let (_, read) = plan_for_job(&f, &plan).await.unwrap();
+            assert_eq!(read.tasks[0].body, "Do it.\n\n- [ ] write");
+        })
     }
 
     /// Pure (D): a temp store.  A task that names none of them reads as it always did.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_task_without_them_reads_as_before() {
+    #[test]
+    fn a_task_without_them_reads_as_before() {
+        saman::Executor::new(2).unwrap().block_on(async move {
         let dir = tempfile::tempdir().unwrap();
         let f = front_in(dir.path());
         let plan = written(
@@ -1839,6 +1959,7 @@ pub(crate) mod tests {
         assert_eq!(t.role, "implement");
         assert_eq!((t.profile.as_deref(), t.model.as_deref()), (None, None));
         assert_eq!(t.body, "- [x] write\n\nInterfaces: fn a()");
+})
     }
 
     fn project_entity(tx: &mut WTx<'_>, id: &str) -> Result<(), CoordError> {
@@ -1862,121 +1983,125 @@ pub(crate) mod tests {
     }
 
     /// S4: an agent in project A neither reads, changes nor creates plans of project B.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn an_agent_reaches_its_own_projects_plans_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        db.write(meta(), move |tx| {
-            project_entity(tx, "project:a")?;
-            project_entity(tx, "project:b")?;
-            let plan_in = |project: &str| WriteParams {
-                plan: None,
-                project: Some(serde_json::from_value(json!(project)).unwrap()),
-                title: Some(serde_json::from_value(json!("P")).unwrap()),
-                tasks: Bounded(vec![write_task("1", &[])]),
-                base_version: None,
-                path: None,
-            };
-            let theirs = write_plan(tx, &plan_in("project:b"), &Scope::Anyone)?;
-            let mine = Scope::Project {
-                id: Some("project:a".into()),
-                root: None,
-                jobs: Vec::new(),
-                sessions: Vec::new(),
-            };
-            // reads
-            let view = load(tx.sql(), &theirs.plan)?.view;
-            assert!(mine.allows_project(view.project.as_deref()).is_err());
-            assert!(
-                Scope::Anyone
-                    .allows_project(view.project.as_deref())
-                    .is_ok()
-            );
-            // changes, `done` included
-            let change = WriteParams {
-                plan: Some(serde_json::from_value(json!(theirs.plan)).unwrap()),
-                project: None,
-                title: None,
-                tasks: Bounded(vec![
-                    serde_json::from_value(json!({"number": "1", "status": "done"})).unwrap(),
-                ]),
-                base_version: None,
-                path: None,
-            };
-            assert!(write_plan(tx, &change, &mine).is_err());
-            assert_eq!(
-                load(tx.sql(), &theirs.plan)?.view.tasks[0].status,
-                "open",
-                "the refused write changed nothing"
-            );
-            // creating one in B is refused; with no project it lands in A
-            assert!(write_plan(tx, &plan_in("project:b"), &mine).is_err());
-            let none = WriteParams {
-                project: None,
-                ..plan_in("project:a")
-            };
-            let own = write_plan(tx, &none, &mine)?;
-            assert_eq!(
-                load(tx.sql(), &own.plan)?.view.project.as_deref(),
-                Some("project:a")
-            );
-            // an agent in no project reaches no project's plan
-            let nowhere = Scope::Project {
-                id: None,
-                root: None,
-                jobs: Vec::new(),
-                sessions: Vec::new(),
-            };
-            assert!(write_plan(tx, &change, &nowhere).is_err());
-            Ok(())
+    #[test]
+    fn an_agent_reaches_its_own_projects_plans_only() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            db.write(meta(), move |tx| {
+                project_entity(tx, "project:a")?;
+                project_entity(tx, "project:b")?;
+                let plan_in = |project: &str| WriteParams {
+                    plan: None,
+                    project: Some(serde_json::from_value(json!(project)).unwrap()),
+                    title: Some(serde_json::from_value(json!("P")).unwrap()),
+                    tasks: Bounded(vec![write_task("1", &[])]),
+                    base_version: None,
+                    path: None,
+                };
+                let theirs = write_plan(tx, &plan_in("project:b"), &Scope::Anyone)?;
+                let mine = Scope::Project {
+                    id: Some("project:a".into()),
+                    root: None,
+                    jobs: Vec::new(),
+                    sessions: Vec::new(),
+                };
+                // reads
+                let view = load(tx.sql(), &theirs.plan)?.view;
+                assert!(mine.allows_project(view.project.as_deref()).is_err());
+                assert!(
+                    Scope::Anyone
+                        .allows_project(view.project.as_deref())
+                        .is_ok()
+                );
+                // changes, `done` included
+                let change = WriteParams {
+                    plan: Some(serde_json::from_value(json!(theirs.plan)).unwrap()),
+                    project: None,
+                    title: None,
+                    tasks: Bounded(vec![
+                        serde_json::from_value(json!({"number": "1", "status": "done"})).unwrap(),
+                    ]),
+                    base_version: None,
+                    path: None,
+                };
+                assert!(write_plan(tx, &change, &mine).is_err());
+                assert_eq!(
+                    load(tx.sql(), &theirs.plan)?.view.tasks[0].status,
+                    "open",
+                    "the refused write changed nothing"
+                );
+                // creating one in B is refused; with no project it lands in A
+                assert!(write_plan(tx, &plan_in("project:b"), &mine).is_err());
+                let none = WriteParams {
+                    project: None,
+                    ..plan_in("project:a")
+                };
+                let own = write_plan(tx, &none, &mine)?;
+                assert_eq!(
+                    load(tx.sql(), &own.plan)?.view.project.as_deref(),
+                    Some("project:a")
+                );
+                // an agent in no project reaches no project's plan
+                let nowhere = Scope::Project {
+                    id: None,
+                    root: None,
+                    jobs: Vec::new(),
+                    sessions: Vec::new(),
+                };
+                assert!(write_plan(tx, &change, &nowhere).is_err());
+                Ok(())
+            })
+            .await
+            .unwrap();
         })
-        .await
-        .unwrap();
     }
 
     /// A record of no project is its job's (or its writer's): another job's task is refused.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn an_agent_reaches_its_own_jobs_tasks_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        db.write(meta(), move |tx| {
-            let mut task = |id: &str, job: &str| {
-                entity::create(
-                    tx,
-                    EntityNew {
-                        id: id.into(),
-                        kind: "task".into(),
-                        project: None,
-                        title: Some(id.into()),
-                        status: Some("ready".into()),
-                        body: None,
-                        priority: None,
-                        assignee: None,
-                        data: json!({"job": job}),
-                        origin: Origin::Recorded,
-                        source: None,
-                    },
-                )
-            };
-            let (t1, t2) = (task("task:j1-1", "j1")?, task("task:j2-1", "j2")?);
-            let scope = |jobs: &[&str]| Scope::Project {
-                id: None,
-                root: None,
-                jobs: jobs.iter().map(|j| (*j).to_owned()).collect(),
-                sessions: Vec::new(),
-            };
-            assert!(scope(&["j1"]).allows_ent(tx.sql(), &t1).is_ok());
-            assert!(scope(&["j1"]).allows_ent(tx.sql(), &t2).is_err());
-            assert!(
-                scope(&["j1", "j2"]).allows_ent(tx.sql(), &t2).is_ok(),
-                "a manager reaches its workers' jobs"
-            );
-            assert!(scope(&[]).allows_ent(tx.sql(), &t1).is_err());
-            assert!(Scope::Anyone.allows_ent(tx.sql(), &t2).is_ok());
-            Ok(())
+    #[test]
+    fn an_agent_reaches_its_own_jobs_tasks_only() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            db.write(meta(), move |tx| {
+                let mut task = |id: &str, job: &str| {
+                    entity::create(
+                        tx,
+                        EntityNew {
+                            id: id.into(),
+                            kind: "task".into(),
+                            project: None,
+                            title: Some(id.into()),
+                            status: Some("ready".into()),
+                            body: None,
+                            priority: None,
+                            assignee: None,
+                            data: json!({"job": job}),
+                            origin: Origin::Recorded,
+                            source: None,
+                        },
+                    )
+                };
+                let (t1, t2) = (task("task:j1-1", "j1")?, task("task:j2-1", "j2")?);
+                let scope = |jobs: &[&str]| Scope::Project {
+                    id: None,
+                    root: None,
+                    jobs: jobs.iter().map(|j| (*j).to_owned()).collect(),
+                    sessions: Vec::new(),
+                };
+                assert!(scope(&["j1"]).allows_ent(tx.sql(), &t1).is_ok());
+                assert!(scope(&["j1"]).allows_ent(tx.sql(), &t2).is_err());
+                assert!(
+                    scope(&["j1", "j2"]).allows_ent(tx.sql(), &t2).is_ok(),
+                    "a manager reaches its workers' jobs"
+                );
+                assert!(scope(&[]).allows_ent(tx.sql(), &t1).is_err());
+                assert!(Scope::Anyone.allows_ent(tx.sql(), &t2).is_ok());
+                Ok(())
+            })
+            .await
+            .unwrap();
         })
-        .await
-        .unwrap();
     }
 
     /// S4: a proposal is about a file; an agent reaches those under its own project's root.
@@ -2001,67 +2126,71 @@ pub(crate) mod tests {
         assert!(Scope::Anyone.allows_path(Path::new("/work/b/x.md")).is_ok());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_fallback_report_block_is_submitted() {
-        let msg = "done.\n```drgnx-report\n{\"tip\": \"abc\", \"interfaces\": \"fn y()\"}\n```\n";
-        let r = fallback_block(msg).unwrap().unwrap();
-        assert_eq!(r.tip.as_str(), "abc");
-        assert!(fallback_block("no block").is_none());
-        assert!(
-            fallback_block("```drgnx-report\n{\"tip\": 1}\n```")
-                .unwrap()
-                .is_err()
-        );
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        let job = norn::write::jobs::NewJob {
-            id: "J".into(),
-            title: "j".into(),
-            plan: None,
-            repo: None,
-            tasks: vec![norn::write::jobs::NewTask {
-                n: 1,
-                title: "t".into(),
-                role: None,
-                deps: vec![],
-            }],
-            data: None,
-        };
-        db.write(meta(), move |tx| {
-            norn::write::jobs::job_create(tx, job, 1.0)
-        })
-        .await
-        .unwrap();
-        let w = Writer {
-            db: db.clone(),
-            signals: Default::default(),
-        };
-        let id = submit_fallback(&w, "s1", Some("1"), Some("J"), msg)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(id.starts_with("report:"));
-        let (iface, status) = db
-            .read(move |c| {
-                let e = entity::by_id(c, &id)?.unwrap();
-                let t = entity::by_id(c, "task:J#1")?.unwrap();
-                Ok((str_of(&e, "interfaces"), t.status))
+    #[test]
+    fn a_fallback_report_block_is_submitted() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let msg =
+                "done.\n```drgnx-report\n{\"tip\": \"abc\", \"interfaces\": \"fn y()\"}\n```\n";
+            let r = fallback_block(msg).unwrap().unwrap();
+            assert_eq!(r.tip.as_str(), "abc");
+            assert!(fallback_block("no block").is_none());
+            assert!(
+                fallback_block("```drgnx-report\n{\"tip\": 1}\n```")
+                    .unwrap()
+                    .is_err()
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            let job = norn::write::jobs::NewJob {
+                id: "J".into(),
+                title: "j".into(),
+                plan: None,
+                repo: None,
+                tasks: vec![norn::write::jobs::NewTask {
+                    n: 1,
+                    title: "t".into(),
+                    role: None,
+                    deps: vec![],
+                }],
+                data: None,
+            };
+            db.write(meta(), move |tx| {
+                norn::write::jobs::job_create(tx, job, 1.0)
             })
             .await
             .unwrap();
-        assert_eq!(iface.as_deref(), Some("fn y()"));
-        assert_eq!(status.as_deref(), Some("in-review"));
-        // a second block for a task in review is ignored
-        assert!(
-            submit_fallback(&w, "s1", Some("1"), Some("J"), msg)
+            let w = Writer {
+                db: db.clone(),
+                signals: Default::default(),
+            };
+            let id = submit_fallback(&w, "s1", Some("1"), Some("J"), msg)
                 .await
-                .is_none()
-        );
+                .unwrap()
+                .unwrap();
+            assert!(id.starts_with("report:"));
+            let (iface, status) = db
+                .read(move |c| {
+                    let e = entity::by_id(c, &id)?.unwrap();
+                    let t = entity::by_id(c, "task:J#1")?.unwrap();
+                    Ok((str_of(&e, "interfaces"), t.status))
+                })
+                .await
+                .unwrap();
+            assert_eq!(iface.as_deref(), Some("fn y()"));
+            assert_eq!(status.as_deref(), Some("in-review"));
+            // a second block for a task in review is ignored
+            assert!(
+                submit_fallback(&w, "s1", Some("1"), Some("J"), msg)
+                    .await
+                    .is_none()
+            );
+        })
     }
 
     /// Pattern D (the parse) and B (the write is the gate): a finding from text is a note about the task, labelled.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn conclusion_block_parses_and_labels_from_text() {
+    #[test]
+    fn conclusion_block_parses_and_labels_from_text() {
+        saman::Executor::new(2).unwrap().block_on(async move {
         let msg = "ok\n```drgnx-conclusion\n{\"kind\": \"finding\", \"text\": \"x is y\", \"sources\": [{\"path\": \"a.rs\", \"lines\": [1, 4]}, {\"url\": \"https://example.test\"}]}\n```\n";
         let b = conclusion_block(msg).unwrap();
         assert_eq!((b.kind.as_str(), b.sources.len()), ("finding", 2));
@@ -2113,6 +2242,7 @@ pub(crate) mod tests {
             (origin.as_deref(), path.as_deref(), about),
             (Some("from-text"), Some("a.rs"), 1)
         );
+})
     }
 
     #[test]
@@ -2211,45 +2341,50 @@ pub(crate) mod tests {
         (d, dir, db, shas)
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn dependents_follows_a_chain_of_three() {
-        let (d, _dir, db, shas) = chain().await;
-        let repo_dir = d.path().to_path_buf();
-        let got = db
-            .read(move |c| dependents_in(c, &repo_dir, 1))
-            .await
-            .unwrap();
-        // d1's c1 was touched again by c2 (d2), and c2's lines by c3 (d3): a chain, not one step
-        assert_eq!(got.decisions, [2, 3]);
-        assert_eq!(got.commits, [shas[1].clone(), shas[2].clone()]);
-        assert_eq!(got.label, "computed");
+    #[test]
+    fn dependents_follows_a_chain_of_three() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let (d, _dir, db, shas) = chain().await;
+            let repo_dir = d.path().to_path_buf();
+            let got = db
+                .read(move |c| dependents_in(c, &repo_dir, 1))
+                .await
+                .unwrap();
+            // d1's c1 was touched again by c2 (d2), and c2's lines by c3 (d3): a chain, not one step
+            assert_eq!(got.decisions, [2, 3]);
+            assert_eq!(got.commits, [shas[1].clone(), shas[2].clone()]);
+            assert_eq!(got.label, "computed");
+        })
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn dependents_ignores_a_commit_on_other_lines() {
-        let (d, _dir, db, _shas) = chain().await;
-        let repo_dir = d.path().to_path_buf();
-        let got = db
-            .read(move |c| dependents_in(c, &repo_dir, 1))
-            .await
-            .unwrap();
-        // d4's commit changed line 9 only
-        assert!(!got.decisions.contains(&4), "{got:?}");
-        let none = db
-            .read({
-                let repo_dir = d.path().to_path_buf();
-                move |c| dependents_in(c, &repo_dir, 4)
-            })
-            .await
-            .unwrap();
-        assert!(
-            none.decisions.is_empty() && none.commits.is_empty(),
-            "{none:?}"
-        );
+    #[test]
+    fn dependents_ignores_a_commit_on_other_lines() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let (d, _dir, db, _shas) = chain().await;
+            let repo_dir = d.path().to_path_buf();
+            let got = db
+                .read(move |c| dependents_in(c, &repo_dir, 1))
+                .await
+                .unwrap();
+            // d4's commit changed line 9 only
+            assert!(!got.decisions.contains(&4), "{got:?}");
+            let none = db
+                .read({
+                    let repo_dir = d.path().to_path_buf();
+                    move |c| dependents_in(c, &repo_dir, 4)
+                })
+                .await
+                .unwrap();
+            assert!(
+                none.decisions.is_empty() && none.commits.is_empty(),
+                "{none:?}"
+            );
+        })
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn plain_session_commits_are_linked() {
+    #[test]
+    fn plain_session_commits_are_linked() {
+        saman::Executor::new(2).unwrap().block_on(async move {
         let d = repo();
         let base = commit(d.path(), "a.txt", "x\n", "base");
         let first = commit(d.path(), "a.txt", "y\n", "first");
@@ -2326,7 +2461,8 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(found_base.as_deref(), Some(base.as_str()));
         assert_eq!(linked, vec!["chat decision".to_owned()]);
-        let _ = first;
+        let _only_when_used_elsewhere = &first;
+})
     }
 
     #[test]
@@ -2361,5 +2497,62 @@ pub(crate) mod tests {
             store_in(&json!({"repo": gone.to_string_lossy()}), &|_| false),
             None
         );
+    }
+
+    /// A plan task's status is one of the tracker's; `superseded` needs a `supersedes` link ending at it.
+    #[test]
+    fn a_plan_tasks_status_is_the_trackers_and_superseded_needs_its_link() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            db.write(meta(), move |tx| {
+                let first = WriteParams {
+                    plan: None,
+                    project: None,
+                    title: Some(serde_json::from_value(json!("P")).unwrap()),
+                    tasks: Bounded(vec![write_task("1", &[]), write_task("2", &[])]),
+                    base_version: None,
+                    path: None,
+                };
+                let w = write_plan(tx, &first, &Scope::Anyone)?;
+                let set = |number: &str, status: &str| WriteParams {
+                    plan: Some(serde_json::from_value(json!(w.plan)).unwrap()),
+                    project: None,
+                    title: None,
+                    tasks: Bounded(vec![
+                        serde_json::from_value(json!({"number": number, "status": status}))
+                            .unwrap(),
+                    ]),
+                    base_version: None,
+                    path: None,
+                };
+                let refused = write_plan(tx, &set("1", "wibble"), &Scope::Anyone).unwrap_err();
+                assert!(
+                    refused.to_string().contains("not a task status"),
+                    "{refused}"
+                );
+                let refused = write_plan(tx, &set("1", "superseded"), &Scope::Anyone).unwrap_err();
+                assert!(
+                    refused.to_string().contains("link that task first"),
+                    "{refused}"
+                );
+                let (old, new) = (&w.tasks[0].id, &w.tasks[1].id);
+                let (o, n) = (
+                    entity::by_id(tx.sql(), old)?.unwrap().n,
+                    entity::by_id(tx.sql(), new)?.unwrap().n,
+                );
+                link::add(tx, n, "supersedes", o, None, Origin::Recorded, None)?;
+                write_plan(tx, &set("1", "superseded"), &Scope::Anyone)?;
+                write_plan(tx, &set("2", "accepted"), &Scope::Anyone)?;
+                let v = load(tx.sql(), &w.plan)?.view;
+                assert_eq!(
+                    (v.tasks[0].status.as_str(), v.tasks[1].status.as_str()),
+                    ("superseded", "accepted")
+                );
+                Ok(())
+            })
+            .await
+            .unwrap();
+        })
     }
 }

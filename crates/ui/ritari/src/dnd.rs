@@ -156,9 +156,14 @@ impl ServerDndGrabHandler for State {
         let Some(text) = rec.types.get(&mime_type).cloned() else {
             return;
         };
-        std::thread::spawn(move || {
-            let _ = std::fs::File::from(fd).write_all(text.as_bytes());
+        let writer = saman::spawn_thread("ritari-offer-writer", move || {
+            if let Err(e) = std::fs::File::from(fd).write_all(text.as_bytes()) {
+                tracing::debug!("the reader of a drag offer went away: {e}");
+            }
         });
+        if let Err(e) = writer {
+            annall::log_error(&e);
+        }
     }
 
     fn finished(&mut self, _: Seat<State>) {
@@ -247,21 +252,21 @@ pub fn enter_origin(state: &mut State) {
 }
 
 /// The surface a command names: an id, `"toplevel"` or `"newest"`; without a name, the one the drag is over.
-pub fn surface_of(state: &mut State, v: Option<&Value>) -> Result<WlSurface, String> {
+pub fn surface_of(state: &mut State, v: Option<&Value>) -> villa::Result<WlSurface> {
     state.surfaces.retain(|s| s.is_alive());
     match v {
         Some(Value::String(s)) if s == "newest" => state
             .surfaces
             .last()
             .cloned()
-            .ok_or_else(|| "no surface".to_string()),
+            .ok_or_else(|| villa::Error::not_found("no surface")),
         Some(v) => crate::input::find_surface(state, v),
         None => state
             .dnd
             .surface
             .clone()
             .filter(|s| s.is_alive())
-            .ok_or_else(|| "no target surface".to_string()),
+            .ok_or_else(|| villa::Error::not_found("no target surface")),
     }
 }
 
@@ -352,7 +357,7 @@ pub fn offer(state: &mut State, req: &Value) -> Value {
     let toplevel = json!("toplevel");
     let surface = match surface_of(state, Some(req.get("surface").unwrap_or(&toplevel))) {
         Ok(s) => s,
-        Err(e) => return err(e),
+        Err(e) => return err(e.to_string()),
     };
     let at = at_of(req);
     let mime_types: Vec<String> = types.keys().cloned().collect();
@@ -400,7 +405,7 @@ pub fn motion(state: &mut State, req: &Value) -> Value {
     }
     let surface = match surface_of(state, req.get("surface")) {
         Ok(s) => s,
-        Err(e) => return err(e),
+        Err(e) => return err(e.to_string()),
     };
     state.dnd.surface = Some(surface.clone());
     move_to(state, Some(surface), at_of(req));
@@ -630,16 +635,17 @@ fn collect(
         },
     );
     job.borrow_mut().token = Some(source.map_err(|e| e.to_string())?);
-    let _ = state
-        .handle
-        .insert_source(Timer::from_duration(READ_DEADLINE), move |_, _, state| {
-            let token = job.borrow_mut().token.take();
-            if let Some(t) = token {
-                state.handle.remove(t);
-            }
-            finish(state, &job, false);
-            TimeoutAction::Drop
-        });
+    let _registered =
+        state
+            .handle
+            .insert_source(Timer::from_duration(READ_DEADLINE), move |_, _, state| {
+                let token = job.borrow_mut().token.take();
+                if let Some(t) = token {
+                    state.handle.remove(t);
+                }
+                finish(state, &job, false);
+                TimeoutAction::Drop
+            });
     Ok(())
 }
 
@@ -683,13 +689,14 @@ pub fn drag_drop(state: &mut State, req: &Value, reply_to: &UnixStream) -> Optio
             d.result = result;
         }
         state.dnd.releases += 1;
-        let _ = state
-            .handle
-            .insert_source(Timer::from_duration(RELEASE_DELAY), |_, _, state| {
-                state.dnd.releases -= 1;
-                release(state);
-                TimeoutAction::Drop
-            });
+        let _registered =
+            state
+                .handle
+                .insert_source(Timer::from_duration(RELEASE_DELAY), |_, _, state| {
+                    state.dnd.releases -= 1;
+                    release(state);
+                    TimeoutAction::Drop
+                });
         json!({"ok": true, "result": result, "data": text})
     });
     match collect(state, ours, reply, done) {

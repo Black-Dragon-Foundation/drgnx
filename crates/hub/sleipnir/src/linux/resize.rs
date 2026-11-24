@@ -7,10 +7,10 @@
 //! cgroup files behind systemd. A shrink below what the container uses now is refused, never forced.
 
 use super::{run, slices};
+use crate::fsio;
 use forseti::backfill::Reservation as HeadReservation;
 use forseti::{Budget, JobId, MachineState, Need, Priority};
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 /// A job grows once its container uses more than this share of its cap, in percent.
@@ -110,15 +110,19 @@ pub fn grow(job: &Sized, budget: &Budget, head: Option<&Head>) -> Option<Resize>
 }
 
 /// The shrink of JOB to TO_MIB: refused when the container uses more than that now, or when it is no shrink.
-pub fn shrink(job: &Sized, to_mib: u64) -> Result<Resize, String> {
+pub fn shrink(job: &Sized, to_mib: u64) -> villa::Result<Resize> {
     if to_mib >= job.cap_mib {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{}: {to_mib} MiB is no shrink of its {} MiB cap",
             job.container, job.cap_mib
-        ));
+        )));
     }
     if to_mib < job.current_mib {
-        return Err(below_use(&job.container, job.current_mib, to_mib));
+        return Err(villa::Error::refused(below_use(
+            &job.container,
+            job.current_mib,
+            to_mib,
+        )));
     }
     Ok(Resize {
         job: job.job.clone(),
@@ -150,37 +154,39 @@ pub fn weights(running: &[(String, Priority)], waiting_p12: bool) -> Vec<(String
 }
 
 /// Sets UNIT's CPU weight for this boot.
-pub fn set_weight(unit: &str, weight: u32) -> Result<(), String> {
+pub fn set_weight(unit: &str, weight: u32) -> villa::Result<()> {
     slices::set(unit, &[("CPUWeight", weight.to_string())])
 }
 
-fn podman(args: &[&str]) -> Result<String, String> {
+fn podman(args: &[&str]) -> villa::Result<String> {
     let out = run::limited(Path::new("podman"), args, &[], run::SYSTEMCTL_LIMIT)?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
-        Err(format!(
+        Err(villa::Error::io(format!(
             "podman {}: {}",
             args.join(" "),
             String::from_utf8_lossy(&out.stderr).trim()
-        ))
+        )))
     }
 }
 
 /// The cgroup directory of container NAME, from its process's `/proc/<pid>/cgroup`.
-pub fn container_cgroup(name: &str) -> Result<PathBuf, String> {
+pub fn container_cgroup(name: &str) -> villa::Result<PathBuf> {
     let pid = podman(&["inspect", "--format", "{{.State.Pid}}", name])?;
     let pid: u32 = pid
         .parse()
         .ok()
         .filter(|p| *p > 0)
-        .ok_or_else(|| format!("{name} is not running"))?;
-    let text = fs::read_to_string(format!("/proc/{pid}/cgroup"))
-        .map_err(|e| format!("{name}'s cgroup: {e}"))?;
+        .ok_or_else(|| villa::Error::unavailable(format!("{name} is not running")))?;
+    let text = fsio::read_to_string(format!("/proc/{pid}/cgroup"))
+        .map_err(|e| villa::Error::io(format!("{name}'s cgroup: {e}")))?;
     let rel = text
         .lines()
         .find_map(|l| l.strip_prefix("0::"))
-        .ok_or_else(|| format!("{name}'s process has no cgroup v2 line"))?;
+        .ok_or_else(|| {
+            villa::Error::unavailable(format!("{name}'s process has no cgroup v2 line"))
+        })?;
     Ok(Path::new("/sys/fs/cgroup").join(rel.trim().trim_start_matches('/')))
 }
 
@@ -193,30 +199,35 @@ pub fn scope_of(cg: &Path) -> Option<String> {
 }
 
 /// The `memory.current` of the cgroup CG, in MiB (rounded up).
-pub fn current_mib(cg: &Path) -> Result<u64, String> {
+pub fn current_mib(cg: &Path) -> villa::Result<u64> {
     let f = cg.join("memory.current");
-    let v = fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?;
+    let v =
+        fsio::read_to_string(&f).map_err(|e| villa::Error::io(format!("{}: {e}", f.display())))?;
     v.trim()
         .parse::<u64>()
         .map(|b| b.div_ceil(MIB))
-        .map_err(|e| format!("{}: {e}", f.display()))
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", f.display())))
 }
 
 /// Carries R out on its container: a grow raises the scope first, then the container; a shrink lowers the container
 /// first, and only while it uses no more than the new cap.
-pub fn apply(r: &Resize) -> Result<(), String> {
+pub fn apply(r: &Resize) -> villa::Result<()> {
     let cg = container_cgroup(&r.container)?;
     let scope = scope_of(&cg).ok_or_else(|| {
-        format!(
+        villa::Error::unavailable(format!(
             "{}'s cgroup has no systemd scope: {}",
             r.container,
             cg.display()
-        )
+        ))
     })?;
     if !r.grows() {
         let now = current_mib(&cg)?;
         if r.to_mib < now {
-            return Err(below_use(&r.container, now, r.to_mib));
+            return Err(villa::Error::refused(below_use(
+                &r.container,
+                now,
+                r.to_mib,
+            )));
         }
     }
     let m = format!("{}M", r.to_mib);
@@ -233,12 +244,12 @@ pub fn apply(r: &Resize) -> Result<(), String> {
 }
 
 /// Pauses container NAME (`podman pause`: the cgroup freezer).
-pub fn pause(name: &str) -> Result<(), String> {
+pub fn pause(name: &str) -> villa::Result<()> {
     podman(&["pause", name]).map(|_| ())
 }
 
 /// Lets container NAME run again.
-pub fn unpause(name: &str) -> Result<(), String> {
+pub fn unpause(name: &str) -> villa::Result<()> {
     podman(&["unpause", name]).map(|_| ())
 }
 

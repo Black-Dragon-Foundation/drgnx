@@ -12,16 +12,19 @@ pub const PINNED_VERSION: &str = env!("GHOSTTY_VT_PIN_VERSION");
 /// Compare the linked library with what this crate was written against: the same major version (the C ABI is stable
 /// across 1.x) and at least the pinned minor. Returns the library's version string, or why it does not fit.
 #[cfg(feature = "ghostty")]
-pub fn ghostty_vt_check() -> Result<String, String> {
+pub fn ghostty_vt_check() -> villa::Result<String> {
     use bindings::*;
-    let size = |key: i32| -> Result<usize, String> {
+    let size = |key: i32| -> villa::Result<usize> {
         let mut v: usize = 0;
         // SAFETY: the key's output type is size_t (build_info.h) and `v` is one.
         let rc = unsafe { ghostty_build_info(key, (&raw mut v).cast()) };
         if rc == GHOSTTY_SUCCESS {
             Ok(v)
         } else {
-            Err(format!("ghostty_build_info({key}) failed: {rc}"))
+            Err(
+                villa::Error::unavailable("The terminal engine did not answer.")
+                    .with_detail(format!("ghostty_build_info({key}) failed: {rc}")),
+            )
         }
     };
     let (major, minor) = (
@@ -35,7 +38,10 @@ pub fn ghostty_vt_check() -> Result<String, String> {
     // SAFETY: the output type of VERSION_STRING is GhosttyString; the string is static in the library.
     let rc = unsafe { ghostty_build_info(GHOSTTY_BUILD_INFO_VERSION_STRING, (&raw mut s).cast()) };
     if rc != GHOSTTY_SUCCESS || s.ptr.is_null() {
-        return Err(format!("ghostty_build_info(version string) failed: {rc}"));
+        return Err(
+            villa::Error::unavailable("The terminal engine did not answer.")
+                .with_detail(format!("ghostty_build_info(version string) failed: {rc}")),
+        );
     }
     // SAFETY: ptr/len describe the library's static version string.
     let version =
@@ -45,9 +51,9 @@ pub fn ghostty_vt_check() -> Result<String, String> {
         .map(|p| p.parse::<usize>().unwrap_or(0));
     let (want_major, want_minor) = (want.next().unwrap_or(1), want.next().unwrap_or(0));
     if major != want_major || minor < want_minor {
-        return Err(format!(
+        return Err(villa::Error::unavailable(format!(
             "libghostty-vt {version} linked, {want_major}.{want_minor}.x or newer wanted"
-        ));
+        )));
     }
     Ok(version)
 }

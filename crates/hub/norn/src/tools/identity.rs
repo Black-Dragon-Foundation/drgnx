@@ -84,11 +84,11 @@ impl Identity {
         pid: u32,
         start: Option<f64>,
         home: Option<PathBuf>,
-    ) -> Result<Identity, String> {
+    ) -> villa::Result<Identity> {
         if !valid_kind(kind) {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "An agent kind is a short lower-case name (claude, codex, zed…), not {kind:?}"
-            ));
+            )));
         }
         let tag = match start {
             Some(s) => format!("{pid}-{}", start_hash(s)),
@@ -126,7 +126,7 @@ impl Identity {
 
     /// The check every call starts with (`drgnx-coord-mcp--guard` calls `--identity`): an identity that is the user
     /// ("user" in any case, spaces around it ignored) or not a plain id refuses every tool.
-    pub fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         let Some(id) = self.id() else { return Ok(()) };
         if id.trim().eq_ignore_ascii_case("user") {
             return Err(format!(
@@ -158,7 +158,7 @@ impl Identity {
     }
 
     /// The caller's id for a write (`drgnx-coord-mcp--me`), checked; an error for a caller with no identity.
-    pub fn me(&self) -> Result<&str, String> {
+    pub(crate) fn me(&self) -> Result<&str, String> {
         self.check()?;
         self.id().ok_or_else(|| {
             "This server has no agent identity (it serves neither a drgnx session nor an outside agent that names its kind): it can only read"
@@ -200,7 +200,7 @@ impl Identity {
     }
 
     /// An error for an outside agent calling TOOL (or naming a job's task, `task T`): [`outside_refusal`]'s text.
-    pub fn not_outside(&self, tool: &str) -> Result<(), String> {
+    pub(crate) fn not_outside(&self, tool: &str) -> Result<(), String> {
         match self {
             Identity::Outside { .. } => Err(outside_refusal(tool, self)),
             _ => Ok(()),

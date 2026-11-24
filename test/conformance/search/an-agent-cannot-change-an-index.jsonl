@@ -1,0 +1,32 @@
+{"scenario": "search/an-agent-cannot-change-an-index", "requires": ["v1", "test-hooks"], "doc": "Hrafn redesign §11A: pausing, resuming, stopping and deleting an index, forgetting a pin and serving vectors are the user's. On its agent socket an agent is refused every one of them (not-allowed), with valid params, and the root stays as it was: the user's list still shows it waiting only for an embedder (no one paused or stopped it), no vector server was started, and the user can still pause it. (An agent reads the index's list and status through its search.sock's tools: mcp/search-tools-read-the-index-only.)"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/p && cd $ROOT/p && git init -q && printf 'fn alpha() {}\\n' > a.rs && git add a.rs && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "search/status", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": {"state": "paused", "why": {"name": "no-embedder"}}}, "within_ms": 20000}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "search/pause", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "search/pause", "params": {"all": true}}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 3, "method": "search/resume", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "a", "json": {"id": 3, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 4, "method": "search/stop", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "a", "json": {"id": 4, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 5, "method": "search/delete", "params": {"root": "$ROOT/p", "confirm": true}}}
+{"do": "expect", "conn": "a", "json": {"id": 5, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 6, "method": "search/forget-pin", "params": {"provider": "desk"}}}
+{"do": "expect", "conn": "a", "json": {"id": 6, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 7, "method": "embed/serve-start", "params": {"listen": "127.0.0.1:0", "plain": true}}}
+{"do": "expect", "conn": "a", "json": {"id": 7, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 8, "method": "embed/serve-token"}}
+{"do": "expect", "conn": "a", "json": {"id": 8, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 9, "method": "embed/serve-stop"}}
+{"do": "expect", "conn": "a", "json": {"id": 9, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 10, "method": "search/list"}}
+{"do": "expect", "conn": "a", "json": {"id": 10, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "search/list"}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"roots": [{"root": "$string", "state": "paused", "why": {"name": "no-embedder"}, "open": true}]}}}
+{"do": "file", "path": "$STATE/embed-serve/token.sha256", "exists": false}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/pause", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"roots": [{"state": "paused", "why": {"name": "user"}}]}}}

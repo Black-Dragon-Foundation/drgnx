@@ -10,7 +10,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ratatoskr::debug::session::{ScopeVars, Stop};
 use ratatoskr::view::debug::model::{
@@ -145,7 +145,7 @@ fn debug_step_variables() {
         fonts: &fonts,
     };
     for epoch in 1..=120u64 {
-        let t = Instant::now();
+        let t = stund::real::instant();
         let s = [session(a_stop(epoch, locals(epoch)))];
         let (ls, cur) = lines(&input(&s, &bps, &opened, &prev));
         let d = doc(&ls);
@@ -158,10 +158,10 @@ fn debug_step_variables() {
     }
     assert!(!old_lines.is_empty());
     let runs: Vec<Duration> = runs.into_iter().skip(20).collect();
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "debug-step-variables (hub): 300 variables, 10 changed, lines+model+diff+rows p95 {:.2} ms (with the editor's half: 30)",
         ms(p95(runs))
-    );
+    ));
 }
 
 /// A session's view of a stop holding a 100,000-element list: PAGES leaf pages fetched (100 elements each, the
@@ -237,15 +237,15 @@ fn held(pages: usize) -> (f64, [f64; 4], usize) {
 fn debug_hub_memory() {
     // the spec's fixture (§12): two chunk levels open, one page of elements fetched
     let (total, parts, n) = held(1);
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "debug-hub-memory: 100000-element list at two chunk levels, {n} lines: +{total:.1} MB heap (budget 64); values {:.1}, lines {:.1}, model {:.1}, rows {:.1}",
         parts[0], parts[1], parts[2], parts[3]
-    );
+    ));
     // every page of the list opened in turn: the view keeps the last PAGE_CAP open and lets the rest go
     let (total, parts, n) = held(1000);
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "debug-hub-memory-pages: the same with all 1000 pages opened in turn ({PAGE_CAP} kept), {n} lines: +{total:.1} MB heap (budget 64); values {:.1}, lines {:.1}, model {:.1}, rows {:.1}",
         parts[0], parts[1], parts[2], parts[3]
-    );
+    ));
     assert!(total <= 64.0, "+{total:.1} MB past the budget");
 }

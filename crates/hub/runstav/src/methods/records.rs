@@ -62,6 +62,10 @@ pub struct ImportReport {
     pub backup: Option<String>,
     #[serde(default, deserialize_with = "null_as_empty")]
     pub files: Vec<ImportedFile>,
+    /// What the import kept but could not read: a plan task's status line with a word that is no status (the file,
+    /// the task and the word); its ticks decide.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

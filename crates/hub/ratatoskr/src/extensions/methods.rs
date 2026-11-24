@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::UNIX_EPOCH;
 
 /// The most of a readme a details page carries.
@@ -117,7 +117,7 @@ pub struct Hub {
 type Ids = Arc<HashSet<String>>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }
 
 /// A search's filters named a Recommended version this connection's set is not at.
@@ -140,7 +140,7 @@ fn internal(message: impl ToString) -> Error {
 impl Hub {
     /// Where the files are; the hub calls this once at start.
     pub fn configure(&self, env: &Env) {
-        let _ = self.files.set(Arc::new(RealFiles::new(env)));
+        crate::soft::done(self.files.set(Arc::new(RealFiles::new(env))), "methods");
         lock(&self.cache).show_packs(true);
     }
 
@@ -160,7 +160,7 @@ impl Hub {
     async fn index_with(&self, plugins: Option<Vec<w::Row>>) -> Result<Arc<Index>, Error> {
         let (cache, files) = (self.cache.clone(), self.files()?);
         crate::clock::blocking(move || {
-            let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut cache = saman::lock(&cache);
             if let Some(rows) = plugins {
                 cache.set_plugins(rows);
             }
@@ -172,14 +172,9 @@ impl Hub {
 
     async fn set_modules(&self, modules: Vec<w::ModuleEntry>) -> Result<(), Error> {
         let cache = self.cache.clone();
-        crate::clock::blocking(move || {
-            cache
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .set_modules(modules)
-        })
-        .await
-        .map_err(internal)
+        crate::clock::blocking(move || saman::lock(&cache).set_modules(modules))
+            .await
+            .map_err(internal)
     }
 
     /// CONN's Recommended set is VERSION's now.

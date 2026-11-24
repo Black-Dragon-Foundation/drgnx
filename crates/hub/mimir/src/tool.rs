@@ -27,8 +27,7 @@ pub trait Tool<Ctx>: Send + Sync {
     /// with its path (`isError`, `_meta["dev.drgnx/error"]`), and `call` never runs. A tool with typed arguments
     /// returns `typed::<Args>().check(args)`; the default accepts anything, so a tool that takes arguments must
     /// override it.
-    fn check(&self, args: &Value) -> Result<(), ArgsError> {
-        let _ = args;
+    fn check(&self, _args: &Value) -> Result<(), ArgsError> {
         Ok(())
     }
     fn call<'a>(&'a self, ctx: &'a Ctx, args: Value) -> BoxFuture<'a, ToolResult>;

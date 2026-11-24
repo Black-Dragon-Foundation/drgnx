@@ -15,7 +15,6 @@ use ratatoskr::search::project::{Project, ProjectSpec, Tier2};
 use ratatoskr::settings::providers::ChainStep;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use tempfile::TempDir;
 use urdr::graph::search::Embedder;
@@ -99,7 +98,7 @@ fn ollama_fingerprint_from_show() {
 /// A git repository of three small files.
 fn repo(dir: &Path) {
     let git = |args: &[&str]| {
-        let st = Command::new("git")
+        let st = ratatoskr::proc::Command::new("git")
             .arg("-C")
             .arg(dir)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -119,7 +118,7 @@ fn add_files(dir: &Path, n: usize, tag: &str) {
     for i in 0..n {
         let f = dir.join(format!("core/{tag}{i}.el"));
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-        std::fs::write(
+        ratatoskr::fsio::write(
             f,
             format!(";;; {tag}{i}.el\n(defun {tag}{i}-run () \"Run number {i} of {tag}.\" {i})\n"),
         )
@@ -256,219 +255,229 @@ impl Fixture {
 
 /// Pattern C. A server swapped for another model under the same URL is a new fingerprint: the next tier-2 batch writes
 /// under the new hex, and the rows under the old hex stay.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn swapped_server_model_is_a_new_fingerprint_and_old_vectors_stay() {
-    let dir = TempDir::new().unwrap();
-    let server = Server::start(dir.path());
-    server.set_model("model-a");
-    let g = gate(
-        dir.path(),
-        json!([tei(&format!("http://127.0.0.1:{}", server.port))]),
-    )
-    .await;
-    let e = Arc::new(g.embedders(&[]).unwrap().remove(0));
-    let f = project(vec![e.clone() as Arc<dyn DocEmbedder>]).await;
-    f.project.start_tier2();
-    let keys_a = f.live_keys().await;
-    let a = f
-        .wait_for_rows("the rows of model a", |r| {
-            r.iter().map(|(_, n)| n).sum::<i64>() == keys_a
-        })
+#[test]
+fn swapped_server_model_is_a_new_fingerprint_and_old_vectors_stay() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = TempDir::new().unwrap();
+        let server = Server::start(dir.path());
+        server.set_model("model-a");
+        let g = gate(
+            dir.path(),
+            json!([tei(&format!("http://127.0.0.1:{}", server.port))]),
+        )
         .await;
-    let (hex_a, id_a) = (a[0].0.clone(), e.identity().expect("it has probed"));
-    assert_eq!((a.len(), hex_a.as_str()), (1, id_a.fp.hex().as_str()));
-    assert_eq!(id_a.record.model_id, "model-a");
+        let e = Arc::new(g.embedders(&[]).unwrap().remove(0));
+        let f = project(vec![e.clone() as Arc<dyn DocEmbedder>]).await;
+        f.project.start_tier2();
+        let keys_a = f.live_keys().await;
+        let a = f
+            .wait_for_rows("the rows of model a", |r| {
+                r.iter().map(|(_, n)| n).sum::<i64>() == keys_a
+            })
+            .await;
+        let (hex_a, id_a) = (a[0].0.clone(), e.identity().expect("it has probed"));
+        assert_eq!((a.len(), hex_a.as_str()), (1, id_a.fp.hex().as_str()));
+        assert_eq!(id_a.record.model_id, "model-a");
 
-    // the same URL now serves another model; a new file wakes tier 2
-    server.set_model("model-b");
-    add_files(&f.root, 2, "two");
-    f.project.refresh_now().await.unwrap();
-    let keys_b = f.live_keys().await;
-    let b = f
-        .wait_for_rows("the rows of model b", |r| {
-            r.iter()
-                .filter(|(m, _)| *m != hex_a)
-                .map(|(_, n)| n)
-                .sum::<i64>()
-                == keys_b
-        })
-        .await;
-    assert_eq!(b.len(), 2, "{b:?}");
-    assert_eq!(
-        b.iter().find(|(m, _)| *m == hex_a).map(|(_, n)| *n),
-        Some(keys_a),
-        "the old model's rows stay: {b:?}"
-    );
-    let id_b = e.identity().unwrap();
-    assert_ne!(id_b.fp, id_a.fp);
-    assert_eq!(id_b.record.model_id, "model-b");
+        // the same URL now serves another model; a new file wakes tier 2
+        server.set_model("model-b");
+        add_files(&f.root, 2, "two");
+        f.project.refresh_now().await.unwrap();
+        let keys_b = f.live_keys().await;
+        let b = f
+            .wait_for_rows("the rows of model b", |r| {
+                r.iter()
+                    .filter(|(m, _)| *m != hex_a)
+                    .map(|(_, n)| n)
+                    .sum::<i64>()
+                    == keys_b
+            })
+            .await;
+        assert_eq!(b.len(), 2, "{b:?}");
+        assert_eq!(
+            b.iter().find(|(m, _)| *m == hex_a).map(|(_, n)| *n),
+            Some(keys_a),
+            "the old model's rows stay: {b:?}"
+        );
+        let id_b = e.identity().unwrap();
+        assert_ne!(id_b.fp, id_a.fp);
+        assert_eq!(id_b.record.model_id, "model-b");
+    })
 }
 
 /// Pattern C (Hrafn redesign Review Focus 1). Every text tier 2 sends is the text its key was made of: for each text
 /// the server received, sha256 over its version and the text (a chunk's, or a path's) is a key tier 2 wrote, and every
 /// key written is one of a received text.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sent_text_hashes_to_its_key() {
-    let dir = TempDir::new().unwrap();
-    let server = Server::start(dir.path());
-    server.set_model("model-a");
-    let g = gate(
-        dir.path(),
-        json!([tei(&format!("http://127.0.0.1:{}", server.port))]),
-    )
-    .await;
-    let e = Arc::new(g.embedders(&[]).unwrap().remove(0));
-    let f = project(vec![e.clone() as Arc<dyn DocEmbedder>]).await;
-    f.project.start_tier2();
-    let chunks = f.live_keys().await;
-    f.wait_for_rows("the chunk rows", |r| {
-        r.iter().map(|(_, n)| n).sum::<i64>() == chunks
-    })
-    .await;
-    let id = e.identity().expect("it has probed");
-    let store = f.project.store();
-    let cache = f.project.cache(&id).await.unwrap();
-    skuld::wait_until_async("tier 2 embedding every key", 30, || async {
-        hrafn::missing(store, &cache, 1)
-            .await
-            .unwrap()
-            .is_empty()
-            .then_some(())
-    })
-    .await;
-    let written = f.written();
-    assert!(
-        written.iter().any(|(k, _)| *k == 1),
-        "the files' path keys too: {written:?}"
-    );
-    let mut received = std::collections::HashSet::new();
-    for (_, body) in server.embeds() {
-        for t in body["inputs"].as_array().expect("TEI's inputs") {
-            let t = t.as_str().unwrap();
-            let chunk = (0, hrafn::KeyKind::Chunk.key(t).to_vec());
-            let path = (1, hrafn::KeyKind::Path.key(t).to_vec());
-            let key = if written.contains(&chunk) {
-                chunk
-            } else {
-                path
-            };
-            assert!(
-                written.contains(&key),
-                "a sent text whose key was not written: {t:?}"
-            );
-            received.insert(key);
+#[test]
+fn sent_text_hashes_to_its_key() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = TempDir::new().unwrap();
+        let server = Server::start(dir.path());
+        server.set_model("model-a");
+        let g = gate(
+            dir.path(),
+            json!([tei(&format!("http://127.0.0.1:{}", server.port))]),
+        )
+        .await;
+        let e = Arc::new(g.embedders(&[]).unwrap().remove(0));
+        let f = project(vec![e.clone() as Arc<dyn DocEmbedder>]).await;
+        f.project.start_tier2();
+        let chunks = f.live_keys().await;
+        f.wait_for_rows("the chunk rows", |r| {
+            r.iter().map(|(_, n)| n).sum::<i64>() == chunks
+        })
+        .await;
+        let id = e.identity().expect("it has probed");
+        let store = f.project.store();
+        let cache = f.project.cache(&id).await.unwrap();
+        skuld::wait_until_async("tier 2 embedding every key", 30, || async {
+            hrafn::missing(store, &cache, 1)
+                .await
+                .unwrap()
+                .is_empty()
+                .then_some(())
+        })
+        .await;
+        let written = f.written();
+        assert!(
+            written.iter().any(|(k, _)| *k == 1),
+            "the files' path keys too: {written:?}"
+        );
+        let mut received = std::collections::HashSet::new();
+        for (_, body) in server.embeds() {
+            for t in body["inputs"].as_array().expect("TEI's inputs") {
+                let t = t.as_str().unwrap();
+                let chunk = (0, hrafn::KeyKind::Chunk.key(t).to_vec());
+                let path = (1, hrafn::KeyKind::Path.key(t).to_vec());
+                let key = if written.contains(&chunk) {
+                    chunk
+                } else {
+                    path
+                };
+                assert!(
+                    written.contains(&key),
+                    "a sent text whose key was not written: {t:?}"
+                );
+                received.insert(key);
+            }
         }
-    }
-    assert_eq!(received, written, "every key written is a sent text's");
+        assert_eq!(received, written, "every key written is a sent text's");
+    })
 }
 
 /// Pattern C. A server whose vectors are not as long as its probe said is refused on write: tier 2 fails naming the
 /// dims, and nothing of the batch is stored.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn wrong_dims_are_refused_on_write() {
-    let dir = TempDir::new().unwrap();
-    let server = Server::start(dir.path());
-    server.set_model("model-a 8 5"); // the probe sees 8, every other text gets 5
-    let g = gate(
-        dir.path(),
-        json!([tei(&format!("http://127.0.0.1:{}", server.port))]),
-    )
-    .await;
-    let e = Arc::new(g.embedders(&[]).unwrap().remove(0));
-    let f = project(vec![e as Arc<dyn DocEmbedder>]).await;
-    f.project.start_tier2();
-    let mut rx = f.project.status();
-    let why = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        rx.wait_for(|s| matches!(s.tier2, Tier2::Failed(_))),
-    )
-    .await
-    .expect("tier 2 never failed")
-    .unwrap()
-    .tier2
-    .clone();
-    let Tier2::Failed(why) = why else {
-        unreachable!()
-    };
-    assert!(
-        why.contains("5 dims") && why.contains("the fingerprint says 8"),
-        "{why}"
-    );
-    assert_eq!(
-        f.vec_models().await,
-        vec![],
-        "nothing of the batch was written"
-    );
+#[test]
+fn wrong_dims_are_refused_on_write() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = TempDir::new().unwrap();
+        let server = Server::start(dir.path());
+        server.set_model("model-a 8 5"); // the probe sees 8, every other text gets 5
+        let g = gate(
+            dir.path(),
+            json!([tei(&format!("http://127.0.0.1:{}", server.port))]),
+        )
+        .await;
+        let e = Arc::new(g.embedders(&[]).unwrap().remove(0));
+        let f = project(vec![e as Arc<dyn DocEmbedder>]).await;
+        f.project.start_tier2();
+        let mut rx = f.project.status();
+        let why = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            rx.wait_for(|s| matches!(s.tier2, Tier2::Failed(_))),
+        )
+        .await
+        .expect("tier 2 never failed")
+        .unwrap()
+        .tier2
+        .clone();
+        let Tier2::Failed(why) = why else {
+            unreachable!()
+        };
+        assert!(
+            why.contains("5 dims") && why.contains("the fingerprint says 8"),
+            "{why}"
+        );
+        assert_eq!(
+            f.vec_models().await,
+            vec![],
+            "nothing of the batch was written"
+        );
+    })
 }
 
 /// Pattern C. Every Ollama request that embeds sets `truncate: false` and `options.num_ctx` to the record's token limit.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ollama_requests_set_truncate_false_and_num_ctx() {
-    let dir = TempDir::new().unwrap();
-    let server = Server::start(dir.path());
-    server.set_model("qwen3-embedding:0.6b");
-    let g = gate(
-        dir.path(),
-        json!([ollama(&format!("http://127.0.0.1:{}", server.port))]),
-    )
-    .await;
-    let chain = [ChainStep {
-        provider: "ollama".into(),
-        model: Some("qwen3-embedding:0.6b".into()),
-    }];
-    let e = g.embedders(&chain).unwrap().remove(0);
-    let id = e.probe().await.unwrap();
-    assert_eq!(id.record.max_tokens, 4096, "the mock's context length");
-    e.embed(&["(defun f ())".to_string()]).await.unwrap();
-    let embeds: Vec<_> = server
-        .requests()
-        .into_iter()
-        .filter(|(p, _)| p == "/api/embed")
-        .collect();
-    assert!(embeds.len() >= 2, "the probe's and the text's: {embeds:?}");
-    for (_, body) in &embeds {
-        assert_eq!(body["truncate"], json!(false), "{body}");
-    }
-    // the probe does not know the model's limit yet (the default context); every request after it sets the record's
-    let (probe, text): (Vec<_>, Vec<_>) = embeds
-        .iter()
-        .partition(|(_, b)| b["input"] == json!(["drgnx fingerprint probe"]));
-    assert_eq!(probe[0].1["options"]["num_ctx"], json!(8192));
-    assert_eq!(
-        text[0].1["options"]["num_ctx"],
-        json!(4096),
-        "{:?}",
-        text[0]
-    );
+#[test]
+fn ollama_requests_set_truncate_false_and_num_ctx() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = TempDir::new().unwrap();
+        let server = Server::start(dir.path());
+        server.set_model("qwen3-embedding:0.6b");
+        let g = gate(
+            dir.path(),
+            json!([ollama(&format!("http://127.0.0.1:{}", server.port))]),
+        )
+        .await;
+        let chain = [ChainStep {
+            provider: "ollama".into(),
+            model: Some("qwen3-embedding:0.6b".into()),
+        }];
+        let e = g.embedders(&chain).unwrap().remove(0);
+        let id = e.probe().await.unwrap();
+        assert_eq!(id.record.max_tokens, 4096, "the mock's context length");
+        e.embed(&["(defun f ())".to_string()]).await.unwrap();
+        let embeds: Vec<_> = server
+            .requests()
+            .into_iter()
+            .filter(|(p, _)| p == "/api/embed")
+            .collect();
+        assert!(embeds.len() >= 2, "the probe's and the text's: {embeds:?}");
+        for (_, body) in &embeds {
+            assert_eq!(body["truncate"], json!(false), "{body}");
+        }
+        // the probe does not know the model's limit yet (the default context); every request after it sets the record's
+        let (probe, text): (Vec<_>, Vec<_>) = embeds
+            .iter()
+            .partition(|(_, b)| b["input"] == json!(["drgnx fingerprint probe"]));
+        assert_eq!(probe[0].1["options"]["num_ctx"], json!(8192));
+        assert_eq!(
+            text[0].1["options"]["num_ctx"],
+            json!(4096),
+            "{:?}",
+            text[0]
+        );
+    })
 }
 
 /// Pattern C. No `vec.model` is a label (`tei:..`, `ollama:..`): each is a fingerprint of 64 hex characters, whether a
 /// server or the built-in model wrote it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn no_label_reaches_the_store() {
-    let dir = TempDir::new().unwrap();
-    let server = Server::start(dir.path());
-    let g = gate(
-        dir.path(),
-        json!([tei(&format!("http://127.0.0.1:{}", server.port))]),
-    )
-    .await;
-    let e = Arc::new(g.embedders(&[]).unwrap().remove(0));
-    let f = project(vec![e.clone() as Arc<dyn DocEmbedder>]).await;
-    f.project.start_tier2();
-    let keys = f.live_keys().await;
-    let rows = f
-        .wait_for_rows("the server's rows", |r| {
-            r.iter().map(|(_, n)| n).sum::<i64>() == keys
-        })
+#[test]
+fn no_label_reaches_the_store() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let dir = TempDir::new().unwrap();
+        let server = Server::start(dir.path());
+        let g = gate(
+            dir.path(),
+            json!([tei(&format!("http://127.0.0.1:{}", server.port))]),
+        )
         .await;
-    assert!(!rows.is_empty());
-    for (model, _) in &rows {
-        assert!(Fingerprint::parse(model).is_some(), "{model}");
-        assert!(
-            !model.starts_with("tei:") && !model.starts_with("ollama:"),
-            "{model}"
-        );
-    }
-    assert_eq!(rows[0].0, e.identity().unwrap().fp.hex());
+        let e = Arc::new(g.embedders(&[]).unwrap().remove(0));
+        let f = project(vec![e.clone() as Arc<dyn DocEmbedder>]).await;
+        f.project.start_tier2();
+        let keys = f.live_keys().await;
+        let rows = f
+            .wait_for_rows("the server's rows", |r| {
+                r.iter().map(|(_, n)| n).sum::<i64>() == keys
+            })
+            .await;
+        assert!(!rows.is_empty());
+        for (model, _) in &rows {
+            assert!(Fingerprint::parse(model).is_some(), "{model}");
+            assert!(
+                !model.starts_with("tei:") && !model.starts_with("ollama:"),
+                "{model}"
+            );
+        }
+        assert_eq!(rows[0].0, e.identity().unwrap().fp.hex());
+    })
 }

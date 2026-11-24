@@ -15,6 +15,7 @@ use super::probe::CgroupStat;
 use super::progress::{self, GuardLimits, Tracker};
 use super::result::{ResultJson, RowResult};
 use super::slices;
+use crate::eline;
 use forseti::classify::{ExitEvidence, infra};
 use forseti::{Expect, Grant, Verdict};
 use serde::{Deserialize, Serialize};
@@ -22,8 +23,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The spec's file name in the attempt's folder.
 pub const SPEC: &str = "job.json";
@@ -125,9 +125,7 @@ impl JobExec {
 }
 
 fn write_atomic(dir: &Path, name: &str, body: &[u8]) -> io::Result<()> {
-    let tmp = dir.join(format!(".{name}.tmp"));
-    fs::write(&tmp, body)?;
-    fs::rename(&tmp, dir.join(name))
+    crate::fsio::write(dir.join(name), body)
 }
 
 /// Records REASON (`infra: disk`, `evicted`, …) in DIR before the scheduler kills the job, so the verdict names it.
@@ -145,7 +143,7 @@ pub fn disturbed(dir: &Path, why: &str) -> io::Result<()> {
 }
 
 pub(crate) fn read_kill_reason(dir: &Path) -> Option<String> {
-    fs::read_to_string(dir.join(KILL_REASON))
+    crate::fsio::read_to_string(dir.join(KILL_REASON))
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -153,14 +151,14 @@ pub(crate) fn read_kill_reason(dir: &Path) -> Option<String> {
 
 /// This process's own cgroup directory (its service), from `/proc/self/cgroup`.
 fn own_cgroup() -> io::Result<PathBuf> {
-    let text = fs::read_to_string("/proc/self/cgroup")?;
+    let text = crate::fsio::read_to_string(format!("/proc/{}/cgroup", std::process::id()))?;
     let rel = text
         .lines()
         .find_map(|l| l.strip_prefix("0::"))
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
-                "no cgroup v2 line in /proc/self/cgroup",
+                "no cgroup v2 line in the process's cgroup file",
             )
         })?;
     Ok(Path::new("/sys/fs/cgroup").join(rel.trim_start_matches('/')))
@@ -186,7 +184,10 @@ fn file_len(p: &Path) -> u64 {
 fn read_log(p: &Path) -> Vec<u8> {
     let mut out = vec![];
     if let Ok(f) = fs::File::open(p) {
-        let _ = f.take(LOG_CAP).read_to_end(&mut out);
+        // a log that stops being readable part way is parsed as far as it got
+        if let Err(e) = f.take(LOG_CAP).read_to_end(&mut out) {
+            tracing::debug!(error = %e, "the job's log ended early");
+        }
     }
     out
 }
@@ -212,22 +213,30 @@ impl Helper {
     /// Starts `sleipnir job-helper` for DIR and waits for its `ready` line.
     fn start(dir: &Path, h: &HelperSpec) -> Result<Helper, String> {
         let exe = std::env::current_exe().map_err(|e| format!("this binary's path: {e}"))?;
-        let log = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("helper.log"))
+        let log = crate::fsio::append(dir.join("helper.log"), true)
             .map_err(|e| format!("the helper's log: {e}"))?;
-        let mut cmd = Command::new(exe);
-        cmd.arg("job-helper").arg("--dir").arg(dir);
+        let mut args: Vec<std::ffi::OsString> =
+            vec!["job-helper".into(), "--dir".into(), dir.into()];
         if let Some(f) = &h.hub_allow {
-            cmd.arg("--hub-allow").arg(f);
+            args.push("--hub-allow".into());
+            args.push(f.into());
         }
-        let mut child = cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(log)
-            .spawn()
-            .map_err(|e| format!("the job helper: {e}"))?;
+        let spec = draugr::Spec {
+            program: exe,
+            args,
+            env: crate::tool::tool_env(&[]),
+            cwd: None,
+            stdin_null: false,
+            pass_fds: vec![],
+            new_session: false,
+        };
+        let opts = draugr::Opts {
+            stdout: draugr::Redirect::Pipe,
+            stderr: draugr::Redirect::To(std::sync::Arc::new(std::os::fd::OwnedFd::from(log))),
+            ..draugr::Opts::default()
+        };
+        let mut child =
+            draugr::spawn_std(&spec, &opts).map_err(|e| format!("the job helper: {e}"))?;
         let mut line = String::new();
         let read = child
             .stdout
@@ -235,8 +244,9 @@ impl Helper {
             .map(io::BufReader::new)
             .map(|mut r| io::BufRead::read_line(&mut r, &mut line));
         if !matches!(read, Some(Ok(_))) || !line.starts_with("ready ") {
-            let _ = child.kill();
-            let _ = child.wait();
+            // the helper never came up: it is stopped and reaped, and if that fails there is nothing left to hold
+            drop(child.kill());
+            drop(child.wait());
             return Err(format!(
                 "the job helper didn't start (its log: {})",
                 dir.join("helper.log").display()
@@ -248,23 +258,27 @@ impl Helper {
     /// Ends the helper: its stdin closes, it zeroes its keys and exits.
     fn end(mut self) {
         drop(self.child.stdin.take());
-        let _ = self.child.wait();
+        if let Err(e) = self.child.wait() {
+            tracing::debug!(error = %e, "waiting for the job helper");
+        }
     }
 }
 
 /// Runs SPEC from the attempt's folder DIR and writes `result.json` there; the result.
 pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
-    let t0 = Instant::now();
+    let t0 = stund::Instant::now();
     let offsets: Vec<(PathBuf, u64)> = spec
         .state_logs
         .iter()
         .map(|p| (p.clone(), file_len(p)))
         .collect();
-    let _ = write_atomic(
+    if let Err(e) = write_atomic(
         dir,
         OFFSETS,
         &serde_json::to_vec(&offsets).unwrap_or_default(),
-    );
+    ) {
+        eline!("sleipnir job-exec: the log offsets: {e}");
+    }
     let mut seen = Seen::default();
     let slice = job_slice_dir(&spec.slice);
     let before = slice
@@ -278,7 +292,8 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
         (Err(e), _) => seen.setup = Some(e.clone()),
         (Ok(_), true) => {
             // a keyed job's secrets must never reach swap: its service is capped at no swap before the first key
-            let swap = own_cgroup().and_then(|c| fs::read_to_string(c.join("memory.swap.max")));
+            let swap =
+                own_cgroup().and_then(|c| crate::fsio::read_to_string(c.join("memory.swap.max")));
             match swap.as_deref().map(str::trim) {
                 Ok("0") => {}
                 Ok(v) => {
@@ -327,20 +342,34 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
     let period = Duration::from_secs(period);
     let mut next = period;
     if seen.setup.is_none() {
-        let mut cmd = Command::new(&spec.argv[0]);
-        let deadline = std::time::SystemTime::now()
+        let deadline = stund::wall()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0)
             + spec.timeout_s;
-        cmd.args(&spec.argv[1..])
-            .envs(spec.env.iter().map(|(k, v)| (k, v)))
-            .env(DEADLINE_ENV, deadline.to_string())
-            .stdin(Stdio::null());
-        if let Some(c) = &spec.cwd {
-            cmd.current_dir(c);
-        }
-        match cmd.spawn() {
+        let deadline = deadline.to_string();
+        let env: Vec<(&str, &str)> = spec
+            .env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .chain([(DEADLINE_ENV, deadline.as_str())])
+            .collect();
+        let job = draugr::Spec {
+            program: (&spec.argv[0]).into(),
+            args: spec.argv[1..].iter().map(Into::into).collect(),
+            env: crate::tool::tool_env(&env),
+            cwd: spec.cwd.clone(),
+            stdin_null: true,
+            pass_fds: vec![],
+            new_session: false,
+        };
+        // the unit's stdout and stderr are the attempt's log: the job writes to them as they are
+        let opts = draugr::Opts {
+            stdout: draugr::Redirect::Inherit,
+            stderr: draugr::Redirect::Inherit,
+            ..draugr::Opts::default()
+        };
+        match draugr::spawn_std(&job, &opts) {
             Err(e) => seen.setup = Some(format!("{}: {e}", spec.argv[0])),
             Ok(mut child) => loop {
                 match child.try_wait() {
@@ -380,14 +409,14 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
                 if dir.join(KILL_REASON).exists() {
                     // the scheduler or the disk watch stops the job: its reason is written, the verdict names it
                     seen.stopped = true;
-                    let _ = child.kill();
+                    drop(child.kill());
                     if let Ok(st) = child.wait() {
                         seen.exit_code = st.code();
                         seen.signal = st.signal();
                     }
                     break;
                 }
-                std::thread::sleep(TICK);
+                stund::sleep_blocking(TICK);
             },
         }
     }
@@ -402,13 +431,19 @@ pub fn run(dir: &Path, spec: &JobExec) -> ResultJson {
     seen.oom |= killed(&after);
     let stop_slice = seen.oom || seen.timed_out || seen.stopped;
     let result = judge_run(dir, spec, &seen, &before, &after, t0.elapsed());
-    let _ = result.write(dir);
+    if let Err(e) = result.write(dir) {
+        eline!("sleipnir job-exec: result.json: {e}");
+    }
     // the limits set on the job's slice at launch go with the job (one runtime drop-in per job otherwise)
-    let _ = slices::revert(&spec.slice);
+    if let Err(e) = slices::revert(&spec.slice) {
+        eline!("sleipnir job-exec: reverting the slice: {e}");
+    }
     if stop_slice {
         // the job is one OOM group: the rest of it (its other containers, the podman client) goes with it, and
         // job-exec with them, now that the verdict is written
-        let _ = slices::stop(&spec.slice);
+        if let Err(e) = slices::stop(&spec.slice) {
+            eline!("sleipnir job-exec: stopping the slice: {e}");
+        }
     }
     result
 }
@@ -428,12 +463,16 @@ fn guard_limits(spec: &JobExec) -> GuardLimits {
 fn stuck(dir: &Path, spec: &JobExec, stop: &progress::Stop, slice: Option<&Path>) {
     use std::io::Write;
     if let Err(e) = progress::stuck_report(dir, stop, slice, &spec.log) {
-        eprintln!("sleipnir job-exec: the stuck report: {e}");
+        eline!("sleipnir job-exec: the stuck report: {e}");
     }
-    if let Ok(mut f) = fs::OpenOptions::new().append(true).open(&spec.log) {
-        let _ = writeln!(f, "{}", progress::log_line(stop));
+    if let Ok(mut f) = crate::fsio::append(&spec.log, false)
+        && let Err(e) = writeln!(f, "{}", progress::log_line(stop))
+    {
+        eline!("sleipnir job-exec: the stuck line: {e}");
     }
-    let _ = kill_reason(dir, &format!("infra: {}", progress::verdict_text(stop)));
+    if let Err(e) = kill_reason(dir, &format!("infra: {}", progress::verdict_text(stop))) {
+        eline!("sleipnir job-exec: the kill reason: {e}");
+    }
 }
 
 fn judge_run(
@@ -478,7 +517,7 @@ fn judge_run(
         _ => None,
     };
     if let Some(why) = &seen.setup {
-        eprintln!("sleipnir job-exec: {why}");
+        eline!("sleipnir job-exec: {why}");
     }
     let rows: Vec<RowResult> = parsed
         .rows
@@ -549,7 +588,7 @@ mod tests {
     fn a_key_timeout_record_is_infra_key_not_delivered() {
         let d = tempfile::tempdir().unwrap();
         let log = d.path().join("a3f.1.log");
-        fs::write(&log, "").unwrap();
+        crate::fsio::write(&log, "").unwrap();
         let s = spec(&log);
         let st = CgroupStat::default();
         let exited = |c: i32| Seen {
@@ -562,7 +601,7 @@ mod tests {
             Verdict::Red,
             "75 alone is the job's"
         );
-        fs::write(d.path().join(KEY_TIMEOUT), "TOKEN\n").unwrap();
+        crate::fsio::write(d.path().join(KEY_TIMEOUT), "TOKEN\n").unwrap();
         for code in [75, 1] {
             let r = judge(&exited(code));
             assert_eq!(
@@ -583,7 +622,7 @@ mod tests {
     fn disturbed_red_is_suspect() {
         let d = tempfile::tempdir().unwrap();
         let log = d.path().join("a3f.1.log");
-        fs::write(&log, "test a ... ok\ntest b ... FAILED\n").unwrap();
+        crate::fsio::write(&log, "test a ... ok\ntest b ... FAILED\n").unwrap();
         let s = spec(&log);
         let st = CgroupStat::default();
         let exited = |c: i32| Seen {
@@ -602,7 +641,7 @@ mod tests {
         );
         assert!(r.disturbed);
         assert_eq!(r.failing, ["b"], "the rows are still reported");
-        fs::write(&log, "test a ... ok\n").unwrap();
+        crate::fsio::write(&log, "test a ... ok\n").unwrap();
         let r = judge(&exited(0));
         assert_eq!((r.verdict, r.disturbed), (Verdict::Pass, true));
         kill_reason(d.path(), EVICTED).unwrap();
@@ -620,7 +659,7 @@ mod tests {
     fn a_written_kill_reason_wins() {
         let d = tempfile::tempdir().unwrap();
         let log = d.path().join("a3f.1.log");
-        fs::write(&log, "test a ... ok\ntest b ... FAILED\n").unwrap();
+        crate::fsio::write(&log, "test a ... ok\ntest b ... FAILED\n").unwrap();
         let s = spec(&log);
         let st = CgroupStat::default();
         let killed = Seen {

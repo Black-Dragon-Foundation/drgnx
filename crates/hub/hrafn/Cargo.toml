@@ -17,6 +17,14 @@ host = ["dep:notify", "dep:gix", "dep:inotify", "dep:libc"]
 eitri = { path = "../eitri", version = "0.1.0" }
 gix = { workspace = true, optional = true }
 urdr = { path = "../urdr", version = "0.1.0" }
+draugr.workspace = true  # git and the grep fallbacks run through it
+saman.workspace = true  # the chunk workers' threads, the stderr reader
+stund.workspace = true  # clocks
+villa.workspace = true  # the errors of the public functions
+annall.workspace = true  # the worker process prints its failure through it
+stig.workspace = true  # the names of the environment a child sees
+tracing.workspace = true
+tokio = { workspace = true, features = ["io-util"] }  # the searchers' output, read line by line
 serde.workspace = true
 serde_json.workspace = true
 regex.workspace = true
@@ -40,7 +48,6 @@ notify = { workspace = true, optional = true }
 hlaup = { path = "../hlaup", version = "0.1.0" }  # stand-in scripts written and run, never busy (ETXTBSY)
 skuld = { path = "../skuld", version = "0.1.0" }  # every order of the settle core
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt", "macros"] }
 
 # --- integration tests: one binary (`it`) plus the files that need a process of their own (reason on each) ---
 
@@ -64,3 +71,6 @@ name = "lang_stamp"
 # installs the process-wide set of fetched packs and the on_missing hook
 [[test]]
 name = "fetched_pack"
+
+[lints]
+workspace = true

@@ -10,7 +10,7 @@ use std::path::Path;
 use verdandi::{HunkState, Kind, OpId};
 
 fn git(dir: &Path, args: &[&str]) {
-    let ok = std::process::Command::new("git")
+    let ok = crate::proc::Command::new("git")
         .args([
             "-c",
             "user.name=t",
@@ -48,11 +48,11 @@ fn fx_with(cause: Option<verdandi::Cause>) -> (Fx, OpId) {
     let root = home.path().join("proj");
     std::fs::create_dir_all(&root).unwrap();
     git(&root, &["init", "-q", "-b", "main"]);
-    std::fs::write(root.join("a.txt"), "one\ntwo\n").unwrap();
+    crate::fsio::write(root.join("a.txt"), "one\ntwo\n").unwrap();
     git(&root, &["add", "."]);
     git(&root, &["commit", "-q", "-m", "base"]);
     let head = String::from_utf8(
-        std::process::Command::new("git")
+        crate::proc::Command::new("git")
             .args(["rev-parse", "HEAD"])
             .current_dir(&root)
             .output()
@@ -129,13 +129,13 @@ fn a_chats_hunk_with_no_buffer_is_reverted_and_written_by_the_hub() {
     let (f, op) = fx();
     // the editor saved and closed the file
     f.hub.unregister("b1");
-    std::fs::write(f.tree.root.join("a.txt"), "one\nalphaZZ beta\ntwo\n").unwrap();
+    crate::fsio::write(f.tree.root.join("a.txt"), "one\nalphaZZ beta\ntwo\n").unwrap();
     let rev = match f.hub.revert_hunk(&f.tree, op.0, "a.txt", 0, 200.0).unwrap() {
         Outcome::Applied(r) => r,
         other => panic!("{other:?}"),
     };
     assert_eq!(
-        std::fs::read_to_string(f.tree.root.join("a.txt")).unwrap(),
+        crate::fsio::read_to_string(f.tree.root.join("a.txt")).unwrap(),
         KEPT
     );
     assert_eq!(f.hub.text(&f.tree, "a.txt").unwrap().as_deref(), Some(KEPT));
@@ -160,7 +160,7 @@ fn a_chats_hunk_in_a_buffer_is_applied_by_the_editors_batch() {
     assert_eq!(version, hash("one\nalphaZZ beta\ntwo\n"));
     // the hub wrote nothing: neither the file nor the document
     assert_eq!(
-        std::fs::read_to_string(f.tree.root.join("a.txt")).unwrap(),
+        crate::fsio::read_to_string(f.tree.root.join("a.txt")).unwrap(),
         "one\ntwo\n"
     );
     assert_eq!(

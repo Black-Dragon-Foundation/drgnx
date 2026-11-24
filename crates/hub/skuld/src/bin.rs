@@ -5,7 +5,6 @@
 //! in both, so a test finds that folder by its child on the way up (`deps` or `build`), never by a count of `..`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// The profile folder (`<target dir>/debug`, `…/release`, a custom profile's) of the build that made the running
 /// test binary, where the workspace's binaries are.  Panics outside a cargo layout.
@@ -57,12 +56,44 @@ pub fn workspace_bin_built(package: &str, name: &str, var: Option<&str>) -> Path
     let profile = dir.file_name().and_then(|n| n.to_str()).unwrap_or("debug");
     let profile = if profile == "debug" { "dev" } else { profile };
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let ok = Command::new(cargo)
-        .args(["build", "-p", package, "--bin", name, "--profile", profile])
-        .arg("--target-dir")
-        .arg(dir.parent().expect("the target dir"))
-        .status()
-        .is_ok_and(|s| s.success());
+    let exec = saman::Executor::new(1).expect("a runtime to build with");
+    let spec = draugr::Spec {
+        program: cargo.into(),
+        args: ["build", "-p", package, "--bin", name, "--profile", profile]
+            .into_iter()
+            .map(Into::into)
+            .chain([
+                "--target-dir".into(),
+                dir.parent().expect("the target dir").into(),
+            ])
+            .collect(),
+        // cargo and the toolchain read these; nothing else of the test's environment reaches the build
+        env: draugr::env::build(
+            &[
+                "PATH",
+                stig::HOME_VAR,
+                "TMPDIR",
+                "LANG",
+                "LD_LIBRARY_PATH",
+                "CC",
+                "CXX",
+                "AR",
+            ],
+            &["CARGO", "RUST", "LC_", "CC_", "CXX_"],
+            &[],
+        ),
+        cwd: None,
+        stdin_null: true,
+        pass_fds: vec![],
+        new_session: false,
+    };
+    let ok = exec.block_on(async {
+        let mut child = draugr::spawn(spec).await.ok()?;
+        // cargo's own report is on stderr (kept as a tail); nothing reads stdout
+        drop(child.take_stdout());
+        child.wait().await.ok().flatten()
+    });
+    let ok = ok.is_some_and(|s| s.success());
     assert!(
         ok && bin.exists(),
         "{name} is not built ({})",

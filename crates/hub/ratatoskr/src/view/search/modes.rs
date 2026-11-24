@@ -140,7 +140,7 @@ async fn batches(
                 lines
                     .entry(file.to_owned())
                     .or_insert_with(|| {
-                        std::fs::read_to_string(file)
+                        crate::fsio::read_to_string(file)
                             .ok()
                             .map(|t| t.lines().map(String::from).collect())
                     })
@@ -492,7 +492,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("p.rs");
         let text = "fn parse(s: &str) {\n    parse(s);\n    parse(s);\n}\nuse parse;\n";
-        std::fs::write(&path, text).unwrap();
+        crate::fsio::write(&path, text).unwrap();
         let file = path.to_string_lossy().into_owned();
         let at = |line: u32, col: u32| Match {
             file: file.clone(),

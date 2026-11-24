@@ -245,7 +245,7 @@ fn not_ready(tx: &Tx<'_>, e: &Ent) -> Result<WriteError, WriteError> {
     };
     let blockers = ids(
         "select b.id from link l join entity b on b.n = l.src where l.dst = ?1 and l.kind = 'blocks' \
-         and l.tx_to = ?2 and b.retired_tx is null and coalesce(b.status, '') not in ('done', 'dropped') order by b.n",
+         and l.tx_to = ?2 and b.retired_tx is null and coalesce(b.status, '') not in ('done', 'dropped', 'accepted', 'parked', 'superseded') order by b.n",
     )?;
     if !blockers.is_empty() {
         return Ok(refused(format!(
@@ -256,7 +256,7 @@ fn not_ready(tx: &Tx<'_>, e: &Ent) -> Result<WriteError, WriteError> {
     }
     let parts = ids(
         "select c.id from link l join entity c on c.n = l.dst where l.src = ?1 and l.kind = 'parent_of' \
-         and l.tx_to = ?2 and c.retired_tx is null and coalesce(c.status, '') not in ('done', 'dropped') order by c.n",
+         and l.tx_to = ?2 and c.retired_tx is null and coalesce(c.status, '') not in ('done', 'dropped', 'accepted', 'parked', 'superseded') order by c.n",
     )?;
     if !parts.is_empty() {
         return Ok(refused(format!(
@@ -290,7 +290,7 @@ pub fn create(tx: &mut Tx<'_>, caller: &Caller, t: NewTask) -> Result<TaskAnswer
         .transpose()?;
     let labels = clean_labels(&t.labels)?;
     let parent = match &t.parent {
-        Some(p) => Some(writable_task(tx, caller, p, false)?),
+        Some(p) => Some(writable_task(tx, caller, p, false, &["create"])?),
         None => None,
     };
     let mut data = json!({});
@@ -324,6 +324,11 @@ pub fn create(tx: &mut Tx<'_>, caller: &Caller, t: NewTask) -> Result<TaskAnswer
     Ok(done(&e, e.ver, None))
 }
 
+/// Whether a task has replaced E: a live `supersedes` link ends at it (`superseded` needs one).
+pub(crate) fn replaced(tx: &Tx<'_>, e: &Ent) -> Result<bool, WriteError> {
+    super::replaced_by_link(tx.sql(), e.n)
+}
+
 /// `update`: fields of task ID at VER. The user's rules on a user-made task (answer 4, call 17); a status change
 /// while another holds the lease is refused.
 pub fn update(
@@ -333,15 +338,38 @@ pub fn update(
     ver: i64,
     f: Fields,
 ) -> Result<TaskAnswer, WriteError> {
-    let e = writable_task(tx, caller, id, false)?;
+    let mut needs: Vec<String> = Vec::new();
+    for (set, op) in [
+        (f.title.is_some(), "update.title"),
+        (f.body.is_some(), "update.body"),
+        (f.acceptance.is_some(), "update.acceptance"),
+        (f.priority.is_some(), "update.priority"),
+    ] {
+        if set {
+            needs.push(op.into());
+        }
+    }
+    if let Some(s) = &f.status {
+        needs.push(format!("status.{s}"));
+    }
+    let needs: Vec<&str> = needs.iter().map(String::as_str).collect();
+    let e = writable_task(tx, caller, id, false, &needs)?;
     let now = tx.at();
     let agent = caller.class != Class::User;
     let users = agent && user_made(tx, &e)?;
     let grant = users && grants::may_edit_user_task(tx.sql(), caller, e.n, now)?;
-    if users && !grant && (f.title.is_some() || f.body.is_some() || f.acceptance.is_some()) {
-        return Err(refused(format!(
-            "{id} is the user's task: its title, body and acceptance change only with the user's permission; add a note instead"
-        )));
+    // a `task-write` grant for an operation lifts the user's-task rule for that operation only
+    let written = |op: &str| grants::may_write_task(tx.sql(), caller, e.n, &[op], now);
+    for (set, op) in [
+        (f.title.is_some(), "update.title"),
+        (f.body.is_some(), "update.body"),
+        (f.acceptance.is_some(), "update.acceptance"),
+    ] {
+        if users && set && !grant && !written(op)? {
+            return Err(refused(format!(
+                "{id} is the user's task: its title, body and acceptance change only with the user's permission; add a note instead"
+            )));
+        }
     }
     let mut propose = false;
     if let Some(s) = f.status.as_deref() {
@@ -357,18 +385,30 @@ pub fn update(
                 e.lease.holder.as_deref().unwrap_or("someone")
             )));
         }
+        if agent && s == "parked" {
+            // never grantable: [`grants::op_ok`] refuses `status.parked`
+            return Err(refused(
+                "parked is the user's own choice: agents never defer (set blocked, or add a note)",
+            ));
+        }
+        if s == "superseded" && !replaced(tx, &e)? {
+            return Err(refused(format!(
+                "{id} is replaced by another task: link that task first (link REPLACEMENT supersedes {id}), then set superseded"
+            )));
+        }
         if users {
-            if s == "dropped" {
+            if s == "dropped" && !written("status.dropped")? {
                 return Err(refused(format!(
                     "{id} is the user's task: only the user drops it"
                 )));
             }
-            if s == "done" && !grant {
+            let written_status = written(&format!("status.{s}"))?;
+            if s == "done" && !grant && !written_status {
                 return Err(refused(format!(
                     "the user closes this task; set it in-review (or complete it) and the user will close it ({id})"
                 )));
             }
-            if !grant && s != "in-review" {
+            if !grant && !written_status && s != "in-review" {
                 return Err(refused(format!(
                     "{id} is the user's task: without the user's permission an agent sets only in-review"
                 )));
@@ -474,7 +514,7 @@ pub fn accept_close(
     if caller.class != Class::User {
         return Err(refused("only the user accepts a close"));
     }
-    let e = writable_task(tx, caller, id, false)?;
+    let e = writable_task(tx, caller, id, false, &[])?;
     let mut changes = Changes {
         status: Some(Some("done".into())),
         ..Changes::default()
@@ -494,7 +534,7 @@ pub fn accept_close(
 /// `claim`: a ready task, or one whose lease ran out, becomes CALLER's (lease epoch + 1, 15 minutes, status
 /// `claimed`, assignee CALLER, a `works_on` link from its session).
 pub fn claim(tx: &mut Tx<'_>, caller: &Caller, id: &str) -> Result<TaskAnswer, WriteError> {
-    let e = writable_task(tx, caller, id, false)?;
+    let e = writable_task(tx, caller, id, false, &["claim"])?;
     let now = tx.at();
     if live(&e, now) {
         let holder = e.lease.holder.as_deref().unwrap_or("");
@@ -545,7 +585,7 @@ pub fn heartbeat(
     id: &str,
     lease: i64,
 ) -> Result<TaskAnswer, WriteError> {
-    let e = writable_task(tx, caller, id, false)?;
+    let e = writable_task(tx, caller, id, false, &["claim"])?;
     if let Some(lost) = fence(tx, caller, &e, lease)? {
         return Ok(lost);
     }
@@ -568,7 +608,7 @@ pub fn release(
     lease: i64,
     note: Option<&str>,
 ) -> Result<TaskAnswer, WriteError> {
-    let e = writable_task(tx, caller, id, false)?;
+    let e = writable_task(tx, caller, id, false, &["claim"])?;
     if let Some(lost) = fence(tx, caller, &e, lease)? {
         return Ok(lost);
     }
@@ -595,7 +635,7 @@ pub fn handoff(
     to: Option<String>,
     note: &str,
 ) -> Result<TaskAnswer, WriteError> {
-    let e = writable_task(tx, caller, id, false)?;
+    let e = writable_task(tx, caller, id, false, &["claim"])?;
     if let Some(lost) = fence(tx, caller, &e, lease)? {
         return Ok(lost);
     }
@@ -630,7 +670,7 @@ pub fn reassign(
     to: Option<String>,
     note: &str,
 ) -> Result<TaskAnswer, WriteError> {
-    let e = writable_task(tx, caller, id, false)?;
+    let e = writable_task(tx, caller, id, false, &["claim"])?;
     need_note(note, "a reassign")?;
     check_to(&to)?;
     if let Some(c) = check_ver(tx, &e, ver)? {
@@ -672,7 +712,7 @@ pub fn split(
     parts: &[String],
     mode: Option<&str>,
 ) -> Result<TaskAnswer, WriteError> {
-    let e = writable_task(tx, caller, id, false)?;
+    let e = writable_task(tx, caller, id, false, &["split"])?;
     let replace = match mode.unwrap_or("children") {
         "children" => false,
         "replace" => true,
@@ -771,12 +811,12 @@ pub fn complete(
     lease: i64,
     note: Option<&str>,
 ) -> Result<TaskAnswer, WriteError> {
-    let e = writable_task(tx, caller, id, false)?;
+    let e = writable_task(tx, caller, id, false, &["status.in-review"])?;
     if let Some(lost) = fence(tx, caller, &e, lease)? {
         return Ok(lost);
     }
     let now = tx.at();
-    let status = if caller.class == Class::User {
+    let status = if grants::may_write_task(tx.sql(), caller, e.n, &["status.done"], now)? {
         "done"
     } else if user_made(tx, &e)? {
         if grants::may_edit_user_task(tx.sql(), caller, e.n, now)? {
@@ -814,6 +854,19 @@ pub fn complete(
     Ok(done(&e, ver, None))
 }
 
+/// `note`: a progress note about task ID (the user's door; an empty text writes nothing).
+pub fn note(
+    tx: &mut Tx<'_>,
+    caller: &Caller,
+    id: &str,
+    text: &str,
+) -> Result<TaskAnswer, WriteError> {
+    let e = writable_task(tx, caller, id, false, &["note"])?;
+    let note = add_note(tx, &e, "progress", text)?;
+    notices::changed(tx, caller, &e, &["notes"], note.as_deref(), None)?;
+    Ok(done(&e, e.ver, None))
+}
+
 /// `label`: add and remove labels (idempotent, never a whole-list replace; no `ver`).
 pub fn label(
     tx: &mut Tx<'_>,
@@ -822,7 +875,7 @@ pub fn label(
     add: &[String],
     remove: &[String],
 ) -> Result<TaskAnswer, WriteError> {
-    let e = writable_task(tx, caller, id, false)?;
+    let e = writable_task(tx, caller, id, false, &["update.labels"])?;
     let add = clean_labels(add)?;
     let remove = clean_labels(remove)?;
     let mut labels = labels_of(&e);
@@ -872,9 +925,11 @@ fn ends(
     if let Some(job) = job_of(&s) {
         return Err(of_a_job(&job));
     }
-    if !caller.may_write_into(s.project) {
+    if !caller.may_write_into(s.project)
+        && !(s.kind == "task" && grants::may_write_task(tx.sql(), caller, s.n, &["link"], tx.at())?)
+    {
         return Err(refused(format!(
-            "{src} is in another project: a grant opens reading only; link from a task of your project"
+            "{src} is in another project: a read grant opens reading only; link from a task of your project, or ask the user for a write grant"
         )));
     }
     let (d, full) = visible(tx, caller, dst, "entity")?;
@@ -1016,7 +1071,7 @@ pub fn tools(
     if caller.class != Class::User {
         return Err(refused("only the user sets a task's tools"));
     }
-    let e = writable_task(tx, caller, id, true)?;
+    let e = writable_task(tx, caller, id, true, &[])?;
     let changes = Changes {
         data_patch: Some(json!({ "tracker_tools": tracker })),
         ..Changes::default()

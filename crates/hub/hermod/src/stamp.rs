@@ -2,13 +2,13 @@
 //! cannot reorder a connection's timeline).
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 static LAST: AtomicU64 = AtomicU64::new(0);
 
 /// Now, as seconds since the epoch; each call returns at least what the previous one did.
 pub fn now() -> f64 {
-    let t = SystemTime::now()
+    let t = stund::wall()
         .duration_since(UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64());
     // positive f64 bit patterns order like the numbers

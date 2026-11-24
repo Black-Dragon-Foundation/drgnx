@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -208,8 +208,8 @@ fn meta() -> TxMeta {
 }
 
 fn now() -> f64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
+    stund::wall()
+        .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
 }
 
@@ -279,7 +279,7 @@ fn retire_all(
 /// applied state in `kv`: what it now denies is retired and excised, then the applied state and the notice are
 /// written in one tx, then the store is scrubbed. Nothing is written when nothing changed. The caller loads DENY;
 /// this reads no file but the store.
-pub async fn apply(writer: &WriterHandle, deny: Arc<DenyList>) -> Result<PrivacyReport, String> {
+pub async fn apply(writer: &WriterHandle, deny: Arc<DenyList>) -> villa::Result<PrivacyReport> {
     #[cfg(test)]
     tests::hooks::reads(writer.path());
     // What the list now denies is read, and retired, inside the writer (call 8): every write queued before this one
@@ -293,7 +293,7 @@ pub async fn apply(writer: &WriterHandle, deny: Arc<DenyList>) -> Result<Privacy
             let found = denied_in(tx.sql(), &d)?;
             let doomed: Vec<(i64, Option<String>)> =
                 found.iter().map(|f| (f.n, f.source.clone())).collect();
-            *s.lock().unwrap_or_else(PoisonError::into_inner) = Some((old, found));
+            *saman::lock(&s) = Some((old, found));
             if doomed.is_empty() {
                 // rolled back: nothing to retire leaves no tx row
                 return Err(WriteError::Refused(NOTHING_DENIED.into()));
@@ -301,13 +301,16 @@ pub async fn apply(writer: &WriterHandle, deny: Arc<DenyList>) -> Result<Privacy
             retire_all(tx, &doomed)
         })
         .await;
-    let Some((old, found)) = seen.lock().unwrap_or_else(PoisonError::into_inner).take() else {
-        return Err(retired.map_or_else(|e| e.to_string(), |_| "nothing was read".into()));
+    let Some((old, found)) = saman::lock(&seen).take() else {
+        return Err(retired.map_or_else(
+            |e| villa::Error::internal(e.to_string()),
+            |_| villa::Error::internal("nothing was read"),
+        ));
     };
     if let Err(e) = retired
         && !found.is_empty()
     {
-        return Err(e.to_string());
+        return Err(villa::Error::internal(e.to_string()));
     }
     let new = Applied::of(&deny);
     let mut report = PrivacyReport {
@@ -339,13 +342,13 @@ pub async fn apply(writer: &WriterHandle, deny: Arc<DenyList>) -> Result<Privacy
                 crate::write::blankers(),
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::internal(e.to_string()))?;
             needles.extend(rep.needles);
             report.excised += 1;
         }
     }
     let text = notice_text(&report);
-    let state = serde_json::to_string(&new).map_err(|e| e.to_string())?;
+    let state = serde_json::to_string(&new).map_err(|e| villa::Error::internal(e.to_string()))?;
     let data = json!({
         "privacy": true,
         "added": report.added.len(),
@@ -381,7 +384,7 @@ pub async fn apply(writer: &WriterHandle, deny: Arc<DenyList>) -> Result<Privacy
             Ok(())
         })
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::internal(e.to_string()))?;
     if !found.is_empty() {
         if let Err(e) = excise::scrub(writer).await {
             tracing::warn!("the scrub after a personal file's excise failed: {e}");
@@ -465,7 +468,7 @@ pub async fn tick(
     }
     let (h, c) = (home.to_path_buf(), config_dir.to_path_buf());
     let list = Arc::new(
-        tokio::task::spawn_blocking(move || DenyList::load(&h, &c))
+        saman::spawn_blocking("deny-list-load", move || DenyList::load(&h, &c))
             .await
             .ok()?,
     );
@@ -478,6 +481,7 @@ pub async fn tick(
             r.notice.is_some().then_some(r)
         }
         Err(e) => {
+            let e = e.to_string();
             if watch.failed.as_deref() != Some(e.as_str()) {
                 tracing::warn!("the personal-notes opt-ins are not applied yet: {e}");
                 watch.failed = Some(e);

@@ -96,7 +96,7 @@ pub struct TermConfig {
 /// ACTION `press` (the default), `repeat` or `release`: a repeat or a release reaches the program as itself only while
 /// it asked for key event types (the view's `term.key_events`).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct TermKey {
+pub struct TermKeyEvent {
     pub id: String,
     pub key: String,
     #[serde(default)]
@@ -208,7 +208,7 @@ pub struct TermScroll {
 
 /// `term/scroll`'s answer.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct TermRowKey {
+pub struct TermRowAt {
     pub key: Option<String>,
 }
 
@@ -407,7 +407,7 @@ macro_rules! has_id {
 }
 has_id!(
     TermConfig,
-    TermKey,
+    TermKeyEvent,
     TermText,
     TermFocus,
     TermClipboardReply,
@@ -511,7 +511,7 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_id,
         ),
         method!(
-            "term/key", TermKey(TermKey) -> bool,
+            "term/key", TermKey(TermKeyEvent) -> bool,
             classes: [User], writes: false,
             doc: "a key press, repeat or release, encoded by the worker from the terminal's modes (kitty keyboard, modifyOtherKeys, DECCKM); its echo is drawn at once",
             check: check_id,
@@ -559,7 +559,7 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_resize,
         ),
         method!(
-            "term/scroll", TermScroll(TermScroll) -> TermRowKey,
+            "term/scroll", TermScroll(TermScroll) -> TermRowAt,
             classes: [User], writes: false,
             doc: "the row to scroll to: the bottom, some rows from a row, or some shell prompts from it (OSC 133); its key, none when there is no such row",
             check: check_id,

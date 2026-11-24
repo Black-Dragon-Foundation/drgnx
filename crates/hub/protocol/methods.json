@@ -18251,6 +18251,120 @@
       "classes": [
         "user"
       ],
+      "doc": "serve this machine's vector cache and embedders over the vector protocol v1 (TLS, or plain HTTP on loopback or a Tailscale address); the token is shown the first time only",
+      "name": "embed/serve-start",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`embed/serve-start`: serve this machine's vectors on LISTEN (`ADDR:PORT`).",
+        "properties": {
+          "listen": {
+            "type": "string"
+          },
+          "no_embed": {
+            "description": "Lookups only.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "plain": {
+            "description": "Plain HTTP: loopback or a Tailscale address only.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "listen"
+        ],
+        "title": "ServeStartParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A running vector server.",
+        "properties": {
+          "cert_sha256": {
+            "description": "The certificate's sha256 (none when plain).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token": {
+            "description": "The token, the first time only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "ServeAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "stop serving vectors; false when none was served",
+      "name": "embed/serve-stop",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a new token for the vector server, shown once; the old one is refused from the next request",
+      "name": "embed/serve-token",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`embed/serve-token`: a new token, shown once.",
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "ServeToken",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the user's login-shell variables the hub allows (never a key), for the agents and jobs it starts next",
       "name": "env/set",
       "params": {
@@ -20257,8 +20371,7 @@
                 "enum": [
                   "package",
                   "plugin",
-                  "module",
-                  "emacs"
+                  "module"
                 ],
                 "type": "string"
               },
@@ -20301,7 +20414,7 @@
                 ]
               },
               "id": {
-                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.",
+                "description": "`pkg:NAME`, `module:NAME`, `plugin:NAME`.",
                 "type": "string"
               },
               "kind": {
@@ -20328,7 +20441,7 @@
                 "$ref": "#/$defs/Signed"
               },
               "source": {
-                "description": "The archive (`gnu`, `melpa`, …), `git`, `emacs` or `module`.",
+                "description": "The archive (`gnu`, `melpa`, …), `git` or `module`.",
                 "type": "string"
               },
               "state": {
@@ -20421,11 +20534,6 @@
               {
                 "const": "held",
                 "description": "A newer version exists that the update plan does not take (a pin or a dependant's bound).",
-                "type": "string"
-              },
-              {
-                "const": "incompat",
-                "description": "Installed, and the newest version needs a newer Emacs than this one.",
                 "type": "string"
               },
               {
@@ -20613,10 +20721,6 @@
                   "null"
                 ]
               },
-              "builtin": {
-                "default": false,
-                "type": "boolean"
-              },
               "bundled": {
                 "default": false,
                 "description": "The packages drgnx itself provides and activates (the modules' `:packages`, rows `bundled:NAME`).",
@@ -20779,8 +20883,7 @@
                 "enum": [
                   "package",
                   "plugin",
-                  "module",
-                  "emacs"
+                  "module"
                 ],
                 "type": "string"
               },
@@ -20828,7 +20931,6 @@
               "filters": {
                 "$ref": "#/$defs/Filters",
                 "default": {
-                  "builtin": false,
                   "bundled": false,
                   "disabled": false,
                   "enabled": false,
@@ -21150,8 +21252,7 @@
                 "enum": [
                   "package",
                   "plugin",
-                  "module",
-                  "emacs"
+                  "module"
                 ],
                 "type": "string"
               },
@@ -21175,7 +21276,7 @@
                 ]
               },
               "id": {
-                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.",
+                "description": "`pkg:NAME`, `module:NAME`, `plugin:NAME`.",
                 "type": "string"
               },
               "kind": {
@@ -21202,7 +21303,7 @@
                 "$ref": "#/$defs/Signed"
               },
               "source": {
-                "description": "The archive (`gnu`, `melpa`, …), `git`, `emacs` or `module`.",
+                "description": "The archive (`gnu`, `melpa`, …), `git` or `module`.",
                 "type": "string"
               },
               "state": {
@@ -21295,11 +21396,6 @@
               {
                 "const": "held",
                 "description": "A newer version exists that the update plan does not take (a pin or a dependant's bound).",
-                "type": "string"
-              },
-              {
-                "const": "incompat",
-                "description": "Installed, and the newest version needs a newer Emacs than this one.",
                 "type": "string"
               },
               {
@@ -21419,7 +21515,7 @@
         "user",
         "agent"
       ],
-      "doc": "rows of the extensions catalog (packages, modules, Emacs built-ins) matching words, filters and an order; reads the refresh job's catalog, the lock and the modules, never the network",
+      "doc": "rows of the extensions catalog (packages, modules) matching words, filters and an order; reads the refresh job's catalog, the lock and the modules, never the network",
       "name": "extensions/search",
       "params": {
         "$defs": {
@@ -21431,10 +21527,6 @@
                   "string",
                   "null"
                 ]
-              },
-              "builtin": {
-                "default": false,
-                "type": "boolean"
               },
               "bundled": {
                 "default": false,
@@ -21518,8 +21610,7 @@
                 "enum": [
                   "package",
                   "plugin",
-                  "module",
-                  "emacs"
+                  "module"
                 ],
                 "type": "string"
               },
@@ -21559,7 +21650,6 @@
           "filters": {
             "$ref": "#/$defs/Filters",
             "default": {
-              "builtin": false,
               "bundled": false,
               "disabled": false,
               "enabled": false,
@@ -21615,8 +21705,7 @@
                 "enum": [
                   "package",
                   "plugin",
-                  "module",
-                  "emacs"
+                  "module"
                 ],
                 "type": "string"
               },
@@ -21640,7 +21729,7 @@
                 ]
               },
               "id": {
-                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.",
+                "description": "`pkg:NAME`, `module:NAME`, `plugin:NAME`.",
                 "type": "string"
               },
               "kind": {
@@ -21667,7 +21756,7 @@
                 "$ref": "#/$defs/Signed"
               },
               "source": {
-                "description": "The archive (`gnu`, `melpa`, …), `git`, `emacs` or `module`.",
+                "description": "The archive (`gnu`, `melpa`, …), `git` or `module`.",
                 "type": "string"
               },
               "state": {
@@ -21760,11 +21849,6 @@
               {
                 "const": "held",
                 "description": "A newer version exists that the update plan does not take (a pin or a dependant's bound).",
-                "type": "string"
-              },
-              {
-                "const": "incompat",
-                "description": "Installed, and the newest version needs a newer Emacs than this one.",
                 "type": "string"
               },
               {
@@ -25757,6 +25841,46 @@
       "name": "graph/grants",
       "params": {
         "$defs": {
+          "EditGrant": {
+            "properties": {
+              "clear_expires": {
+                "description": "Remove the expiry.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "expires": {
+                "description": "A new expiry, unix seconds in the future.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "A grant's id (`grant:…`).",
+                "maxLength": 64,
+                "type": "string"
+              },
+              "ops": {
+                "description": "The `task-write` grant's new operations.",
+                "items": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
           "GrantAccess": {
             "oneOf": [
               {
@@ -25770,6 +25894,11 @@
                 "const": "options",
                 "description": "Change settings (`options:global` or `options:project`), never a deny-listed one.",
                 "type": "string"
+              },
+              {
+                "const": "task-write",
+                "description": "Write tasks under a project, a plan or a task: `ops` names the operations.",
+                "type": "string"
               }
             ]
           },
@@ -25778,6 +25907,30 @@
               "active": {
                 "type": [
                   "boolean",
+                  "null"
+                ]
+              },
+              "effective_for": {
+                "description": "An actor (`ext:KIND:ID`, an agent or session id): only the active grants that apply to it (its effective\nrights; a project or profile grant is matched only with the actor's `project` or `profile`).",
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "profile": {
+                "description": "With `effective_for`: the actor's profile name, so a grant that names the profile applies to it.",
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "project": {
+                "description": "With `effective_for`: the project the actor works in (`project:ID`, a slug or its number), so a grant that names\nthe project applies to it.",
+                "maxLength": 256,
+                "type": [
+                  "string",
                   "null"
                 ]
               },
@@ -25816,6 +25969,18 @@
                   "null"
                 ]
               },
+              "ops": {
+                "description": "A `task-write` grant's operations.",
+                "items": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
               "what": {
                 "maxLength": 4352,
                 "type": "string"
@@ -25835,6 +26000,16 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "edit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EditGrant"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "grant": {
             "anyOf": [
               {
@@ -25900,6 +26075,16 @@
                   "null"
                 ]
               },
+              "ops": {
+                "description": "A `task-write` grant's operations.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
               "status": {
                 "description": "`active` or `revoked`.",
                 "type": "string"
@@ -25926,6 +26111,13 @@
         "additionalProperties": false,
         "description": "`graph/grants`' answer: the list, the new grant, or whether a grant was revoked.",
         "properties": {
+          "edited": {
+            "description": "Whether an `edit` found an active grant.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "grant": {
             "anyOf": [
               {
@@ -32511,7 +32703,6 @@
               "unsandboxed",
               "settings.change",
               "user.private",
-              "user.emacs",
               "chat.project-read",
               "plugin.abilities",
               "chat.project-edit",
@@ -32748,7 +32939,6 @@
               "unsandboxed",
               "settings.change",
               "user.private",
-              "user.emacs",
               "chat.project-read",
               "plugin.abilities",
               "chat.project-edit",
@@ -36108,6 +36298,13 @@
                   "null"
                 ]
               },
+              "reason": {
+                "maxLength": 512,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "role": {
                 "maxLength": 32,
                 "type": [
@@ -37201,6 +37398,13 @@
             "default": [],
             "items": {
               "$ref": "#/$defs/ImportedFile"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "description": "What the import kept but could not read: a plan task's status line with a word that is no status (the file,\nthe task and the word); its ticks decide.",
+            "items": {
+              "type": "string"
             },
             "type": "array"
           }
@@ -41118,6 +41322,75 @@
       "classes": [
         "user"
       ],
+      "doc": "delete a root's index (confirm must be true): its store, its packs and the vectors no other root holds; recorded with its reason; the user's, never an MCP tool's",
+      "name": "search/delete",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/delete`: ROOT's index, once the user CONFIRMed (the CLI asks).",
+        "properties": {
+          "confirm": {
+            "type": "boolean"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "confirm"
+        ],
+        "title": "DeleteParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a delete freed.",
+        "properties": {
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "packs": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "root": {
+            "type": "string"
+          },
+          "vectors": {
+            "description": "Vectors no other root held.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "root",
+          "bytes",
+          "vectors",
+          "packs"
+        ],
+        "title": "DeleteAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the lines of a view's search for an Edit Results buffer: each source line once (a match's, or context around one), with its id, file, line number and text; none past the max (over), files that cannot be written skipped with why",
       "name": "search/edit-doc",
       "params": {
@@ -41810,6 +42083,162 @@
       "classes": [
         "user"
       ],
+      "doc": "write a vector pack: the vectors (no paths, no text) of the keys a repo's tree references, from the cache; the file is source-equivalent and the answer says so",
+      "name": "search/export",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A vector pack of a repo's vectors (`search/export`).",
+        "properties": {
+          "all_trees": {
+            "description": "Every key of every tree the repo's index has.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "branch": {
+            "description": "The tree of this branch instead of the folder's own.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "out": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where to write it. Without it the pack goes into the repo's `.drgnx/packs/`; a place outside the repo is the\nuser's to name."
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "ExportParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "keys": {
+            "description": "Vectors in it, chunk and path.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "sha256": {
+            "description": "The file's sha256, hex: its name among packs.",
+            "type": "string"
+          },
+          "warning": {
+            "description": "What a pack is: a file that can recreate the code's text. Shown before the path.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "keys",
+          "warning"
+        ],
+        "title": "ExportAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "answer the one-time notice about GPUs beyond the chosen one: use turns drgnx-search-gpus to all, dismiss leaves it; either is stored (drgnx-search-gpus-noticed) so the notice is not shown again for that set; the user's, never an MCP tool's",
+      "name": "search/extra-gpus",
+      "params": {
+        "$defs": {
+          "ExtraGpusChoice": {
+            "description": "What the user answered to the notice about GPUs beyond the chosen one.",
+            "oneOf": [
+              {
+                "const": "use",
+                "description": "Turn `drgnx-search-gpus` to `\"all\"`.",
+                "type": "string"
+              },
+              {
+                "const": "dismiss",
+                "description": "Leave it; the notice is not shown again for this set of GPUs.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/extra-gpus`: the answer to the one-time notice.",
+        "properties": {
+          "answer": {
+            "$ref": "#/$defs/ExtraGpusChoice"
+          }
+        },
+        "required": [
+          "answer"
+        ],
+        "title": "ExtraGpusParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The GPUs the answer was for (none: there was nothing to answer, and nothing changed).",
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          },
+          "gpus": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "gpus",
+          "changed"
+        ],
+        "title": "ExtraGpusAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "rank a folder's file names for a query and send a hub-fed view the best as rows (view-patch); git's list in a repository, a walk that follows no link elsewhere; a newer query of the view stops the old one",
       "name": "search/files",
       "params": {
@@ -41951,6 +42380,34 @@
         "type": "boolean"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "forget a vectors provider's pinned certificate: the next answer pins the one it shows",
+      "name": "search/forget-pin",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/forget-pin`: the `vectors` provider whose pinned certificate is forgotten.",
+        "properties": {
+          "provider": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "title": "ForgetPinParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
     },
     {
       "classes": [
@@ -42615,7 +43072,101 @@
       "classes": [
         "user"
       ],
-      "doc": "start or rebuild a project's index; now overrides the battery gate",
+      "doc": "merge a vector pack into the cache: only the keys a repo store here references (or all with keep_all); a model no source here can use is refused unless keep_all",
+      "name": "search/import",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A vector pack merged into the machine's cache (`search/import`).",
+        "properties": {
+          "file": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "keep_all": {
+            "description": "Keep the whole pack, for a repo opened later, and for a model no source here can use.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A project whose index is current before the keys are matched."
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "ImportParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "already_had": {
+            "description": "Referenced, and the cache had them.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fingerprint": {
+            "description": "The pack's fingerprint (64 hex characters) and its model.",
+            "type": "string"
+          },
+          "kept": {
+            "description": "Written to the cache now.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "keys_in_pack": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "label": {
+            "type": "string"
+          },
+          "skipped_unreferenced": {
+            "description": "No repo here references them.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fingerprint",
+          "label",
+          "keys_in_pack",
+          "kept",
+          "skipped_unreferenced",
+          "already_had"
+        ],
+        "title": "ImportAnswer",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "start or rebuild a project's index; now overrides the battery and load gates",
       "name": "search/index",
       "params": {
         "$defs": {
@@ -42629,7 +43180,7 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "now": {
-            "description": "Overrides the battery gate: tier 2 runs until nothing is missing.",
+            "description": "Overrides the battery and load gates (not the disk floor): tier 2 runs until nothing is missing.",
             "type": [
               "boolean",
               "null"
@@ -42667,6 +43218,116 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "every root this machine keeps an index of: its state, why it waits, its files, chunks and bytes",
+      "name": "search/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PauseReason": {
+            "additionalProperties": false,
+            "description": "Why a root's index waits.",
+            "properties": {
+              "name": {
+                "description": "`user`, `battery`, `load`, `disk-floor` or `no-embedder`.",
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "text"
+            ],
+            "type": "object"
+          },
+          "RootInfo": {
+            "additionalProperties": false,
+            "description": "One root the hub keeps an index of.",
+            "properties": {
+              "bytes": {
+                "description": "The store's bytes on disk.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "chunks": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "files": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "description": "The store's id.",
+                "type": "string"
+              },
+              "open": {
+                "description": "Whether this hub has it open (a closed root's state is what the user set).",
+                "type": "boolean"
+              },
+              "root": {
+                "description": "The checkout the index is built from.",
+                "type": "string"
+              },
+              "state": {
+                "description": "`idle`, `running`, `paused` or `stopped`.",
+                "type": "string"
+              },
+              "why": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PauseReason"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "root",
+              "id",
+              "state",
+              "open",
+              "files",
+              "chunks",
+              "bytes"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/list`.",
+        "properties": {
+          "roots": {
+            "items": {
+              "$ref": "#/$defs/RootInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "roots"
+        ],
+        "title": "ListAnswer",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -43146,6 +43807,143 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "pause a root's index (or every root's with all): the batch in flight finishes, then tier 2 holds until resume; kept across restarts and changes; the user's, never an MCP tool's",
+      "name": "search/pause",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/pause`, `search/resume`, `search/stop`: ROOT, or every root with ALL.",
+        "properties": {
+          "all": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ManageParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PauseReason": {
+            "additionalProperties": false,
+            "description": "Why a root's index waits.",
+            "properties": {
+              "name": {
+                "description": "`user`, `battery`, `load`, `disk-floor` or `no-embedder`.",
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "text"
+            ],
+            "type": "object"
+          },
+          "RootInfo": {
+            "additionalProperties": false,
+            "description": "One root the hub keeps an index of.",
+            "properties": {
+              "bytes": {
+                "description": "The store's bytes on disk.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "chunks": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "files": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "description": "The store's id.",
+                "type": "string"
+              },
+              "open": {
+                "description": "Whether this hub has it open (a closed root's state is what the user set).",
+                "type": "boolean"
+              },
+              "root": {
+                "description": "The checkout the index is built from.",
+                "type": "string"
+              },
+              "state": {
+                "description": "`idle`, `running`, `paused` or `stopped`.",
+                "type": "string"
+              },
+              "why": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PauseReason"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "root",
+              "id",
+              "state",
+              "open",
+              "files",
+              "chunks",
+              "bytes"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The roots a pause, resume or stop reached, as they are after it.",
+        "properties": {
+          "roots": {
+            "items": {
+              "$ref": "#/$defs/RootInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "roots"
+        ],
+        "title": "ManageAnswer",
+        "type": "object"
+      },
+      "writes": true
     },
     {
       "classes": [
@@ -43901,6 +44699,143 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "resume a paused or stopped index: it goes on with the keys still missing; the user's, never an MCP tool's",
+      "name": "search/resume",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/pause`, `search/resume`, `search/stop`: ROOT, or every root with ALL.",
+        "properties": {
+          "all": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ManageParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PauseReason": {
+            "additionalProperties": false,
+            "description": "Why a root's index waits.",
+            "properties": {
+              "name": {
+                "description": "`user`, `battery`, `load`, `disk-floor` or `no-embedder`.",
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "text"
+            ],
+            "type": "object"
+          },
+          "RootInfo": {
+            "additionalProperties": false,
+            "description": "One root the hub keeps an index of.",
+            "properties": {
+              "bytes": {
+                "description": "The store's bytes on disk.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "chunks": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "files": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "description": "The store's id.",
+                "type": "string"
+              },
+              "open": {
+                "description": "Whether this hub has it open (a closed root's state is what the user set).",
+                "type": "boolean"
+              },
+              "root": {
+                "description": "The checkout the index is built from.",
+                "type": "string"
+              },
+              "state": {
+                "description": "`idle`, `running`, `paused` or `stopped`.",
+                "type": "string"
+              },
+              "why": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PauseReason"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "root",
+              "id",
+              "state",
+              "open",
+              "files",
+              "chunks",
+              "bytes"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The roots a pause, resume or stop reached, as they are after it.",
+        "properties": {
+          "roots": {
+            "items": {
+              "$ref": "#/$defs/RootInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "roots"
+        ],
+        "title": "ManageAnswer",
+        "type": "object"
+      },
+      "writes": true
     },
     {
       "classes": [
@@ -45062,244 +45997,6 @@
       "classes": [
         "user"
       ],
-      "doc": "what starting TEI or Ollama would run, shown before the user agrees; runs and writes nothing",
-      "name": "search/server-plan",
-      "params": {
-        "$defs": {
-          "ServerKind": {
-            "description": "A server the wizard can start on request.",
-            "enum": [
-              "tei",
-              "ollama"
-            ],
-            "type": "string"
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "properties": {
-          "kind": {
-            "$ref": "#/$defs/ServerKind"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "title": "ServerKindParams",
-        "type": "object"
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "description": "What a start would do, shown before the user agrees. A plan runs and writes nothing.",
-        "properties": {
-          "available": {
-            "type": "boolean"
-          },
-          "bytes": {
-            "description": "About what the model weighs.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "commands": {
-            "description": "The commands a start runs, in order.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "gpu": {
-            "description": "The GPU image would run.",
-            "type": "boolean"
-          },
-          "image": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "memory_cap": {
-            "description": "The memory cap of the container (TEI) as podman writes it, e.g. `4g`; empty for Ollama.",
-            "type": "string"
-          },
-          "model": {
-            "type": "string"
-          },
-          "unit_path": {
-            "description": "The Quadlet file a start writes (TEI).",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "why": {
-            "description": "Why not, when it is not available.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "available",
-          "gpu",
-          "memory_cap",
-          "model",
-          "commands"
-        ],
-        "title": "ServerPlan",
-        "type": "object"
-      },
-      "writes": false
-    },
-    {
-      "classes": [
-        "user"
-      ],
-      "doc": "start TEI (a capped podman Quadlet) or Ollama after the user confirmed the plan; the hub never starts one by itself",
-      "name": "search/server-start",
-      "params": {
-        "$defs": {
-          "ServerKind": {
-            "description": "A server the wizard can start on request.",
-            "enum": [
-              "tei",
-              "ollama"
-            ],
-            "type": "string"
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "properties": {
-          "confirm": {
-            "description": "The user agreed to what `search/server-plan` showed; a start without it is refused.",
-            "type": "boolean"
-          },
-          "kind": {
-            "$ref": "#/$defs/ServerKind"
-          }
-        },
-        "required": [
-          "kind",
-          "confirm"
-        ],
-        "title": "ServerStartParams",
-        "type": "object"
-      },
-      "result": {
-        "$defs": {
-          "ProviderEntry": {
-            "additionalProperties": false,
-            "description": "An entry for the settings' provider table; the editor's settings writer adds it, the hub never does.",
-            "properties": {
-              "auth": {
-                "type": "string"
-              },
-              "base": {
-                "type": "string"
-              },
-              "caps": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "id": {
-                "type": "string"
-              },
-              "kind": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "kind",
-              "base",
-              "auth",
-              "caps"
-            ],
-            "type": "object"
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "properties": {
-          "provider": {
-            "$ref": "#/$defs/ProviderEntry"
-          },
-          "started": {
-            "type": "boolean"
-          },
-          "unit": {
-            "description": "The service that runs it.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "started",
-          "unit",
-          "provider"
-        ],
-        "title": "ServerStarted",
-        "type": "object"
-      },
-      "writes": false
-    },
-    {
-      "classes": [
-        "user"
-      ],
-      "doc": "stop the server a start began",
-      "name": "search/server-stop",
-      "params": {
-        "$defs": {
-          "ServerKind": {
-            "description": "A server the wizard can start on request.",
-            "enum": [
-              "tei",
-              "ollama"
-            ],
-            "type": "string"
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "properties": {
-          "kind": {
-            "$ref": "#/$defs/ServerKind"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "title": "ServerKindParams",
-        "type": "object"
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "properties": {
-          "stopped": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "stopped"
-        ],
-        "title": "ServerStopped",
-        "type": "object"
-      },
-      "writes": false
-    },
-    {
-      "classes": [
-        "user"
-      ],
       "doc": "a project's index: files and chunks per class, coverage errors, the lag, the models that have vectors, tier 2's state and the embed worker's device",
       "name": "search/status",
       "params": {
@@ -45325,6 +46022,27 @@
       },
       "result": {
         "$defs": {
+          "ChainStatus": {
+            "additionalProperties": false,
+            "description": "One fingerprint's chain of sources, in the order they are asked.",
+            "properties": {
+              "entries": {
+                "items": {
+                  "$ref": "#/$defs/SourceEntry"
+                },
+                "type": "array"
+              },
+              "model": {
+                "description": "The fingerprint (64 hex characters).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "model",
+              "entries"
+            ],
+            "type": "object"
+          },
           "ClassCount": {
             "additionalProperties": false,
             "description": "Files and chunks of one class.",
@@ -45442,6 +46160,24 @@
             ],
             "type": "object"
           },
+          "PauseReason": {
+            "additionalProperties": false,
+            "description": "Why a root's index waits.",
+            "properties": {
+              "name": {
+                "description": "`user`, `battery`, `load`, `disk-floor` or `no-embedder`.",
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "text"
+            ],
+            "type": "object"
+          },
           "SearchWatch": {
             "additionalProperties": false,
             "description": "The project's file watches.",
@@ -45480,6 +46216,37 @@
             "required": [
               "used",
               "unwatched"
+            ],
+            "type": "object"
+          },
+          "SourceEntry": {
+            "additionalProperties": false,
+            "description": "One source of a chain.",
+            "properties": {
+              "id": {
+                "description": "A provider id, or `cache` or `builtin`.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "`cache`, `lookup`, `embed`, `engine` or `builtin`.",
+                "type": "string"
+              },
+              "state": {
+                "description": "`answering`, `down`, `held` (battery) or `no text` (a remote not allowed text).",
+                "type": "string"
+              },
+              "why": {
+                "description": "Why it is down.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "state"
             ],
             "type": "object"
           },
@@ -45602,8 +46369,19 @@
             },
             "type": "array"
           },
+          "sources": {
+            "description": "Where each fingerprint's vectors come from here: its chain of sources as the last pass of tier 2 left it.",
+            "items": {
+              "$ref": "#/$defs/ChainStatus"
+            },
+            "type": "array"
+          },
+          "state": {
+            "description": "The root's state as the user sees it: `idle`, `running`, `paused` or `stopped` (Hrafn redesign §11A).",
+            "type": "string"
+          },
           "tier2": {
-            "description": "`stopped`, `idle`, `running`, `typing`, `battery` or `failed`.",
+            "description": "`stopped`, `idle`, `running`, `typing`, `battery`, `load`, `disk-floor`, `paused` or `failed`.",
             "type": "string"
           },
           "trees": {
@@ -45616,6 +46394,17 @@
           "watch": {
             "$ref": "#/$defs/SearchWatch"
           },
+          "why": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PauseReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it waits, while `paused`: `user`, `battery`, `load`, `disk-floor` or `no-embedder`, and its words."
+          },
           "worker": {
             "$ref": "#/$defs/WorkerStatus"
           }
@@ -45627,8 +46416,10 @@
           "coverage_errors",
           "lag",
           "models",
+          "sources",
           "worker",
           "tier2",
+          "state",
           "embedded",
           "trees",
           "watch"
@@ -45637,6 +46428,143 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "stop a root's index now: what it finished stays; the next change or search/index goes on; the user's, never an MCP tool's",
+      "name": "search/stop",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/pause`, `search/resume`, `search/stop`: ROOT, or every root with ALL.",
+        "properties": {
+          "all": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "root": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ManageParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "PauseReason": {
+            "additionalProperties": false,
+            "description": "Why a root's index waits.",
+            "properties": {
+              "name": {
+                "description": "`user`, `battery`, `load`, `disk-floor` or `no-embedder`.",
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "text"
+            ],
+            "type": "object"
+          },
+          "RootInfo": {
+            "additionalProperties": false,
+            "description": "One root the hub keeps an index of.",
+            "properties": {
+              "bytes": {
+                "description": "The store's bytes on disk.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "chunks": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "files": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "description": "The store's id.",
+                "type": "string"
+              },
+              "open": {
+                "description": "Whether this hub has it open (a closed root's state is what the user set).",
+                "type": "boolean"
+              },
+              "root": {
+                "description": "The checkout the index is built from.",
+                "type": "string"
+              },
+              "state": {
+                "description": "`idle`, `running`, `paused` or `stopped`.",
+                "type": "string"
+              },
+              "why": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PauseReason"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "root",
+              "id",
+              "state",
+              "open",
+              "files",
+              "chunks",
+              "bytes"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The roots a pause, resume or stop reached, as they are after it.",
+        "properties": {
+          "roots": {
+            "items": {
+              "$ref": "#/$defs/RootInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "roots"
+        ],
+        "title": "ManageAnswer",
+        "type": "object"
+      },
+      "writes": true
     },
     {
       "classes": [
@@ -47546,7 +48474,7 @@
       "classes": [
         "user"
       ],
-      "doc": "one tracker operation as the user (create, update, claim, heartbeat, release, handoff, reassign, split, complete, link, unlink, label, tools): done, a conflict with what changed, a lost lease, or a close proposal",
+      "doc": "one tracker operation as the user (create, update, claim, heartbeat, release, handoff, reassign, split, complete, link, unlink, label, tools, note): done, a conflict with what changed, a lost lease, or a close proposal",
       "name": "tasks/write",
       "params": {
         "$defs": {
@@ -47558,22 +48486,31 @@
           },
           "Op": {
             "description": "A tracker operation.",
-            "enum": [
-              "create",
-              "update",
-              "claim",
-              "heartbeat",
-              "release",
-              "handoff",
-              "reassign",
-              "split",
-              "complete",
-              "link",
-              "unlink",
-              "label",
-              "tools"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "create",
+                  "update",
+                  "claim",
+                  "heartbeat",
+                  "release",
+                  "handoff",
+                  "reassign",
+                  "split",
+                  "complete",
+                  "link",
+                  "unlink",
+                  "label",
+                  "tools"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "note",
+                "description": "A note about the task (`note` is its text).",
+                "type": "string"
+              }
+            ]
           },
           "SplitMode": {
             "description": "How a split goes: the parts as children (default), or in the task's place.",
@@ -48171,7 +49108,7 @@
           "id",
           "key"
         ],
-        "title": "TermKey",
+        "title": "TermKeyEvent",
         "type": "object"
       },
       "result": {
@@ -48660,7 +49597,7 @@
             ]
           }
         },
-        "title": "TermRowKey",
+        "title": "TermRowAt",
         "type": "object"
       },
       "writes": false

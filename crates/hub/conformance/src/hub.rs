@@ -94,8 +94,7 @@ impl Root {
         self.dir.path()
     }
 
-    /// The whole environment a hub or a CLI run gets (nothing else is inherited but `PATH`, `DRGNX_EMACS` (the
-    /// editor's own CLIs that a row runs need it), `DBUS_SESSION_BUS_ADDRESS`, `DRGNX_PACK_LOCK` and
+    /// The whole environment a hub or a CLI run gets (nothing else is inherited but `PATH`, `DBUS_SESSION_BUS_ADDRESS`, `DRGNX_PACK_LOCK` and
     /// `DRGNX_PACK_GRAMMARS` (the grammars a run was pointed at) and `DRGNX_RATATOSKR_LOG`, [`HUB_LOG`] when unset): every directory points into this root, so nothing reaches `~`.  The session bus is
     /// how a container job's podman reaches the user's systemd, which enforces the job's caps (the hub refuses the job
     /// without it; `XDG_RUNTIME_DIR` here is the root's, so podman cannot find the bus there).  `extra` wins.
@@ -113,7 +112,6 @@ impl Root {
         let mut vars: BTreeMap<String, String> = BTreeMap::new();
         for k in [
             "PATH",
-            "DRGNX_EMACS",
             "DBUS_SESSION_BUS_ADDRESS",
             "DRGNX_RATATOSKR_STALL_FILE",
             "DRGNX_PACK_LOCK",
@@ -143,8 +141,20 @@ impl Root {
             ("DRGNX_CONFIG_DIR", dir("config")),
             ("TMPDIR", dir("tmp")),
             ("RATATOSKR_SUPERVISOR", "none".to_string()),
+            ("DRGNX_TEST_POWER_ROOT", dir("q")),
         ] {
             vars.insert(k.into(), v);
+        }
+        // the stand-in machine the hub reads for the battery, the load and the disk floor: on AC, quiet, with room,
+        // whatever the build machine's state (a full desktop disk paused tier 2 in the hub tests, 2026-11-24)
+        let q = self.path().join("q");
+        let _ = std::fs::create_dir_all(q.join("devices/system/cpu"));
+        for (f, text) in [
+            ("devices/system/cpu/online", "0-3\n"),
+            ("loadavg", "0.00 0.00 0.00 1/100 1\n"),
+            ("statvfs", "1099511627776 2199023255552\n"),
+        ] {
+            let _ = std::fs::write(q.join(f), text);
         }
         vars.extend(extra);
         vars

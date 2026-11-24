@@ -40,15 +40,19 @@ pub enum Sub {
 }
 
 /// The arguments after `outside`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<OutsideCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<OutsideCommand> {
     use lexopt::Arg::{Long, Value as Word};
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let sub = match p.next().map_err(e)? {
         Some(Word(v)) => v.string().map_err(e)?,
-        Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err(format!("outside needs a subcommand\n{USAGE}")),
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
+        None => {
+            return Err(villa::Error::invalid(format!(
+                "outside needs a subcommand\n{USAGE}"
+            )));
+        }
     };
     let (mut kind, mut root, mut role, mut id, mut json) = (None, None, None, None, false);
     while let Some(arg) = p.next().map_err(e)? {
@@ -61,23 +65,31 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<OutsideCommand,
             Long("role") if sub == "bind" => {
                 let r = p.value().map_err(e)?.string().map_err(e)?;
                 if !matches!(r.as_str(), "manager" | "worker" | "chat") {
-                    return Err(format!("--role is manager, worker or chat, not {r:?}"));
+                    return Err(villa::Error::invalid(format!(
+                        "--role is manager, worker or chat, not {r:?}"
+                    )));
                 }
                 role = Some(r);
             }
             Word(v) if sub == "unbind" && id.is_none() => id = Some(v.string().map_err(e)?),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let sub = match sub.as_str() {
         "bind" => Sub::Bind {
-            kind: kind.ok_or("outside bind needs --kind")?,
-            root: root.ok_or("outside bind needs --root")?,
-            role: role.ok_or("outside bind needs --role")?,
+            kind: kind.ok_or_else(|| villa::Error::invalid("outside bind needs --kind"))?,
+            root: root.ok_or_else(|| villa::Error::invalid("outside bind needs --root"))?,
+            role: role.ok_or_else(|| villa::Error::invalid("outside bind needs --role"))?,
         },
-        "unbind" => Sub::Unbind(id.ok_or("outside unbind needs the binding's ID")?),
+        "unbind" => Sub::Unbind(
+            id.ok_or_else(|| villa::Error::invalid("outside unbind needs the binding's ID"))?,
+        ),
         "list" => Sub::List,
-        other => return Err(format!("unknown outside subcommand {other:?}\n{USAGE}")),
+        other => {
+            return Err(villa::Error::invalid(format!(
+                "unknown outside subcommand {other:?}\n{USAGE}"
+            )));
+        }
     };
     Ok(OutsideCommand { sub, json })
 }
@@ -133,14 +145,14 @@ pub fn run(env: &Env, cmd: OutsideCommand) -> i32 {
     match Client::user(env, Duration::from_secs(5)).and_then(|mut c| c.call(method, params, CALL)) {
         Ok(a) => {
             if cmd.json {
-                println!("{a}");
+                crate::soft::out_line(&a.to_string());
             } else {
-                println!("{}", text(&cmd.sub, &a));
+                crate::soft::out_line(&(text(&cmd.sub, &a)).to_string());
             }
             i32::from(matches!(cmd.sub, Sub::Unbind(_)) && a != json!(true))
         }
         Err(e) => {
-            eprintln!("ratatoskr outside: {e}");
+            crate::soft::err_line(&format!("ratatoskr outside: {e}"));
             1
         }
     }
@@ -151,7 +163,7 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    fn p(args: &[&str]) -> Result<OutsideCommand, String> {
+    fn p(args: &[&str]) -> villa::Result<OutsideCommand> {
         parse(args.iter().map(OsString::from))
     }
 

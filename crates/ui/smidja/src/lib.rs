@@ -33,13 +33,13 @@ pub use fold::{FOLD_CELLS, FOLD_PX, FoldTable};
 pub use intent::{Allowed, How, Intent, OpenOpts, TabFields, Target, allowed};
 pub use layout::{Dir4, LayoutSnapshot, MoveTarget, Side};
 pub use model::{
-    Attention, Axis, EdgeKey, Focus, Fold, Group, GroupId, Node, Origin, OsWindow, Overlay,
-    OverlayId, OverlayKind, PlaceState, Rect, Ref, Refusal, Region, RightTab, Selection, SideFold,
-    Source, Tab, TabId, TempLayout, Version, WinId, WinSize, Workbench,
+    Attention, Axis, Focus, Fold, Group, GroupId, Node, Origin, OsWindow, Overlay, OverlayId,
+    OverlayKind, PlaceState, Rect, Ref, Refusal, Region, RightTab, Selection, SideFold, Source,
+    Tab, TabId, TempLayout, Version, WinId, WinSize, WindowEdge, Workbench,
 };
 pub use multi::TearOut;
 pub use persist::{Pending, Resolved, load};
 pub use preset::{CenterSpec, Preset, SideSpec};
-pub use query::{Role, Snapshot, Token};
+pub use query::{QueryItem, Role, Snapshot};
 pub use realise::{GroupReal, Realisation, RegionReal};
 pub use rules::{Rule, RuleBroken, check_rule, check_rules, check_step};

@@ -15,7 +15,6 @@
 //! the allow-listed hosts through it while the job runs, and nothing else (no other host, no address that isn't
 //! public).
 
-use std::fs;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use std::os::fd::{FromRawFd, RawFd};
@@ -68,7 +67,7 @@ fn hold_v6(port: u16) -> io::Result<Option<TcpListener>> {
 /// A running proxy, on a runtime of its own; dropping it stops it.
 pub struct Proxy {
     _handle: proxy::ProxyHandle,
-    _runtime: tokio::runtime::Runtime,
+    _runtime: saman::Executor,
     /// The port on `::1`, held (never accepted on) while the job runs.
     _v6: Option<TcpListener>,
 }
@@ -77,13 +76,15 @@ pub struct Proxy {
 /// close-on-exec again (the job never gets them), which must be sockets on `127.0.0.1:PORT` and `[::1]:PORT`, and the
 /// allow-list in DIR's [`ALLOW`]. Anything else is refused, naming it: the job then never runs (a setup failure), so it
 /// never has a network its profile doesn't name.
-pub fn take(fd: RawFd, v6: Option<RawFd>, port: u16, dir: &Path) -> Result<Proxy, String> {
-    let l = adopt(fd, IpAddr::V4(Ipv4Addr::LOCALHOST), port)?;
+pub fn take(fd: RawFd, v6: Option<RawFd>, port: u16, dir: &Path) -> villa::Result<Proxy> {
+    let l = adopt(fd, IpAddr::V4(Ipv4Addr::LOCALHOST), port).map_err(villa::Error::refused)?;
     let v6 = v6
         .map(|fd| adopt(fd, IpAddr::V6(Ipv6Addr::LOCALHOST), port))
-        .transpose()?;
+        .transpose()
+        .map_err(villa::Error::refused)?;
     let f = dir.join(ALLOW);
-    let text = fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?;
+    let text = crate::fsio::read_to_string(&f)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", f.display())).with_source(e))?;
     let mut p = serve(l, crate::net::allow_list(&text)?)?;
     p._v6 = v6;
     Ok(p)
@@ -106,17 +107,13 @@ fn adopt(fd: RawFd, addr: IpAddr, port: u16) -> Result<TcpListener, String> {
 }
 
 /// Serves the proxy for ALLOW on L, on a thread of its own; refusals are said on stderr (job-exec's log).
-pub fn serve(l: TcpListener, allow: Vec<Target>) -> Result<Proxy, String> {
-    l.set_nonblocking(true).map_err(|e| e.to_string())?;
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .thread_name("job-proxy")
-        .enable_all()
-        .build()
-        .map_err(|e| format!("its runtime: {e}"))?;
-    let handle = {
-        let _in = runtime.enter();
-        let l = tokio::net::TcpListener::from_std(l).map_err(|e| e.to_string())?;
+pub fn serve(l: TcpListener, allow: Vec<Target>) -> villa::Result<Proxy> {
+    l.set_nonblocking(true)?;
+    let runtime = saman::Executor::tuned(1, |b| {
+        b.thread_name("job-proxy");
+    })?;
+    let handle = runtime.block_on(async {
+        let l = tokio::net::TcpListener::from_std(l)?;
         let (tx, mut rx) = tokio::sync::mpsc::channel::<ProxyEvent>(64);
         let h = proxy::start(
             crate::net::proxy_config(allow),
@@ -124,13 +121,14 @@ pub fn serve(l: TcpListener, allow: Vec<Target>) -> Result<Proxy, String> {
             tx,
         );
         h.listen(Listener::Tcp(l), 0);
-        tokio::spawn(async move {
+        saman::spawn("job-proxy-events", async move {
             while let Some(e) = rx.recv().await {
-                eprintln!("sleipnir job-exec: the proxy refused {e:?}");
+                crate::eline!("sleipnir job-exec: the proxy refused {e:?}");
             }
-        });
-        h
-    };
+        })
+        .detach("it ends with the proxy's event channel");
+        Ok::<_, io::Error>(h)
+    })?;
     Ok(Proxy {
         _handle: handle,
         _runtime: runtime,
@@ -141,6 +139,7 @@ pub fn serve(l: TcpListener, allow: Vec<Target>) -> Result<Proxy, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::{Read, Write};
     use std::os::fd::IntoRawFd;
 
@@ -196,7 +195,7 @@ mod tests {
     #[test]
     fn job_exec_takes_only_its_loopback_socket() {
         let d = tempfile::tempdir().unwrap();
-        fs::write(d.path().join(ALLOW), "example.com:443\n").unwrap();
+        crate::fsio::write(d.path().join(ALLOW), "example.com:443\n").unwrap();
         let (fd, v6, port) = inherited(bind().unwrap());
         let p = take(fd, v6, port, d.path()).unwrap();
         assert!(cloexec(fd));
@@ -208,12 +207,12 @@ mod tests {
         let e = take(fd, None, port.wrapping_add(1).max(1), d.path())
             .err()
             .unwrap();
-        assert!(e.contains("not 127.0.0.1:"), "{e}");
+        assert!(e.message().contains("not 127.0.0.1:"), "{e}");
 
         let (fd, port) = v4_only();
         let (not_v6, _) = v4_only();
         let e = take(fd, Some(not_v6), port, d.path()).err().unwrap();
-        assert!(e.contains(&format!("not [::1]:{port}")), "{e}");
+        assert!(e.message().contains(&format!("not [::1]:{port}")), "{e}");
 
         let file = fs::File::open(d.path().join(ALLOW)).unwrap().into_raw_fd();
         assert!(take(file, None, port, d.path()).is_err());
@@ -221,7 +220,7 @@ mod tests {
 
         let (fd, v6, port) = inherited(bind().unwrap());
         let e = take(fd, v6, port, &d.path().join("none")).err().unwrap();
-        assert!(e.contains(ALLOW), "{e}");
+        assert!(e.message().contains(ALLOW), "{e}");
     }
 
     /// [D] The profile's `localhost` is both loopbacks, so the job's port on `::1` is held from [`bind`] to the
@@ -237,11 +236,11 @@ mod tests {
             Err(e) => Some(e.kind() == io::ErrorKind::AddrInUse),
         };
         let d = tempfile::tempdir().unwrap();
-        fs::write(d.path().join(ALLOW), "example.com:443\n").unwrap();
+        crate::fsio::write(d.path().join(ALLOW), "example.com:443\n").unwrap();
         let b = bind().unwrap();
         let port = b.port;
         if taken(port).is_none() {
-            eprintln!("no IPv6 loopback here: nothing on ::1 to hold");
+            crate::eline!("no IPv6 loopback here: nothing on ::1 to hold");
         }
         assert_ne!(taken(port), Some(false), "[::1]:{port} let go after bind");
         // SAFETY: the child only pauses (async-signal-safe) until it is killed
@@ -275,7 +274,7 @@ mod tests {
         // a port taken on ::1 and free on 127.0.0.1
         let (_other, busy) = loop {
             let Ok(o) = TcpListener::bind((Ipv6Addr::LOCALHOST, 0)) else {
-                eprintln!("no IPv6 loopback here: no port to skip");
+                crate::eline!("no IPv6 loopback here: no port to skip");
                 return;
             };
             let port = o.local_addr().unwrap().port();

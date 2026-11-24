@@ -6,7 +6,8 @@ use serde_json::{json, Value};
 use std::io::Read;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 use wayland_client::protocol::{
     wl_data_device::WlDataDevice, wl_data_device_manager::WlDataDeviceManager, wl_output::WlOutput,
     wl_seat::WlSeat, wl_subcompositor::WlSubcompositor,
@@ -72,12 +73,13 @@ fn selection_read_returns_client_data() {
     device.set_selection(Some(&source), 1);
     env.roundtrip();
     let path = env.rec.control_path();
-    let reader = std::thread::spawn(move || {
+    let reader = saman::spawn_thread("ritari-test", move || {
         send(
             &path,
             json!({"cmd": "read", "kind": "clipboard", "type": "text/plain"}),
         )
-    });
+    })
+    .unwrap();
     wait_for(&mut env, |e| !e.client.ev.sends.is_empty());
     let reply = reader.join().unwrap();
     assert_eq!(reply, json!({"ok": true, "data": "from the client"}));
@@ -108,12 +110,12 @@ fn wait_for_a_selection_answers_once_a_client_sets_one() {
         "{none}"
     );
     let path = env.rec.control_path();
-    let asker = std::thread::spawn(move || {
+    let asker = saman::spawn_thread("ritari-test", move || {
         send(
             &path,
             json!({"cmd": "wait", "for": "selection", "kind": "clipboard", "after": 0, "timeout_ms": 5000}),
         )
-    });
+    }).unwrap();
     let manager: WlDataDeviceManager = env.bind("wl_data_device_manager", 3);
     let source = manager.create_data_source(&env.qh, ());
     source.offer("text/plain".into());
@@ -148,7 +150,7 @@ fn wait_for(env: &mut Env, done: impl Fn(&Env) -> bool) {
     while !done(env) {
         assert!(Instant::now() < end, "timed out waiting for the client");
         env.roundtrip();
-        std::thread::sleep(Duration::from_millis(5));
+        stund::sleep_blocking(Duration::from_millis(5));
     }
 }
 
@@ -184,12 +186,13 @@ fn silent_offer_times_out_cleanly() {
     env.roundtrip();
     let path = env.rec.control_path();
     let started = Instant::now();
-    let reader = std::thread::spawn(move || {
+    let reader = saman::spawn_thread("ritari-test", move || {
         send(
             &path,
             json!({"cmd": "read", "kind": "clipboard", "type": "text/plain"}),
         )
-    });
+    })
+    .unwrap();
     wait_for(&mut env, |e| !e.client.ev.sends.is_empty());
     let globals = env.rec.control(json!({"cmd": "globals"}));
     assert_eq!(globals["ok"], true, "the loop answers while a read waits");

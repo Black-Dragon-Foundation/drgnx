@@ -343,7 +343,7 @@ mod tests {
         for (p, text, mode) in files {
             let f = d.path().join(p);
             fs::create_dir_all(f.parent().unwrap()).unwrap();
-            fs::write(&f, text).unwrap();
+            crate::fsio::write(&f, text).unwrap();
             fs::set_permissions(&f, fs::Permissions::from_mode(*mode)).unwrap();
         }
         d

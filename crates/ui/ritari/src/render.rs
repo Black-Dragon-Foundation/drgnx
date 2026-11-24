@@ -79,7 +79,7 @@ fn render<T>(
             .map_err(|e| e.to_string())?;
         draw_render_elements::<PixmanRenderer, _, _>(&mut frame, scale, &elements, &[full])
             .map_err(|e| e.to_string())?;
-        let _ = frame.finish().map_err(|e| e.to_string())?;
+        let _sync_point = frame.finish().map_err(|e| e.to_string())?;
     }
     let stride = image.stride();
     // SAFETY: the image owns `stride * h` bytes of pixel data, valid while `image` lives
@@ -89,19 +89,22 @@ fn render<T>(
 }
 
 fn write_bgra(path: &str, w: u32, h: u32, stride: usize, data: &[u8]) -> Result<(), String> {
-    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-    let mut out = std::io::BufWriter::new(file);
     let row = w as usize * 4;
-    for y in 0..h as usize {
-        out.write_all(&data[y * stride..y * stride + row])
-            .map_err(|e| e.to_string())?;
+    let path = std::path::Path::new(path);
+    if stride == row {
+        // rows follow each other: the image is written as it is, with no copy of its 20 MB
+        return eitri::replace_file(path, &data[..row * h as usize]).map_err(|e| e.to_string());
     }
-    out.flush().map_err(|e| e.to_string())
+    let mut out = Vec::with_capacity(row * h as usize);
+    for y in 0..h as usize {
+        out.extend_from_slice(&data[y * stride..y * stride + row]);
+    }
+    eitri::replace_file(path, &out).map_err(|e| e.to_string())
 }
 
 fn write_png(path: &str, w: u32, h: u32, stride: usize, data: &[u8]) -> Result<(), String> {
-    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    let mut png_bytes = Vec::new();
+    let mut enc = png::Encoder::new(&mut png_bytes, w, h);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
     let mut writer = enc.write_header().map_err(|e| e.to_string())?;
@@ -124,5 +127,7 @@ fn write_png(path: &str, w: u32, h: u32, stride: usize, data: &[u8]) -> Result<(
         }
         stream.write_all(&rgba).map_err(|e| e.to_string())?;
     }
-    stream.finish().map_err(|e| e.to_string())
+    stream.finish().map_err(|e| e.to_string())?;
+    drop(writer);
+    eitri::replace_file(std::path::Path::new(path), &png_bytes).map_err(|e| e.to_string())
 }

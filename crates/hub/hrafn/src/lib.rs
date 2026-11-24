@@ -20,6 +20,7 @@ pub mod map;
 mod memo;
 pub mod notebook;
 pub mod overlay;
+mod proc;
 pub mod query;
 pub mod rank;
 pub mod refs;
@@ -29,6 +30,7 @@ pub mod store;
 pub mod structural;
 pub mod symbols;
 pub mod tree;
+pub mod vector_pack;
 pub mod watch;
 
 pub use cache::{QuantRow, VectorCache};
@@ -39,7 +41,10 @@ pub use door::{GixDoor, door};
 pub use files::{Change, Class, Commit, Config, Git, Lang, Listed, classify, list};
 #[cfg(feature = "host")]
 pub use files::{GitCli, ignored_dirs, is_ignored_dir};
-pub use index::{Lag, Refresh, hold, lag, missing, missing_with, refresh, reset};
+pub use index::{
+    Lag, Refresh, Window, hold, lag, missing, missing_first, missing_ordered, missing_window,
+    missing_with, refresh, reset,
+};
 pub use query::{Answer, Hit, Query, Scope, search};
 pub use watch::{
     AddError, MAIN_TREE, ProjectWatch, Router, TreeSpec, Watch, WatchEvent, WatchState,
@@ -53,3 +58,6 @@ pub use store::{
     chunk_key, path_key, path_text,
 };
 pub use tree::{TreeId, TreeRow, TreeState, View};
+pub use vector_pack::{
+    ExportScope, PACK_FORMAT, PackHeader, PackReader, export_keys, read_pack, write_pack,
+};

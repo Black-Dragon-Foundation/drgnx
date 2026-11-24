@@ -5,7 +5,8 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 use rusqlite::config::DbConfig;
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
@@ -66,7 +67,7 @@ pub async fn run(
     row_cap: usize,
 ) -> Result<Rows, SqlRefusal> {
     let path = pool.path().to_path_buf();
-    tokio::task::spawn_blocking(move || {
+    saman::spawn_blocking("urdr-sql", move || {
         let (mut conn, denied) = open(&path)?;
         query(&mut conn, &denied, &sql, &params, deadline, row_cap)
     })
@@ -111,10 +112,7 @@ fn authorize(action: AuthAction<'_>, denied: &Mutex<Option<String>>) -> Authoriz
         }
         other => action_name(other),
     };
-    denied
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_or_insert(refused);
+    saman::lock(denied).get_or_insert(refused);
     Authorization::Deny
 }
 
@@ -214,7 +212,7 @@ fn query(
 
 /// The answer for a failed prepare or step: the authorizer's refusal first, then the deadline, then the rest.
 fn refusal(e: rusqlite::Error, denied: &Mutex<Option<String>>, late: &AtomicBool) -> SqlRefusal {
-    if let Some(action) = denied.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    if let Some(action) = saman::lock(denied).take() {
         return SqlRefusal::NotAllowed(action);
     }
     if late.load(Ordering::Relaxed) {
@@ -292,355 +290,391 @@ mod tests {
         fs::read(path).unwrap()
     }
 
-    #[tokio::test]
-    async fn select_works() {
-        let (_dir, pool) = fixture();
-        let r = run(
-            &pool,
-            "select id, name, data, 1.5 as r from t where id = ?1".into(),
-            vec![json!(1)],
-            SECONDS,
-            10,
-        )
-        .await
-        .unwrap();
-        assert_eq!(r.columns, ["id", "name", "data", "r"]);
-        assert_eq!(
-            r.rows,
-            vec![vec![json!(1), json!("a"), json!({"blob": 3}), json!(1.5)]]
-        );
-        assert!(!r.truncated);
-        // A non-recursive CTE, a join and JSON1 are reads.
-        let r = sql(
-            &pool,
-            "with two as (select id from t) select count(*), json_array(1, 2) from two join n on n.x = two.id",
-        )
-        .await
-        .unwrap();
-        assert_eq!(r.rows, vec![vec![json!(2), json!("[1,2]")]]);
-    }
-
-    #[tokio::test]
-    async fn attach_is_refused() {
-        let (dir, pool) = fixture();
-        refused(
-            sql(&pool, "attach database ':memory:' as x").await,
-            "attach",
-        );
-        let other = dir.path().join("other.db");
-        let text = format!("attach database '{}' as x", other.display());
-        refused(sql(&pool, &text).await, "attach");
-        assert!(!other.exists());
-        refused(sql(&pool, "detach database main").await, "detach");
-        // `VACUUM INTO` would write a copy anywhere; it prepares without an action code, then attaches its target
-        // when it runs, and that is refused.
-        let copy = dir.path().join("copy.db");
-        let text = format!("vacuum into '{}'", copy.display());
-        refused(sql(&pool, &text).await, "attach");
-        assert!(!copy.exists());
-    }
-
-    #[tokio::test]
-    async fn pragma_is_refused() {
-        let (_dir, pool) = fixture();
-        for text in [
-            "pragma journal_mode",
-            "pragma journal_mode = delete",
-            "pragma wal_checkpoint(truncate)",
-            "pragma query_only = 0",
-            "pragma writable_schema = 1",
-            "pragma trusted_schema = 1",
-        ] {
-            refused(sql(&pool, text).await, "pragma");
-        }
-    }
-
-    #[tokio::test]
-    async fn insert_update_delete_create_drop_are_refused() {
-        let (_dir, pool) = fixture();
-        let file = pool.path().to_path_buf();
-        let before = bytes(&file);
-        refused(
-            sql(&pool, "insert into t(name) values ('c')").await,
-            "insert",
-        );
-        refused(
-            sql(&pool, "replace into t(id, name) values (1, 'c')").await,
-            "insert",
-        );
-        refused(sql(&pool, "update t set name = 'c'").await, "update");
-        refused(sql(&pool, "delete from t").await, "delete");
-        // DDL: SQLite asks for more than one action (the schema table's insert or delete, then the DDL's own code);
-        // the first refusal is reported.
-        for text in [
-            "create table z(x)",
-            "create temp table z(x)",
-            "create index ti on t(name)",
-            "create view v as select 1",
-            "create trigger tr after insert on t begin select 1; end",
-            "drop table t",
-            "drop index t_name",
-            "alter table t add column y",
-            "reindex",
-            "analyze",
-            // VACUUM has no action code of its own; it attaches a scratch database when it runs, which is refused.
-            "vacuum",
-        ] {
-            let r = sql(&pool, text).await;
-            assert!(matches!(r, Err(SqlRefusal::NotAllowed(_))), "{text}: {r:?}");
-        }
-        assert_eq!(bytes(&file), before);
-        let r = sql(&pool, "select count(*) from t").await.unwrap();
-        assert_eq!(r.rows, vec![vec![json!(2)]]);
-    }
-
-    #[tokio::test]
-    async fn begin_commit_are_refused() {
-        let (_dir, pool) = fixture();
-        for text in ["begin", "begin immediate", "commit", "end", "rollback"] {
-            refused(sql(&pool, text).await, "transaction");
-        }
-        for text in ["savepoint s", "release s", "rollback to s"] {
-            refused(sql(&pool, text).await, "savepoint");
-        }
-    }
-
-    #[tokio::test]
-    async fn load_extension_is_refused() {
-        let (_dir, pool) = fixture();
-        refused(
-            sql(&pool, "select load_extension('/nonexistent/libx')").await,
-            "load_extension",
-        );
-        refused(
-            sql(&pool, "select LOAD_EXTENSION('/nonexistent/libx', 'f')").await,
-            "load_extension",
-        );
-        // With the extension API switched on, only the authorizer stands between the SQL and the loader.
-        let (mut conn, denied) = open(pool.path()).unwrap();
-        // SAFETY: the handle is this live connection's; the call only flips its extension-loading switch.
-        let rc = unsafe { rusqlite::ffi::sqlite3_enable_load_extension(conn.handle(), 1) };
-        assert_eq!(rc, rusqlite::ffi::SQLITE_OK);
-        refused(
-            query(
-                &mut conn,
-                &denied,
-                "select load_extension('/nonexistent/libx')",
-                &[],
+    #[test]
+    fn select_works() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            let r = run(
+                &pool,
+                "select id, name, data, 1.5 as r from t where id = ?1".into(),
+                vec![json!(1)],
                 SECONDS,
                 10,
-            ),
-            "load_extension",
-        );
-    }
-
-    #[tokio::test]
-    async fn a_recursive_cte_is_refused() {
-        let (_dir, pool) = fixture();
-        refused(
-            sql(
-                &pool,
-                "with recursive c(x) as (select 1 union all select x + 1 from c) select count(*) from c",
             )
-            .await,
-            "recursive",
-        );
-    }
-
-    #[tokio::test]
-    async fn two_statements_are_refused() {
-        let (_dir, pool) = fixture();
-        assert_eq!(
-            sql(&pool, "select 1; select 2").await,
-            Err(SqlRefusal::TooManyStatements)
-        );
-        // A trailing semicolon, blanks or a comment are not a second statement.
-        for text in ["select 1;", "select 1;  ", "select 1; -- done"] {
-            assert_eq!(
-                sql(&pool, text).await.unwrap().rows,
-                vec![vec![json!(1)]],
-                "{text}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn a_long_query_meets_the_deadline() {
-        let (_dir, pool) = fixture();
-        let r = run(
-            &pool,
-            "select count(*) from n a, n b, n c".into(),
-            Vec::new(),
-            Duration::from_millis(100),
-            10,
-        )
-        .await;
-        assert_eq!(r, Err(SqlRefusal::Deadline));
-    }
-
-    #[tokio::test]
-    async fn heavy_rows_meet_the_deadline() {
-        // 30 rows are too few steps for the progress handler to look at the clock, and 27 MB of random bytes take
-        // longer than a millisecond on any machine
-        let (_dir, pool) = fixture();
-        let r = run(
-            &pool,
-            "select randomblob(900000) from n a, n b".into(),
-            Vec::new(),
-            Duration::from_millis(1),
-            30,
-        )
-        .await;
-        assert_eq!(r, Err(SqlRefusal::Deadline));
-    }
-
-    #[tokio::test]
-    async fn rows_are_capped() {
-        let (_dir, pool) = fixture();
-        let r = run(
-            &pool,
-            "select x from n order by x".into(),
-            Vec::new(),
-            SECONDS,
-            10,
-        )
-        .await
-        .unwrap();
-        assert_eq!(r.rows.len(), 10);
-        assert_eq!(r.rows[9], vec![json!(10)]);
-        assert!(r.truncated);
-        let r = run(&pool, "select x from n".into(), Vec::new(), SECONDS, 2_000)
             .await
             .unwrap();
-        assert_eq!(r.rows.len(), 2_000);
-        assert!(!r.truncated);
-    }
-
-    #[tokio::test]
-    async fn never_checkpoints() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("work.db");
-        let wal: PathBuf = dir.path().join("work.db-wal");
-        let w = Connection::open(&file).unwrap();
-        w.pragma_update(None, "journal_mode", "wal").unwrap();
-        w.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
-        w.execute_batch("create table t(x); insert into t values (1), (2);")
-            .unwrap();
-        // The writer closes first without checkpointing, so the runner is the last connection to close.
-        w.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
-            .unwrap();
-        drop(w);
-        let main = bytes(&file);
-        let frames = fs::metadata(&wal).unwrap().len();
-        assert!(frames > 0);
-        let pool = ReadPool::open(file.clone(), 2);
-        let r = sql(&pool, "select count(*) from t").await.unwrap();
-        assert_eq!(r.rows, vec![vec![json!(2)]]);
-        assert_eq!(bytes(&file), main);
-        assert_eq!(fs::metadata(&wal).unwrap().len(), frames);
-    }
-
-    #[tokio::test]
-    async fn a_huge_blob_is_refused() {
-        let (_dir, pool) = fixture();
-        for text in [
-            "select randomblob(999999999)",
-            "select printf('%.*c', 999999999, 'x')",
-        ] {
-            let r = sql(&pool, text).await;
-            assert!(
-                matches!(&r, Err(SqlRefusal::Sql(t)) if t.contains("too big")),
-                "{text}: {r:?}"
+            assert_eq!(r.columns, ["id", "name", "data", "r"]);
+            assert_eq!(
+                r.rows,
+                vec![vec![json!(1), json!("a"), json!({"blob": 3}), json!(1.5)]]
             );
-        }
+            assert!(!r.truncated);
+            // A non-recursive CTE, a join and JSON1 are reads.
+            let r = sql(
+                &pool,
+                "with two as (select id from t) select count(*), json_array(1, 2) from two join n on n.x = two.id",
+            )
+            .await
+            .unwrap();
+            assert_eq!(r.rows, vec![vec![json!(2), json!("[1,2]")]]);
+        })
     }
 
-    #[tokio::test]
-    async fn pragma_table_functions_are_refused_or_harmless() {
-        let (_dir, pool) = fixture();
-        let file = pool.path().to_path_buf();
-        let before = bytes(&file);
-        let mode = || -> String {
-            crate::open_readonly(&file)
-                .unwrap()
-                .query_row("pragma journal_mode", [], |r| r.get(0))
-                .unwrap()
-        };
-        assert_eq!(mode(), "wal");
-        // A pragma's table-valued function prepares `PRAGMA [schema.]name[=arg]` on the same connection when it
-        // runs, and the authorizer refuses that (`NotAllowed("pragma")`). Where SQLite itself rejects the call first
-        // (`Sql(…)`), nothing ran either. Either way the file and its journal mode stay as they were.
-        for (text, want) in [
-            // Accepted with an argument (the table): the authorizer refuses the inner PRAGMA.
-            ("select * from pragma_table_info('t')", "pragma"),
-            // journal_mode's only hidden column is the schema: with a real one the authorizer refuses ...
-            ("select * from pragma_journal_mode('main')", "pragma"),
-            // ... and a mode in its place is read as a schema name, which SQLite refuses before preparing anything.
-            (
-                "select * from pragma_journal_mode('delete')",
-                "unknown database 'delete'",
-            ),
-            // wal_checkpoint has no table-valued function; query_only's takes no argument.
-            (
-                "select * from pragma_wal_checkpoint('truncate')",
-                "no such table",
-            ),
-            ("select * from pragma_query_only(0)", "too many arguments"),
-            ("select name from pragma_function_list", "pragma"),
-        ] {
-            match sql(&pool, text).await {
-                Err(SqlRefusal::NotAllowed(a)) if want == "pragma" => assert_eq!(a, want, "{text}"),
-                Err(SqlRefusal::Sql(t)) if want != "pragma" => {
-                    assert!(t.contains(want), "{text}: {t}")
-                }
-                other => panic!("{text}: {other:?}, expected {want}"),
+    #[test]
+    fn attach_is_refused() {
+        saman::block_on_current(async {
+            let (dir, pool) = fixture();
+            refused(
+                sql(&pool, "attach database ':memory:' as x").await,
+                "attach",
+            );
+            let other = dir.path().join("other.db");
+            let text = format!("attach database '{}' as x", other.display());
+            refused(sql(&pool, &text).await, "attach");
+            assert!(!other.exists());
+            refused(sql(&pool, "detach database main").await, "detach");
+            // `VACUUM INTO` would write a copy anywhere; it prepares without an action code, then attaches its target
+            // when it runs, and that is refused.
+            let copy = dir.path().join("copy.db");
+            let text = format!("vacuum into '{}'", copy.display());
+            refused(sql(&pool, &text).await, "attach");
+            assert!(!copy.exists());
+        })
+    }
+
+    #[test]
+    fn pragma_is_refused() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            for text in [
+                "pragma journal_mode",
+                "pragma journal_mode = delete",
+                "pragma wal_checkpoint(truncate)",
+                "pragma query_only = 0",
+                "pragma writable_schema = 1",
+                "pragma trusted_schema = 1",
+            ] {
+                refused(sql(&pool, text).await, "pragma");
             }
-            assert_eq!(bytes(&file), before, "{text}");
-            assert_eq!(mode(), "wal", "{text}");
-        }
+        })
     }
 
-    #[tokio::test]
-    async fn dbstat_is_read_only() {
-        let (_dir, pool) = fixture();
-        let r = sql(&pool, "select count(*) from dbstat").await.unwrap();
-        assert!(r.rows[0][0].as_i64().unwrap() > 0);
-        for text in [
-            "insert into dbstat(name) values ('t')",
-            "update dbstat set name = 'x'",
-            "delete from dbstat",
-            "insert into sqlite_dbpage values (1, zeroblob(4096))",
-        ] {
-            assert!(sql(&pool, text).await.is_err(), "{text}");
-        }
+    #[test]
+    fn insert_update_delete_create_drop_are_refused() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            let file = pool.path().to_path_buf();
+            let before = bytes(&file);
+            refused(
+                sql(&pool, "insert into t(name) values ('c')").await,
+                "insert",
+            );
+            refused(
+                sql(&pool, "replace into t(id, name) values (1, 'c')").await,
+                "insert",
+            );
+            refused(sql(&pool, "update t set name = 'c'").await, "update");
+            refused(sql(&pool, "delete from t").await, "delete");
+            // DDL: SQLite asks for more than one action (the schema table's insert or delete, then the DDL's own code);
+            // the first refusal is reported.
+            for text in [
+                "create table z(x)",
+                "create temp table z(x)",
+                "create index ti on t(name)",
+                "create view v as select 1",
+                "create trigger tr after insert on t begin select 1; end",
+                "drop table t",
+                "drop index t_name",
+                "alter table t add column y",
+                "reindex",
+                "analyze",
+                // VACUUM has no action code of its own; it attaches a scratch database when it runs, which is refused.
+                "vacuum",
+            ] {
+                let r = sql(&pool, text).await;
+                assert!(matches!(r, Err(SqlRefusal::NotAllowed(_))), "{text}: {r:?}");
+            }
+            assert_eq!(bytes(&file), before);
+            let r = sql(&pool, "select count(*) from t").await.unwrap();
+            assert_eq!(r.rows, vec![vec![json!(2)]]);
+        })
     }
 
-    #[tokio::test]
-    async fn fts3_tokenizer_is_refused() {
-        let (_dir, pool) = fixture();
-        refused(
-            sql(&pool, "select fts3_tokenizer('simple')").await,
-            "fts3_tokenizer",
-        );
-        refused(
-            sql(&pool, "select fts3_tokenizer('evil', x'0000000000000000')").await,
-            "fts3_tokenizer",
-        );
+    #[test]
+    fn begin_commit_are_refused() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            for text in ["begin", "begin immediate", "commit", "end", "rollback"] {
+                refused(sql(&pool, text).await, "transaction");
+            }
+            for text in ["savepoint s", "release s", "rollback to s"] {
+                refused(sql(&pool, text).await, "savepoint");
+            }
+        })
     }
 
-    #[tokio::test]
-    async fn attach_limit_is_zero() {
-        let (_dir, pool) = fixture();
-        let (conn, _denied) = open(pool.path()).unwrap();
-        assert_eq!(conn.limit(Limit::SQLITE_LIMIT_ATTACHED).unwrap(), 0);
-        for (limit, value) in LIMITS {
-            assert_eq!(conn.limit(limit).unwrap(), value, "{limit:?}");
-        }
-        assert!(conn.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap());
-        assert!(
-            !conn
-                .db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA)
-                .unwrap()
-        );
+    #[test]
+    fn load_extension_is_refused() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            refused(
+                sql(&pool, "select load_extension('/nonexistent/libx')").await,
+                "load_extension",
+            );
+            refused(
+                sql(&pool, "select LOAD_EXTENSION('/nonexistent/libx', 'f')").await,
+                "load_extension",
+            );
+            // With the extension API switched on, only the authorizer stands between the SQL and the loader.
+            let (mut conn, denied) = open(pool.path()).unwrap();
+            // SAFETY: the handle is this live connection's; the call only flips its extension-loading switch.
+            let rc = unsafe { rusqlite::ffi::sqlite3_enable_load_extension(conn.handle(), 1) };
+            assert_eq!(rc, rusqlite::ffi::SQLITE_OK);
+            refused(
+                query(
+                    &mut conn,
+                    &denied,
+                    "select load_extension('/nonexistent/libx')",
+                    &[],
+                    SECONDS,
+                    10,
+                ),
+                "load_extension",
+            );
+        })
+    }
+
+    #[test]
+    fn a_recursive_cte_is_refused() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            refused(
+                sql(
+                    &pool,
+                    "with recursive c(x) as (select 1 union all select x + 1 from c) select count(*) from c",
+                )
+                .await,
+                "recursive",
+            );
+        })
+    }
+
+    #[test]
+    fn two_statements_are_refused() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            assert_eq!(
+                sql(&pool, "select 1; select 2").await,
+                Err(SqlRefusal::TooManyStatements)
+            );
+            // A trailing semicolon, blanks or a comment are not a second statement.
+            for text in ["select 1;", "select 1;  ", "select 1; -- done"] {
+                assert_eq!(
+                    sql(&pool, text).await.unwrap().rows,
+                    vec![vec![json!(1)]],
+                    "{text}"
+                );
+            }
+        })
+    }
+
+    #[test]
+    fn a_long_query_meets_the_deadline() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            let r = run(
+                &pool,
+                "select count(*) from n a, n b, n c".into(),
+                Vec::new(),
+                Duration::from_millis(100),
+                10,
+            )
+            .await;
+            assert_eq!(r, Err(SqlRefusal::Deadline));
+        })
+    }
+
+    #[test]
+    fn heavy_rows_meet_the_deadline() {
+        saman::block_on_current(async {
+            // 30 rows are too few steps for the progress handler to look at the clock, and 27 MB of random bytes take
+            // longer than a millisecond on any machine
+            let (_dir, pool) = fixture();
+            let r = run(
+                &pool,
+                "select randomblob(900000) from n a, n b".into(),
+                Vec::new(),
+                Duration::from_millis(1),
+                30,
+            )
+            .await;
+            assert_eq!(r, Err(SqlRefusal::Deadline));
+        })
+    }
+
+    #[test]
+    fn rows_are_capped() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            let r = run(
+                &pool,
+                "select x from n order by x".into(),
+                Vec::new(),
+                SECONDS,
+                10,
+            )
+            .await
+            .unwrap();
+            assert_eq!(r.rows.len(), 10);
+            assert_eq!(r.rows[9], vec![json!(10)]);
+            assert!(r.truncated);
+            let r = run(&pool, "select x from n".into(), Vec::new(), SECONDS, 2_000)
+                .await
+                .unwrap();
+            assert_eq!(r.rows.len(), 2_000);
+            assert!(!r.truncated);
+        })
+    }
+
+    #[test]
+    fn never_checkpoints() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("work.db");
+            let wal: PathBuf = dir.path().join("work.db-wal");
+            let w = Connection::open(&file).unwrap();
+            w.pragma_update(None, "journal_mode", "wal").unwrap();
+            w.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+            w.execute_batch("create table t(x); insert into t values (1), (2);")
+                .unwrap();
+            // The writer closes first without checkpointing, so the runner is the last connection to close.
+            w.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+                .unwrap();
+            drop(w);
+            let main = bytes(&file);
+            let frames = fs::metadata(&wal).unwrap().len();
+            assert!(frames > 0);
+            let pool = ReadPool::open(file.clone(), 2);
+            let r = sql(&pool, "select count(*) from t").await.unwrap();
+            assert_eq!(r.rows, vec![vec![json!(2)]]);
+            assert_eq!(bytes(&file), main);
+            assert_eq!(fs::metadata(&wal).unwrap().len(), frames);
+        })
+    }
+
+    #[test]
+    fn a_huge_blob_is_refused() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            for text in [
+                "select randomblob(999999999)",
+                "select printf('%.*c', 999999999, 'x')",
+            ] {
+                let r = sql(&pool, text).await;
+                assert!(
+                    matches!(&r, Err(SqlRefusal::Sql(t)) if t.contains("too big")),
+                    "{text}: {r:?}"
+                );
+            }
+        })
+    }
+
+    #[test]
+    fn pragma_table_functions_are_refused_or_harmless() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            let file = pool.path().to_path_buf();
+            let before = bytes(&file);
+            let mode = || -> String {
+                crate::open_readonly(&file)
+                    .unwrap()
+                    .query_row("pragma journal_mode", [], |r| r.get(0))
+                    .unwrap()
+            };
+            assert_eq!(mode(), "wal");
+            // A pragma's table-valued function prepares `PRAGMA [schema.]name[=arg]` on the same connection when it
+            // runs, and the authorizer refuses that (`NotAllowed("pragma")`). Where SQLite itself rejects the call first
+            // (`Sql(…)`), nothing ran either. Either way the file and its journal mode stay as they were.
+            for (text, want) in [
+                // Accepted with an argument (the table): the authorizer refuses the inner PRAGMA.
+                ("select * from pragma_table_info('t')", "pragma"),
+                // journal_mode's only hidden column is the schema: with a real one the authorizer refuses ...
+                ("select * from pragma_journal_mode('main')", "pragma"),
+                // ... and a mode in its place is read as a schema name, which SQLite refuses before preparing anything.
+                (
+                    "select * from pragma_journal_mode('delete')",
+                    "unknown database 'delete'",
+                ),
+                // wal_checkpoint has no table-valued function; query_only's takes no argument.
+                (
+                    "select * from pragma_wal_checkpoint('truncate')",
+                    "no such table",
+                ),
+                ("select * from pragma_query_only(0)", "too many arguments"),
+                ("select name from pragma_function_list", "pragma"),
+            ] {
+                match sql(&pool, text).await {
+                    Err(SqlRefusal::NotAllowed(a)) if want == "pragma" => {
+                        assert_eq!(a, want, "{text}")
+                    }
+                    Err(SqlRefusal::Sql(t)) if want != "pragma" => {
+                        assert!(t.contains(want), "{text}: {t}")
+                    }
+                    other => panic!("{text}: {other:?}, expected {want}"),
+                }
+                assert_eq!(bytes(&file), before, "{text}");
+                assert_eq!(mode(), "wal", "{text}");
+            }
+        })
+    }
+
+    #[test]
+    fn dbstat_is_read_only() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            let r = sql(&pool, "select count(*) from dbstat").await.unwrap();
+            assert!(r.rows[0][0].as_i64().unwrap() > 0);
+            for text in [
+                "insert into dbstat(name) values ('t')",
+                "update dbstat set name = 'x'",
+                "delete from dbstat",
+                "insert into sqlite_dbpage values (1, zeroblob(4096))",
+            ] {
+                assert!(sql(&pool, text).await.is_err(), "{text}");
+            }
+        })
+    }
+
+    #[test]
+    fn fts3_tokenizer_is_refused() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            refused(
+                sql(&pool, "select fts3_tokenizer('simple')").await,
+                "fts3_tokenizer",
+            );
+            refused(
+                sql(&pool, "select fts3_tokenizer('evil', x'0000000000000000')").await,
+                "fts3_tokenizer",
+            );
+        })
+    }
+
+    #[test]
+    fn attach_limit_is_zero() {
+        saman::block_on_current(async {
+            let (_dir, pool) = fixture();
+            let (conn, _denied) = open(pool.path()).unwrap();
+            assert_eq!(conn.limit(Limit::SQLITE_LIMIT_ATTACHED).unwrap(), 0);
+            for (limit, value) in LIMITS {
+                assert_eq!(conn.limit(limit).unwrap(), value, "{limit:?}");
+            }
+            assert!(conn.db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE).unwrap());
+            assert!(
+                !conn
+                    .db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA)
+                    .unwrap()
+            );
+        })
     }
 }

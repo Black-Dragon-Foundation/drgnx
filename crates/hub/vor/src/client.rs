@@ -147,17 +147,17 @@ impl Client {
         addr: std::net::SocketAddr,
         within: std::time::Duration,
     ) -> std::io::Result<(Client, mpsc::UnboundedReceiver<Incoming>)> {
-        let deadline = tokio::time::Instant::now() + within;
+        let start = stund::Instant::now();
         loop {
             match tokio::net::TcpStream::connect(addr).await {
                 Ok(s) => return Ok(Client::tcp(s)),
-                Err(e) if tokio::time::Instant::now() >= deadline => {
+                Err(e) if start.elapsed() >= within => {
                     return Err(std::io::Error::new(
                         e.kind(),
                         format!("no debug adapter on {addr} after {within:?}: {e}"),
                     ));
                 }
-                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+                Err(_) => stund::sleep(std::time::Duration::from_millis(50)).await,
             }
         }
     }
@@ -195,7 +195,7 @@ impl Client {
         // the writer: ends when every handle is gone (closing the adapter's input) or a write fails (the reader then
         // sees the end too)
         let weak = Arc::downgrade(&client.inner);
-        tokio::spawn(async move {
+        saman::spawn("vor-writer", async move {
             let mut write = write;
             let mut codec = DapCodec::default();
             let mut buf = BytesMut::new();
@@ -213,11 +213,15 @@ impl Client {
                 }
             }
             // every handle is gone: the adapter reads the end of its input
-            let _ = write.shutdown().await;
-        });
+            saman::delivered(
+                write.shutdown().await,
+                "vor: the adapter's input was already gone",
+            );
+        })
+        .detach("ends with the connection: every handle gone or a write failed");
         // the reader: frames in the order they came, then one end
         let weak = Arc::downgrade(&client.inner);
-        tokio::spawn(async move {
+        saman::spawn("vor-reader", async move {
             let mut read = read;
             let mut codec = DapCodec::default();
             let mut buf = BytesMut::with_capacity(16 * 1024);
@@ -227,7 +231,7 @@ impl Client {
                         Ok(None) => break,
                         Err(e) => break 'read format!("a framing error: {e}"),
                         Ok(Some(Frame::Bad(why))) => {
-                            let _ = in_tx.send(Incoming::Bad(why));
+                            saman::delivered(in_tx.send(Incoming::Bad(why)), "vor: bad frame");
                         }
                         Ok(Some(Frame::Message(m))) => {
                             let Some(inner) = weak.upgrade() else { return };
@@ -244,7 +248,8 @@ impl Client {
             if let Some(inner) = weak.upgrade() {
                 close(&inner, &why);
             }
-        });
+        })
+        .detach("ends with the connection: the adapter's end, a read error or every handle gone");
         (client, in_rx)
     }
 
@@ -262,14 +267,17 @@ impl Client {
         body: Value,
     ) {
         let seq = self.next_seq();
-        let _ = self.inner.out.send(Message::Response {
-            seq,
-            request_seq,
-            success,
-            command: command.to_owned(),
-            message,
-            body,
-        });
+        saman::delivered(
+            self.inner.out.send(Message::Response {
+                seq,
+                request_seq,
+                success,
+                command: command.to_owned(),
+                message,
+                body,
+            }),
+            "vor: answer to a reverse request",
+        );
     }
 
     /// Sends COMMAND with ARGUMENTS; the future answers the response's body (or why there is none). Its `seq` is
@@ -278,21 +286,27 @@ impl Client {
         let seq = self.next_seq();
         let (tx, rx) = oneshot::channel();
         {
-            let mut p = self.inner.pending.lock().unwrap();
+            let mut p = saman::lock(&self.inner.pending);
             match &mut *p {
                 Ok(map) => {
                     map.insert(seq, (command.to_owned(), tx));
                 }
                 Err(why) => {
-                    let _ = tx.send(Err(Error::Closed(why.clone())));
+                    saman::delivered(
+                        tx.send(Err(Error::Closed(why.clone()))),
+                        "vor: request on a closed connection",
+                    );
                 }
             }
         }
-        let _ = self.inner.out.send(Message::Request {
-            seq,
-            command: command.to_owned(),
-            arguments,
-        });
+        saman::delivered(
+            self.inner.out.send(Message::Request {
+                seq,
+                command: command.to_owned(),
+                arguments,
+            }),
+            "vor: request",
+        );
         Pending {
             seq,
             rx,
@@ -320,7 +334,7 @@ impl Client {
 
     /// Whether the connection has ended.
     pub fn is_closed(&self) -> bool {
-        self.inner.pending.lock().unwrap().is_err()
+        saman::lock(&self.inner.pending).is_err()
     }
 
     /// Ends the connection from this side: every waiter gets [`Error::Closed`] with WHY.
@@ -331,7 +345,7 @@ impl Client {
 
 fn close(inner: &Inner, why: &str) {
     let waiters = {
-        let mut p = inner.pending.lock().unwrap();
+        let mut p = saman::lock(&inner.pending);
         match std::mem::replace(&mut *p, Err(why.to_owned())) {
             Ok(map) => map,
             Err(old) => {
@@ -341,7 +355,10 @@ fn close(inner: &Inner, why: &str) {
         }
     };
     for (_, (_, tx)) in waiters {
-        let _ = tx.send(Err(Error::Closed(why.to_owned())));
+        saman::delivered(
+            tx.send(Err(Error::Closed(why.to_owned()))),
+            "vor: waiter gone",
+        );
     }
 }
 
@@ -355,7 +372,7 @@ fn dispatch(inner: &Arc<Inner>, m: Message, in_tx: &mpsc::UnboundedSender<Incomi
             body,
             ..
         } => {
-            let waiter = match &mut *inner.pending.lock().unwrap() {
+            let waiter = match &mut *saman::lock(&inner.pending) {
                 Ok(map) => map.remove(&request_seq),
                 Err(_) => None,
             };
@@ -369,26 +386,29 @@ fn dispatch(inner: &Arc<Inner>, m: Message, in_tx: &mpsc::UnboundedSender<Incomi
                         body,
                     })
                 };
-                let _ = tx.send(r);
+                saman::delivered(tx.send(r), "vor: answer for a dropped request");
             }
         }
         Message::Event { event, body, .. } => {
-            let _ = in_tx.send(Incoming::Event { event, body });
+            saman::delivered(in_tx.send(Incoming::Event { event, body }), "vor: event");
         }
         Message::Request {
             seq,
             command,
             arguments,
         } => {
-            let _ = in_tx.send(Incoming::Request(ReverseRequest {
-                seq,
-                command,
-                arguments,
-                client: Client {
-                    inner: inner.clone(),
-                },
-                answered: false,
-            }));
+            saman::delivered(
+                in_tx.send(Incoming::Request(ReverseRequest {
+                    seq,
+                    command,
+                    arguments,
+                    client: Client {
+                        inner: inner.clone(),
+                    },
+                    answered: false,
+                })),
+                "vor: reverse request",
+            );
         }
     }
 }
@@ -422,7 +442,7 @@ impl Future for Pending {
 impl Drop for Pending {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.upgrade()
-            && let Ok(map) = &mut *inner.pending.lock().unwrap()
+            && let Ok(map) = &mut *saman::lock(&inner.pending)
         {
             map.remove(&self.seq);
         }

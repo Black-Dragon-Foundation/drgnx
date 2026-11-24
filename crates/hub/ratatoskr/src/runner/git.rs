@@ -11,13 +11,13 @@ use super::clash::FileDiff;
 use super::{GitError, GitFuture, RunGit, TaskTree, TreeMode, TrialResult};
 use crate::agents::lock::PROTECTED_RO;
 use crate::matrix_gate::Gate;
+use crate::proc::Command;
 use runstav::methods::matrix::Facts;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::process::Command;
 
 #[cfg(test)]
 mod tests;
@@ -181,8 +181,7 @@ impl HubGit {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("LC_ALL", "C")
-            .stdin(std::process::Stdio::null())
-            .kill_on_drop(true);
+            .deadline(self.deadline);
         for (k, v) in self.shell.overlay() {
             c.env(k, v);
         }
@@ -195,7 +194,7 @@ impl HubGit {
         if let Some(d) = dir {
             c.current_dir(d);
         }
-        let out = crate::clock::timeout(self.deadline, c.output())
+        let out = crate::clock::timeout(self.deadline, c.output_async())
             .await
             .map_err(|_| err(what.clone(), "past its deadline"))?
             .map_err(|e| err(what.clone(), e.to_string()))?;
@@ -346,7 +345,10 @@ impl HubGit {
             .await
         }
         .await;
-        let _ = self.git_in(repo, &["update-ref", "-d", &incoming]).await;
+        crate::soft::done(
+            self.git_in(repo, &["update-ref", "-d", &incoming]).await,
+            "git",
+        );
         result.map(|_| tip)
     }
 
@@ -493,7 +495,7 @@ impl HubGit {
                 ins.changed.len()
             )));
         }
-        self.checked.lock().unwrap().insert(
+        saman::lock(&self.checked).insert(
             tree.branch.clone(),
             Checked {
                 tip: ins.tip.clone(),
@@ -527,7 +529,7 @@ impl HubGit {
 
     /// The card for BRANCH's CI/build change was answered yes: its checked tip may merge.
     pub fn clear(&self, branch: &str) {
-        if let Some(c) = self.checked.lock().unwrap().get_mut(branch) {
+        if let Some(c) = saman::lock(&self.checked).get_mut(branch) {
             c.cleared = true;
         }
     }
@@ -540,7 +542,7 @@ impl HubGit {
 
     /// The tip the gate checked and cleared for BRANCH, if any: the commit the hub's gates judge.
     pub fn checked_tip(&self, branch: &str) -> Option<String> {
-        let c = self.checked.lock().unwrap();
+        let c = saman::lock(&self.checked);
         c.get(branch).filter(|c| c.cleared).map(|c| c.tip.clone())
     }
 
@@ -559,7 +561,7 @@ impl HubGit {
             .await?
             .trim()
             .to_owned();
-        let checked = self.checked.lock().unwrap().get(&tree.branch).cloned();
+        let checked = saman::lock(&self.checked).get(&tree.branch).cloned();
         if let (Some(j), Some(c)) = (judged, &checked)
             && j != c.tip
         {
@@ -595,7 +597,7 @@ impl HubGit {
             .await;
         match r {
             Ok(_) => {
-                self.checked.lock().unwrap().remove(&tree.branch);
+                saman::lock(&self.checked).remove(&tree.branch);
                 Ok(MergeOutcome::Merged)
             }
             Err(e) => {
@@ -605,7 +607,7 @@ impl HubGit {
                     .unwrap_or_default();
                 let files: Vec<PathBuf> = files.lines().map(PathBuf::from).collect();
                 if self.git_in(job_tree, &["merge", "--abort"]).await.is_err() {
-                    let _ = self.git_in(job_tree, &["reset", "--merge"]).await;
+                    crate::soft::done(self.git_in(job_tree, &["reset", "--merge"]).await, "git");
                 }
                 if files.is_empty() {
                     Err(e)
@@ -779,7 +781,7 @@ impl HubGit {
                         return Err(e);
                     }
                     conflicts.extend(files);
-                    let _ = self.git_in(&scratch, &["merge", "--abort"]).await;
+                    crate::soft::done(self.git_in(&scratch, &["merge", "--abort"]).await, "git");
                 }
             }
             conflicts.sort();
@@ -790,10 +792,12 @@ impl HubGit {
             })
         }
         .await;
-        let _ = self
-            .git_in(repo, &["worktree", "remove", "--force", &s])
-            .await;
-        let _ = std::fs::remove_dir_all(&scratch);
+        crate::soft::done(
+            self.git_in(repo, &["worktree", "remove", "--force", &s])
+                .await,
+            "git",
+        );
+        crate::soft::done(std::fs::remove_dir_all(&scratch), "std::fs::remove_dir_all");
         result
     }
 }
@@ -836,13 +840,13 @@ fn snapshot_tip(path: &Path, branch: &str) -> Option<String> {
 /// Copy a bare store to a task's `.git`, sharing blocks where the filesystem can (APFS, btrfs, XFS).
 async fn reflink_copy(from: &str, to: &str) -> Result<(), GitError> {
     for flags in [["-a", "--reflink=auto"], ["-a", "-c"], ["-a", "-a"]] {
-        let _ = std::fs::remove_dir_all(to);
-        let ok = Command::new("cp")
+        crate::soft::done(std::fs::remove_dir_all(to), "std::fs::remove_dir_all");
+        let ok = crate::proc::Command::new("cp")
             .args(flags)
             .arg(from)
             .arg(to)
             .stderr(std::process::Stdio::null())
-            .status()
+            .status_async()
             .await
             .is_ok_and(|s| s.success());
         if ok {

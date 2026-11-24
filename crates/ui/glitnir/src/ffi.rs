@@ -233,7 +233,9 @@ pub unsafe extern "C" fn glitnir_decor_corners(
     scale: f64,
 ) -> i32 {
     ffi_guard(|| {
-        let px = |v: f64| (v.is_finite() && v >= 0.0).then(|| (v * scale).round() as u32);
+        let px = |v: f64| {
+            (v.is_finite() && v >= 0.0).then(|| kvardi::device_f64(v, scale).round() as u32)
+        };
         let (Some(r), Some(b)) = (px(radius), px(ring_w)) else {
             return GLITNIR_E_ARG;
         };
@@ -808,6 +810,7 @@ pub unsafe extern "C" fn glitnir_probe_seams(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kvardi::Px;
     use std::path::{Path, PathBuf};
 
     fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -822,7 +825,7 @@ mod tests {
     }
 
     fn crate_file(rel: &str) -> String {
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)).unwrap()
+        eitri::read_string(&Path::new(env!("CARGO_MANIFEST_DIR")).join(rel), 1 << 24).unwrap()
     }
 
     #[test]
@@ -859,19 +862,19 @@ mod tests {
         let f = 8001;
         assert!(pending(f).is_empty());
         let rects = [
-            Rect::new(0, 0, 10, 2),
-            Rect::new(0, 0, 4, 1),
-            Rect::new(50, 50, 0, 3),
+            Rect::new(Px(0), Px(0), Px(10), Px(2)),
+            Rect::new(Px(0), Px(0), Px(4), Px(1)),
+            Rect::new(Px(50), Px(50), Px(0), Px(3)),
         ];
         assert_eq!(
             unsafe { glitnir_damage_add_n(f, rects.as_ptr(), rects.len()) },
             GLITNIR_OK
         );
-        assert_eq!(pending(f), vec![Rect::new(0, 0, 10, 2)]);
+        assert_eq!(pending(f), vec![Rect::new(Px(0), Px(0), Px(10), Px(2))]);
         assert!(pending(f).is_empty());
-        let area = Rect::new(0, 100, 300, 200);
+        let area = Rect::new(Px(0), Px(100), Px(300), Px(200));
         assert_eq!(
-            glitnir_scroll(f, 3, area, -40, Rect::new(0, 260, 300, 40)),
+            glitnir_scroll(f, 3, area, -40, Rect::new(Px(0), Px(260), Px(300), Px(40))),
             GLITNIR_OK
         );
         assert_eq!(pending(f), vec![area]);
@@ -880,7 +883,10 @@ mod tests {
             unsafe { glitnir_damage_add_n(f, rects.as_ptr(), 1) },
             GLITNIR_OK
         );
-        assert_eq!(pending(f), vec![Rect::new(0, 0, i32::MAX, i32::MAX)]);
+        assert_eq!(
+            pending(f),
+            vec![Rect::new(Px(0), Px(0), Px(i32::MAX), Px(i32::MAX))]
+        );
         assert_eq!(glitnir_damage_forget(f), GLITNIR_OK);
         assert!(pending(f).is_empty());
     }
@@ -894,7 +900,10 @@ mod tests {
         };
         assert_eq!(unsafe { glitnir_commit(f, &mut out) }, GLITNIR_OK);
         assert_eq!(out.n, 0);
-        let rects = [Rect::new(3, 4, 5, 6), Rect::new(100, 0, 2, 2)];
+        let rects = [
+            Rect::new(Px(3), Px(4), Px(5), Px(6)),
+            Rect::new(Px(100), Px(0), Px(2), Px(2)),
+        ];
         assert_eq!(
             unsafe { glitnir_damage_add_n(f, rects.as_ptr(), rects.len()) },
             GLITNIR_OK
@@ -987,7 +996,7 @@ mod tests {
             scale: 1.0,
             visible: 1,
         };
-        let root = d(r, 0, 1, Rect::new(0, 0, 400, 300));
+        let root = d(r, 0, 1, Rect::new(Px(0), Px(0), Px(400), Px(300)));
         assert_eq!(unsafe { glitnir_layer_upsert(r, &root) }, GLITNIR_E_STATE);
         assert_eq!(glitnir_root_new(r), GLITNIR_OK);
         assert_eq!(unsafe { glitnir_layer_upsert(r, &root) }, GLITNIR_OK);
@@ -1000,7 +1009,7 @@ mod tests {
             GLITNIR_E_ARG
         );
         for id in [10, 20] {
-            let c = d(id, r, 3, Rect::new(10, 10, 50, 50));
+            let c = d(id, r, 3, Rect::new(Px(10), Px(10), Px(50), Px(50)));
             assert_eq!(unsafe { glitnir_layer_upsert(r, &c) }, GLITNIR_OK);
         }
         let ch = Chrome {
@@ -1034,7 +1043,10 @@ mod tests {
         assert_eq!(unsafe { glitnir_commit(r, &mut out) }, GLITNIR_OK);
         // SAFETY: valid until R's next commit.
         let got = unsafe { std::slice::from_raw_parts(out.rects, out.n) };
-        assert!(got.contains(&Rect::new(0, 0, 400, 300)), "{got:?}");
+        assert!(
+            got.contains(&Rect::new(Px(0), Px(0), Px(400), Px(300))),
+            "{got:?}"
+        );
         assert_eq!(glitnir_layer_remove(r, 10), GLITNIR_OK);
         assert!(list().is_empty());
         assert_eq!(glitnir_root_drop(r), GLITNIR_OK);
@@ -1058,7 +1070,7 @@ mod tests {
         assert_eq!(glitnir_layer_set_output(r, w(1), 1), GLITNIR_E_STATE);
         assert_eq!(glitnir_root_new(r), GLITNIR_OK);
         assert_eq!(
-            unsafe { glitnir_layer_upsert(r, &d(r, 1, Rect::new(0, 0, 800, 600))) },
+            unsafe { glitnir_layer_upsert(r, &d(r, 1, Rect::new(Px(0), Px(0), Px(800), Px(600)))) },
             GLITNIR_OK
         );
         assert_eq!(
@@ -1072,7 +1084,11 @@ mod tests {
             "not a window"
         );
         for i in 1..=5 {
-            let l = d(w(i), 2, Rect::new(0, 100 * i as i32, 800, 100));
+            let l = d(
+                w(i),
+                2,
+                Rect::new(Px(0), Px(100 * i as i32), Px(800), Px(100)),
+            );
             assert_eq!(unsafe { glitnir_layer_upsert(r, &l) }, GLITNIR_OK);
         }
         for i in 1..=4 {
@@ -1137,7 +1153,12 @@ mod tests {
         );
         let mut texts: Vec<(String, String)> = files
             .iter()
-            .map(|p| (p.display().to_string(), std::fs::read_to_string(p).unwrap()))
+            .map(|p| {
+                (
+                    p.display().to_string(),
+                    eitri::read_string(p, 1 << 24).unwrap(),
+                )
+            })
             .collect();
         texts.push(("include/glitnir.h".into(), crate_file("include/glitnir.h")));
         for (name, text) in texts {

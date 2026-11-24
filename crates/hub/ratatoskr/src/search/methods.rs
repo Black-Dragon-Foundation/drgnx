@@ -10,13 +10,16 @@
 //! - **A query** refreshes tier 1 when the files changed, picks the model (`search::prefer`: a server that answers and
 //!   covers 95 % of the chunks, else the built-in model), embeds the question with it and asks `hrafn::search`. With no
 //!   model the answer is keyword, symbol and path results at once, and says why.
-//! - **The embedders** of a project are the built-in model's worker (when `drgnx-search-builtin` is on and the model is
-//!   `Ready`) and the servers the gateway has. A change in that set opens the project again.
+//! - **The embedders** of a project are the local engine (when the `embed` role names it and its download was
+//!   consented and is in place), the servers the gateway has, and the built-in model's worker (when
+//!   `drgnx-search-builtin` is on and the model is `Ready`). A change in that set opens the project again.
 
+use super::engine_pool::EnginePool;
+use super::manage::{PauseWhy, RootState};
 use super::project::{Project, ProjectError, ProjectSpec, Tier2, ViewOf, project_id};
 use super::saved::Saved;
 use super::worker::WorkerEmbedder;
-use super::{DocEmbedder, Search, download, power, prefer, saved, scope, servers};
+use super::{DocEmbedder, Search, download, power, prefer, saved, scope};
 use crate::clock;
 use crate::dispatch::Caller;
 use crate::embed::ProviderEmbedder;
@@ -26,6 +29,7 @@ use hrafn_embed::cache::{ModelState, model_dir, state};
 use hrafn_embed::fingerprint::{Fingerprint, Identity};
 use hrafn_embed::{default_model, download_bytes};
 use runstav::methods::Params;
+use runstav::methods::gateway::ProviderKind;
 use runstav::methods::search as w;
 use runstav::paths::{self, Env};
 use runstav::wire::{Error, ErrorCode};
@@ -68,6 +72,30 @@ const MAX_USER_WATCHES: &str = "/proc/sys/fs/inotify/max_user_watches";
 
 type Projects = Arc<tokio::sync::Mutex<HashMap<String, Open>>>;
 
+/// An install has finished: the open projects are dropped (their embedders are formed again) and each root is opened
+/// again at once, so tier 2 starts with the new engine or model rather than at the next call that names the root.
+async fn reopen(projects: &Projects, front: Option<Weak<Front>>) {
+    let roots: Vec<PathBuf> = {
+        let mut open = projects.lock().await;
+        let roots = open
+            .values()
+            .map(|o| o.project.root().to_path_buf())
+            .collect();
+        open.clear();
+        roots
+    };
+    let Some(front) = front.and_then(|f| f.upgrade()) else {
+        return;
+    };
+    for root in roots {
+        // a root that cannot be opened now is opened (and its error told) by the call that names it
+        crate::soft::done(
+            front.search.project(&front, &root).await,
+            "search: reopen a project",
+        );
+    }
+}
+
 /// Hrafn's state in the hub: the built-in model's worker, the open projects, the model download.
 #[derive(Default)]
 pub struct Hub {
@@ -84,22 +112,31 @@ pub struct Hub {
     pub embed: Arc<crate::embed::Shared>,
     /// What each server proved at its last probe, and when ([`Hub::probed`]); a server that did not answer is `None`.
     probes: Mutex<HashMap<String, (tokio::time::Instant, Option<Identity>)>>,
+    /// The vector server (`embed/serve-start`), while it runs.
+    serve: tokio::sync::Mutex<Option<crate::embed_serve::Running>>,
 }
 
 /// How long a call that only needs a server's fingerprint (a query, a project's signature) reuses a probe, so that
 /// none of them costs a request to the server. Tier 2 probes before every batch on its own.
 const PROBE_TTL: Duration = Duration::from_secs(10);
 
-fn error(code: ErrorCode, message: impl Into<String>, path: Option<&str>) -> Error {
+fn error(code: ErrorCode, message: impl ToString, path: Option<&str>) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: path.map(str::to_owned),
     }
 }
 
 fn internal(message: impl ToString) -> Error {
     error(ErrorCode::Internal, message.to_string(), None)
+}
+
+fn pack_error(e: super::packs::PackError) -> Error {
+    match e {
+        super::packs::PackError::Refused(m) => error(ErrorCode::InvalidParams, m, None),
+        other => internal(other),
+    }
 }
 
 fn project_error(e: ProjectError) -> Error {
@@ -235,14 +272,14 @@ fn scope_of(s: Option<w::Scope>) -> Scope {
 
 /// `.drgnx/search.toml` of ROOT as a layer ([`hrafn::files::read_repo`], at most 64 KiB, read as data). No file is an
 /// empty layer; a file that does not read is an `Err`.
-pub fn config_file(root: &Path) -> Result<hrafn::rules::RuleSet, String> {
-    hrafn::files::read_repo(root).map_err(|e| e.to_string())
+pub fn config_file(root: &Path) -> villa::Result<hrafn::rules::RuleSet> {
+    hrafn::files::read_repo(root).map_err(|e| villa::Error::invalid(e.to_string()))
 }
 
 impl Hub {
     /// The front, once it is in its `Arc` (the MCP tool reaches the hub through it).
     pub fn bind(&self, front: &Arc<Front>) {
-        let _ = self.front.set(Arc::downgrade(front));
+        crate::soft::done(self.front.set(Arc::downgrade(front)), "methods");
     }
 
     /// The front the hub was bound to, while it lives.
@@ -253,16 +290,22 @@ impl Hub {
     /// Where things are, once the server knows: ENV for the state and cache folders, HOME and CONFIG for the deny-list,
     /// RUNTIME for the model consent.
     pub fn configure(&self, env: &Env, home: PathBuf, config: PathBuf, runtime: urdr::Handle) {
-        let _ = self.search.set(Search::new(env));
-        let _ = self.saved.set(Arc::new(Saved::new(
-            paths::state_dir(env).join("hub").join("search"),
-        )));
-        let _ = self.dirs.set(Dirs {
-            env: env.clone(),
-            home,
-            config,
-            runtime,
-        });
+        crate::soft::done(self.search.set(Search::new(env)), "methods");
+        crate::soft::done(
+            self.saved.set(Arc::new(Saved::new(
+                paths::state_dir(env).join("hub").join("search"),
+            ))),
+            "methods",
+        );
+        crate::soft::done(
+            self.dirs.set(Dirs {
+                env: env.clone(),
+                home,
+                config,
+                runtime,
+            }),
+            "methods",
+        );
     }
 
     /// The built-in model's worker, once the model is `Ready` in the cache.
@@ -270,14 +313,113 @@ impl Hub {
         self.search.get()?.builtin()
     }
 
+    /// The local engine and the provider id its step goes by, when the `embed` role names a provider of kind `llama`
+    /// and the engine may run: its download was consented and its files are in the cache. None otherwise, so a chain
+    /// that names it falls through.
+    pub async fn engine(&self, front: &Front) -> Option<(String, Arc<EnginePool>)> {
+        let id = {
+            let current = front.settings.current();
+            let values = &current.loaded.values;
+            let defaults = crate::settings::defaults();
+            let steps =
+                crate::settings::providers::role_chain(&values.ai_roles, &defaults.roles, "embed");
+            let providers =
+                crate::settings::providers::effective(&defaults.presets, &values.ai_providers);
+            steps.into_iter().find_map(|s| {
+                providers
+                    .iter()
+                    .any(|p| p.id == s.provider && p.kind == Some(ProviderKind::Llama))
+                    .then_some(s.provider)
+            })?
+        };
+        let dirs = self.dirs().ok()?;
+        let gguf = hrafn_embed::default_gguf();
+        let consented = super::stored_engine_consent(&dirs.runtime)
+            .await
+            .is_some_and(|c| c.model == gguf.id);
+        let settings = super::engine_setup::EngineSettings::from_values(
+            &front.settings.current().loaded.values,
+        );
+        let on_battery = super::power::on_battery(&super::power::root());
+        match self
+            .search
+            .get()?
+            .engine(consented, &settings, on_battery)
+            .await
+        {
+            Ok(e) => {
+                self.offer_extra_gpus(front);
+                Some((id, e))
+            }
+            Err(why) => {
+                tracing::debug!("search: no local engine: {}", why.0);
+                None
+            }
+        }
+    }
+
+    /// The one-time notice for GPUs beyond the chosen one: sent once per set, never when it was answered.
+    fn offer_extra_gpus(&self, front: &Front) {
+        let Some(search) = self.search.get() else {
+            return;
+        };
+        let answered = front
+            .settings
+            .effective(super::engine_notice::NOTICED, None)
+            .and_then(|(v, _)| v.as_str().map(str::to_owned));
+        if let Some(n) = search
+            .offer()
+            .notice(&search.extra_gpus(), answered.as_deref())
+        {
+            front.broadcast("notice", n);
+        }
+    }
+
+    /// `search/extra-gpus`: the answer to that notice. It is stored in the settings (the global overrides, as the editor's
+    /// own sets are), and the notice is taken away.
+    async fn extra_gpus(
+        &self,
+        front: &Front,
+        p: w::ExtraGpusParams,
+    ) -> Result<w::ExtraGpusAnswer, Error> {
+        use super::engine_notice::{Answer, answer_overrides, clear_notice, gpu_set_key};
+        let extra = self
+            .search
+            .get()
+            .map(|s| s.extra_gpus())
+            .unwrap_or_default();
+        if extra.is_empty() {
+            return Ok(w::ExtraGpusAnswer {
+                gpus: Vec::new(),
+                changed: false,
+            });
+        }
+        let answer = match p.answer {
+            w::ExtraGpusChoice::Use => Answer::Use,
+            w::ExtraGpusChoice::Dismiss => Answer::Dismiss,
+        };
+        let list = answer_overrides(
+            front.settings.global_overrides(),
+            answer,
+            &gpu_set_key(&extra),
+        );
+        front.settings.set_overrides(None, list).await?;
+        front.broadcast("notice", clear_notice());
+        Ok(w::ExtraGpusAnswer {
+            gpus: extra.iter().map(|d| d.id.clone()).collect(),
+            changed: true,
+        })
+    }
+
     /// `status.watch`: the inotify budget and each open project's watches.
     pub fn watch_status(&self) -> runstav::methods::hub::WatchStatus {
         use runstav::methods::hub::{ProjectWatch, WatchStatus};
         let mut projects = Vec::new();
-        if let Ok(mut rows) = self.watches.lock() {
+        {
+            let mut rows = saman::lock(&self.watches);
             rows.retain(|(_, w)| w.strong_count() > 0);
             for (root, w) in rows.iter() {
-                if let Some(s) = w.upgrade().and_then(|s| s.lock().ok().map(|s| s.clone())) {
+                if let Some(s) = w.upgrade().map(|s| saman::lock(&s).clone()) {
                     projects.push(ProjectWatch {
                         root: root.to_string_lossy().into_owned(),
                         watched: s.watched as u64,
@@ -287,7 +429,7 @@ impl Hub {
             }
         }
         WatchStatus {
-            max_user_watches: std::fs::read_to_string(MAX_USER_WATCHES)
+            max_user_watches: crate::fsio::read_to_string(MAX_USER_WATCHES)
                 .ok()
                 .and_then(|t| t.trim().parse().ok()),
             projects,
@@ -301,11 +443,12 @@ impl Hub {
         let Some(s) = self.saved.get() else { return };
         if s.offer(root, view, spec, crate::clock::now()) {
             let (s, root) = (Arc::clone(s), root.to_path_buf());
-            let _ = std::thread::Builder::new()
-                .name("search-recent".into())
-                .spawn(move || {
-                    let _ = s.flush(&root);
-                });
+            crate::soft::done(
+                saman::spawn_thread("search-recent", move || {
+                    crate::soft::done(s.flush(&root), "methods");
+                }),
+                "search-recent",
+            );
         }
     }
 
@@ -338,11 +481,14 @@ impl Hub {
     async fn probed(&self, s: &ProviderEmbedder) -> Option<Identity> {
         let key = s.cache_key();
         let now = crate::clock::now();
-        let cached = self.probes.lock().ok().and_then(|p| {
-            p.get(&key)
-                .filter(|(at, _)| now.saturating_duration_since(*at) < PROBE_TTL)
-                .map(|(_, got)| got.clone())
-        });
+        let cached = {
+            let p = saman::lock(&self.probes);
+            {
+                p.get(&key)
+                    .filter(|(at, _)| now.saturating_duration_since(*at) < PROBE_TTL)
+                    .map(|(_, got)| got.clone())
+            }
+        };
         match cached {
             Some(got) => {
                 if let Some(i) = &got {
@@ -352,7 +498,8 @@ impl Hub {
             }
             None => {
                 let got = DocEmbedder::probe(s).await.ok();
-                if let Ok(mut p) = self.probes.lock() {
+                {
+                    let mut p = saman::lock(&self.probes);
                     p.insert(key, (now, got.clone()));
                 }
                 got
@@ -446,6 +593,11 @@ impl Hub {
         // what each embedder proves now: the project is another one when a fingerprint changes (a server swapped for
         // another model), and a server that does not answer has none
         let mut fingerprints: Vec<String> = Vec::new();
+        // the local engine first, when the role names it and it may run (it knows its fingerprint without a start)
+        if let Some((_, e)) = self.engine(front).await {
+            fingerprints.push(format!("engine:{}", e.identity().fp.hex()));
+            embedders.push(e);
+        }
         for (i, s) in self.servers(front).into_iter().enumerate() {
             fingerprints.push(
                 self.probed(&s)
@@ -461,6 +613,11 @@ impl Hub {
                 .push(DocEmbedder::identity(b.as_ref()).map_or_else(String::new, |id| id.fp.hex()));
             embedders.push(b);
         }
+        // the `vectors` providers (another machine's `embed serve`): lookup sources, embedders when trusted (MP-18)
+        // the stamp first: a key that lands between the two is in the sources and not yet in the stamp, so the next
+        // call opens the project once more, never the reverse
+        fingerprints.extend(front.gate.vectors_stamp());
+        let remotes = front.gate.vectors();
         // a project that cannot be read is an error the user sees (the Search view's state line), never a search
         // with the global settings or off; nothing is opened, the next call asks git again
         let unread = |e: String| internal(format!("search: {e}"));
@@ -472,9 +629,12 @@ impl Hub {
             .collect::<Vec<_>>()
             .join(",");
         let mut open = self.projects.lock().await;
+        // `drgnx-search-battery-engine` as it is now: a change counts from the next pass of tier 2
+        let battery_engine = front.settings.current().loaded.values.search_battery_engine;
         if let Some(o) = open.get(&id)
             && o.sig == sig
         {
+            o.project.set_battery_engine(battery_engine);
             return Ok(o.project.clone());
         }
         let config = self
@@ -489,13 +649,38 @@ impl Hub {
                 config_dir: dirs.config.clone(),
                 config,
                 embedders,
-                power_root: PathBuf::from(power::SYS),
+                power_root: power::root(),
                 base,
                 #[cfg(feature = "test-hooks")]
                 test_permits: None,
             })
             .await
             .map_err(project_error)?,
+        );
+        let db = front.gate.runtime_db();
+        project.add_sources(
+            remotes
+                .into_iter()
+                .map(|(id, url, token, trusted)| {
+                    let pins: Arc<dyn super::remote::Pins> = match &db {
+                        Some(db) => Arc::new(super::remote::KvPins {
+                            db: db.clone(),
+                            key: super::remote::pin_key(&id),
+                        }),
+                        None => Arc::new(super::remote::MemPins::default()),
+                    };
+                    Arc::new(super::remote::RemoteVectors::new(
+                        super::remote::RemoteSpec {
+                            id,
+                            url,
+                            token,
+                            trusted,
+                            pins,
+                            ledger: Some(front.gate.ledger()),
+                        },
+                    )) as Arc<dyn super::sources::Source>
+                })
+                .collect(),
         );
         let common = real.join(".git");
         let watch = Arc::new(hrafn::ProjectWatch::new(move || {
@@ -519,20 +704,23 @@ impl Hub {
             project.watch(watch.clone());
         }
         let state = hrafn::Watch::shared_state(&*watch);
-        if let Err(e) = added
-            && let Ok(mut s) = state.lock()
-            && s.error.is_none()
-        {
-            tracing::warn!("search: no file watch for {}: {e}", real.display());
-            s.error = Some(e.to_string());
+        if let Err(e) = added {
+            let mut s = saman::lock(&state);
+            if s.error.is_none() {
+                tracing::warn!("search: no file watch for {}: {e}", real.display());
+                s.error = Some(e.to_string());
+            }
         }
-        if let Some(e) = state.lock().ok().and_then(|s| s.error.clone()) {
+        let error = saman::lock(&state).error.clone();
+        if let Some(e) = error {
             tracing::warn!("search: {} runs unwatched: {e}", real.display());
         }
-        if let Ok(mut rows) = self.watches.lock() {
+        {
+            let mut rows = saman::lock(&self.watches);
             rows.retain(|(_, w)| w.strong_count() > 0);
             rows.push((real.clone(), Arc::downgrade(&state)));
         }
+        project.set_battery_engine(battery_engine);
         project.start_tier2();
         let weak = Arc::downgrade(&project);
         clock::spawn("search:driver", async move {
@@ -609,6 +797,32 @@ impl Hub {
         let mut labels: HashMap<Fingerprint, String> = HashMap::new();
         let mut ids: HashMap<Fingerprint, Identity> = HashMap::new();
         let mut down: Vec<String> = Vec::new();
+        // the local engine is asked as a server is: first, when it covers enough or is the only way to vectors
+        if let Some((_, e)) = self.engine(front).await {
+            let id = e.identity();
+            let lag = p.lag(Some(&id)).await.map_err(project_error)?;
+            ids.insert(id.fp, id.clone());
+            let up = if covers(&lag) || builtin_id.is_none() {
+                match e.embed_query(text, Some(scope.instruction())).await {
+                    Ok(v) => {
+                        qvecs.insert(id.fp, v);
+                        true
+                    }
+                    Err(why) => {
+                        tracing::debug!(
+                            "search: the local engine did not answer the question: {}",
+                            why.0
+                        );
+                        down.push(id.label.clone());
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+            labels.insert(id.fp, id.label);
+            infos.push((id.fp, lag, up));
+        }
         for s in self.servers(front) {
             // a server states its model now (a probe of the last few seconds counts): another model under the same
             // URL is another fingerprint, with its own vectors
@@ -1019,7 +1233,11 @@ impl Hub {
         })
     }
 
-    async fn status(&self, front: &Front, root: &Path) -> Result<w::StatusAnswer, Error> {
+    pub(crate) async fn status(
+        &self,
+        front: &Front,
+        root: &Path,
+    ) -> Result<w::StatusAnswer, Error> {
         let p = self.project(front, root).await?;
         let per_class = p
             .store()
@@ -1108,18 +1326,12 @@ impl Hub {
                 watched: t.watched,
             })
             .collect();
-        let used = self
-            .watches
-            .lock()
-            .ok()
-            .and_then(|rows| {
-                rows.iter()
-                    .find(|(r, _)| r == p.root())
-                    .and_then(|(_, w)| w.upgrade())
-                    .and_then(|s| s.lock().ok().map(|s| s.watched as u64))
-            })
-            .unwrap_or(0);
-        let limit: Option<u64> = std::fs::read_to_string(MAX_USER_WATCHES)
+        let used = saman::lock(&self.watches)
+            .iter()
+            .find(|(r, _)| r == p.root())
+            .and_then(|(_, w)| w.upgrade())
+            .map_or(0, |s| saman::lock(&s).watched as u64);
+        let limit: Option<u64> = crate::fsio::read_to_string(MAX_USER_WATCHES)
             .ok()
             .and_then(|t| t.trim().parse().ok());
         let watch = w::SearchWatch {
@@ -1135,8 +1347,26 @@ impl Hub {
             coverage_errors,
             lag: wire_lag(&lag),
             models,
+            sources: p
+                .chains()
+                .into_iter()
+                .map(|(model, entries)| w::ChainStatus {
+                    model,
+                    entries: entries
+                        .into_iter()
+                        .map(|e| w::SourceEntry {
+                            id: e.id,
+                            kind: e.kind.to_string(),
+                            state: e.state.to_string(),
+                            why: e.why,
+                        })
+                        .collect(),
+                })
+                .collect(),
             worker: worker_status(builtin.as_deref()),
             tier2: tier2_name(&st.tier2).to_string(),
+            state: p.state().name().to_owned(),
+            why: wire_why(p.state()),
             embedded: st.embedded,
             trees,
             watch,
@@ -1153,13 +1383,13 @@ impl Hub {
             ModelState::Ready => ("ready", download_bytes(spec)),
             ModelState::Corrupt { .. } => ("corrupt", 0),
         };
-        let mut failed = None;
-        if let Ok(d) = self.download.lock() {
+        let failed = {
+            let d = saman::lock(&self.download);
             if d.running {
                 (st, held) = ("downloading", d.have.min(d.total));
             }
-            failed = d.failed.clone();
-        }
+            d.failed.clone()
+        };
         let builtin = self.builtin();
         let mut servers = Vec::new();
         let mut preferred = None;
@@ -1212,9 +1442,7 @@ impl Hub {
     /// The entity embedder's chain as its last step left it, each entry's state; a wait as wall-clock seconds.
     fn chain_entries(&self) -> Vec<w::ChainEntry> {
         let (now, wall) = (crate::clock::now(), crate::clock::wall());
-        let Ok(view) = self.embed.view.lock() else {
-            return Vec::new();
-        };
+        let view = saman::lock(&self.embed.view);
         view.iter()
             .map(|(l, h)| {
                 let (state, until, why) = match h {
@@ -1245,6 +1473,9 @@ impl Hub {
         p: w::DownloadParams,
     ) -> Result<w::Started, Error> {
         let dirs = self.dirs()?;
+        if p.model.as_str() == hrafn_embed::default_gguf().id {
+            return self.engine_download(front, p).await;
+        }
         let spec = super::model(p.model.as_str()).ok_or_else(|| {
             error(
                 ErrorCode::InvalidParams,
@@ -1258,15 +1489,13 @@ impl Hub {
             at: clock::wall_secs(),
         };
         if p.consent.bytes != download_bytes(spec) {
-            return Err(error(
-                ErrorCode::InvalidParams,
-                format!(
-                    "the consent names {} bytes; the model is {} bytes",
-                    p.consent.bytes,
-                    download_bytes(spec)
-                ),
-                Some("consent.bytes"),
-            ));
+            let items: Vec<(String, u64)> = spec
+                .files
+                .iter()
+                .map(|f| (f.name.to_string(), f.bytes))
+                .collect();
+            let (_, text) = super::engine_setup::consent_text(spec.id, p.consent.bytes, &items);
+            return Err(error(ErrorCode::InvalidParams, text, Some("consent.bytes")));
         }
         let base = super::model_base(
             front
@@ -1279,10 +1508,7 @@ impl Hub {
         )
         .map_err(|m| error(ErrorCode::InvalidParams, m, None))?;
         {
-            let mut d = self
-                .download
-                .lock()
-                .map_err(|_| internal("download state"))?;
+            let mut d = saman::lock(&self.download);
             if d.running {
                 return Ok(w::Started { started: false });
             }
@@ -1295,88 +1521,303 @@ impl Hub {
         }
         super::store_consent(&dirs.runtime, &consent).await;
         let (progress_state, projects) = (self.download.clone(), self.projects.clone());
+        let front_weak = self.front.get().cloned();
         let root = super::models_root(&dirs.env);
         clock::spawn("search:download", async move {
             let progress = {
                 let state = progress_state.clone();
                 move |have: u64, total: u64| {
-                    if let Ok(mut d) = state.lock() {
-                        (d.have, d.total) = (have, total);
-                    }
+                    let mut d = saman::lock(&state);
+                    (d.have, d.total) = (have, total);
                 }
             };
             let result = download(spec, &root, &base, &consent, &progress).await;
-            if let Ok(mut d) = progress_state.lock() {
+            {
+                let mut d = saman::lock(&progress_state);
                 d.running = false;
                 d.failed = result.as_ref().err().map(|e| format!("{e:?}"));
             }
             if result.is_ok() {
-                projects.lock().await.clear();
+                reopen(&projects, front_weak).await;
             }
         });
         Ok(w::Started { started: true })
     }
 
-    /// `search/server-plan`: what a start would run. The host is read, nothing runs.
-    async fn server_plan(&self, kind: w::ServerKind) -> Result<w::ServerPlan, Error> {
-        let env = self.dirs()?.env.clone();
-        let host = crate::clock::blocking(move || servers::Host::probe(&env))
-            .await
-            .map_err(internal)?;
-        Ok(servers::plan(&host, kind))
-    }
-
-    /// `search/server-start`: the only door to [`servers::start`].
-    async fn server_start(&self, p: w::ServerStartParams) -> Result<w::ServerStarted, Error> {
-        self.server_job(move |host, run| servers::start(host, run, p.kind, p.confirm))
-            .await
-    }
-
-    /// `search/server-stop`: the only door to [`servers::stop`].
-    async fn server_stop(&self, kind: w::ServerKind) -> Result<w::ServerStopped, Error> {
-        let stopped = self
-            .server_job(move |host, run| servers::stop(host, run, kind))
-            .await?;
-        Ok(w::ServerStopped { stopped })
-    }
-
-    /// F on a probed host and the runner (the real tools; with test-hooks one that records and runs nothing), off the
-    /// async threads.
-    async fn server_job<T: Send + 'static>(
+    /// `search/model-download` of the engine's GGUF: the GGUF and this machine's engine asset under one consent, whose
+    /// bytes are their sum. The consent is stored first (the engine runs only with it), then both are fetched, the
+    /// GGUF from the model host (or the mirror), the asset from its pinned URL.
+    async fn engine_download(
         &self,
-        f: impl FnOnce(&servers::Host, &dyn servers::Run) -> Result<T, servers::Refused>
-        + Send
-        + 'static,
-    ) -> Result<T, Error> {
-        let env = self.dirs()?.env.clone();
-        crate::clock::blocking(move || {
-            let host = servers::Host::probe(&env);
-            #[cfg(feature = "test-hooks")]
-            let run = servers::Record(
-                PathBuf::from(env.vars.get("XDG_STATE_HOME").cloned().unwrap_or_default())
-                    .join("drgnx/servers-test.log"),
-            );
-            #[cfg(not(feature = "test-hooks"))]
-            let run = servers::System;
-            f(&host, &run)
-        })
-        .await
-        .map_err(internal)?
-        .map_err(|r| match r {
-            servers::Refused::Confirm => error(
-                ErrorCode::InvalidParams,
-                "starting a server needs the user's confirmation (confirm: true)",
-                Some("confirm"),
-            ),
-            servers::Refused::Unavailable(why) => error(ErrorCode::NotAllowed, why, Some("kind")),
-            servers::Refused::Failed(why) => internal(why),
-        })
+        front: &Front,
+        p: w::DownloadParams,
+    ) -> Result<w::Started, Error> {
+        let dirs = self.dirs()?;
+        let gguf = hrafn_embed::default_gguf();
+        // the assets the settings and this machine's GPUs name: the vendor's build per GPU (CUDA, ROCm, Metal, else Vulkan)
+        let settings = super::engine_setup::EngineSettings::from_values(
+            &front.settings.current().loaded.values,
+        );
+        let machine = self
+            .search
+            .get()
+            .ok_or_else(|| internal("search"))?
+            .machine();
+        let cache = paths::cache_dir(&dirs.env);
+        let resolved = {
+            let (cache, st) = (cache.clone(), settings.clone());
+            clock::blocking(move || {
+                super::engine_setup::resolve(
+                    &cache,
+                    &machine,
+                    &super::engine_pick::Visible::from_env(),
+                    &st,
+                    false,
+                )
+            })
+            .await
+            .map_err(internal)?
+        };
+        let assets: Vec<&'static hrafn_embed::EngineAsset> =
+            resolved.assets.iter().map(|s| s.asset).collect();
+        if assets.is_empty() {
+            return Err(error(
+                ErrorCode::NotAllowed,
+                format!(
+                    "no GPU engine to download for this machine (no usable GPU, or no build pinned for it). Options:\n  {}",
+                    super::engine_pick::no_gpu_options().join("\n  ")
+                ),
+                Some("model"),
+            ));
+        }
+        let mut items: Vec<(String, u64)> = vec![(gguf.id.to_string(), gguf.bytes)];
+        for a in &assets {
+            items.push((a.id(), a.bytes));
+            if let Some(rt) = a.runtime {
+                items.push((rt.dir_name().to_string(), rt.bytes));
+            }
+        }
+        let (total, text) = super::engine_setup::consent_text(gguf.id, p.consent.bytes, &items);
+        if p.consent.bytes != total {
+            return Err(error(ErrorCode::InvalidParams, text, Some("consent.bytes")));
+        }
+        let base = super::model_base(
+            front
+                .settings
+                .current()
+                .loaded
+                .values
+                .search_model_mirror
+                .as_deref(),
+        )
+        .map_err(|m| error(ErrorCode::InvalidParams, m, None))?;
+        {
+            let mut d = saman::lock(&self.download);
+            if d.running {
+                return Ok(w::Started { started: false });
+            }
+            *d = Download {
+                running: true,
+                have: 0,
+                total,
+                failed: None,
+            };
+        }
+        let consent = super::Consent {
+            model: gguf.id.to_string(),
+            bytes: total,
+            at: clock::wall_secs(),
+        };
+        super::store_engine_consent(&dirs.runtime, &consent).await;
+        let (state, projects) = (self.download.clone(), self.projects.clone());
+        let front_weak = self.front.get().cloned();
+        let models = super::models_root(&dirs.env);
+        let engine_dirs: Vec<PathBuf> = assets
+            .iter()
+            .map(|a| super::engine_install::dir_for(&cache, a))
+            .collect();
+        clock::spawn("search:download", async move {
+            let held = |have: u64| {
+                let mut d = saman::lock(&state);
+                d.have = have;
+            };
+            let mut result = super::download_gguf(gguf, &models, &base, &held).await;
+            let mut before = gguf.bytes;
+            for (asset, dir) in assets.iter().zip(&engine_dirs) {
+                if result.is_err() {
+                    break;
+                }
+                let asset_consent = super::Consent {
+                    model: asset.id(),
+                    bytes: asset.total_bytes(),
+                    at: consent.at,
+                };
+                result = super::engine_install::install_with(asset, &asset_consent, dir, &|have| {
+                    held(before + have)
+                })
+                .await
+                .map(|_| ());
+                before += asset.total_bytes();
+            }
+            {
+                let mut d = saman::lock(&state);
+                d.running = false;
+                d.failed = result.as_ref().err().map(|e| format!("{e:?}"));
+            }
+            if result.is_ok() {
+                reopen(&projects, front_weak).await;
+            }
+        });
+        Ok(w::Started { started: true })
     }
 
     async fn typing(&self) {
         for o in self.projects.lock().await.values() {
             o.project.note_typing();
         }
+    }
+
+    /// The view of the tree checked out on BRANCH in P's store: a linked worktree's overlay, or the base when the main
+    /// checkout is on it.
+    async fn branch_view(p: &Project, branch: &str) -> Result<hrafn::View, Error> {
+        let trees = p.store().trees().await.map_err(internal)?;
+        if let Some(t) = trees.iter().find(|t| t.branch.as_deref() == Some(branch)) {
+            return Ok(hrafn::View::Tree(t.id));
+        }
+        let base = p.base_root().to_path_buf();
+        let current = clock::blocking(move || scope::bases(&base))
+            .await
+            .map_err(internal)?
+            .ok()
+            .and_then(|b| b.current);
+        if current.as_deref() == Some(branch) {
+            return Ok(hrafn::View::Base);
+        }
+        Err(error(
+            ErrorCode::InvalidParams,
+            format!("no indexed checkout is on branch {branch:?}"),
+            Some("branch"),
+        ))
+    }
+
+    /// `search/export`: the vectors of ROOT's tree (or BRANCH's, or every tree's) as a vector pack.
+    async fn export(&self, front: &Front, p: w::ExportParams) -> Result<w::ExportAnswer, Error> {
+        let all = p.all_trees == Some(true);
+        if all && p.branch.is_some() {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "a branch or all trees, not both",
+                Some("branch"),
+            ));
+        }
+        let root = PathBuf::from(p.root.as_str());
+        let (project, of) = self.view_of(front, &root, false).await?;
+        let scope = if all {
+            hrafn::ExportScope::AllTrees
+        } else if let Some(b) = &p.branch {
+            hrafn::ExportScope::View(Self::branch_view(&project, b).await?)
+        } else {
+            hrafn::ExportScope::View(of.view)
+        };
+        // without `out` the pack goes into the repo's own `.drgnx/packs/`, under a temporary name until its sha is known
+        let given = p.out.as_ref().map(|o| PathBuf::from(o.as_str()));
+        let write_to = match &given {
+            Some(o) => o.clone(),
+            None => {
+                let dir = project.base_root().join(".drgnx/packs");
+                let d = dir.clone();
+                clock::blocking(move || std::fs::create_dir_all(d))
+                    .await
+                    .map_err(internal)?
+                    .map_err(internal)?;
+                dir.join(format!("pending-{}.vpack", std::process::id()))
+            }
+        };
+        let created = clock::wall_secs() as i64;
+        let done = super::packs::export(
+            project.caches(),
+            project.store(),
+            scope,
+            &write_to,
+            created,
+            (None, None),
+        )
+        .await
+        .map_err(pack_error)?;
+        let mut path = done.path.clone();
+        if given.is_none() {
+            let to = write_to.with_file_name(format!("{}.vpack", &done.sha256[..16]));
+            let (from, dest) = (write_to.clone(), to.clone());
+            clock::blocking(move || crate::fsio::rename(from, dest))
+                .await
+                .map_err(internal)?
+                .map_err(internal)?;
+            path = to;
+        }
+        Ok(w::ExportAnswer {
+            path: runstav::types::AbsPath::new(path.to_string_lossy().into_owned())
+                .map_err(internal)?,
+            sha256: done.sha256,
+            keys: done.keys,
+            warning: super::packs::WARNING.to_string(),
+        })
+    }
+
+    /// `search/import`: FILE's vectors merged into the caches, for the keys a repo store of this machine references.
+    async fn import(&self, front: &Front, p: w::ImportParams) -> Result<w::ImportAnswer, Error> {
+        let dirs = self.dirs()?;
+        let caches = super::caches::Caches::shared(&paths::state_dir(&dirs.env));
+        if let Some(root) = &p.root {
+            let project = self.project(front, Path::new(root.as_str())).await?;
+            project.fresh_for_query().await.map_err(project_error)?;
+        }
+        // what this machine can make query vectors for: the servers that answer, and the built-in model
+        let mut known: Vec<Fingerprint> = Vec::new();
+        for s in self.servers(front) {
+            if let Some(id) = self.probed(&s).await {
+                known.push(id.fp);
+            }
+        }
+        if Self::builtin_on(front) {
+            known.push(super::builtin_identity(default_model()).fp);
+        }
+        // the local engine (Wave 7), when the embed role names it and it may run: its vectors are this machine's too
+        if let Some((_, engine)) = self.engine(front).await {
+            known.push(engine.identity().fp);
+        }
+        let projects: Vec<Arc<Project>> = self
+            .projects
+            .lock()
+            .await
+            .values()
+            .map(|o| o.project.clone())
+            .collect();
+        let open: Vec<super::packs::HeldStore<'_>> = projects
+            .iter()
+            .map(|p| super::packs::HeldStore {
+                store: p.store(),
+                root: p.base_root(),
+            })
+            .collect();
+        let now_ms = (clock::wall_secs() * 1000.0) as i64;
+        let got = super::packs::import(
+            &caches,
+            Path::new(p.file.as_str()),
+            &open,
+            &known,
+            p.keep_all == Some(true),
+            now_ms,
+        )
+        .await
+        .map_err(pack_error)?;
+        Ok(w::ImportAnswer {
+            fingerprint: got.fingerprint,
+            label: got.label,
+            keys_in_pack: got.keys_in_pack,
+            kept: got.kept,
+            skipped_unreferenced: got.skipped_unreferenced,
+            already_had: got.already_had,
+        })
     }
 
     async fn index(&self, front: &Front, i: w::IndexParams) -> Result<w::Started, Error> {
@@ -1389,9 +1830,281 @@ impl Hub {
         } else {
             p.refresh_now().await.map_err(project_error)?;
         }
+        // `search/index` goes on from a stop (a pause holds until `resume`)
+        if p.state() == RootState::Stopped {
+            p.resume().await.map_err(project_error)?;
+        }
         p.start_tier2();
         Ok(w::Started { started: true })
     }
+
+    /// Every root with a store in this state, as `search/list` shows it.
+    pub(crate) async fn list(&self) -> Result<w::ListAnswer, Error> {
+        let dirs = self.dirs()?;
+        let state = paths::state_dir(&dirs.env);
+        let ids = super::caches::Caches::shared(&state).stores();
+        let mut roots = Vec::new();
+        for id in ids {
+            if let Some(r) = self.root_info(&state, &id).await {
+                roots.push(r);
+            }
+        }
+        Ok(w::ListAnswer { roots })
+    }
+
+    /// Store ID's row: its counts read-only, its state from the open project or from what the user set.
+    async fn root_info(&self, state: &Path, id: &str) -> Option<w::RootInfo> {
+        let path = super::project::store_path(state, id);
+        let bytes: u64 = super::manage::store_files(state, id)
+            .iter()
+            .filter_map(|f| std::fs::metadata(f).ok())
+            .map(|m| m.len())
+            .sum();
+        let p2 = path.clone();
+        let (root, user, files, chunks) = crate::clock::blocking(move || {
+            let c = urdr::open_readonly(&p2).ok()?;
+            let root = urdr::meta(&c, super::project::META_BASE_ROOT).ok()??;
+            let user = urdr::meta(&c, super::manage::META_STATE).ok().flatten();
+            let count = |sql: &str| {
+                c.query_row(sql, [], |r| r.get::<_, i64>(0))
+                    .unwrap_or(0)
+                    .max(0) as u64
+            };
+            let files = count("select count(*) from file where tree = 0");
+            let chunks = count("select count(*) from chunk");
+            Some((root, user, files, chunks))
+        })
+        .await
+        .ok()??;
+        let open = self.opened(id);
+        let st = match &open {
+            Some(p) => p.state(),
+            None => match super::manage::UserState::parse(user.as_deref()) {
+                super::manage::UserState::Paused => RootState::Paused(PauseWhy::User),
+                super::manage::UserState::Stopped => RootState::Stopped,
+                super::manage::UserState::On => RootState::Idle,
+            },
+        };
+        Some(w::RootInfo {
+            root,
+            id: id.to_owned(),
+            state: st.name().to_owned(),
+            why: wire_why(st),
+            open: open.is_some(),
+            files,
+            chunks,
+            bytes,
+        })
+    }
+
+    /// `search/pause`, `resume`, `stop` of P's root, or of every root with `all`. A closed root's state is written to
+    /// its store; it holds when the root is next opened.
+    async fn manage(
+        &self,
+        front: &Front,
+        verb: &str,
+        p: w::ManageParams,
+    ) -> Result<w::ManageAnswer, Error> {
+        let all = p.all == Some(true);
+        if all == p.root.is_some() {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "a root or all, one of them",
+                Some("root"),
+            ));
+        }
+        let dirs = self.dirs()?;
+        let state = paths::state_dir(&dirs.env);
+        let ids: Vec<String> = match &p.root {
+            Some(r) => vec![
+                self.project(front, Path::new(r.as_str()))
+                    .await?
+                    .id()
+                    .to_owned(),
+            ],
+            None => super::caches::Caches::shared(&state).stores(),
+        };
+        let user = match verb {
+            "pause" => super::manage::UserState::Paused,
+            "stop" => super::manage::UserState::Stopped,
+            _ => super::manage::UserState::On,
+        };
+        let mut roots = Vec::new();
+        for id in ids {
+            match self.opened(&id) {
+                Some(project) => match verb {
+                    "pause" => project.pause().await,
+                    "stop" => project.stop().await,
+                    _ => project.resume().await,
+                }
+                .map_err(project_error)?,
+                None => {
+                    let store = hrafn::CodeStore::open(&super::project::store_path(&state, &id))
+                        .map_err(internal)?;
+                    store
+                        .meta_set(super::manage::META_STATE, user.as_str())
+                        .await
+                        .map_err(internal)?;
+                }
+            }
+            if let Some(r) = self.root_info(&state, &id).await {
+                roots.push(r);
+            }
+        }
+        Ok(w::ManageAnswer { roots })
+    }
+
+    /// `search/delete`: the root's project closed, then its store, packs and unshared vectors removed; the deletion is
+    /// recorded in `runtime.db` (`search.deleted.<id>`) with its reason.
+    async fn delete(&self, front: &Front, p: w::DeleteParams) -> Result<w::DeleteAnswer, Error> {
+        if !p.confirm {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "a delete needs confirm: true (the user's answer)",
+                Some("confirm"),
+            ));
+        }
+        let dirs = self.dirs()?;
+        let state = paths::state_dir(&dirs.env);
+        let given = PathBuf::from(p.root.as_str());
+        let (real, id) = crate::clock::blocking(move || project_id(&given))
+            .await
+            .map_err(internal)?
+            .map_err(|e| {
+                error(
+                    ErrorCode::InvalidParams,
+                    format!("{}: {e}", p.root.as_str()),
+                    Some("root"),
+                )
+            })?;
+        if !super::project::store_path(&state, &id).exists() {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "no index of this root",
+                Some("root"),
+            ));
+        }
+        // closed first: its tier 2 ends with it
+        let base = match self.projects.lock().await.remove(&id) {
+            Some(o) => {
+                let base = o.project.base_root().to_path_buf();
+                o.project.stop().await.map_err(project_error)?;
+                base
+            }
+            None => real.clone(),
+        };
+        let caches = super::caches::Caches::shared(&state);
+        let gone = super::manage::delete_root(&caches, &id, Some(&base))
+            .await
+            .map_err(internal)?;
+        let record = json!({
+            "root": real, "reason": "the user's search/delete", "at": clock::wall_secs() as i64,
+            "bytes": gone.bytes, "vectors": gone.vectors, "packs": gone.packs,
+        });
+        tracing::info!(root = %real.display(), bytes = gone.bytes, vectors = gone.vectors, "search: an index deleted");
+        if let Some(db) = front.gate.runtime_db() {
+            crate::gateway::kv_set(&db, &format!("search.deleted.{id}"), &record.to_string()).await;
+        }
+        Ok(w::DeleteAnswer {
+            root: real.to_string_lossy().into_owned(),
+            bytes: gone.bytes,
+            vectors: gone.vectors,
+            packs: gone.packs,
+        })
+    }
+
+    /// `search/forget-pin`: the provider's pinned certificate forgotten (the next answer pins anew).
+    async fn forget_pin(&self, front: &Front, p: w::ForgetPinParams) -> Result<bool, Error> {
+        let db = front
+            .gate
+            .runtime_db()
+            .ok_or_else(|| internal("runtime.db is not open"))?;
+        Ok(crate::gateway::kv_del(&db, &super::remote::pin_key(&p.provider)).await)
+    }
+
+    /// `embed/serve-start`: this machine's caches and its local embedders (the engine, the built-in model) served.
+    async fn serve_start(
+        &self,
+        front: &Front,
+        p: w::ServeStartParams,
+    ) -> Result<w::ServeAnswer, Error> {
+        let listen: std::net::SocketAddr = p.listen.parse().map_err(|e| {
+            error(
+                ErrorCode::InvalidParams,
+                format!("ADDR:PORT: {e}"),
+                Some("listen"),
+            )
+        })?;
+        let mut serving = self.serve.lock().await;
+        if let Some(r) = serving.take() {
+            r.stop();
+        }
+        let dirs = self.dirs()?;
+        let state = paths::state_dir(&dirs.env);
+        let mut embedders: Vec<Arc<dyn DocEmbedder>> = Vec::new();
+        if let Some((_, e)) = self.engine(front).await {
+            embedders.push(e);
+        }
+        if Self::builtin_on(front)
+            && let Some(b) = self.builtin()
+        {
+            embedders.push(b);
+        }
+        let serve = Arc::new(
+            crate::embed_serve::CacheServe::new(super::caches::Caches::shared(&state), embedders)
+                .with_ledger(front.gate.ledger()),
+        );
+        let (running, token) = crate::embed_serve::start(
+            crate::embed_serve::ServeSpec {
+                listen,
+                plain: p.plain == Some(true),
+                no_embed: p.no_embed == Some(true),
+                dir: state.join("embed-serve"),
+            },
+            serve,
+        )
+        .await
+        .map_err(|e| error(ErrorCode::InvalidParams, e, Some("listen")))?;
+        let answer = w::ServeAnswer {
+            url: running.url().to_owned(),
+            cert_sha256: running.cert_sha256().map(str::to_owned),
+            token,
+        };
+        *serving = Some(running);
+        Ok(answer)
+    }
+
+    async fn serve_stop(&self) -> bool {
+        match self.serve.lock().await.take() {
+            Some(r) => {
+                r.stop();
+                true
+            }
+            None => false,
+        }
+    }
+
+    async fn serve_token(&self) -> Result<w::ServeToken, Error> {
+        let serving = self.serve.lock().await;
+        let r = serving.as_ref().ok_or_else(|| {
+            error(
+                ErrorCode::InvalidParams,
+                "no vector server runs: embed serve --listen first",
+                None,
+            )
+        })?;
+        Ok(w::ServeToken {
+            token: hulda::Secret::new(r.new_token().map_err(internal)?),
+        })
+    }
+}
+
+/// Why a root waits, as the wire has it.
+fn wire_why(st: RootState) -> Option<w::PauseReason> {
+    st.why().map(|why| w::PauseReason {
+        name: why.name().to_owned(),
+        text: why.text().to_owned(),
+    })
 }
 
 fn tier2_name(t: &Tier2) -> &'static str {
@@ -1401,6 +2114,9 @@ fn tier2_name(t: &Tier2) -> &'static str {
         Tier2::Running => "running",
         Tier2::Typing => "typing",
         Tier2::Battery => "battery",
+        Tier2::Load => "load",
+        Tier2::DiskFloor => "disk-floor",
+        Tier2::Paused => "paused",
         Tier2::Failed(_) => "failed",
     }
 }
@@ -1506,9 +2222,6 @@ pub async fn serve(
             Ok(json!(true))
         }
         Params::SearchModelDownload(d) => hub.model_download(front, d).await.map(|s| json!(s)),
-        Params::SearchServerPlan(k) => hub.server_plan(k.kind).await.map(|p| json!(p)),
-        Params::SearchServerStart(s) => hub.server_start(s).await.map(|r| json!(r)),
-        Params::SearchServerStop(k) => hub.server_stop(k.kind).await.map(|r| json!(r)),
         Params::SearchSymbolAt(a) => symbol_at(a).await.map(|s| json!(s)),
         Params::SearchSymbols(a) => hub.symbols(front, a).await.map(|s| json!(s)),
         Params::SearchOutline(a) => hub.outline(front, a).await.map(|o| json!(o)),
@@ -1561,10 +2274,22 @@ pub async fn serve(
                         .map_err(|e| error(ErrorCode::InvalidParams, e.to_string(), Some("root")))
                 })
         }
+        Params::SearchExport(p) => hub.export(front, p).await.map(|a| json!(a)),
+        Params::SearchImport(p) => hub.import(front, p).await.map(|a| json!(a)),
         Params::SearchTyping(_) => {
             hub.typing().await;
             Ok(json!({}))
         }
+        Params::SearchList(_) => hub.list().await.map(|a| json!(a)),
+        Params::SearchPause(p) => hub.manage(front, "pause", p).await.map(|a| json!(a)),
+        Params::SearchExtraGpus(p) => hub.extra_gpus(front, p).await.map(|a| json!(a)),
+        Params::SearchResume(p) => hub.manage(front, "resume", p).await.map(|a| json!(a)),
+        Params::SearchStop(p) => hub.manage(front, "stop", p).await.map(|a| json!(a)),
+        Params::SearchDelete(p) => hub.delete(front, p).await.map(|a| json!(a)),
+        Params::SearchForgetPin(p) => hub.forget_pin(front, p).await.map(|a| json!(a)),
+        Params::EmbedServeStart(p) => hub.serve_start(front, p).await.map(|a| json!(a)),
+        Params::EmbedServeStop(_) => Ok(json!(hub.serve_stop().await)),
+        Params::EmbedServeToken(_) => hub.serve_token().await.map(|a| json!(a)),
         other => return Err(Box::new(other)),
     })
 }

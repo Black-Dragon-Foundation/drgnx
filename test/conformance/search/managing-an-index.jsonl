@@ -1,0 +1,49 @@
+{"scenario": "search/managing-an-index", "requires": ["v1"], "doc": "Hrafn redesign §11A through a real hub, as the user. A root with no embedder waits for one (status says why); search/pause holds it for the user's reason and search/list shows it; resume lifts the user's pause and the automatic reason shows again; stop stops it; a manage verb needs a root or all, one of them; search/delete needs confirm, frees the index, records it in runtime.db's kv and leaves no root (a second delete has no index); search/forget-pin deletes the pin's kv row (false when there was none); embed/serve-start serves on loopback in plain HTTP with the token once (only its sha256 kept, 0600), serve-token gives another, serve-stop stops (false the second time), a public address in plain HTTP is refused, and serve-token without a server is refused."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/p && cd $ROOT/p && git init -q && printf 'fn alpha() {}\\n' > a.rs && git add a.rs && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "search/status", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": {"state": "paused", "why": {"name": "no-embedder", "text": {"$text": "no embedder"}}}}, "within_ms": 20000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "search/pause", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"roots": [{"root": "$string", "id": "$capture:id", "state": "paused", "why": {"name": "user", "text": {"$text": "paused by the user"}}, "open": true}]}}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/list"}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"roots": [{"id": "$id", "state": "paused", "why": {"name": "user"}, "open": true, "files": "$number", "chunks": "$number", "bytes": "$number"}]}}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/status", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"state": "paused", "why": {"name": "user"}}}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "search/resume", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": {"roots": [{"id": "$id", "state": "paused", "why": {"name": "no-embedder"}}]}}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "search/stop", "params": {"root": "$ROOT/p"}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": {"roots": [{"id": "$id", "state": "stopped", "why": "$absent"}]}}}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "search/pause", "params": {}}}
+{"do": "expect", "conn": "e", "json": {"id": 7, "error": {"code": "invalid-params", "path": "root"}}}
+{"do": "send", "conn": "e", "json": {"id": 8, "method": "search/resume", "params": {"all": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 8, "result": {"roots": [{"id": "$id", "why": {"name": "no-embedder"}}]}}}
+{"do": "send", "conn": "e", "json": {"id": 9, "method": "search/delete", "params": {"root": "$ROOT/p", "confirm": false}}}
+{"do": "expect", "conn": "e", "json": {"id": 9, "error": {"code": "invalid-params", "path": "confirm"}}}
+{"do": "send", "conn": "e", "json": {"id": 10, "method": "search/delete", "params": {"root": "$ROOT/p", "confirm": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 10, "result": {"root": "$string", "bytes": "$number", "vectors": 0, "packs": 0}}}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select json_extract(value, '$.reason') from kv where key = 'search.deleted.$id'", "rows": [["the user's search/delete"]]}
+{"do": "send", "conn": "e", "json": {"id": 11, "method": "search/list"}}
+{"do": "expect", "conn": "e", "json": {"id": 11, "result": {"roots": []}}}
+{"do": "send", "conn": "e", "json": {"id": 12, "method": "search/delete", "params": {"root": "$ROOT/p", "confirm": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 12, "error": {"code": "invalid-params", "path": "root"}}}
+{"do": "sqlite", "path": "$STATE/hub/runtime.db", "sql": ["insert into kv(key, value) values ('vectors.pin.desk', 'ab12')"]}
+{"do": "send", "conn": "e", "json": {"id": 13, "method": "search/forget-pin", "params": {"provider": "desk"}}}
+{"do": "expect", "conn": "e", "json": {"id": 13, "result": true}}
+{"do": "sql_expect", "path": "$STATE/hub/runtime.db", "sql": "select count(*) from kv where key = 'vectors.pin.desk'", "rows": [[0]]}
+{"do": "send", "conn": "e", "json": {"id": 14, "method": "search/forget-pin", "params": {"provider": "desk"}}}
+{"do": "expect", "conn": "e", "json": {"id": 14, "result": false}}
+{"do": "send", "conn": "e", "json": {"id": 15, "method": "embed/serve-token"}}
+{"do": "expect", "conn": "e", "json": {"id": 15, "error": {"code": "invalid-params"}}}
+{"do": "send", "conn": "e", "json": {"id": 16, "method": "embed/serve-start", "params": {"listen": "8.8.8.8:0", "plain": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 16, "error": {"code": "invalid-params", "path": "listen"}}}
+{"do": "send", "conn": "e", "json": {"id": 17, "method": "embed/serve-start", "params": {"listen": "127.0.0.1:0", "plain": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 17, "result": {"url": {"$text": "http://127.0.0.1:"}, "cert_sha256": "$absent", "token": "$capture:token"}}}
+{"do": "file", "path": "$STATE/embed-serve/token.sha256", "exists": true, "mode": "0600"}
+{"do": "file_grep", "paths": ["$STATE/embed-serve/token.sha256"], "absent": "$token"}
+{"do": "send", "conn": "e", "json": {"id": 18, "method": "embed/serve-token"}}
+{"do": "expect", "conn": "e", "json": {"id": 18, "result": {"token": "$not:token"}}}
+{"do": "send", "conn": "e", "json": {"id": 19, "method": "embed/serve-stop"}}
+{"do": "expect", "conn": "e", "json": {"id": 19, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 20, "method": "embed/serve-stop"}}
+{"do": "expect", "conn": "e", "json": {"id": 20, "result": false}}

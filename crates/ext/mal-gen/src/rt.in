@@ -1,0 +1,470 @@
+/// What the generated bindings share. The Luau error contract (docs/develop/standards/api-versioning.md):
+/// - a failure of the API itself (`result<_, E>`) is returned, never raised: `nil, "kind"`; success is the value (or
+///   `true` when there is none), alone;
+/// - a failure of the call (a wrong argument, a number out of range, a busy API) is raised as a Lua error;
+/// - a script's function that breaks this (`true, "denied"`, `nil` alone, an unknown kind) is refused, never read as success.
+pub mod rt {
+    /// 2^53: the largest integer an f64 holds exactly, and so the largest 64-bit value Luau can carry.
+    pub const MAX_SAFE: f64 = 9007199254740992.0;
+
+    pub fn bad(ctx: &str, why: &str) -> mlua::Error {
+        mlua::Error::runtime(format!("{ctx}: {why}"))
+    }
+
+    pub fn contract(ctx: &str, why: &str) -> mlua::Error {
+        mlua::Error::runtime(format!("{ctx}: breaks the result contract: {why}"))
+    }
+
+    pub fn arity(ctx: &str, a: &[mlua::Value], n: usize) -> mlua::Result<()> {
+        if a.len() == n {
+            Ok(())
+        } else {
+            Err(bad(ctx, &format!("expected {n} argument(s), got {}", a.len())))
+        }
+    }
+
+    pub fn dec_bool(v: &mlua::Value, ctx: &str) -> mlua::Result<bool> {
+        match v {
+            mlua::Value::Boolean(b) => Ok(*b),
+            _ => Err(bad(ctx, "expected a boolean")),
+        }
+    }
+
+    pub fn dec_num(v: &mlua::Value, ctx: &str) -> mlua::Result<f64> {
+        match v {
+            mlua::Value::Number(n) => Ok(*n),
+            mlua::Value::Integer(i) => Ok(*i as f64),
+            _ => Err(bad(ctx, "expected a number")),
+        }
+    }
+
+    /// A whole number in MIN..=MAX (a 64-bit type's range is cut to +-2^53: beyond it Luau has already rounded).
+    pub fn dec_int(v: &mlua::Value, ctx: &str, min: f64, max: f64) -> mlua::Result<f64> {
+        let n = dec_num(v, ctx)?;
+        if !n.is_finite() || n.fract() != 0.0 {
+            Err(bad(ctx, "expected a whole number"))
+        } else if n < min || n > max {
+            Err(bad(ctx, &format!("{n} is outside {min}..={max}")))
+        } else {
+            Ok(n)
+        }
+    }
+
+    pub fn dec_str(v: &mlua::Value, ctx: &str) -> mlua::Result<String> {
+        match v {
+            mlua::Value::String(s) => match s.to_str() {
+                Ok(b) => {
+                    let t: &str = &b;
+                    Ok(t.to_owned())
+                }
+                Err(_) => Err(bad(ctx, "expected valid UTF-8")),
+            },
+            _ => Err(bad(ctx, "expected a string")),
+        }
+    }
+
+    pub fn dec_table(v: &mlua::Value, ctx: &str) -> mlua::Result<mlua::Table> {
+        match v {
+            mlua::Value::Table(t) => Ok(t.clone()),
+            _ => Err(bad(ctx, "expected a table")),
+        }
+    }
+
+    /// A list given to a function: its elements, refused when it is longer than MAX.
+    pub fn dec_list(v: &mlua::Value, ctx: &str, max: usize) -> mlua::Result<Vec<mlua::Value>> {
+        match v {
+            mlua::Value::Table(t) => {
+                let n = t.raw_len();
+                check_len(n, max, ctx)?;
+                let mut out = Vec::with_capacity(n);
+                for i in 1..=n {
+                    out.push(t.raw_get::<mlua::Value>(i as i64)?);
+                }
+                Ok(out)
+            }
+            _ => Err(bad(ctx, "expected a list")),
+        }
+    }
+
+    pub fn check_len(n: usize, max: usize, ctx: &str) -> mlua::Result<()> {
+        if n > max {
+            Err(bad(ctx, &format!("the list is longer than {max}")))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The same for a list a guest sent: its length, refused when it is over MAX.
+    pub fn len_ok(n: usize, max: usize, ctx: &str) -> wasmtime::Result<()> {
+        if n > max {
+            Err(wasmtime::Error::msg(format!("{ctx}: the list is longer than {max}")))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn enc_u64(v: u64, ctx: &str) -> mlua::Result<mlua::Value> {
+        if v > (1u64 << 53) {
+            Err(bad(ctx, "the result is above 2^53, which Luau cannot hold exactly"))
+        } else {
+            Ok(mlua::Value::Number(v as f64))
+        }
+    }
+
+    pub fn enc_i64(v: i64, ctx: &str) -> mlua::Result<mlua::Value> {
+        if v.unsigned_abs() > (1u64 << 53) {
+            Err(bad(ctx, "the result is beyond 2^53, which Luau cannot hold exactly"))
+        } else {
+            Ok(mlua::Value::Number(v as f64))
+        }
+    }
+
+    pub fn enc_str(lua: &mlua::Lua, s: &str) -> mlua::Result<mlua::Value> {
+        lua.create_string(s).map(mlua::Value::String)
+    }
+
+    /// The caller the host has set for this call.
+    pub fn caller<C: Clone>(cell: &std::sync::RwLock<C>) -> C {
+        match cell.read() {
+            Ok(g) => g.clone(),
+            Err(p) => (**p.get_ref()).clone(),
+        }
+    }
+
+    /// Run F on the API. A call from inside a call (the lock is held) is an error, never a deadlock. A panic that poisoned
+    /// the lock fails the call, and every call after it: the API's state is not trusted again.
+    pub fn with_api<A, R>(
+        api: &std::sync::Mutex<A>,
+        ctx: &str,
+        f: impl FnOnce(&mut A) -> R,
+    ) -> mlua::Result<R> {
+        match api.try_lock() {
+            Ok(mut g) => Ok(f(&mut g)),
+            Err(std::sync::TryLockError::Poisoned(_)) => Err(bad(
+                ctx,
+                "the API failed earlier (a panic in it); this extension is stopped",
+            )),
+            Err(std::sync::TryLockError::WouldBlock) => Err(bad(
+                ctx,
+                "the API is busy: a call from inside a call is refused",
+            )),
+        }
+    }
+
+    /// The same for the component host: the error traps the guest instead.
+    pub fn with_wasm<A, R>(
+        api: &std::sync::Mutex<A>,
+        ctx: &str,
+        f: impl FnOnce(&mut A) -> R,
+    ) -> wasmtime::Result<R> {
+        match api.try_lock() {
+            Ok(mut g) => Ok(f(&mut g)),
+            Err(std::sync::TryLockError::Poisoned(_)) => Err(wasmtime::Error::msg(format!(
+                "{ctx}: the API failed earlier (a panic in it); this extension is stopped"
+            ))),
+            Err(std::sync::TryLockError::WouldBlock) => Err(wasmtime::Error::msg(format!(
+                "{ctx}: the API is busy: a call from inside a call is refused"
+            ))),
+        }
+    }
+
+    /// A resource handle an extension holds: the slot's generation (high 32 bits) and index (low 32 bits). Handle 0 is
+    /// never issued.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub struct RHandle(pub u64);
+
+    impl RHandle {
+        pub fn index(self) -> u32 {
+            self.0 as u32
+        }
+
+        pub fn generation(self) -> u32 {
+            (self.0 >> 32) as u32
+        }
+    }
+
+    /// Why a table refused a handle.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum HandleError {
+        /// the extension holds as many handles as it may
+        Full(usize),
+        /// dropped, never issued, or issued to another extension
+        Stale,
+        /// a handle of another resource type
+        WrongKind,
+    }
+
+    impl std::fmt::Display for HandleError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                HandleError::Full(n) => write!(f, "this extension holds {n} handles, the most it may"),
+                HandleError::Stale => write!(f, "the handle was dropped, or it is not this extension's"),
+                HandleError::WrongKind => write!(f, "the handle is of another resource type"),
+            }
+        }
+    }
+
+    /// One extension's live handles: a slot per handle, each with a generation, so a handle that was dropped is never
+    /// read as the one that took its slot. A slot whose last generation is used is retired, never reused, so a
+    /// generation never wraps onto a handle somebody still holds.
+    pub struct HandleTable {
+        cap: usize,
+        first_generation: u32,
+        slots: Vec<Slot>,
+        free: Vec<u32>,
+        live: usize,
+        deferred: Vec<(u32, u64)>,
+    }
+
+    struct Slot {
+        generation: u32,
+        /// (resource type, the editor's rep)
+        entry: Option<(u32, u64)>,
+        spent: bool,
+    }
+
+    impl HandleTable {
+        /// A table that holds at most CAP handles at once.
+        pub fn new(cap: usize) -> Self {
+            Self::new_at(cap, 1)
+        }
+
+        /// The same, whose new slots start at FIRST_GENERATION (0 is never used): for a test of what the last
+        /// generations do.
+        pub fn new_at(cap: usize, first_generation: u32) -> Self {
+            Self {
+                cap,
+                first_generation: first_generation.max(1),
+                slots: Vec::new(),
+                free: Vec::new(),
+                live: 0,
+                deferred: Vec::new(),
+            }
+        }
+
+        pub fn cap(&self) -> usize {
+            self.cap
+        }
+
+        /// The handles held now.
+        pub fn live(&self) -> usize {
+            self.live
+        }
+
+        /// Whether one more handle may be held.
+        pub fn has_room(&self) -> Result<(), HandleError> {
+            if self.live >= self.cap {
+                Err(HandleError::Full(self.cap))
+            } else {
+                Ok(())
+            }
+        }
+
+        /// A handle for REP of resource type KIND.
+        pub fn insert(&mut self, kind: u32, rep: u64) -> Result<RHandle, HandleError> {
+            self.has_room()?;
+            let index = match self.free.pop() {
+                Some(i) => i,
+                None => {
+                    let i = u32::try_from(self.slots.len()).map_err(|_| HandleError::Full(self.cap))?;
+                    self.slots.push(Slot {
+                        generation: self.first_generation,
+                        entry: None,
+                        spent: false,
+                    });
+                    i
+                }
+            };
+            let slot = &mut self.slots[index as usize];
+            slot.entry = Some((kind, rep));
+            self.live += 1;
+            Ok(RHandle(u64::from(slot.generation) << 32 | u64::from(index)))
+        }
+
+        fn slot_of(&self, h: RHandle, kind: u32) -> Result<(usize, u64), HandleError> {
+            let index = h.index() as usize;
+            let slot = self.slots.get(index).ok_or(HandleError::Stale)?;
+            match slot.entry {
+                Some((k, rep)) if slot.generation == h.generation() => {
+                    if k == kind {
+                        Ok((index, rep))
+                    } else {
+                        Err(HandleError::WrongKind)
+                    }
+                }
+                _ => Err(HandleError::Stale),
+            }
+        }
+
+        /// The rep of H, if it is live and of resource type KIND.
+        pub fn get(&self, h: RHandle, kind: u32) -> Result<u64, HandleError> {
+            self.slot_of(h, kind).map(|(_, rep)| rep)
+        }
+
+        /// Drop H: its rep, once; the handle is stale from now on.
+        pub fn remove(&mut self, h: RHandle, kind: u32) -> Result<u64, HandleError> {
+            let (index, rep) = self.slot_of(h, kind)?;
+            self.release(index);
+            Ok(rep)
+        }
+
+        fn release(&mut self, index: usize) {
+            let slot = &mut self.slots[index];
+            slot.entry = None;
+            self.live -= 1;
+            match slot.generation.checked_add(1) {
+                Some(next) => {
+                    slot.generation = next;
+                    self.free.push(index as u32);
+                }
+                None => slot.spent = true,
+            }
+        }
+
+        /// The live handle in slot INDEX (the rep a component's handle carries).
+        pub fn at_index(&self, index: u32) -> Option<RHandle> {
+            let slot = self.slots.get(index as usize)?;
+            slot.entry
+                .map(|_| RHandle(u64::from(slot.generation) << 32 | u64::from(index)))
+        }
+
+        /// A drop the editor could not be told of yet (its API was in use): kept until the next call.
+        pub fn defer(&mut self, kind: u32, rep: u64) {
+            self.deferred.push((kind, rep));
+        }
+
+        pub fn take_deferred(&mut self) -> Vec<(u32, u64)> {
+            std::mem::take(&mut self.deferred)
+        }
+
+        /// Every live handle, dropped: (resource type, rep) of each, once. They are stale afterwards.
+        pub fn drain(&mut self) -> Vec<(u32, u64)> {
+            let mut out = Vec::new();
+            for index in 0..self.slots.len() {
+                if let Some(e) = self.slots[index].entry {
+                    out.push(e);
+                    self.release(index);
+                }
+            }
+            out
+        }
+    }
+
+    fn table(hs: &std::sync::Mutex<HandleTable>) -> std::sync::MutexGuard<'_, HandleTable> {
+        saman::lock(hs)
+    }
+
+    /// A drop that the editor is told of, when the API is free: the handle table's drops deferred, taken.
+    pub fn deferred(hs: &std::sync::Mutex<HandleTable>) -> Vec<(u32, u64)> {
+        table(hs).take_deferred()
+    }
+
+    /// Every handle of the table, dropped (see [`HandleTable::drain`]).
+    pub fn drained(hs: &std::sync::Mutex<HandleTable>) -> Vec<(u32, u64)> {
+        table(hs).drain()
+    }
+
+    /// Hold back a drop for the next call.
+    pub fn defer(hs: &std::sync::Mutex<HandleTable>, kind: u32, rep: u64) {
+        table(hs).defer(kind, rep);
+    }
+
+    /// What a Luau state's resources share: the API, the caller and the table of the one extension in the state.
+    pub struct LuaInst<A, C> {
+        pub api: std::sync::Arc<std::sync::Mutex<A>>,
+        pub caller: std::sync::Arc<std::sync::RwLock<C>>,
+        pub hs: std::sync::Arc<std::sync::Mutex<HandleTable>>,
+        pub max: usize,
+    }
+
+    /// A handle is used only in the state it was made in: one of another extension is refused.
+    pub fn own<A: 'static, C: 'static>(
+        lua: &mlua::Lua,
+        inst: &std::sync::Arc<LuaInst<A, C>>,
+        ctx: &str,
+    ) -> mlua::Result<()> {
+        match lua.app_data_ref::<std::sync::Arc<LuaInst<A, C>>>() {
+            Some(mine) if std::sync::Arc::ptr_eq(&mine, inst) => Ok(()),
+            _ => Err(bad(ctx, "the handle belongs to another extension")),
+        }
+    }
+
+    pub fn lua_room(hs: &std::sync::Mutex<HandleTable>, ctx: &str) -> mlua::Result<()> {
+        table(hs).has_room().map_err(|e| bad(ctx, &e.to_string()))
+    }
+
+    pub fn lua_insert(
+        hs: &std::sync::Mutex<HandleTable>,
+        kind: u32,
+        rep: u64,
+        ctx: &str,
+    ) -> mlua::Result<RHandle> {
+        table(hs).insert(kind, rep).map_err(|e| bad(ctx, &e.to_string()))
+    }
+
+    pub fn lua_get(
+        hs: &std::sync::Mutex<HandleTable>,
+        h: RHandle,
+        kind: u32,
+        ctx: &str,
+    ) -> mlua::Result<u64> {
+        table(hs).get(h, kind).map_err(|e| bad(ctx, &e.to_string()))
+    }
+
+    /// Take H out of the table if it is there (a handle let go: there is no one to tell of a refusal).
+    pub fn forget(hs: &std::sync::Mutex<HandleTable>, h: RHandle, kind: u32) -> Option<u64> {
+        table(hs).remove(h, kind).ok()
+    }
+
+    pub fn lua_remove(
+        hs: &std::sync::Mutex<HandleTable>,
+        h: RHandle,
+        kind: u32,
+        ctx: &str,
+    ) -> mlua::Result<u64> {
+        table(hs).remove(h, kind).map_err(|e| bad(ctx, &e.to_string()))
+    }
+
+    fn wasm_err(ctx: &str, e: HandleError) -> wasmtime::Error {
+        wasmtime::Error::msg(format!("{ctx}: {e}"))
+    }
+
+    pub fn wasm_room(hs: &std::sync::Mutex<HandleTable>, ctx: &str) -> wasmtime::Result<()> {
+        table(hs).has_room().map_err(|e| wasm_err(ctx, e))
+    }
+
+    /// A component's handle carries the slot's index: the table finds the live handle there.
+    pub fn wasm_insert(
+        hs: &std::sync::Mutex<HandleTable>,
+        kind: u32,
+        rep: u64,
+        ctx: &str,
+    ) -> wasmtime::Result<u32> {
+        table(hs)
+            .insert(kind, rep)
+            .map(|h| h.index())
+            .map_err(|e| wasm_err(ctx, e))
+    }
+
+    pub fn wasm_get(
+        hs: &std::sync::Mutex<HandleTable>,
+        kind: u32,
+        index: u32,
+        ctx: &str,
+    ) -> wasmtime::Result<u64> {
+        let t = table(hs);
+        let h = t.at_index(index).ok_or_else(|| wasm_err(ctx, HandleError::Stale))?;
+        t.get(h, kind).map_err(|e| wasm_err(ctx, e))
+    }
+
+    pub fn wasm_remove(
+        hs: &std::sync::Mutex<HandleTable>,
+        kind: u32,
+        index: u32,
+        ctx: &str,
+    ) -> wasmtime::Result<u64> {
+        let mut t = table(hs);
+        let h = t.at_index(index).ok_or_else(|| wasm_err(ctx, HandleError::Stale))?;
+        t.remove(h, kind).map_err(|e| wasm_err(ctx, e))
+    }
+}

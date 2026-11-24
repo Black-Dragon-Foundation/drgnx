@@ -31,6 +31,9 @@ use std::time::Duration;
 
 /// How often it looks.
 pub const POLL: Duration = Duration::from_secs(5);
+
+/// How long the power-off command may take before it is tried again at the next look.
+const POWEROFF_LIMIT: Duration = Duration::from_secs(60);
 /// In the runner's root: what `serve` writes for it.
 pub const HEARTBEAT: &str = "heartbeat.json";
 /// In its own folder: the notice's time.
@@ -308,7 +311,7 @@ pub struct Args {
 impl Args {
     /// `--provider aws|gcp --idle S --lifetime S --unattended S --root DIR --dir DIR` (and in a test build
     /// `--clock-file F --poweroff-cmd PATH --metadata-url URL`).
-    pub fn parse(args: &[&str]) -> Result<Args, String> {
+    pub fn parse(args: &[&str]) -> villa::Result<Args> {
         let (mut provider, mut idle, mut lifetime, mut unattended) = (None, None, None, None);
         let (mut root, mut dir) = (None, None);
         // a test build may set these three
@@ -320,17 +323,19 @@ impl Args {
         let mut poweroff = vec!["systemctl".to_string(), "poweroff".to_string()];
         let mut it = args.iter();
         while let Some(a) = it.next() {
-            let v = it.next().ok_or_else(|| format!("{a} needs a value"))?;
+            let v = it
+                .next()
+                .ok_or_else(|| villa::Error::invalid(format!("{a} needs a value")))?;
             let secs = || {
                 v.parse::<u64>()
-                    .map_err(|_| format!("{a} is seconds, not {v}"))
+                    .map_err(|_| villa::Error::invalid(format!("{a} is seconds, not {v}")))
             };
             let abs = || {
                 let p = PathBuf::from(v);
                 if p.is_absolute() {
                     Ok(p)
                 } else {
-                    Err(format!("{a} must be absolute: {v}"))
+                    Err(villa::Error::invalid(format!("{a} must be absolute: {v}")))
                 }
             };
             match *a {
@@ -338,7 +343,11 @@ impl Args {
                     provider = Some(match *v {
                         "aws" => Provider::Aws,
                         "gcp" => Provider::Gcp,
-                        p => return Err(format!("--provider is aws or gcp, not {p}")),
+                        p => {
+                            return Err(villa::Error::invalid(format!(
+                                "--provider is aws or gcp, not {p}"
+                            )));
+                        }
                     })
                 }
                 "--idle" => idle = Some(secs()?),
@@ -352,19 +361,21 @@ impl Args {
                 "--poweroff-cmd" => poweroff = vec![abs()?.display().to_string()],
                 #[cfg(feature = "test-hooks")]
                 "--metadata-url" => metadata = v.trim_end_matches('/').to_string(),
-                other => return Err(format!("unknown option {other}")),
+                other => return Err(villa::Error::invalid(format!("unknown option {other}"))),
             }
         }
-        let need = |v: Option<u64>, n: &str| v.ok_or_else(|| format!("{n} is needed"));
+        let need = |v: Option<u64>, n: &str| {
+            v.ok_or_else(|| villa::Error::invalid(format!("{n} is needed")))
+        };
         Ok(Args {
-            provider: provider.ok_or("--provider is needed")?,
+            provider: provider.ok_or_else(|| villa::Error::invalid("--provider is needed"))?,
             limits: Limits {
                 idle_s: need(idle, "--idle")?,
                 lifetime_s: need(lifetime, "--lifetime")?,
                 unattended_s: need(unattended, "--unattended")?,
             },
-            root: root.ok_or("--root is needed")?,
-            dir: dir.ok_or("--dir is needed")?,
+            root: root.ok_or_else(|| villa::Error::invalid("--root is needed"))?,
+            dir: dir.ok_or_else(|| villa::Error::invalid("--dir is needed"))?,
             metadata,
             clock_file,
             poweroff,
@@ -372,33 +383,15 @@ impl Args {
     }
 }
 
-/// A small regular file's text, read without following a link and without blocking on a FIFO; none otherwise.
+/// A small regular file's text, read without following a link and without blocking on a FIFO; none otherwise (a file
+/// above [`MAX_READ`] too).
 pub fn read_small(path: &Path) -> Option<String> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let f = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
-    if !f.metadata().ok()?.is_file() {
-        return None;
-    }
-    let mut s = String::new();
-    f.take(MAX_READ).read_to_string(&mut s).ok()?;
-    Some(s)
+    eitri::read_string(path, MAX_READ).ok()
 }
 
 /// Writes TEXT to DIR/NAME by rename (a new file each time: never through a link).
 fn put(dir: &Path, name: &str, text: &str) -> io::Result<()> {
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    let _ = fs::remove_file(&tmp);
-    let mut f = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)?;
-    f.write_all(text.as_bytes())?;
-    drop(f);
-    fs::rename(&tmp, dir.join(name))
+    crate::fsio::write(dir.join(name), text)
 }
 
 /// The attempts under ROOT the hub hasn't collected: running, or a result waiting for the hub.
@@ -449,7 +442,7 @@ fn notice(args: &Args, now: u64) -> Option<u64> {
 }
 
 fn wall() -> u64 {
-    std::time::SystemTime::now()
+    stund::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
@@ -480,15 +473,18 @@ fn booted(args: &Args, now: u64) -> u64 {
 /// Runs the watchdog with ARGS until it is stopped (it never exits on its own once it has started).
 pub fn run(args: Args) -> i32 {
     if let Err(e) = fs::create_dir_all(&args.dir) {
-        eprintln!("sleipnir watchdog: {}: {e}", args.dir.display());
+        crate::eline!("sleipnir watchdog: {}: {e}", args.dir.display());
         return 1;
     }
     let mut now = clock(&args, 0);
     let mut w = Watch::new(args.provider, args.limits, booted(&args, now), now);
     let (mut noticed, mut idle, mut off) = (false, None, false);
-    eprintln!(
+    crate::eline!(
         "sleipnir watchdog: {:?}, idle {} s, lifetime {} s, unattended {} s",
-        args.provider, args.limits.idle_s, args.limits.lifetime_s, args.limits.unattended_s
+        args.provider,
+        args.limits.idle_s,
+        args.limits.lifetime_s,
+        args.limits.unattended_s
     );
     loop {
         now = clock(&args, now);
@@ -496,25 +492,30 @@ pub fn run(args: Args) -> i32 {
             match put(&args.dir, PREEMPTING, &at.to_string()) {
                 Ok(()) => {
                     noticed = true;
-                    eprintln!("sleipnir watchdog: the provider's notice: the machine goes at {at}");
+                    crate::eline!(
+                        "sleipnir watchdog: the provider's notice: the machine goes at {at}"
+                    );
                 }
-                Err(e) => eprintln!("sleipnir watchdog: writing the notice: {e}"),
+                Err(e) => crate::eline!("sleipnir watchdog: writing the notice: {e}"),
             }
         }
         let hb = read_small(&args.root.join(HEARTBEAT)).and_then(|s| serde_json::from_str(&s).ok());
         match w.step(now, jobs(&args.root), hb) {
             Some(Act::Poweroff(why)) if !off => {
-                let _ = put(&args.dir, POWEROFF, why.as_str());
-                eprintln!("sleipnir watchdog: powering off ({})", why.as_str());
-                match std::process::Command::new(&args.poweroff[0])
-                    .args(&args.poweroff[1..])
-                    .stdin(std::process::Stdio::null())
-                    .status()
-                {
-                    Ok(s) if s.success() => off = true,
+                if let Err(e) = put(&args.dir, POWEROFF, why.as_str()) {
+                    crate::eline!("sleipnir watchdog: writing the power-off mark: {e}");
+                }
+                crate::eline!("sleipnir watchdog: powering off ({})", why.as_str());
+                match crate::tool::limited(
+                    Path::new(&args.poweroff[0]),
+                    &args.poweroff[1..],
+                    &[],
+                    POWEROFF_LIMIT,
+                ) {
+                    Ok(o) if o.status.success() => off = true,
                     // tried again at the next look
-                    Ok(s) => eprintln!("sleipnir watchdog: the power-off failed: {s}"),
-                    Err(e) => eprintln!("sleipnir watchdog: the power-off: {e}"),
+                    Ok(o) => crate::eline!("sleipnir watchdog: the power-off failed: {}", o.status),
+                    Err(e) => crate::eline!("sleipnir watchdog: the power-off: {e}"),
                 }
             }
             Some(Act::Idle { since }) if idle != Some(since) => {
@@ -523,12 +524,17 @@ pub fn run(args: Args) -> i32 {
                 }
             }
             None if idle.is_some() => {
-                let _ = fs::remove_file(args.dir.join(IDLE));
+                // a mark already gone is as good as removed
+                if let Err(e) = fs::remove_file(args.dir.join(IDLE))
+                    && e.kind() != io::ErrorKind::NotFound
+                {
+                    crate::eline!("sleipnir watchdog: removing the idle mark: {e}");
+                }
                 idle = None;
             }
             _ => {}
         }
-        std::thread::sleep(POLL);
+        stund::sleep_blocking(POLL);
     }
 }
 
@@ -731,8 +737,9 @@ mod tests {
                 "--dir",
                 "/run/w",
             ])
-            .map(|a| (a.provider, a.limits)),
-            Ok((Provider::Aws, L))
+            .map(|a| (a.provider, a.limits))
+            .unwrap(),
+            (Provider::Aws, L)
         );
         assert!(Args::parse(&["--provider", "azure"]).is_err());
         assert!(

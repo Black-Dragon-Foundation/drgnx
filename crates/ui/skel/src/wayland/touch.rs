@@ -59,12 +59,7 @@ fn record(window: u64, time: u32, id: i32, op: u32, x: f64, y: f64) -> Record {
 
 /// Drop the frame in progress and end every live point the host has heard of as cancelled.
 pub(super) fn cancel(state: &mut ReaderState) {
-    state
-        .shared
-        .serials
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .release_all(true);
+    saman::lock(&state.shared.serials).release_all(true);
     state.touch.queued.clear();
     for p in std::mem::take(&mut state.touch.points) {
         if p.posted {
@@ -92,11 +87,7 @@ impl Dispatch<WlTouch, ()> for ReaderState {
                 y,
             } => {
                 {
-                    let mut serials = state
-                        .shared
-                        .serials
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let mut serials = saman::lock(&state.shared.serials);
                     serials.update(SerialKind::TouchDown, serial);
                     serials.press(Held::Touch(id), serial);
                 }
@@ -124,12 +115,7 @@ impl Dispatch<WlTouch, ()> for ReaderState {
                 state.touch.queued.push(ev);
             }
             wl_touch::Event::Up { time, id, .. } => {
-                state
-                    .shared
-                    .serials
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .release(Held::Touch(id));
+                saman::lock(&state.shared.serials).release(Held::Touch(id));
                 let Some(i) = state.touch.points.iter().position(|p| p.id == id) else {
                     return;
                 };

@@ -25,7 +25,7 @@ impl Fx {
             fs::create_dir_all(b.join(d)).unwrap();
         }
         symlink(b.join("config"), b.join("config-link")).unwrap();
-        fs::write(b.join("bin/ratatoskr"), "x").unwrap();
+        crate::fsio::write(b.join("bin/ratatoskr"), "x").unwrap();
         Fx { _dir: dir, b }
     }
 
@@ -36,7 +36,7 @@ impl Fx {
     fn file(&self, rel: &str) {
         let p = self.p(rel);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
-        fs::write(&p, "x").unwrap();
+        crate::fsio::write(&p, "x").unwrap();
     }
 
     fn link(&self, rel: &str, target: &str) {
@@ -189,7 +189,7 @@ fn the_user_lisp_files_come_from_settings_el() {
   (drgnx-user-lisp-files '(("~/lisp/init.el" :on nil) "rel.el" "" ("~bob/x.el") "~" "/abs/y.el"
                            ("dotted.el" . x) 7 (8))))"#;
     let settings = fx.p("config/settings.el");
-    fs::write(&settings, text).unwrap();
+    crate::fsio::write(&settings, text).unwrap();
     fs::set_permissions(&settings, fs::Permissions::from_mode(0o600)).unwrap();
     let home = fx.p("home");
     assert_eq!(
@@ -206,7 +206,7 @@ fn the_user_lisp_files_come_from_settings_el() {
         "(drgnx-settings :version 1)",
         "(drgnx-settings :version 1 (drgnx-user-lisp-files nil))",
     ] {
-        fs::write(&settings, text).unwrap();
+        crate::fsio::write(&settings, text).unwrap();
         assert_eq!(
             read_user_lisp_files(&fx.p("config"), &home),
             [] as [PathBuf; 0]

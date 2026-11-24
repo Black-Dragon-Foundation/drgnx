@@ -1,0 +1,15 @@
+//! One planted violation per file.
+
+mod alias;
+mod allow;
+mod colour;
+mod command;
+mod dequant;
+mod home;
+mod keys;
+mod luau;
+mod open;
+mod print;
+mod secret;
+mod strings;
+mod underscore;

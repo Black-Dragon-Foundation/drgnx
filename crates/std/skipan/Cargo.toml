@@ -1,0 +1,22 @@
+[package]
+name = "skipan"
+description = "Settings: one typed schema, the eight-level stack with the level each value came from, snapshots and live reload (the settings standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+villa.workspace = true
+saman.workspace = true
+huginn = { path = "../../core/huginn", version = "0.1.0" }
+eitri = { path = "../../hub/eitri", version = "0.1.0" }
+serde_json.workspace = true
+mot = { path = "../mot", version = "0.1.0" }
+
+[dev-dependencies]
+raun.workspace = true
+
+[lints]
+workspace = true

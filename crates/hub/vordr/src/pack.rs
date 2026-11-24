@@ -76,7 +76,7 @@ pub struct Pack {
     pub rules: Vec<Rule>,
     /// The paths of test files (`*` matches across `/`); a Rust file's `#[cfg(test)]` part is a test hunk too.
     pub test_globs: Vec<String>,
-    /// The languages whose compile-fail reds count when they name a symbol the task adds (`rust`, `elisp`).
+    /// The languages whose compile-fail reds count when they name a symbol the task adds (`rust`, `other`).
     pub compile_fail_reds: Vec<String>,
     /// The tips a merge batch takes at most.
     pub batch_size: i64,
@@ -121,7 +121,7 @@ impl Pack {
         self.shared_paths.iter().any(|g| glob_match(g, path))
     }
 
-    /// Whether a `build` red counts for LANG (`rust`, `elisp`).
+    /// Whether a `build` red counts for LANG (`rust`, `other`).
     pub fn build_reds(&self, lang: &str) -> bool {
         self.compile_fail_reds.iter().any(|l| l == lang)
     }
@@ -253,7 +253,7 @@ mod tests {
             ..Pack::default()
         };
         assert!(p.on("red-first") && !p.on("review") && !p.on("push-gate"));
-        assert!(p.build_reds("rust") && !p.build_reds("elisp"));
+        assert!(p.build_reds("rust") && !p.build_reds("other"));
         assert_eq!(p.batch(), 1);
         assert!(p.problems().is_empty());
         let bad = Pack {

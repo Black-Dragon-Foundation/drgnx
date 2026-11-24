@@ -14,10 +14,9 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use super::cred::{self, OriginCred};
-use super::git::{Git, run, spawn};
+use super::git::{Git, run, set_env, spawn};
 use super::{Result, refused};
 
 /// A bare mirror under the runner folder.
@@ -200,7 +199,7 @@ impl Mirror {
         let mut c = self.git().cmd(&args);
         if let Some(s) = &served {
             for (k, v) in &s.env {
-                c.env(k, v);
+                set_env(&mut c, k, v);
             }
         }
         let r = run("fetch from the origin", c, None);
@@ -227,7 +226,7 @@ impl Mirror {
 /// The command `sleipnir git-receive --root ROOT REPO` execs: `git receive-pack` on the mirror REPO names (its id,
 /// or its path `ROOT/git/<id>`), hardened as every git of sleipnir, with the caller's stdin and stdout (the hub's
 /// `git push` over SSH). No hook runs and every object received is checked.
-pub fn git_receive(root: &Path, repo: &str) -> Result<Command> {
+pub fn git_receive(root: &Path, repo: &str) -> Result<draugr::Spec> {
     let trimmed = repo.trim_end_matches('/');
     let p = Path::new(trimmed);
     let id = p
@@ -245,13 +244,8 @@ pub fn git_receive(root: &Path, repo: &str) -> Result<Command> {
         }
     }
     let m = Mirror::ensure(root, id)?;
-    let mut c = m
-        .git()
-        .cmd([OsStr::new("receive-pack"), m.git_dir.as_os_str()]);
-    c.stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    Ok(c)
+    Ok(m.git()
+        .cmd([OsStr::new("receive-pack"), m.git_dir.as_os_str()]))
 }
 
 #[cfg(test)]

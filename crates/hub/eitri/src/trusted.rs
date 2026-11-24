@@ -194,7 +194,7 @@ mod tests {
                 std::env::var_os("DRGNX_REQUIRE_ROOT_TESTS").is_none(),
                 "{test}: needs uid 0, and DRGNX_REQUIRE_ROOT_TESTS says this lane runs as root"
             );
-            eprintln!("{test}: needs uid 0; skipped");
+            tracing::warn!("{test}: needs uid 0; skipped");
         }
         root
     }
@@ -368,7 +368,9 @@ mod tests {
         // GL-T1-4: a named-user ACL entry with write raises the mask, and the mask is the file's group bits, so the
         // mode check sees it. An ACL that only reads or executes (mask r-x) stays trusted.
         if !set_acl(&prog, 65534, 0o7) {
-            eprintln!("a_file_or_parent_whose_acl_grants_write_is_refused: no ACLs here; skipped");
+            tracing::warn!(
+                "a_file_or_parent_whose_acl_grants_write_is_refused: no ACLs here; skipped"
+            );
             return;
         }
         assert_eq!(why(trusted_program(&[&prog])), WHY_WRITABLE);

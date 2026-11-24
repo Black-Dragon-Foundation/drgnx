@@ -28,7 +28,7 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use heimdall::codec::{FrameDecoder, HEADER_LEN, KIND_CDP, KIND_CONTROL, Nul};
@@ -89,11 +89,11 @@ pub struct HostArgs {
 
 /// `--hub-fd N --ready-fd N --program P --dir D --web-port N [--max-message B] [--headless-shell|--full]
 /// [--unconfined]`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<HostArgs, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<HostArgs> {
     use lexopt::Arg::Long;
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let (mut hub_fd, mut ready_fd, mut program, mut dir, mut web_port) =
         (None, None, None, None, None);
     let mut max_message = DEFAULT_MAX_MESSAGE;
@@ -114,30 +114,42 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<HostArgs, Strin
             Long("full") if kind.is_none() => kind = Some(false),
             #[cfg(feature = "test-hooks")]
             Long("unconfined") => unconfined = true,
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let need = |what: &str| format!("browser-host needs --{what}");
-    let hub_fd = hub_fd.ok_or_else(|| need("hub-fd"))?;
-    let ready_fd = ready_fd.ok_or_else(|| need("ready-fd"))?;
-    let program = program.ok_or_else(|| need("program"))?;
-    let dir = dir.ok_or_else(|| need("dir"))?;
-    let web_port = web_port.ok_or_else(|| need("web-port"))?;
+    let hub_fd = hub_fd
+        .ok_or_else(|| need("hub-fd"))
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let ready_fd = ready_fd
+        .ok_or_else(|| need("ready-fd"))
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let program = program
+        .ok_or_else(|| need("program"))
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let dir = dir
+        .ok_or_else(|| need("dir"))
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let web_port = web_port
+        .ok_or_else(|| need("web-port"))
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if hub_fd < 3 || ready_fd < 3 || hub_fd == ready_fd {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "the hub's fd ({hub_fd}) and the ready fd ({ready_fd}) must be two numbers from 3"
-        ));
+        )));
     }
     for (name, path) in [("program", &program), ("dir", &dir)] {
         if !path.is_absolute() || path.to_str().is_none() {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "--{name} must be an absolute UTF-8 path: {}",
                 path.display()
-            ));
+            )));
         }
     }
     if web_port == 0 || max_message == 0 {
-        return Err("--web-port and --max-message must be above 0".into());
+        return Err(villa::Error::invalid(
+            "--web-port and --max-message must be above 0",
+        ));
     }
     Ok(HostArgs {
         hub_fd,
@@ -159,7 +171,7 @@ pub fn main(args: Vec<OsString>) -> i32 {
     let a = match parse(args) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("ratatoskr browser-host: {e}");
+            crate::soft::err_line(&format!("ratatoskr browser-host: {e}"));
             return EXIT_USAGE;
         }
     };
@@ -167,13 +179,15 @@ pub fn main(args: Vec<OsString>) -> i32 {
     if !a.unconfined
         && let Err(why) = check_layered()
     {
-        eprintln!("ratatoskr browser-host: refusing to run outside the browser layer: {why}");
+        crate::soft::err_line(&format!(
+            "ratatoskr browser-host: refusing to run outside the browser layer: {why}"
+        ));
         return EXIT_FAILED;
     }
     let (hub, ready) = match (take_fd(a.hub_fd), take_fd(a.ready_fd)) {
         (Ok(h), Ok(r)) => (h, r),
         (Err(e), _) | (_, Err(e)) => {
-            eprintln!("ratatoskr browser-host: {e}");
+            crate::soft::err_line(&format!("ratatoskr browser-host: {e}"));
             return EXIT_FAILED;
         }
     };
@@ -182,22 +196,24 @@ pub fn main(args: Vec<OsString>) -> i32 {
 
 /// Whether this process runs under the browser layer: `no_new_privs` is set (`/proc/self/status`), and a TCP bind on
 /// loopback is refused. The browser layer binds no port at all; the agent's own layer and an unsandboxed process may.
-pub fn check_layered() -> Result<(), String> {
-    let status = std::fs::read_to_string("/proc/self/status")
-        .map_err(|e| format!("cannot read /proc/self/status: {e}"))?;
+pub fn check_layered() -> villa::Result<()> {
+    let status = crate::fsio::read_to_string("/proc/self/status")
+        .map_err(|e| villa::Error::io(format!("cannot read /proc/self/status: {e}")))?;
     let nnp = status
         .lines()
         .find_map(|l| l.strip_prefix("NoNewPrivs:"))
         .map(str::trim);
     if nnp != Some("1") {
-        return Err("no_new_privs is not set".into());
+        return Err(villa::Error::invalid("no_new_privs is not set"));
     }
     match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
-        Ok(_) => Err("a TCP bind on loopback was allowed, which the browser layer refuses".into()),
-        Err(e) if matches!(e.raw_os_error(), Some(libc::EACCES | libc::EPERM)) => Ok(()),
-        Err(e) => Err(format!(
-            "a TCP bind on loopback failed, but was not refused: {e}"
+        Ok(_) => Err(villa::Error::invalid(
+            "a TCP bind on loopback was allowed, which the browser layer refuses",
         )),
+        Err(e) if matches!(e.raw_os_error(), Some(libc::EACCES | libc::EPERM)) => Ok(()),
+        Err(e) => Err(villa::Error::invalid(format!(
+            "a TCP bind on loopback failed, but was not refused: {e}"
+        ))),
     }
 }
 
@@ -253,7 +269,7 @@ pub fn chromium_argv(cfg: &HostCfg) -> Vec<String> {
 /// Chromium's whole environment: `HOME`, `XDG_CACHE_HOME` and `TMPDIR`, each the browser's own dir.
 pub fn chromium_env(cfg: &HostCfg) -> Vec<(String, String)> {
     let dir = cfg.dir.to_string_lossy().into_owned();
-    ["HOME", "XDG_CACHE_HOME", "TMPDIR"]
+    [stig::HOME_VAR, stig::Xdg::Cache.var(), "TMPDIR"]
         .map(|k| (k.to_owned(), dir.clone()))
         .to_vec()
 }
@@ -262,7 +278,7 @@ pub fn chromium_env(cfg: &HostCfg) -> Vec<(String, String)> {
 /// closes. Its exit code: [`EXIT_OK`] after the hub's EOF, [`EXIT_FAILED`] when the stream broke.
 pub fn serve(cfg: &HostCfg, hub: OwnedFd, ready: OwnedFd) -> i32 {
     let fail = |what: String| {
-        eprintln!("ratatoskr browser-host: {what}");
+        crate::soft::err_line(&format!("ratatoskr browser-host: {what}"));
         EXIT_FAILED
     };
     // off fd 3, where the inherited end is not close-on-exec
@@ -299,35 +315,42 @@ pub fn serve(cfg: &HostCfg, hub: OwnedFd, ready: OwnedFd) -> i32 {
     // in a stop's grace period (SIGTERM, then SIGKILL after it): the hub's writes never wait on a stopping browser,
     // and its closing is seen at once; the frames are acted on here, in order, once the stop is done.
     let (to_main, from_hub) = mpsc::channel::<FromHub>();
-    std::thread::spawn(move || {
-        let mut buf = vec![0u8; 64 * 1024];
-        let end = loop {
-            let n = match input.read(&mut buf) {
-                Ok(0) => break EXIT_OK,
-                Ok(n) => n,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                // the hub closed its end before it read what the host last sent (an exit event, say): the hub went,
-                // as with EOF
-                Err(e) if e.kind() == io::ErrorKind::ConnectionReset => break EXIT_OK,
-                Err(e) => {
-                    eprintln!("ratatoskr browser-host: reading the hub: {e}");
-                    break EXIT_FAILED;
-                }
-            };
-            match decoder.push(&buf[..n]) {
-                Ok(frames) => {
-                    if to_main.send(FromHub::Frames(frames)).is_err() {
-                        return;
+    crate::soft::done(
+        saman::spawn_thread("ratatoskr:host", move || {
+            let mut buf = vec![0u8; 64 * 1024];
+            let end = loop {
+                let n = match input.read(&mut buf) {
+                    Ok(0) => break EXIT_OK,
+                    Ok(n) => n,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    // the hub closed its end before it read what the host last sent (an exit event, say): the hub went,
+                    // as with EOF
+                    Err(e) if e.kind() == io::ErrorKind::ConnectionReset => break EXIT_OK,
+                    Err(e) => {
+                        crate::soft::err_line(&format!(
+                            "ratatoskr browser-host: reading the hub: {e}"
+                        ));
+                        break EXIT_FAILED;
+                    }
+                };
+                match decoder.push(&buf[..n]) {
+                    Ok(frames) => {
+                        if to_main.send(FromHub::Frames(frames)).is_err() {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        crate::soft::err_line(&format!(
+                            "ratatoskr browser-host: the hub's stream: {e}"
+                        ));
+                        break EXIT_FAILED;
                     }
                 }
-                Err(e) => {
-                    eprintln!("ratatoskr browser-host: the hub's stream: {e}");
-                    break EXIT_FAILED;
-                }
-            }
-        };
-        let _ = to_main.send(FromHub::End(end));
-    });
+            };
+            crate::soft::done(to_main.send(FromHub::End(end)), "to_main send");
+        }),
+        "thread",
+    );
     let mut browser: Option<Browser> = None;
     let code = loop {
         let frames = match from_hub.recv() {
@@ -342,12 +365,14 @@ pub fn serve(cfg: &HostCfg, hub: OwnedFd, ready: OwnedFd) -> i32 {
             match f.kind {
                 KIND_CDP => match &browser {
                     Some(b) => b.send(f.payload),
-                    None => eprintln!(
-                        "ratatoskr browser-host: a CDP message while no browser runs: dropped"
+                    None => crate::soft::err_line(
+                        "ratatoskr browser-host: a CDP message while no browser runs: dropped",
                     ),
                 },
                 KIND_CONTROL => control(cfg, &f.payload, &mut browser, &out, &sink),
-                k => eprintln!("ratatoskr browser-host: a frame of unknown kind {k}: dropped"),
+                k => crate::soft::err_line(&format!(
+                    "ratatoskr browser-host: a frame of unknown kind {k}: dropped"
+                )),
             }
         }
     };
@@ -383,10 +408,10 @@ fn control(
                 b.stop(v["why"].as_str().unwrap_or("unknown"));
             }
         }
-        _ => eprintln!(
+        _ => crate::soft::err_line(&format!(
             "ratatoskr browser-host: an unknown control frame: {}",
             String::from_utf8_lossy(&payload[..payload.len().min(200)])
-        ),
+        )),
     }
 }
 
@@ -396,26 +421,29 @@ struct Out(Arc<Mutex<File>>);
 
 impl Out {
     fn frame(&self, kind: u8, payload: &[u8]) -> io::Result<()> {
-        let mut w = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut w = saman::lock(&self.0);
         write_frame(&mut w, kind, payload)
     }
 
     /// A control event; a hub that is gone is the reading side's to notice.
     fn control(&self, v: Value) {
-        let _ = self.frame(KIND_CONTROL, v.to_string().as_bytes());
+        crate::soft::done(self.frame(KIND_CONTROL, v.to_string().as_bytes()), "host");
     }
 
     /// [`Self::control`], then THEN while no other frame can be written: whoever takes the stream after sees THEN's
     /// effect along with the event.
     fn control_then(&self, v: Value, then: impl FnOnce()) {
-        let mut w = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let _ = write_frame(&mut w, KIND_CONTROL, v.to_string().as_bytes());
+        let mut w = saman::lock(&self.0);
+        crate::soft::done(
+            write_frame(&mut w, KIND_CONTROL, v.to_string().as_bytes()),
+            "write_frame",
+        );
         then();
     }
 
     /// F, once no frame is being written.
     fn between_frames<T>(&self, f: impl FnOnce() -> T) -> T {
-        let _w = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let _w = saman::lock(&self.0);
         f()
     }
 }
@@ -448,7 +476,7 @@ impl StderrSink {
     /// One line (without its newline). It is sent when no line was sent in the last [`STDERR_EVERY`], and the tail
     /// file is written then.
     fn line(&self, line: &[u8]) {
-        let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut st = saman::lock(&self.state);
         let (tail, last) = &mut *st;
         tail.extend(line);
         tail.push_back(b'\n');
@@ -466,14 +494,14 @@ impl StderrSink {
 
     /// At the end of a stderr: the tail file holds every line.
     fn flush(&self) {
-        let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut st = saman::lock(&self.state);
         write_tail(&self.path, &mut st.0);
     }
 }
 
 fn write_tail(path: &Path, tail: &mut VecDeque<u8>) {
-    if let Err(e) = std::fs::write(path, tail.make_contiguous()) {
-        eprintln!("ratatoskr browser-host: {}: {e}", path.display());
+    if let Err(e) = crate::fsio::write(path, tail.make_contiguous()) {
+        crate::soft::err_line(&format!("ratatoskr browser-host: {}: {e}", path.display()));
     }
 }
 
@@ -501,7 +529,9 @@ impl Browser {
         match spawn(cfg) {
             Ok(s) => Some(Browser::run(cfg, s, out, sink)),
             Err((code, e)) => {
-                eprintln!("ratatoskr browser-host: cannot start the browser: {e}");
+                crate::soft::err_line(&format!(
+                    "ratatoskr browser-host: cannot start the browser: {e}"
+                ));
                 out.control(json!({
                     "ev": "exited", "code": code, "signal": null,
                     "error": format!("cannot start {}: {e}", cfg.program.display()),
@@ -520,14 +550,19 @@ impl Browser {
         let live = Arc::new(AtomicBool::new(true));
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         let mut to = File::from(s.to_chrome);
-        std::thread::spawn(move || {
-            for msg in rx {
-                if let Err(e) = to.write_all(&msg) {
-                    eprintln!("ratatoskr browser-host: writing to the browser: {e}");
-                    break;
+        crate::soft::done(
+            saman::spawn_thread("ratatoskr:host", move || {
+                for msg in rx {
+                    if let Err(e) = to.write_all(&msg) {
+                        crate::soft::err_line(&format!(
+                            "ratatoskr browser-host: writing to the browser: {e}"
+                        ));
+                        break;
+                    }
                 }
-            }
-        });
+            }),
+            "thread",
+        );
         let (drained_tx, drained) = mpsc::channel::<()>();
         let (mut from, max) = (File::from(s.from_chrome), cfg.max_message);
         let from_fd = from.as_raw_fd();
@@ -537,118 +572,130 @@ impl Browser {
         let (mut gone_r, gone_w) = match pipe() {
             Ok((r, w)) => (Some(File::from(r)), Some(File::from(w))),
             Err(e) => {
-                eprintln!("ratatoskr browser-host: the reader's stop pipe: {e}");
+                crate::soft::err_line(&format!(
+                    "ratatoskr browser-host: the reader's stop pipe: {e}"
+                ));
                 (None, None)
             }
         };
         let (o, l) = (out.clone(), live.clone());
-        std::thread::spawn(move || {
-            let mut nul = Nul::new(max);
-            let mut take = |bytes: &[u8]| {
-                for m in nul.push(bytes) {
-                    match m {
-                        Ok(m) if l.load(Ordering::Acquire) => {
-                            let _ = o.frame(KIND_CDP, &m);
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            eprintln!("ratatoskr browser-host: from the browser: {e}: dropped")
+        crate::soft::done(
+            saman::spawn_thread("ratatoskr:host", move || {
+                let mut nul = Nul::new(max);
+                let mut take = |bytes: &[u8]| {
+                    for m in nul.push(bytes) {
+                        match m {
+                            Ok(m) if l.load(Ordering::Acquire) => {
+                                crate::soft::done(o.frame(KIND_CDP, &m), "host");
+                            }
+                            Ok(_) => {}
+                            Err(e) => crate::soft::err_line(&format!(
+                                "ratatoskr browser-host: from the browser: {e}: dropped"
+                            )),
                         }
                     }
-                }
-            };
-            let mut buf = vec![0u8; 64 * 1024];
-            loop {
-                if let Some(g) = gone_r.as_mut()
-                    && gone_first(&from, g)
-                {
-                    let mut held = [0u8; 8];
-                    // no word, only the waiter's end closed: it had no group to clear, so the pipe's end decides
-                    if g.read_exact(&mut held).is_err() {
-                        gone_r = None;
-                        continue;
-                    }
+                };
+                let mut buf = vec![0u8; 64 * 1024];
+                loop {
+                    if let Some(g) = gone_r.as_mut()
+                        && gone_first(&from, g)
                     {
-                        let mut left = u64::from_ne_bytes(held);
-                        while left > 0 {
-                            let cap = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
-                            match from.read(&mut buf[..cap]) {
-                                Ok(0) => break,
-                                Ok(n) => {
-                                    take(&buf[..n]);
-                                    left -= n as u64;
+                        let mut held = [0u8; 8];
+                        // no word, only the waiter's end closed: it had no group to clear, so the pipe's end decides
+                        if g.read_exact(&mut held).is_err() {
+                            gone_r = None;
+                            continue;
+                        }
+                        {
+                            let mut left = u64::from_ne_bytes(held);
+                            while left > 0 {
+                                let cap =
+                                    buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
+                                match from.read(&mut buf[..cap]) {
+                                    Ok(0) => break,
+                                    Ok(n) => {
+                                        take(&buf[..n]);
+                                        left -= n as u64;
+                                    }
+                                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                                    Err(_) => break,
                                 }
-                                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                                Err(_) => break,
                             }
                         }
+                        break;
                     }
-                    break;
+                    let n = match from.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    };
+                    take(&buf[..n]);
                 }
-                let n = match from.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                };
-                take(&buf[..n]);
-            }
-            let _ = drained_tx.send(());
-        });
+                crate::soft::done(drained_tx.send(()), "drained_tx send");
+            }),
+            "thread",
+        );
         let err = File::from(s.stderr);
         let sk = sink.clone();
-        std::thread::spawn(move || {
-            let mut r = BufReader::new(err);
-            let mut line = Vec::new();
-            loop {
-                line.clear();
-                match r
-                    .by_ref()
-                    .take(LINE_MAX as u64)
-                    .read_until(b'\n', &mut line)
-                {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {
-                        if line.last() == Some(&b'\n') {
-                            line.pop();
+        crate::soft::done(
+            saman::spawn_thread("ratatoskr:host", move || {
+                let mut r = BufReader::new(err);
+                let mut line = Vec::new();
+                loop {
+                    line.clear();
+                    match r
+                        .by_ref()
+                        .take(LINE_MAX as u64)
+                        .read_until(b'\n', &mut line)
+                    {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            if line.last() == Some(&b'\n') {
+                                line.pop();
+                            }
+                            sk.line(&line);
                         }
-                        sk.line(&line);
                     }
                 }
-            }
-            sk.flush();
-        });
+                sk.flush();
+            }),
+            "thread",
+        );
         let (done_tx, done) = mpsc::channel::<()>();
         let sent = Arc::new(AtomicBool::new(false));
         let (o, s) = (out.clone(), sent.clone());
         #[cfg(test)]
         let bdir = cfg.dir.clone();
-        std::thread::spawn(move || {
-            let (code, signal) = wait_and_clear(pid, group, || {
-                let Some(mut g) = gone_w else { return };
-                let mut held: libc::c_int = 0;
-                // SAFETY: FIONREAD writes one c_int to the pointer, which lives across the call; the reader holds the
-                // fd open until it has read what this says (a reader gone already never reads the word)
-                if unsafe { libc::ioctl(from_fd, libc::FIONREAD, &mut held) } == 0 {
-                    let held = u64::try_from(held).unwrap_or(0);
-                    let _ = g.write_all(&held.to_ne_bytes());
-                }
-            });
-            let _ = drained.recv_timeout(DRAIN);
-            live.store(false, Ordering::Release);
-            eprintln!(
-                "ratatoskr browser-host: the browser exited (code {code:?}, signal {signal:?})"
-            );
-            o.control_then(
-                json!({"ev": "exited", "code": code, "signal": signal}),
-                || {
-                    s.store(true, Ordering::Release);
-                },
-            );
-            #[cfg(test)]
-            tests::exited_delay(&bdir);
-            let _ = done_tx.send(());
-        });
+        crate::soft::done(
+            saman::spawn_thread("ratatoskr:host", move || {
+                let (code, signal) = wait_and_clear(pid, group, || {
+                    let Some(mut g) = gone_w else { return };
+                    let mut held: libc::c_int = 0;
+                    // SAFETY: FIONREAD writes one c_int to the pointer, which lives across the call; the reader holds the
+                    // fd open until it has read what this says (a reader gone already never reads the word)
+                    if unsafe { libc::ioctl(from_fd, libc::FIONREAD, &mut held) } == 0 {
+                        let held = u64::try_from(held).unwrap_or(0);
+                        crate::soft::done(g.write_all(&held.to_ne_bytes()), "host");
+                    }
+                });
+                crate::soft::done(drained.recv_timeout(DRAIN), "host");
+                live.store(false, Ordering::Release);
+                crate::soft::err_line(&format!(
+                    "ratatoskr browser-host: the browser exited (code {code:?}, signal {signal:?})"
+                ));
+                o.control_then(
+                    json!({"ev": "exited", "code": code, "signal": signal}),
+                    || {
+                        s.store(true, Ordering::Release);
+                    },
+                );
+                #[cfg(test)]
+                tests::exited_delay(&bdir);
+                crate::soft::done(done_tx.send(()), "done_tx send");
+            }),
+            "thread",
+        );
         Browser {
             pid,
             group,
@@ -668,13 +715,15 @@ impl Browser {
 
     fn send(&self, msg: Vec<u8>) {
         if msg.contains(&0) {
-            eprintln!("ratatoskr browser-host: a CDP message with a NUL in it: dropped");
+            crate::soft::err_line(
+                "ratatoskr browser-host: a CDP message with a NUL in it: dropped",
+            );
             return;
         }
         let mut msg = msg;
         msg.push(0);
         if let Some(tx) = &self.to_chrome {
-            let _ = tx.send(msg);
+            crate::soft::done(tx.send(msg), "tx send");
         }
     }
 
@@ -682,12 +731,14 @@ impl Browser {
     /// with the pipe closed first, a browser that ends at the pipe's end (as Chromium does) could exit 0 before the
     /// signal came, and a stop read as the browser leaving by itself.
     fn stop(mut self, why: &str) {
-        eprintln!("ratatoskr browser-host: stopping the browser ({why})");
+        crate::soft::err_line(&format!(
+            "ratatoskr browser-host: stopping the browser ({why})"
+        ));
         self.signal(libc::SIGTERM);
         drop(self.to_chrome.take());
         if let Err(RecvTimeoutError::Timeout) = self.done.recv_timeout(self.grace) {
             self.signal(libc::SIGKILL);
-            let _ = self.done.recv_timeout(Duration::from_secs(5));
+            crate::soft::done(self.done.recv_timeout(Duration::from_secs(5)), "host");
         }
     }
 
@@ -889,12 +940,13 @@ fn spawn(cfg: &HostCfg) -> Result<Spawned, (i32, String)> {
     let (err_r, err_w) = pipe().map_err(io("the stderr pipe"))?;
     #[cfg(test)]
     tests::fork_holder();
-    let null = File::options()
-        .read(true)
-        .write(true)
-        .open("/dev/null")
-        .map(OwnedFd::from)
-        .map_err(io("/dev/null"))?;
+    // a device, not a regular file: eitri refuses it
+    let null = rustix::fs::open(
+        "/dev/null",
+        rustix::fs::OFlags::RDWR | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|e| io("/dev/null")(e.into()))?;
     // above every number the child moves them to, so no dup2 there overwrites one before it is used
     let moved = [&in_r, &out_w, &err_w, &null]
         .map(high)
@@ -1003,7 +1055,10 @@ mod tests {
             };
             let (hub, end) = UnixStream::pair().unwrap();
             let (ready, ready_w) = std::io::pipe().unwrap();
-            let host = std::thread::spawn(move || serve(&cfg, end.into(), ready_w.into()));
+            let host = saman::spawn_thread("ratatoskr:host", move || {
+                serve(&cfg, end.into(), ready_w.into())
+            })
+            .unwrap();
             Fx {
                 dir,
                 hub,
@@ -1115,7 +1170,7 @@ mod tests {
                 .unwrap()
                 .filter_map(Result::ok)
                 .any(|e| {
-                    let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else {
+                    let Ok(stat) = crate::fsio::read_to_string(e.path().join("stat")) else {
                         return false;
                     };
                     // after the command's ")": state ppid pgrp …
@@ -1146,7 +1201,7 @@ mod tests {
         assert_eq!(r["result"]["echo"]["method"], "Browser.getVersion", "{r}");
         let e = fx.event("stderr", Duration::from_secs(5));
         assert_eq!(e["line"], "fake-chromium: up");
-        let tail = std::fs::read_to_string(fx.bdir().join(STDERR_TAIL_FILE)).unwrap();
+        let tail = crate::fsio::read_to_string(fx.bdir().join(STDERR_TAIL_FILE)).unwrap();
         assert!(tail.contains("fake-chromium: up"), "{tail:?}");
         let argv = std::fs::read(fx.bdir().join("argv")).unwrap();
         let argv: Vec<String> = argv
@@ -1199,11 +1254,11 @@ mod tests {
         let mut line = String::new();
         fx.ready.read_to_string(&mut line).unwrap();
         let hold = fx.bdir().join("exited-hold");
-        std::fs::write(&hold, "").unwrap();
+        crate::fsio::write(&hold, "").unwrap();
         struct Release(PathBuf);
         impl Drop for Release {
             fn drop(&mut self) {
-                let _ = std::fs::remove_file(&self.0);
+                crate::soft::done(std::fs::remove_file(&self.0), "std::fs::remove_file");
             }
         }
         let release = Release(hold);
@@ -1248,11 +1303,12 @@ mod tests {
             }
         }
         HOLDER.store(pid, Ordering::SeqCst);
-        std::thread::spawn(move || {
+        saman::spawn_thread("ratatoskr:host", move || {
             let mut st = 0;
             // SAFETY: reaps the child made above.
             unsafe { libc::waitpid(pid, &mut st, 0) };
-        });
+        })
+        .unwrap();
     }
 
     /// `start` answers when the browser has exec'd, not when every other fork's copy of its pipes is gone: a child
@@ -1342,7 +1398,7 @@ mod tests {
         fx.cdp(r#"{"id":1,"method":"Fake.stray"}"#);
         fx.reply(1);
         let stray = skuld::wait_until("the stray's pid", 5, || {
-            std::fs::read_to_string(fx.bdir().join("stray"))
+            crate::fsio::read_to_string(fx.bdir().join("stray"))
                 .ok()
                 .and_then(|p| p.trim().parse::<libc::pid_t>().ok())
         });
@@ -1441,7 +1497,7 @@ mod tests {
             [
                 format!("HOME={d}"),
                 format!("TMPDIR={d}"),
-                format!("XDG_CACHE_HOME={d}")
+                format!("{}={d}", stig::Xdg::Cache.var())
             ]
         );
     }
@@ -1481,7 +1537,7 @@ mod tests {
     fn refuses_to_run_unlayered_without_the_flag() {
         let why = check_layered().expect_err("a test process holds no browser layer");
         assert!(
-            why.contains("no_new_privs") || why.contains("allowed"),
+            why.message().contains("no_new_privs") || why.message().contains("allowed"),
             "{why}"
         );
         let dir = tempfile::tempdir().unwrap();

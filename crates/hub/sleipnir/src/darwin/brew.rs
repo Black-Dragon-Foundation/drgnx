@@ -124,21 +124,43 @@ pub fn run(args: &[String]) -> i32 {
     match answer(args, prefix) {
         Answer::Say(lines) => {
             for l in lines {
-                println!("{l}");
+                crate::oline!("{l}");
             }
             0
         }
         Answer::Fail(m) => {
-            eprintln!("{m}");
+            crate::eline!("{m}");
             1
         }
         Answer::Brew => {
             let real = prefix.join("bin/brew");
-            match std::process::Command::new(&real).args(args).status() {
+            // the real brew with the job's own environment and streams
+            let spec = draugr::Spec {
+                program: real.clone(),
+                args: args.iter().map(Into::into).collect(),
+                env: std::env::vars_os().collect(),
+                cwd: None,
+                stdin_null: false,
+                pass_fds: vec![],
+                new_session: false,
+            };
+            let ran = std::os::fd::AsFd::as_fd(&std::io::stdin())
+                .try_clone_to_owned()
+                .and_then(|stdin| {
+                    let opts = draugr::Opts {
+                        stdin: Some(std::sync::Arc::new(stdin)),
+                        stdout: draugr::Redirect::Inherit,
+                        stderr: draugr::Redirect::Inherit,
+                        ..draugr::Opts::default()
+                    };
+                    draugr::spawn_std(&spec, &opts)
+                })
+                .and_then(|mut c| c.wait());
+            match ran {
                 Ok(s) if s.success() => 0,
                 Ok(s) => {
                     let code = s.code().unwrap_or(1);
-                    eprintln!(
+                    crate::eline!(
                         "{SHIM}: `brew {}` failed (exit {code}); a call that needs the network or writes Homebrew \
                          fails in a job",
                         args.join(" ")
@@ -146,7 +168,7 @@ pub fn run(args: &[String]) -> i32 {
                     code
                 }
                 Err(e) => {
-                    eprintln!("{SHIM}: {}: {e}", real.display());
+                    crate::eline!("{SHIM}: {}: {e}", real.display());
                     1
                 }
             }
@@ -156,17 +178,21 @@ pub fn run(args: &[String]) -> i32 {
 
 /// Makes `<root>/bin/brew-shim/brew` a link to EXE (the runner's `sleipnir`), replacing a stale one atomically. The
 /// shim's folder.
-pub fn ensure_shim(root: &Path, exe: &Path) -> Result<PathBuf, String> {
+pub fn ensure_shim(root: &Path, exe: &Path) -> villa::Result<PathBuf> {
     let dir = shim_dir(root);
     let link = dir.join("brew");
     if std::fs::read_link(&link).ok().as_deref() == Some(exe) {
         return Ok(dir);
     }
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let tmp = dir.join(".brew.new");
-    let _ = std::fs::remove_file(&tmp);
-    std::os::unix::fs::symlink(exe, &tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &link).map_err(|e| format!("{}: {e}", link.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| villa::Error::from(e).with_detail(format!("creating {}", dir.display())))?;
+    // a link made beside the old one and renamed over it, so a job that runs `brew` meanwhile finds one or the other
+    let pinned = eitri::open_path(&dir, eitri::Kind::Dir)?;
+    eitri::symlink_beneath(
+        std::os::fd::AsFd::as_fd(&pinned.fd),
+        Path::new("brew"),
+        std::os::unix::ffi::OsStrExt::as_bytes(exe.as_os_str()),
+    )?;
     Ok(dir)
 }
 

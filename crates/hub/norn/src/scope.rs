@@ -118,10 +118,7 @@ struct Watch {
 fn watch_of(conn: &Connection) -> Arc<Watch> {
     static WATCHES: OnceLock<Mutex<HashMap<String, Arc<Watch>>>> = OnceLock::new();
     let key = conn.path().unwrap_or_default().to_string();
-    let mut map = WATCHES
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut map = saman::lock(WATCHES.get_or_init(Default::default));
     map.entry(key).or_default().clone()
 }
 
@@ -176,7 +173,7 @@ impl StoreScope {
 }
 
 fn now_secs() -> f64 {
-    std::time::SystemTime::now()
+    stund::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
 }
@@ -245,7 +242,11 @@ pub fn for_caller(
                 }
             }
             What::All => star = true,
-            What::Task(_) | What::OptionsGlobal | What::OptionsProject | What::Matrix { .. } => {
+            What::Task(_)
+            | What::Plan(_)
+            | What::OptionsGlobal
+            | What::OptionsProject
+            | What::Matrix { .. } => {
                 continue;
             }
         }

@@ -1,0 +1,40 @@
+[package]
+name = "sattr"
+description = "The extension API (sáttr, an agreement): the hosts for drgnx:api, Luau and WebAssembly components, both generated from the WIT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true # planned: Apache-2.0 after the audit
+publish = false
+build = "build.rs"
+
+[dependencies]
+villa.workspace = true
+mlua.workspace = true
+wasmtime.workspace = true
+serde_json.workspace = true
+saman.workspace = true
+stund.workspace = true
+bod.workspace = true
+skipan = { path = "../../std/skipan", version = "0.1.0" }
+lykill = { path = "../../std/lykill", version = "0.1.0" }
+tidindi = { path = "../../std/tidindi", version = "0.1.0" }
+spurn = { path = "../../std/spurn", version = "0.1.0" }
+
+[build-dependencies]
+villa.workspace = true
+annall.workspace = true
+mal-gen.workspace = true
+eitri = { path = "../../hub/eitri", version = "0.1.0" }
+
+[dev-dependencies]
+eitri = { path = "../../hub/eitri", version = "0.1.0" }
+mal.workspace = true
+wat.workspace = true
+raun.workspace = true
+tokio.workspace = true
+wit-parser.workspace = true
+wit-component.workspace = true
+
+[lints]
+workspace = true

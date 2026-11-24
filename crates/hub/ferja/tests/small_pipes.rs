@@ -12,11 +12,11 @@
 //! gets there, and the run hits the timeout that otherwise only guards a hang.
 #![cfg(all(target_os = "linux", feature = "test-hooks"))]
 
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read as _, Write as _};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -54,10 +54,20 @@ fn small_pipe() -> (OwnedFd, OwnedFd) {
     (r, w)
 }
 
+/// The sidecar's process: its group is killed when the test ends, however it ends.
+struct Leader(draugr::Child);
+
+impl Drop for Leader {
+    fn drop(&mut self) {
+        // SAFETY: kill(2) on the group the child leads; ESRCH (gone already) is the answer to ignore.
+        unsafe { libc::kill(-self.0.id(), libc::SIGKILL) };
+    }
+}
+
 /// The conmon stand-in: one thread, `poll` on every input, each read copied to its output with a blocking `write_all`.
 /// An input at its end (or an output that fails) closes that link.
 fn conmon(links: Vec<(OwnedFd, OwnedFd, usize)>) {
-    std::thread::spawn(move || {
+    saman::spawn_thread("conmon", move || {
         let mut live: Vec<Option<(File, File, usize)>> = links
             .into_iter()
             .map(|(from, to, size)| Some((File::from(from), File::from(to), size)))
@@ -94,7 +104,8 @@ fn conmon(links: Vec<(OwnedFd, OwnedFd, usize)>) {
                 }
             }
         }
-    });
+    })
+    .expect("the conmon thread starts");
 }
 
 /// The bytes one direction of one stream carries, in chunks cut from a shared random block: a chunk out of order,
@@ -169,7 +180,9 @@ async fn upstream(
 ) -> Upstream {
     let (c, _) = l.accept().await.expect("the proxy connects");
     let (mut r, mut w) = c.into_split();
-    let sent = tokio::spawn(async move { push(&mut w, &base, 1000 + i).await });
+    let sent = saman::spawn("upstream-writer", async move {
+        push(&mut w, &base, 1000 + i).await
+    });
     if (32..48).contains(&i) {
         released(gate).await;
     }
@@ -197,7 +210,7 @@ async fn job(
     up: SocketAddr,
     base: Arc<Pattern>,
     gate: watch::Receiver<bool>,
-    fixture: tokio::task::JoinHandle<Upstream>,
+    fixture: saman::Task<Upstream>,
     done: Arc<AtomicUsize>,
     release: Arc<watch::Sender<bool>>,
 ) {
@@ -213,7 +226,7 @@ async fn job(
     assert!(h.starts_with("HTTP/1.1 200"), "stream {i}: {h:?}");
     let (mut r, mut w) = c.into_split();
     let b = base.clone();
-    let sent = tokio::spawn(async move { push(&mut w, &b, i).await });
+    let sent = saman::spawn("job-writer", async move { push(&mut w, &b, i).await });
     if i < 32 {
         released(gate).await;
     }
@@ -270,40 +283,62 @@ async fn saturate(px: Px) {
             let input = pipe::Receiver::from_owned_fd(sc_in_r).unwrap();
             let output = pipe::Sender::from_owned_fd(sc_out_w).unwrap();
             let log_out = pipe::Sender::from_owned_fd(sc_err_w).unwrap();
-            shell_end = Some(tokio::spawn(sidecar::serve(
-                cfg,
-                l,
-                listen,
-                IpAddr::V4(JOB_IP),
-                None,
-                input,
-                output,
-                Some(log_out),
-                Log::default(),
-            )));
+            shell_end = Some(saman::spawn(
+                "sidecar-shell",
+                sidecar::serve(
+                    cfg,
+                    l,
+                    listen,
+                    IpAddr::V4(JOB_IP),
+                    None,
+                    input,
+                    output,
+                    Some(log_out),
+                    Log::default(),
+                ),
+            ));
         }
         Px::Binary => {
             // a free port, so the owner knows the address READY must name
             let probe = std::net::TcpListener::bind("127.0.0.2:0").unwrap();
             listen = probe.local_addr().unwrap();
             drop(probe);
-            child = Some(
-                tokio::process::Command::new(PX)
-                    .args(["--listen", &listen.to_string(), "--job-ip", "127.0.0.3"])
-                    .arg("--test-log-frames")
-                    .stdin(Stdio::from(sc_in_r))
-                    .stdout(Stdio::from(sc_out_w))
-                    .stderr(Stdio::from(sc_err_w))
-                    .kill_on_drop(true)
-                    .spawn()
-                    .expect("drgnx-px starts"),
-            );
+            // the sidecar's stdio are the three pipes: a shell moves them from fds 3, 4 and 5 before it execs
+            let pass = |fd: OwnedFd, target| draugr::PassFd {
+                fd: Arc::new(fd),
+                target,
+            };
+            let args: Vec<OsString> = [
+                "-c",
+                "exec \"$0\" \"$@\" <&3 >&4 2>&5",
+                PX,
+                "--listen",
+                &listen.to_string(),
+                "--job-ip",
+                "127.0.0.3",
+                "--test-log-frames",
+            ]
+            .map(OsString::from)
+            .into();
+            child = Some(Leader(
+                draugr::spawn(draugr::Spec {
+                    program: "/bin/sh".into(),
+                    args,
+                    env: Vec::new(),
+                    cwd: None,
+                    stdin_null: true,
+                    pass_fds: vec![pass(sc_in_r, 3), pass(sc_out_w, 4), pass(sc_err_w, 5)],
+                    new_session: false,
+                })
+                .await
+                .expect("drgnx-px starts"),
+            ));
         }
     }
 
     // the owner's stderr drain reads all the time
     let mut drain = pipe::Receiver::from_owned_fd(drain_r).unwrap();
-    let logged = tokio::spawn(async move { pull(&mut drain).await.0 });
+    let logged = saman::spawn("owner-drain", async move { pull(&mut drain).await.0 });
 
     // the upstreams, and the proxy behind the owner
     let base = Arc::new(Pattern::new());
@@ -315,7 +350,10 @@ async fn saturate(px: Px) {
         let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let a = l.local_addr().unwrap();
         allow.push(parse_target(&format!("up.test:{}", a.port())).unwrap());
-        ups.push((a, tokio::spawn(upstream(l, i, base.clone(), gate.clone()))));
+        ups.push((
+            a,
+            saman::spawn("upstream", upstream(l, i, base.clone(), gate.clone())),
+        ));
     }
     let cfg = ProxyConfig {
         allow,
@@ -334,31 +372,29 @@ async fn saturate(px: Px) {
         .expect("the sidecar's READY");
     let (etx, _events) = mpsc::channel(16);
     let owner_log = Log::default();
-    let owner_end = tokio::spawn(owner::run(
-        out,
-        inp,
-        stx,
-        etx,
-        owner::BEAT,
-        STALL,
-        owner_log.clone(),
-    ));
+    let owner_end = saman::spawn(
+        "owner-run",
+        owner::run(out, inp, stx, etx, owner::BEAT, STALL, owner_log.clone()),
+    );
 
     let done = Arc::new(AtomicUsize::new(0));
     let jobs: Vec<_> = ups
         .into_iter()
         .enumerate()
         .map(|(i, (up, fixture))| {
-            tokio::spawn(job(
-                i,
-                listen,
-                up,
-                base.clone(),
-                gate.clone(),
-                fixture,
-                done.clone(),
-                release.clone(),
-            ))
+            saman::spawn(
+                "job",
+                job(
+                    i,
+                    listen,
+                    up,
+                    base.clone(),
+                    gate.clone(),
+                    fixture,
+                    done.clone(),
+                    release.clone(),
+                ),
+            )
         })
         .collect();
     let all = async {
@@ -378,16 +414,17 @@ async fn saturate(px: Px) {
         assert!(!e.is_finished(), "the sidecar's channel is still up");
     }
     // the owner closes the sidecar's stdin: the channel ends at both ends
-    owner_end.abort();
+    drop(owner_end);
     if let Some(e) = shell_end {
         let end = timeout(HANG, e).await.expect("the sidecar ends").unwrap();
         assert_eq!(end, ferja::shell::End::Eof);
     }
     if let Some(mut c) = child {
-        let code = timeout(HANG, c.wait())
+        let code = timeout(HANG, c.0.wait())
             .await
             .expect("the sidecar exits")
-            .unwrap();
+            .unwrap()
+            .expect("its first wait");
         assert_eq!(code.code(), Some(0));
     }
     assert!(
@@ -401,13 +438,17 @@ async fn saturate(px: Px) {
 }
 
 /// [C, Linux] The sidecar's shell in-process and the owner's `run`, through 4096-byte pipes and the conmon stand-in.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn both_directions_saturated_through_small_pipes_finish() {
-    saturate(Px::Shell).await;
+#[test]
+fn both_directions_saturated_through_small_pipes_finish() {
+    saman::Executor::new(4).unwrap().block_on(async {
+        saturate(Px::Shell).await;
+    })
 }
 
 /// [C, Linux] The same with the built `drgnx-px` as the sidecar.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_built_binary_through_small_pipes_finishes() {
-    saturate(Px::Binary).await;
+#[test]
+fn the_built_binary_through_small_pipes_finishes() {
+    saman::Executor::new(4).unwrap().block_on(async {
+        saturate(Px::Binary).await;
+    })
 }

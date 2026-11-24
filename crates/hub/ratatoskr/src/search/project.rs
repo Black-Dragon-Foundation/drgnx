@@ -11,13 +11,19 @@
 //!   of quiet, a save after 30 s); without watches, [`Project::fresh_for_query`] diffs the blobs at query time.
 //! - **The vectors** are in the state's machine-wide caches ([`Caches`], one file per fingerprint): the store holds
 //!   keys only, and every refresh reports its live key set to the cache of each fingerprint the embedders proved.
-//! - **Tier 2.** Requests of [`REQUEST_KEYS`] missing keys to each embedder that answers (a server that is not running
-//!   gets none, and is no failure, until the next change wakes tier 2). Between requests it waits while typing
-//!   holds ([`TYPING_HOLD`] from the last [`Project::note_typing`]) and, on battery, until AC or
-//!   [`Project::index_now`]. Idle, it stays idle until a wake finds a key missing. What it does is published as a
+//! - **Tier 2** is a chain of sources per fingerprint ([`super::sources`]): requests of at most a source's `max_batch`
+//!   missing keys ([`REQUEST_KEYS`] for the built-in model and servers), open and recently edited files first, then by
+//!   git recency. Each embedder states its model by a probe (a server that is not running is no failure: it is
+//!   asked again at the next change); the ones that state the same fingerprint are one chain, with a backoff per
+//!   source. The built-in model's chain runs only while the main chains have nothing to fill. Between requests tier 2
+//!   waits while typing holds ([`TYPING_HOLD`] from the last [`Project::note_typing`]); on battery the local sources
+//!   (the built-in model) wait until AC, [`Project::index_now`] or `drgnx-search-battery-engine`, and remote ones go on.
+//!   Idle, it stays idle until a wake finds a key missing or a down source is due. What it does is published as a
 //!   [`Status`].
 
 use super::caches::Caches;
+use super::manage::{META_STATE, PauseWhy, RootState, UserState};
+use super::sources::{ChainEntry, DocSource, Slot, Source, SourceChain, run_pass_with};
 use super::{DocEmbedder, power};
 use crate::clock;
 use hrafn::fresh::{Due, Fresh, Settle};
@@ -32,7 +38,6 @@ use std::io;
 use std::os::fd::AsFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -40,10 +45,17 @@ use tokio::sync::{Notify, watch};
 
 /// Keys in one tier-2 request: about 0.25 s on the Radeon, 7 s on the CPU path.
 pub const REQUEST_KEYS: u32 = 8;
+/// Paths of the order of work (open and edited files, then git recency) a batch looks through.
+pub const ORDER_PATHS: usize = 500;
+/// Recently edited files remembered for the order of work.
+pub const RECENT_PATHS: usize = 64;
 /// How long tier 2 holds after the last keystroke.
 pub const TYPING_HOLD: Duration = Duration::from_secs(3);
 /// How often tier 2 looks at the power supply again while it waits on battery.
 pub const POWER_POLL: Duration = Duration::from_secs(10);
+/// How often tier 2 asks again while no source answers its probe (an engine or a model whose install has just
+/// finished, a server that came back): nothing else wakes it.
+pub const PROBE_POLL: Duration = Duration::from_secs(30);
 /// The gitdir's quiet period before a git change is refreshed.
 pub const GIT_QUIET: Duration = Duration::from_secs(2);
 /// A saved file is refreshed once it has been quiet this long.
@@ -90,9 +102,23 @@ pub struct TreeLive {
     pub last: Option<hrafn::overlay::Seed>,
 }
 
+/// The top level of the working tree ROOT is in, if it is one.
+fn toplevel(root: &Path) -> Option<PathBuf> {
+    let out = crate::proc::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--show-toplevel"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+}
+
 /// The project of ROOT: its main checkout's real path and its id.
 pub fn project_id(root: &Path) -> io::Result<(PathBuf, String)> {
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
@@ -107,10 +133,49 @@ pub fn project_id(root: &Path) -> io::Result<(PathBuf, String)> {
     } else {
         root.to_path_buf()
     };
+    // a main checkout that holds nothing but its `.git` (or is not there: a worktree mounted alone, beside the repo's
+    // git dir) has no files to index: the worktree is its own project
+    let hollow =
+        !std::fs::read_dir(&main).is_ok_and(|d| d.flatten().any(|e| e.file_name() != ".git"));
+    let main = if hollow && let Some(top) = toplevel(root) {
+        top
+    } else {
+        main
+    };
     let real = std::fs::canonicalize(main)?;
     let sum = Sha256::digest(real.as_os_str().as_bytes());
     let id: String = sum.iter().take(8).map(|b| format!("{b:02x}")).collect();
     Ok((real, id))
+}
+
+/// The files of ROOT by git recency: those changed by the newest commits first, each once (blocking: runs git).
+fn git_recency(root: &Path) -> io::Result<Vec<String>> {
+    let out = crate::proc::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "-c",
+            "core.quotepath=off",
+            "log",
+            "--name-only",
+            "--no-renames",
+            "--format=",
+            "-n",
+            "300",
+        ])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()?;
+    if !out.status.success() {
+        return Ok(Vec::new());
+    }
+    let mut seen = HashSet::new();
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter(|l| seen.insert(l.to_string()))
+        .take(ORDER_PATHS)
+        .map(str::to_owned)
+        .collect())
 }
 
 /// `<state>/code/<id>.db`.
@@ -187,6 +252,12 @@ pub enum Tier2 {
     Typing,
     /// Waiting on battery.
     Battery,
+    /// Waiting while the machine is busy ([`super::host::busy`]).
+    Load,
+    /// Waiting for space on the state directory's disk ([`super::host::below_floor`]).
+    DiskFloor,
+    /// Paused by the user (`search/pause`) until `search/resume`.
+    Paused,
     /// An embedder failed; tier 2 waits for the next change.
     Failed(String),
 }
@@ -245,9 +316,22 @@ struct Inner {
     held: Mutex<HashSet<String>>,
     deny: DenyList,
     config: Config,
-    embedders: Vec<Arc<dyn DocEmbedder>>,
+    /// Tier 2's sources: the spec's embedders, and what [`Project::add_sources`] added.
+    sources: Mutex<Vec<Arc<dyn Source>>>,
+    /// `drgnx-search-battery-engine`: the local sources run on battery.
+    battery_engine: std::sync::atomic::AtomicBool,
+    /// Open files, edited files (newest first) and the git recency of the paths, for the order of work (MP-14).
+    open_paths: Mutex<Vec<String>>,
+    recent_paths: Mutex<Vec<String>>,
+    recency: Mutex<Option<Vec<String>>>,
+    /// Each fingerprint's chain as the last pass left it, for `search/status`.
+    chains: Mutex<Vec<(String, Vec<ChainEntry>)>>,
     power_root: PathBuf,
+    /// The hub's state directory: the disk floor is its filesystem's.
+    state_dir: PathBuf,
     gate: Mutex<Gate>,
+    /// What the user set (`search/pause`, `resume`, `stop`), as the store's `index_state` keeps it.
+    user: Mutex<UserState>,
     wake: Notify,
     status: watch::Sender<Status>,
     tier1: tokio::sync::Mutex<()>,
@@ -261,7 +345,7 @@ struct Inner {
     /// The worktree overlays' state in the hub, by tree.
     trees: Mutex<HashMap<hrafn::TreeId, Live>>,
     /// The trees' running work (seeds, checks, re-checks, sweeps).
-    jobs: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    jobs: Mutex<Vec<crate::clock::Spawned<()>>>,
     /// The history feed is attached.
     fed: std::sync::atomic::AtomicBool,
     /// When the trees were last swept.
@@ -277,14 +361,13 @@ struct Inner {
 /// One project's index. Dropping it stops tier 2; its workers exit when their stdin closes.
 pub struct Project {
     inner: Arc<Inner>,
-    tier2: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    tier2: Mutex<Option<crate::clock::Spawned<()>>>,
 }
 
 impl Drop for Project {
     fn drop(&mut self) {
-        if let Ok(mut t) = self.tier2.lock()
-            && let Some(h) = t.take()
-        {
+        let held = saman::lock(&self.tier2).take();
+        if let Some(h) = held {
             h.abort();
         }
     }
@@ -341,6 +424,7 @@ impl Project {
         }
         // edits may have happened while the hub was down: every tree is checked on its next use
         store.trees_reopened().await?;
+        let user = UserState::parse(store.meta_get(META_STATE).await?.as_deref());
         let (status, _) = watch::channel(Status {
             tier2: Tier2::Stopped,
             embedded: 0,
@@ -355,9 +439,21 @@ impl Project {
                 held: Mutex::new(HashSet::new()),
                 deny,
                 config: spec.config,
-                embedders: spec.embedders,
+                sources: Mutex::new(
+                    spec.embedders
+                        .into_iter()
+                        .map(|e| Arc::new(DocSource::new(e)) as Arc<dyn Source>)
+                        .collect(),
+                ),
+                battery_engine: false.into(),
+                open_paths: Mutex::new(Vec::new()),
+                recent_paths: Mutex::new(Vec::new()),
+                recency: Mutex::new(None),
+                chains: Mutex::new(Vec::new()),
                 power_root: spec.power_root,
+                state_dir: spec.state.clone(),
                 gate: Mutex::new(Gate::default()),
+                user: Mutex::new(user),
                 wake: Notify::new(),
                 status,
                 tier1: tokio::sync::Mutex::new(()),
@@ -403,14 +499,17 @@ impl Project {
 
     /// The watcher's events from now on; `tick` feeds them to the settle core.
     pub fn watch(&self, w: Arc<hrafn::ProjectWatch>) {
-        if let Ok(mut e) = self.inner.events.lock() {
+        {
+            let mut e = saman::lock(&self.inner.events);
             *e = Some(hrafn::Watch::events(&*w));
         }
-        if let Ok(mut h) = self.inner.watcher.lock() {
+        {
+            let mut h = saman::lock(&self.inner.watcher);
             *h = Some(w);
         }
-        if let Ok(mut b) = self.inner.watch_budget.lock() {
-            *b = std::fs::read_to_string(MAX_USER_WATCHES)
+        {
+            let mut b = saman::lock(&self.inner.watch_budget);
+            *b = crate::fsio::read_to_string(MAX_USER_WATCHES)
                 .ok()
                 .and_then(|t| t.trim().parse::<usize>().ok())
                 .map(|n| n / 2);
@@ -420,7 +519,10 @@ impl Project {
     /// Another tree of this project (a worktree) joins the project's one watcher; its events are tagged with
     /// its key. Blocking: it walks the tree and runs git.
     pub fn add_tree(&self, spec: hrafn::TreeSpec) -> Result<(), hrafn::AddError> {
-        let w = self.inner.watcher.lock().ok().and_then(|h| h.clone());
+        let w = {
+            let h = saman::lock(&self.inner.watcher);
+            h.clone()
+        };
         match w {
             Some(w) => w.add_tree(spec),
             None => Err(hrafn::AddError::Other("the project has no watcher".into())),
@@ -431,7 +533,8 @@ impl Project {
     /// copied to it.  Dropping the receiver ends the tap.
     pub fn tap(&self) -> Receiver<WatchEvent> {
         let (tx, rx) = std::sync::mpsc::channel();
-        if let Ok(mut t) = self.inner.taps.lock() {
+        {
+            let mut t = saman::lock(&self.inner.taps);
             t.push(tx);
         }
         rx
@@ -450,6 +553,10 @@ impl Project {
         if r.keys_missing > 0 || r.files_changed > 0 {
             inner.wake.notify_one();
         }
+        // a stop holds until the next change
+        if r.files_changed > 0 && inner.user() == UserState::Stopped {
+            self.resume().await?;
+        }
         Ok(r)
     }
 
@@ -458,21 +565,15 @@ impl Project {
         let mut hints: HashMap<String, BTreeSet<String>> = HashMap::new();
         let (mut gits, mut overflow) = (HashSet::new(), false);
         let due = {
-            let events: Vec<WatchEvent> = match self.inner.events.lock() {
-                Ok(g) => g
-                    .as_ref()
-                    .map_or_else(Vec::new, |rx| rx.try_iter().collect()),
-                Err(_) => vec![],
-            };
-            if let Ok(mut taps) = self.inner.taps.lock() {
+            let events: Vec<WatchEvent> = saman::lock(&self.inner.events)
+                .as_ref()
+                .map_or_else(Vec::new, |rx| rx.try_iter().collect());
+            {
+                let mut taps = saman::lock(&self.inner.taps);
                 taps.retain(|t| events.iter().all(|e| t.send(e.clone()).is_ok()));
             }
             let now = clock::now() - self.inner.opened;
-            let mut settle = self
-                .inner
-                .settle
-                .lock()
-                .map_err(|_| io::Error::other("settle"))?;
+            let mut settle = saman::lock(&self.inner.settle);
             for e in &events {
                 match e {
                     WatchEvent::File { tree, rel } if tree != hrafn::MAIN_TREE => {
@@ -496,16 +597,14 @@ impl Project {
         };
         // the worktrees' events go to their overlays; an overflow lost events of every tree
         self.inner.hints(hints, gits, overflow).await?;
-        let sweep = match self.inner.swept.lock() {
-            Ok(mut s) => {
-                let now = clock::now();
-                let due = s.is_none_or(|t| now - t >= TREE_SWEEP);
-                if due {
-                    *s = Some(now);
-                }
-                due
+        let sweep = {
+            let mut s = saman::lock(&self.inner.swept);
+            let now = clock::now();
+            let due = s.is_none_or(|t| now - t >= TREE_SWEEP);
+            if due {
+                *s = Some(now);
             }
-            Err(_) => false,
+            due
         };
         if sweep {
             let inner = self.inner.clone();
@@ -522,7 +621,8 @@ impl Project {
                     tracing::warn!("search: the vector cache sweep: {e}");
                 }
             });
-            if let Ok(mut j) = self.inner.jobs.lock() {
+            {
+                let mut j = saman::lock(&self.inner.jobs);
                 j.push(h);
             }
         }
@@ -543,7 +643,10 @@ impl Project {
     /// any differ. The listing reads and hashes only the files whose status moved since the last one
     /// (`hrafn::files::list_with`).
     pub async fn fresh_for_query(&self) -> Result<Option<Refresh>, ProjectError> {
-        let has_watch = self.inner.events.lock().is_ok_and(|e| e.is_some());
+        let has_watch = {
+            let e = saman::lock(&self.inner.events);
+            e.is_some()
+        };
         if has_watch {
             return self.tick().await;
         }
@@ -561,26 +664,24 @@ impl Project {
     /// Holds tier 2 for [`TYPING_HOLD`] from now (between requests, never inside one).
     pub fn note_typing(&self) {
         let until = clock::now() + TYPING_HOLD;
-        let start_timer = match self.inner.gate.lock() {
-            Ok(mut g) => {
-                g.hold_until = Some(until);
-                !std::mem::replace(&mut g.timer, true)
-            }
-            Err(_) => false,
+        let start_timer = {
+            let mut g = saman::lock(&self.inner.gate);
+            g.hold_until = Some(until);
+            !std::mem::replace(&mut g.timer, true)
         };
         if start_timer {
             let inner = self.inner.clone();
             clock::spawn("search:typing", async move {
                 loop {
-                    let wait = match inner.gate.lock() {
-                        Ok(mut g) => match g.hold_until {
+                    let wait = {
+                        let mut g = saman::lock(&inner.gate);
+                        match g.hold_until {
                             Some(t) if t > clock::now() => Some(t - clock::now()),
                             _ => {
                                 g.timer = false;
                                 None
                             }
-                        },
-                        Err(_) => None,
+                        }
                     };
                     match wait {
                         Some(d) => clock::sleep(d).await,
@@ -592,18 +693,114 @@ impl Project {
         }
     }
 
-    /// `search/index` with `now`: tier 2 runs on battery too, until nothing is missing.
+    /// `search/index` with `now`: tier 2 runs on battery and on a busy machine too (not below the disk floor), until
+    /// nothing is missing.
     pub fn index_now(&self) {
-        if let Ok(mut g) = self.inner.gate.lock() {
+        {
+            let mut g = saman::lock(&self.inner.gate);
             g.overriding = true;
         }
         self.inner.wake.notify_one();
     }
 
-    /// Starts tier 2 (once).
+    /// More sources for tier 2 (a lookup source, an engine): before [`start_tier2`](Self::start_tier2).
+    pub fn add_sources(&self, more: Vec<Arc<dyn Source>>) {
+        {
+            let mut s = saman::lock(&self.inner.sources);
+            s.extend(more);
+        }
+    }
+
+    /// `drgnx-search-battery-engine` as it is now: the local sources run on battery. Applies at the next pass.
+    pub fn set_battery_engine(&self, on: bool) {
+        let was = self
+            .inner
+            .battery_engine
+            .swap(on, std::sync::atomic::Ordering::Relaxed);
+        if was != on {
+            self.inner.wake.notify_one();
+        }
+    }
+
+    /// The files open in the editor and the ones edited lately: tier 2 embeds their chunks first (MP-14); the rest
+    /// follow by git recency. A history version of a file also makes it a recently edited one.
+    pub fn order_hint(&self, open: &[String], recent: &[String]) {
+        {
+            let mut o = saman::lock(&self.inner.open_paths);
+            *o = open.to_vec();
+        }
+        self.inner.note_recent(recent.iter().rev());
+    }
+
+    /// Each fingerprint's (hex) chain of sources as the last pass left it.
+    pub fn chains(&self) -> Vec<(String, Vec<ChainEntry>)> {
+        saman::lock(&self.inner.chains).clone()
+    }
+
+    /// `search/pause`: the batch in flight finishes, then tier 2 holds until [`resume`](Self::resume); kept in the
+    /// store, so a restart or a file change does not undo it.
+    pub async fn pause(&self) -> Result<(), ProjectError> {
+        self.inner.set_user(UserState::Paused).await?;
+        self.inner.wake.notify_one();
+        Ok(())
+    }
+
+    /// `search/resume`: tier 2 goes on with the keys still missing (a pause or a stop lifted).
+    pub async fn resume(&self) -> Result<(), ProjectError> {
+        self.inner.set_user(UserState::On).await?;
+        self.start_tier2();
+        self.inner.wake.notify_one();
+        Ok(())
+    }
+
+    /// `search/stop`: the running build is cancelled now; what it finished stays. The watcher stays on: the next change
+    /// or `search/index` goes on from there.
+    pub async fn stop(&self) -> Result<(), ProjectError> {
+        self.inner.set_user(UserState::Stopped).await?;
+        let running = {
+            let mut t = saman::lock(&self.tier2);
+            t.take()
+        };
+        if let Some(h) = running {
+            h.abort();
+            crate::soft::done(h.await, "project");
+        }
+        self.inner.publish(Tier2::Stopped);
+        Ok(())
+    }
+
+    /// The root's state as the user sees it: the user's pause or stop first, then what tier 2 waits for.
+    pub fn state(&self) -> RootState {
+        match self.inner.user() {
+            UserState::Stopped => return RootState::Stopped,
+            UserState::Paused => return RootState::Paused(PauseWhy::User),
+            UserState::On => {}
+        }
+        match self.inner.status.borrow().tier2 {
+            Tier2::Battery => RootState::Paused(PauseWhy::Battery),
+            Tier2::Load => RootState::Paused(PauseWhy::Load),
+            Tier2::DiskFloor => RootState::Paused(PauseWhy::DiskFloor),
+            Tier2::Failed(_) => RootState::Paused(PauseWhy::NoEmbedder),
+            Tier2::Running | Tier2::Typing | Tier2::Paused => RootState::Running,
+            // no source at all, or none answered its probe (no chain formed: a built-in model not downloaded, a
+            // server not there)
+            Tier2::Idle | Tier2::Stopped
+                if self.inner.sources().is_empty()
+                    || saman::lock(&self.inner.chains).is_empty() =>
+            {
+                RootState::Paused(PauseWhy::NoEmbedder)
+            }
+            Tier2::Idle | Tier2::Stopped => RootState::Idle,
+        }
+    }
+
+    /// Starts tier 2 (once; again when it ended), unless the user stopped it.
     pub fn start_tier2(&self) {
-        let Ok(mut t) = self.tier2.lock() else { return };
-        if t.is_some() {
+        if self.inner.user() == UserState::Stopped {
+            return;
+        }
+        let mut t = saman::lock(&self.tier2);
+        if t.as_ref().is_some_and(|h| !h.is_finished()) {
             return;
         }
         let inner = self.inner.clone();
@@ -749,15 +946,13 @@ impl Project {
     /// Waits until no seed, check, re-check or sweep of the trees runs.
     pub async fn settle_trees(&self) {
         loop {
-            let jobs: Vec<tokio::task::JoinHandle<()>> = match self.inner.jobs.lock() {
-                Ok(mut j) => j.drain(..).collect(),
-                Err(_) => return,
-            };
+            let jobs: Vec<crate::clock::Spawned<()>> =
+                saman::lock(&self.inner.jobs).drain(..).collect();
             if jobs.is_empty() {
                 return;
             }
             for j in jobs {
-                let _ = j.await;
+                crate::soft::done(j.await, "project");
             }
         }
     }
@@ -768,7 +963,7 @@ impl Project {
     pub fn feed(
         &self,
         mut rx: tokio::sync::broadcast::Receiver<crate::history::FileVersion>,
-    ) -> Option<tokio::task::JoinHandle<()>> {
+    ) -> Option<crate::clock::Spawned<()>> {
         use tokio::sync::broadcast::error::{RecvError, TryRecvError};
         if self
             .inner
@@ -801,6 +996,8 @@ impl Project {
                     }
                 }
                 let Some(inner) = weak.upgrade() else { return };
+                // an edited file is embedded before the rest (MP-14)
+                inner.note_recent(hints.values().flatten());
                 if let Err(e) = inner.hints(hints, HashSet::new(), lagged).await {
                     tracing::warn!("search: the history feed of {}: {e}", inner.root.display());
                 }
@@ -880,7 +1077,7 @@ impl Project {
 }
 
 /// The store's meta key naming the checkout its base was built from.
-const META_BASE_ROOT: &str = "base_root";
+pub(crate) const META_BASE_ROOT: &str = "base_root";
 
 /// `max_user_watches`: the user's inotify budget.
 const MAX_USER_WATCHES: &str = "/proc/sys/fs/inotify/max_user_watches";
@@ -903,7 +1100,7 @@ fn tree_of(given: &Path, main: &Path) -> io::Result<Option<(PathBuf, PathBuf)>> 
 
 /// The worktrees `git worktree list --porcelain` names in the project at MAIN, and whether each is `locked`.
 fn worktree_list(main: &Path) -> io::Result<Vec<(PathBuf, bool)>> {
-    let out = Command::new("git")
+    let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(main)
         .args(["worktree", "list", "--porcelain"])
@@ -939,15 +1136,15 @@ fn same_path(a: &Path, b: &Path) -> bool {
 
 impl Inner {
     fn live<R>(&self, t: hrafn::TreeId, f: impl FnOnce(&mut Live) -> R) -> R {
-        let mut g = self
-            .trees
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut g = saman::lock(&self.trees);
         f(g.entry(t).or_default())
     }
 
     fn watcher(&self) -> Option<Arc<hrafn::ProjectWatch>> {
-        self.watcher.lock().ok().and_then(|h| h.clone())
+        {
+            let h = saman::lock(&self.watcher);
+            h.clone()
+        }
     }
 
     async fn state_of(&self, t: hrafn::TreeId) -> Result<hrafn::TreeState, ProjectError> {
@@ -1023,8 +1220,14 @@ impl Inner {
                 self.live(t, |l| l.watched = true);
                 let state = hrafn::Watch::shared_state(&*w);
                 let over = || {
-                    let budget = self.watch_budget.lock().ok().and_then(|b| *b);
-                    let used = state.lock().map(|s| s.watched).unwrap_or(0);
+                    let budget = {
+                        let b = saman::lock(&self.watch_budget);
+                        *b
+                    };
+                    let used = {
+                        let s = saman::lock(&state);
+                        s.watched
+                    };
                     budget.is_some_and(|b| used > b)
                 };
                 while over() && self.unwatch_lru(t).await {}
@@ -1049,8 +1252,13 @@ impl Inner {
         };
         if let Some(w) = self.watcher() {
             let (w2, k) = (w.clone(), lru.key.clone());
-            let _ = clock::blocking(move || w2.remove_tree(&k)).await;
-            if let Ok(mut s) = hrafn::Watch::shared_state(&*w).lock() {
+            crate::soft::done(
+                clock::blocking(move || w2.remove_tree(&k)).await,
+                "clock::blocking",
+            );
+            {
+                let state = hrafn::Watch::shared_state(&*w);
+                let mut s = saman::lock(&state);
                 s.unwatched.retain(|(k, _)| *k != lru.key);
                 s.unwatched.push((
                     lru.key.clone(),
@@ -1060,10 +1268,12 @@ impl Inner {
         }
         self.live(lru.id, |l| l.watched = false);
         if lru.state != hrafn::TreeState::Seeding {
-            let _ = self
-                .store
-                .tree_mark(lru.id, hrafn::TreeState::Unwatched)
-                .await;
+            crate::soft::done(
+                self.store
+                    .tree_mark(lru.id, hrafn::TreeState::Unwatched)
+                    .await,
+                "project",
+            );
         }
         true
     }
@@ -1074,13 +1284,19 @@ impl Inner {
         let _one = self.tier1.lock().await;
         if let Some(w) = self.watcher() {
             let (w2, k) = (w.clone(), r.key.clone());
-            let _ = clock::blocking(move || w2.remove_tree(&k)).await;
-            if let Ok(mut s) = hrafn::Watch::shared_state(&*w).lock() {
+            crate::soft::done(
+                clock::blocking(move || w2.remove_tree(&k)).await,
+                "clock::blocking",
+            );
+            {
+                let state = hrafn::Watch::shared_state(&*w);
+                let mut s = saman::lock(&state);
                 s.unwatched.retain(|(k, _)| *k != r.key);
             }
         }
         self.store.tree_drop(r.id).await?;
-        if let Ok(mut t) = self.trees.lock() {
+        {
+            let mut t = saman::lock(&self.trees);
             t.remove(&r.id);
         }
         Ok(())
@@ -1126,7 +1342,8 @@ impl Inner {
                 }
             }
         });
-        if let Ok(mut j) = self.jobs.lock() {
+        {
+            let mut j = saman::lock(&self.jobs);
             j.retain(|h| !h.is_finished());
             j.push(h);
         }
@@ -1225,10 +1442,7 @@ impl Inner {
 
     /// The file list (blocking: git and a read of every file).
     fn list(&self) -> io::Result<Vec<Listed>> {
-        let mut snap = self
-            .listing
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut snap = saman::lock(&self.listing);
         hrafn::files::list_with(
             &self.base,
             &GitCli,
@@ -1238,10 +1452,18 @@ impl Inner {
         )
     }
 
-    /// The caches of the fingerprints the embedders have proved so far (an embedder not probed yet has none).
+    /// Tier 2's sources now.
+    fn sources(&self) -> Vec<Arc<dyn Source>> {
+        {
+            let s = saman::lock(&self.sources);
+            s.clone()
+        }
+    }
+
+    /// The caches of the fingerprints the sources have proved so far (a source not probed yet has none).
     async fn models(&self) -> Result<Vec<Arc<VectorCache>>, ProjectError> {
         let mut out: Vec<Arc<VectorCache>> = Vec::new();
-        for id in self.embedders.iter().filter_map(|e| e.identity()) {
+        for id in self.sources().iter().filter_map(|e| e.identity()) {
             let c = self.caches.get(&id).await?;
             if !out.iter().any(|o| o.fp_hex() == c.fp_hex()) {
                 out.push(c);
@@ -1252,6 +1474,11 @@ impl Inner {
 
     async fn refresh(&self) -> Result<Refresh, ProjectError> {
         let listed = self.list()?;
+        // the files' git recency is read again for the next batch
+        {
+            let mut r = saman::lock(&self.recency);
+            *r = None;
+        }
         let root = eitri::open_path(&self.base, eitri::Kind::Dir)
             .map_err(|e| io::Error::other(e.to_string()))?;
         let read = |p: &str| {
@@ -1267,7 +1494,8 @@ impl Inner {
                 .await?;
         }
         // the store's live key set, to each cache (MP-21); a fingerprint first proved later is held by tier 2
-        if let Ok(mut h) = self.held.lock() {
+        {
+            let mut h = saman::lock(&self.held);
             h.clear();
         }
         for c in &caches {
@@ -1280,7 +1508,8 @@ impl Inner {
     async fn hold(&self, cache: &VectorCache) -> Result<(), ProjectError> {
         let now_ms = (clock::wall_secs() * 1000.0) as i64;
         hrafn::hold(&self.store, cache, &self.base, now_ms).await?;
-        if let Ok(mut h) = self.held.lock() {
+        {
+            let mut h = saman::lock(&self.held);
             h.insert(cache.fp_hex().to_string());
         }
         Ok(())
@@ -1289,11 +1518,31 @@ impl Inner {
     /// ID's cache, holding the store's live key set (reported now when no refresh has since ID was first proved).
     async fn cache_held(&self, id: &Identity) -> Result<Arc<VectorCache>, ProjectError> {
         let cache = self.caches.get(id).await?;
-        let held = self.held.lock().is_ok_and(|h| h.contains(cache.fp_hex()));
+        let held = {
+            let h = saman::lock(&self.held);
+            h.contains(cache.fp_hex())
+        };
         if !held {
             self.hold(&cache).await?;
         }
         Ok(cache)
+    }
+
+    fn user(&self) -> UserState {
+        {
+            let u = saman::lock(&self.user);
+            *u
+        }
+    }
+
+    /// The user's state, kept in the store first.
+    async fn set_user(&self, state: UserState) -> Result<(), ProjectError> {
+        self.store.meta_set(META_STATE, state.as_str()).await?;
+        {
+            let mut u = saman::lock(&self.user);
+            *u = state;
+        }
+        Ok(())
     }
 
     fn publish(&self, tier2: Tier2) {
@@ -1304,35 +1553,146 @@ impl Inner {
         });
     }
 
-    /// Waits until the gates let a request go; whether it goes as `index now`.
-    async fn gates(&self) -> bool {
+    /// Waits until the user's pause, typing and the disk floor let a request go; whether it goes as `index now`, and
+    /// what holds the local sources: the battery (unless `index now` or `drgnx-search-battery-engine`), else a busy
+    /// machine (unless `index now`). Remote sources are held by neither.
+    async fn gates(&self) -> (bool, Option<Tier2>) {
         loop {
-            let (typing, overriding) = match self.gate.lock() {
-                Ok(g) => (g.hold_until.is_some_and(|t| t > clock::now()), g.overriding),
-                Err(_) => (false, false),
+            // the user's pause first: no automatic reason lifts it, only `resume`
+            if self.user() != UserState::On {
+                self.publish(Tier2::Paused);
+                self.wake.notified().await;
+                continue;
+            }
+            let (typing, overriding) = {
+                let g = saman::lock(&self.gate);
+                (g.hold_until.is_some_and(|t| t > clock::now()), g.overriding)
             };
             if typing {
                 self.publish(Tier2::Typing);
                 self.wake.notified().await;
                 continue;
             }
-            if !overriding && power::on_battery(&self.power_root) {
-                self.publish(Tier2::Battery);
+            // the disk floor holds every source, even for `index now`: tier 2 writes vectors
+            if super::host::below_floor(&self.power_root, &self.state_dir) {
+                self.publish(Tier2::DiskFloor);
                 tokio::select! {
                     () = self.wake.notified() => {}
                     () = clock::sleep(POWER_POLL) => {}
                 }
                 continue;
             }
-            return overriding;
+            // the battery, then the load: they hold the local sources only, and not for `index now`
+            let hold = if overriding {
+                None
+            } else if !self
+                .battery_engine
+                .load(std::sync::atomic::Ordering::Relaxed)
+                && power::on_battery(&self.power_root)
+            {
+                Some(Tier2::Battery)
+            } else if super::host::busy(&self.power_root) {
+                Some(Tier2::Load)
+            } else {
+                None
+            };
+            return (overriding, hold);
         }
     }
 
+    /// The paths to embed first: open files, then recently edited ones, then the rest by git recency (MP-14).
+    async fn order(&self) -> Vec<String> {
+        let cached = {
+            let r = saman::lock(&self.recency);
+            r.clone()
+        };
+        let recency = match cached {
+            Some(r) => r,
+            None => {
+                let base = self.base.clone();
+                let r = clock::blocking(move || git_recency(&base))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or_default();
+                {
+                    let mut c = saman::lock(&self.recency);
+                    *c = Some(r.clone());
+                }
+                r
+            }
+        };
+        let mut seen = HashSet::new();
+        let take = |v: &Mutex<Vec<String>>| {
+            let v = saman::lock(v);
+            v.clone()
+        };
+        take(&self.open_paths)
+            .into_iter()
+            .chain(take(&self.recent_paths))
+            .chain(recency)
+            .filter(|p| seen.insert(p.clone()))
+            .take(ORDER_PATHS)
+            .collect()
+    }
+
+    /// Remembers the paths a history version names as the most recently edited.
+    fn note_recent<'a>(&self, paths: impl Iterator<Item = &'a String>) {
+        {
+            let mut r = saman::lock(&self.recent_paths);
+            for p in paths {
+                r.retain(|o| o != p);
+                r.insert(0, p.clone());
+            }
+            r.truncate(RECENT_PATHS);
+        }
+    }
+
+    /// One chain per fingerprint the sources state now (a source that does not answer its probe is no failure: it is
+    /// asked again at the next change). A swapped server states another fingerprint and gets another chain; the rows
+    /// under the old one stay. A fingerprint's chain keeps its backoff from pass to pass.
+    async fn slots(&self, old: Vec<Slot>, battery: bool, overriding: bool) -> Vec<Slot> {
+        let mut groups: Vec<(Identity, Vec<Arc<dyn Source>>)> = Vec::new();
+        for s in self.sources() {
+            let Ok(id) = s.probe().await else {
+                continue;
+            };
+            match groups.iter_mut().find(|(g, _)| g.fp == id.fp) {
+                Some((_, v)) => v.push(s),
+                None => groups.push((id, vec![s])),
+            }
+        }
+        let mut old = old;
+        let mut slots = Vec::new();
+        for (id, sources) in groups {
+            let cache = match self.cache_held(&id).await {
+                Ok(c) => c,
+                Err(err) => {
+                    self.publish(Tier2::Failed(err.to_string()));
+                    continue;
+                }
+            };
+            let mut slot = match old.iter().position(|s| s.chain.fingerprint() == id.fp) {
+                Some(i) => {
+                    let mut s = old.swap_remove(i);
+                    s.chain.sync(sources);
+                    s.cache = cache;
+                    s
+                }
+                None => Slot::new(SourceChain::new(id.fp, sources), cache),
+            };
+            slot.chain.set_gates(battery, overriding);
+            slots.push(slot);
+        }
+        slots
+    }
+
     async fn tier2(self: Arc<Self>) {
-        if self.embedders.is_empty() {
+        if self.sources().is_empty() {
             self.publish(Tier2::Idle);
             return;
         }
+        let mut slots: Vec<Slot> = Vec::new();
         loop {
             #[cfg(feature = "test-hooks")]
             if let Some(p) = &self.permits {
@@ -1341,106 +1701,91 @@ impl Inner {
                     Err(_) => return,
                 }
             }
-            let overriding = self.gates().await;
             let mut sent = false;
-            for e in &self.embedders {
-                // a server that is not running is no failure of tier 2: it is asked again at the next change. The
-                // probe says which model it is now: a swapped server is another fingerprint, and the batch goes
-                // under that one (the rows under the old one stay).
-                let Ok(id) = e.probe().await else {
-                    continue;
-                };
-                let dims = id.record.dims;
-                let cache = match self.cache_held(&id).await {
-                    Ok(c) => c,
-                    Err(err) => {
-                        self.publish(Tier2::Failed(err.to_string()));
-                        continue;
-                    }
-                };
-                let keys = match hrafn::missing(&self.store, &cache, REQUEST_KEYS).await {
-                    Ok(k) => k,
-                    Err(err) => {
-                        self.publish(Tier2::Failed(err.to_string()));
-                        continue;
-                    }
-                };
-                if keys.is_empty() {
-                    continue;
+            loop {
+                let (overriding, hold) = self.gates().await;
+                slots = self.slots(slots, hold.is_some(), overriding).await;
+                {
+                    let mut v = saman::lock(&self.chains);
+                    *v = slots
+                        .iter()
+                        .map(|s| (s.chain.fingerprint().hex(), s.chain.status()))
+                        .collect();
                 }
-                self.publish(Tier2::Running);
-                // the texts exactly as `missing` gives them: each is the text its key was made of
-                let texts: Vec<String> = keys.iter().map(|(_, _, t)| t.clone()).collect();
-                match e.embed_docs(&texts, overriding).await {
-                    Ok(vectors) if vectors.len() == keys.len() => {
-                        // the fingerprint says how long a vector is: another length writes nothing of the batch
-                        if let Some(v) = vectors.iter().find(|v| v.len() != dims as usize) {
-                            self.publish(Tier2::Failed(format!(
-                                "{}: {} dims, the fingerprint says {dims}",
-                                id.label,
-                                v.len()
-                            )));
-                            continue;
-                        }
-                        let (chunks, paths): (Vec<_>, Vec<_>) = keys
-                            .iter()
-                            .zip(vectors)
-                            .partition(|((kind, _, _), _)| *kind == hrafn::KeyKind::Chunk);
-                        let mut failed = None;
-                        for (kind, rows) in [
-                            (hrafn::KeyKind::Chunk, chunks),
-                            (hrafn::KeyKind::Path, paths),
-                        ] {
-                            let rows: Vec<([u8; 32], Vec<f32>)> =
-                                rows.into_iter().map(|((_, k, _), v)| (*k, v)).collect();
-                            if rows.is_empty() {
-                                continue;
-                            }
-                            if let Err(err) = cache.put(kind, dims, &rows).await {
-                                failed = Some(err.to_string());
-                                break;
-                            }
-                        }
-                        if let Some(err) = failed {
-                            self.publish(Tier2::Failed(err));
-                            continue;
-                        }
-                        // the chunks embedded (what `keys_missing` and the lag count); a path's vector rides along
-                        let chunks = keys
-                            .iter()
-                            .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
-                            .count();
-                        self.status.send_modify(|s| s.embedded += chunks as u64);
+                let order = self.order().await;
+                let mut reads = 0;
+                let running = || self.publish(Tier2::Running);
+                match run_pass_with(
+                    &mut slots,
+                    &self.store,
+                    &order,
+                    clock::now(),
+                    &mut reads,
+                    &running,
+                )
+                .await
+                {
+                    Ok(out) if out.filled => {
+                        self.publish(Tier2::Running);
+                        // the chunks filled (what `keys_missing` and the lag count); a path's vector rides along
+                        self.status.send_modify(|s| s.embedded += out.chunks as u64);
                         sent = true;
                     }
-                    Ok(vectors) => self.publish(Tier2::Failed(format!(
-                        "{} vectors for {} texts",
-                        vectors.len(),
-                        keys.len()
-                    ))),
-                    Err(err) => self.publish(Tier2::Failed(err.0)),
+                    Ok(out) if out.held => {
+                        // only the battery or the load keeps a local source from the work: wait for it to clear,
+                        // `index now` or a change
+                        self.publish(hold.unwrap_or(Tier2::Battery));
+                        tokio::select! {
+                            () = self.wake.notified() => {}
+                            () = clock::sleep(POWER_POLL) => {}
+                        }
+                        continue;
+                    }
+                    Ok(out) => {
+                        if let Some(why) = out.down {
+                            self.publish(Tier2::Failed(why));
+                        }
+                    }
+                    Err(err) => self.publish(Tier2::Failed(err.to_string())),
                 }
+                break;
             }
             if !sent {
-                if let Ok(mut g) = self.gate.lock() {
+                {
+                    let mut g = saman::lock(&self.gate);
                     g.overriding = false;
                 }
                 // (unreferenced vectors are the caches' to collect: their hourly sweep)
                 if !matches!(self.status.borrow().tier2, Tier2::Failed(_)) {
                     self.publish(Tier2::Idle);
                 }
-                self.until_missing().await;
+                let now = clock::now();
+                let mut due = slots.iter().filter_map(|s| s.chain.next_due(now)).min();
+                if slots.is_empty() {
+                    // no chain formed: no backoff to wait out, so ask the sources again after a while
+                    due = Some(PROBE_POLL);
+                }
+                self.until_missing(due).await;
             }
         }
     }
 
-    /// Waits until a wake finds a key missing for an embedder that answers. A wake is only a hint: `Notify` keeps one
-    /// sent while tier 2 was not waiting (a refresh, `index now` read before its wake), so one that finds nothing to
-    /// do leaves tier 2 where it is, idle, and ends an `index now`, rather than taking it back to its gates.
-    async fn until_missing(&self) {
+    /// Waits until a wake finds a key missing for a source that answers, or until DUE (a source that is down is
+    /// asked again when its backoff is over). A wake is only a hint: `Notify` keeps one sent while tier 2 was not
+    /// waiting (a refresh, `index now` read before its wake), so one that finds nothing to do leaves tier 2 where it
+    /// is, idle, and ends an `index now`, rather than taking it back to its gates.
+    async fn until_missing(&self, due: Option<Duration>) {
         loop {
-            self.wake.notified().await;
-            for e in &self.embedders {
+            match due {
+                Some(d) => {
+                    tokio::select! {
+                        () = self.wake.notified() => {}
+                        () = clock::sleep(d) => return,
+                    }
+                }
+                None => self.wake.notified().await,
+            }
+            for e in self.sources() {
                 // a store error is the pass's to report
                 if let Ok(id) = e.probe().await
                     && let Ok(cache) = self.cache_held(&id).await
@@ -1449,7 +1794,8 @@ impl Inner {
                     return;
                 }
             }
-            if let Ok(mut g) = self.gate.lock() {
+            {
+                let mut g = saman::lock(&self.gate);
                 g.overriding = false;
             }
         }

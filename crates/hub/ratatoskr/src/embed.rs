@@ -74,6 +74,24 @@ pub struct ProviderEmbedder {
     ident: std::sync::Mutex<Option<Identity>>,
     /// What the server said when the dims were last measured, and the dims.
     dims_seen: std::sync::Mutex<Option<(String, u32)>>,
+    /// Its entry says `trusted`.
+    marked: bool,
+}
+
+/// Whether the URL BASE names this machine (`localhost`, 127.x or ::1): the only providers that receive document text
+/// unless their entry says `trusted` (Task 23).
+pub fn is_loopback(base: &str) -> bool {
+    let Ok(uri) = base.parse::<bifrost::Uri>() else {
+        return false;
+    };
+    let Some(host) = uri.host() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The text a probe embeds to learn a server's dimensions (the mock server answers it with the model's real dims).
@@ -90,6 +108,7 @@ impl ProviderEmbedder {
             api: Api::Tei,
             ident: std::sync::Mutex::new(None),
             dims_seen: std::sync::Mutex::new(None),
+            marked: false,
         }
     }
 
@@ -109,7 +128,14 @@ impl ProviderEmbedder {
             api: Api::Ollama(model.to_owned()),
             ident: std::sync::Mutex::new(None),
             dims_seen: std::sync::Mutex::new(None),
+            marked: false,
         }
+    }
+
+    /// Its entry's `trusted`: text may go to it off this machine too.
+    pub(crate) fn marked_trusted(mut self, yes: bool) -> ProviderEmbedder {
+        self.marked = yes;
+        self
     }
 
     /// What a probe of this server is cached under: the provider and, for Ollama, the model asked for.
@@ -122,18 +148,12 @@ impl ProviderEmbedder {
 
     /// Takes IDENTITY as what a probe proved (a probe of this server a moment ago, kept by the hub).
     pub(crate) fn seed(&self, identity: Identity) {
-        *self
-            .ident
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(identity);
+        *saman::lock(&self.ident) = Some(identity);
     }
 
     /// What the last probe proved, if it did.
     fn known(&self) -> Option<Identity> {
-        self.ident
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        saman::lock(&self.ident).clone()
     }
 
     /// The key the entity chain knows this embedder by: its fingerprint's hex, or `unprobed:<provider>` before it has
@@ -332,10 +352,7 @@ impl ProviderEmbedder {
                 )));
             }
         };
-        *self
-            .ident
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id.clone());
+        *saman::lock(&self.ident) = Some(id.clone());
         Ok(id)
     }
 
@@ -343,11 +360,7 @@ impl ProviderEmbedder {
     /// what the server says of it (SAID) does not, so an unchanged answer reuses the last probe's: a probe before every
     /// batch of tier 2 is then one request, not two.
     async fn probe_dims(&self, said: &str) -> Result<u32, String> {
-        if let Some((s, d)) = self
-            .dims_seen
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
+        if let Some((s, d)) = saman::lock(&self.dims_seen).as_ref()
             && s == said
         {
             return Ok(*d);
@@ -359,10 +372,7 @@ impl ProviderEmbedder {
             .first()
             .map(|v| v.len() as u32)
             .ok_or_else(|| format!("{} answered no vector", self.provider))?;
-        *self
-            .dims_seen
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((said.to_owned(), dims));
+        *saman::lock(&self.dims_seen) = Some((said.to_owned(), dims));
         Ok(dims)
     }
 }
@@ -459,6 +469,15 @@ impl crate::search::DocEmbedder for ProviderEmbedder {
 
     fn probe(&self) -> BoxFuture<'_, Result<Identity, EmbedError>> {
         Box::pin(self.probe_identity())
+    }
+
+    fn source_id(&self) -> String {
+        self.provider.clone()
+    }
+
+    /// A server on this machine, or one whose entry says `trusted`.
+    fn trusted(&self) -> bool {
+        self.marked || is_loopback(&self.base)
     }
 
     fn embed_docs<'a>(
@@ -603,142 +622,7 @@ fn unchanged(c: &urdr::Connection, r: &Row) -> Result<bool, CoordError> {
     }
 }
 
-/// How long a down embedder waits before it is asked again, after its first, second, third and later failures in a row:
-/// 1, 5 and 30 minutes, then every 6 hours (on the hub's clock, virtual in tests).
-pub const BACKOFF: [Duration; 4] = [
-    Duration::from_secs(60),
-    Duration::from_secs(5 * 60),
-    Duration::from_secs(30 * 60),
-    Duration::from_secs(6 * 60 * 60),
-];
-
-/// The wait after FAILURES failures in a row (1 or more).
-pub fn backoff(failures: u32) -> Duration {
-    let i = usize::try_from(failures.max(1) - 1).unwrap_or(usize::MAX);
-    BACKOFF[i.min(BACKOFF.len() - 1)]
-}
-
-/// How one embedder of the chain stands.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Health {
-    /// It answered last time (or has not been asked yet).
-    Answering,
-    /// It failed FAILURES times in a row; it is asked again, with one text, at UNTIL.
-    Down {
-        failures: u32,
-        until: Instant,
-        why: String,
-    },
-}
-
-/// A change of an embedder's state: what the log and the Notices say, once each.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Change {
-    Down { model: String, why: String },
-    Up { model: String },
-}
-
-/// The embedders of the chain by model name, in the user's order, with their health.
-#[derive(Debug, Default)]
-pub struct Chain {
-    entries: Vec<(String, Health)>,
-}
-
-impl Chain {
-    /// The chain is MODELS now, in that order: an embedder already known keeps its health, a new one answers.
-    pub fn sync(&mut self, models: &[String]) {
-        let mut old = std::mem::take(&mut self.entries);
-        for m in models {
-            let health = match old.iter().position(|(o, _)| o == m) {
-                Some(i) => old.swap_remove(i).1,
-                None => Health::Answering,
-            };
-            self.entries.push((m.clone(), health));
-        }
-    }
-
-    /// Each embedder with its health, in the chain's order.
-    pub fn entries(&self) -> &[(String, Health)] {
-        &self.entries
-    }
-
-    fn health_mut(&mut self, model: &str) -> Option<&mut Health> {
-        self.entries
-            .iter_mut()
-            .find(|(m, _)| m == model)
-            .map(|(_, h)| h)
-    }
-
-    /// Whether MODEL may take a batch: it answered last time.
-    pub fn answering(&self, model: &str) -> bool {
-        self.entries
-            .iter()
-            .any(|(m, h)| m == model && *h == Health::Answering)
-    }
-
-    /// Whether any embedder of the chain may take a batch.
-    pub fn any_answering(&self) -> bool {
-        self.entries.iter().any(|(_, h)| *h == Health::Answering)
-    }
-
-    /// MODEL failed at NOW with WHY: it waits for its next backoff.  A change only when it was answering.
-    pub fn fail(&mut self, model: &str, why: &str, now: Instant) -> Option<Change> {
-        let h = self.health_mut(model)?;
-        match h {
-            Health::Answering => {
-                *h = Health::Down {
-                    failures: 1,
-                    until: now + backoff(1),
-                    why: why.to_owned(),
-                };
-                Some(Change::Down {
-                    model: model.to_owned(),
-                    why: why.to_owned(),
-                })
-            }
-            Health::Down {
-                failures,
-                until,
-                why: w,
-            } => {
-                *failures += 1;
-                *until = now + backoff(*failures);
-                why.clone_into(w);
-                None
-            }
-        }
-    }
-
-    /// MODEL answered: its backoff is over.  A change only when it was down.
-    pub fn answered(&mut self, model: &str) -> Option<Change> {
-        let h = self.health_mut(model)?;
-        if *h == Health::Answering {
-            return None;
-        }
-        *h = Health::Answering;
-        Some(Change::Up {
-            model: model.to_owned(),
-        })
-    }
-
-    /// The down embedders whose wait is over at NOW, in the chain's order.
-    pub fn probes_due(&self, now: Instant) -> Vec<String> {
-        self.entries
-            .iter()
-            .filter(|(_, h)| matches!(h, Health::Down { until, .. } if *until <= now))
-            .map(|(m, _)| m.clone())
-            .collect()
-    }
-
-    /// Retry now: every down embedder is asked at the next step.
-    pub fn retry_now(&mut self, now: Instant) {
-        for (_, h) in &mut self.entries {
-            if let Health::Down { until, .. } = h {
-                *until = now;
-            }
-        }
-    }
-}
+pub use crate::chain::{BACKOFF, Chain, Change, Health, backoff};
 
 /// Give the stale entities their vectors, BATCH at a time, from the first embedder of EMBEDDERS (the chain, in the
 /// user's order) that answers: the batch is read for it, and when it fails the same batch goes to the next one that
@@ -1121,12 +1005,15 @@ pub fn notice_text(chain: &Chain, labels: &[Label]) -> Option<String> {
     })
 }
 
-/// The role's chain in the user's order (Task 192): each step of STEPS that names a server of SERVERS (by provider
-/// id) or `builtin` (the built-in model, BUILTIN when it is ready), nothing else and nothing reordered; the built-in
-/// model goes last only when no step names it and SEARCH_BUILTIN is on.
+/// The role's chain in the user's order (Task 192): each step of STEPS that names a server of SERVERS on this machine
+/// (by provider id), the local engine (ENGINE: its provider id and the engine, when it may run) or `builtin` (the
+/// built-in model, BUILTIN when it is ready), nothing else and nothing reordered; the built-in model goes last only when
+/// no step names it and SEARCH_BUILTIN is on. A server elsewhere never gets a place (MP-17: work-graph text goes to no
+/// remote source, whatever the role names).
 pub fn ordered(
     steps: &[crate::settings::ChainStep],
     servers: Vec<ProviderEmbedder>,
+    engine: Option<(&str, std::sync::Arc<dyn Embedder>)>,
     builtin: Option<std::sync::Arc<dyn Embedder>>,
     search_builtin: bool,
 ) -> Vec<(Label, std::sync::Arc<dyn Embedder>)> {
@@ -1134,10 +1021,27 @@ pub fn ordered(
         model: e.model(),
         label: "the built-in model".to_owned(),
     };
-    let mut servers: Vec<Option<ProviderEmbedder>> = servers.into_iter().map(Some).collect();
+    let mut servers: Vec<Option<ProviderEmbedder>> = servers
+        .into_iter()
+        .filter(|s| is_loopback(&s.base))
+        .map(Some)
+        .collect();
+    let mut engine = engine;
     let mut out: Vec<(Label, std::sync::Arc<dyn Embedder>)> = Vec::new();
     let mut placed = false;
     for s in steps {
+        if engine.as_ref().is_some_and(|(id, _)| *id == s.provider)
+            && let Some((_, e)) = engine.take()
+        {
+            out.push((
+                Label {
+                    model: e.model(),
+                    label: "the local engine".to_owned(),
+                },
+                e,
+            ));
+            continue;
+        }
         if s.provider == BUILTIN_STEP {
             if let Some(b) = &builtin
                 && !placed
@@ -1187,7 +1091,7 @@ pub(crate) mod tests {
     use runstav::methods::gateway::ProviderConfig;
     use std::io::{BufRead, BufReader};
     use std::path::{Path, PathBuf};
-    use std::process::{Child, Command, Stdio};
+    use std::process::Child;
 
     /// `ratatoskr-mock`, in the test build's profile folder ([`skuld::profile_dir`]); built once when it is not there,
     /// into the run's own target dir and profile, so a run with `--target-dir` or `--release` finds it.
@@ -1203,8 +1107,8 @@ pub(crate) mod tests {
 
     impl Drop for Mock {
         fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            crate::soft::done(self.child.kill(), "embed");
+            crate::soft::done(self.child.wait(), "embed");
         }
     }
 
@@ -1212,17 +1116,20 @@ pub(crate) mod tests {
         /// `ratatoskr-mock llm` with SCRIPT (the answers), logging to a file in DIR.
         fn start(dir: &Path, script: &Value) -> Mock {
             let file = dir.join("script.json");
-            std::fs::write(&file, script.to_string()).unwrap();
+            crate::fsio::write(&file, script.to_string()).unwrap();
             let log = dir.join("mock.log");
-            let mut child = Command::new(mock_binary())
+            let mut child = crate::proc::Command::new(mock_binary())
                 .args(["llm", "--script"])
                 .arg(&file)
                 .arg("--log")
                 .arg(&log)
                 .arg("--parent")
                 .arg(std::process::id().to_string())
-                .stdout(Stdio::piped())
-                .spawn()
+                .spawn(
+                    crate::proc::Io::Inherit,
+                    crate::proc::Io::Pipe,
+                    crate::proc::Io::Inherit,
+                )
                 .unwrap();
             let mut line = String::new();
             BufReader::new(child.stdout.take().unwrap())
@@ -1239,7 +1146,7 @@ pub(crate) mod tests {
 
         /// The texts of each request that reached `/embed`, in order.
         fn requests(&self) -> Vec<Vec<String>> {
-            let text = std::fs::read_to_string(&self.log).unwrap_or_default();
+            let text = crate::fsio::read_to_string(&self.log).unwrap_or_default();
             text.lines()
                 .filter_map(|l| serde_json::from_str::<Value>(l).ok())
                 .filter_map(|v| v.get("request").cloned())
@@ -1325,136 +1232,142 @@ pub(crate) mod tests {
         DenyList::load(&dir.join("home"), &dir.join("config"))
     }
 
-    #[tokio::test]
-    async fn never_starts_the_provider() {
-        let dir = tempfile::tempdir().unwrap();
-        // a port nobody listens on: the provider is down
-        let port = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            l.local_addr().unwrap().port()
-        };
-        let (gate, e) = tei(dir.path(), port).await;
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        put(&db, "task:a", None, "alpha", json!({})).await;
-        let out = fill(&db, &e, &allow_all(dir.path())).await;
-        assert!(
-            matches!(out, Outcome::Stopped { embedded: 0, .. }),
-            "{out:?}"
-        );
-        assert_eq!(vectors(&db).await, 0);
-        // nothing was started in its place
-        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
-        drop(gate);
+    #[test]
+    fn never_starts_the_provider() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            // a port nobody listens on: the provider is down
+            let port = {
+                let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                l.local_addr().unwrap().port()
+            };
+            let (gate, e) = tei(dir.path(), port).await;
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            put(&db, "task:a", None, "alpha", json!({})).await;
+            let out = fill(&db, &e, &allow_all(dir.path())).await;
+            assert!(
+                matches!(out, Outcome::Stopped { embedded: 0, .. }),
+                "{out:?}"
+            );
+            assert_eq!(vectors(&db).await, 0);
+            // nothing was started in its place
+            assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
+            drop(gate);
+        })
     }
 
-    #[tokio::test]
-    async fn a_denied_source_is_never_sent() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
-        std::fs::create_dir_all(home.join("org")).unwrap();
-        // the canary is random bytes made here, never a real note
-        let canary = runstav::proof::nonce().unwrap();
-        let notes = home.join("org/notes.org");
-        let mock = Mock::start(dir.path(), &json!([{"path": "/embed", "body": vecs(2)}]));
-        let (_gate, e) = tei(dir.path(), mock.port).await;
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        put(&db, "task:ok1", None, "fine one", json!({})).await;
-        put(
-            &db,
-            "task:src",
-            Some(notes.to_str().unwrap()),
-            &format!("by source {canary}"),
-            json!({}),
-        )
-        .await;
-        put(
-            &db,
-            "task:path",
-            Some("recorded"),
-            &format!("by data path {canary}"),
-            json!({"path": notes.to_str().unwrap()}),
-        )
-        .await;
-        put(
-            &db,
-            &format!("file:{}", notes.display()),
-            Some("recorded"),
-            &format!("by id {canary}"),
-            json!({}),
-        )
-        .await;
-        put(
-            &db,
-            "task:odd",
-            Some("somewhere/relative"),
-            &format!("unknown form {canary}"),
-            json!({}),
-        )
-        .await;
-        put(&db, "task:ok2", Some("commit"), "fine two", json!({})).await;
-        let deny = DenyList::load(&home, &dir.path().join("config"));
-        let out = fill(&db, &e, &deny).await;
-        assert_eq!(
-            out,
-            Outcome::Filled {
-                embedded: 2,
-                denied: 4
-            }
-        );
-        let sent = mock.requests();
-        assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0], ["fine one", "fine two"]);
-        let log = std::fs::read_to_string(&mock.log).unwrap();
-        assert!(!log.contains(&canary), "a denied text reached the provider");
-        assert_eq!(vectors(&db).await, 2);
-    }
-
-    #[tokio::test]
-    async fn fills_stale_vectors_in_batches() {
-        let dir = tempfile::tempdir().unwrap();
-        // 130 entities: batches of 64, 64 and 2, told apart by the first text of each
-        let script = json!([
-            {"path": "/embed", "match": "text 000", "body": vecs(64)},
-            {"path": "/embed", "match": "text 064", "body": vecs(64)},
-            {"path": "/embed", "match": "text 128", "body": vecs(2)},
-        ]);
-        let mock = Mock::start(dir.path(), &script);
-        let (_gate, e) = tei(dir.path(), mock.port).await;
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        for i in 0..130 {
+    #[test]
+    fn a_denied_source_is_never_sent() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            std::fs::create_dir_all(home.join("org")).unwrap();
+            // the canary is random bytes made here, never a real note
+            let canary = runstav::proof::nonce().unwrap();
+            let notes = home.join("org/notes.org");
+            let mock = Mock::start(dir.path(), &json!([{"path": "/embed", "body": vecs(2)}]));
+            let (_gate, e) = tei(dir.path(), mock.port).await;
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            put(&db, "task:ok1", None, "fine one", json!({})).await;
             put(
                 &db,
-                &format!("task:e{i:03}"),
-                None,
-                &format!("text {i:03}"),
+                "task:src",
+                Some(notes.to_str().unwrap()),
+                &format!("by source {canary}"),
                 json!({}),
             )
             .await;
-        }
-        let out = fill(&db, &e, &allow_all(dir.path())).await;
-        assert_eq!(
-            out,
-            Outcome::Filled {
-                embedded: 130,
-                denied: 0
+            put(
+                &db,
+                "task:path",
+                Some("recorded"),
+                &format!("by data path {canary}"),
+                json!({"path": notes.to_str().unwrap()}),
+            )
+            .await;
+            put(
+                &db,
+                &format!("file:{}", notes.display()),
+                Some("recorded"),
+                &format!("by id {canary}"),
+                json!({}),
+            )
+            .await;
+            put(
+                &db,
+                "task:odd",
+                Some("somewhere/relative"),
+                &format!("unknown form {canary}"),
+                json!({}),
+            )
+            .await;
+            put(&db, "task:ok2", Some("commit"), "fine two", json!({})).await;
+            let deny = DenyList::load(&home, &dir.path().join("config"));
+            let out = fill(&db, &e, &deny).await;
+            assert_eq!(
+                out,
+                Outcome::Filled {
+                    embedded: 2,
+                    denied: 4
+                }
+            );
+            let sent = mock.requests();
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0], ["fine one", "fine two"]);
+            let log = crate::fsio::read_to_string(&mock.log).unwrap();
+            assert!(!log.contains(&canary), "a denied text reached the provider");
+            assert_eq!(vectors(&db).await, 2);
+        })
+    }
+
+    #[test]
+    fn fills_stale_vectors_in_batches() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            // 130 entities: batches of 64, 64 and 2, told apart by the first text of each
+            let script = json!([
+                {"path": "/embed", "match": "text 000", "body": vecs(64)},
+                {"path": "/embed", "match": "text 064", "body": vecs(64)},
+                {"path": "/embed", "match": "text 128", "body": vecs(2)},
+            ]);
+            let mock = Mock::start(dir.path(), &script);
+            let (_gate, e) = tei(dir.path(), mock.port).await;
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            for i in 0..130 {
+                put(
+                    &db,
+                    &format!("task:e{i:03}"),
+                    None,
+                    &format!("text {i:03}"),
+                    json!({}),
+                )
+                .await;
             }
-        );
-        let sizes: Vec<usize> = mock.requests().iter().map(Vec::len).collect();
-        assert_eq!(sizes, [64, 64, 2]);
-        assert_eq!(vectors(&db).await, 130);
-        let model = Embedder::model(&e);
-        assert_eq!(model.len(), 64, "the vectors are keyed by a fingerprint");
-        let stale = db
-            .read(move |c| Ok(vec_stale(c, &model, 10)?))
-            .await
-            .unwrap();
-        assert!(stale.is_empty());
-        // a second round has nothing to do and sends nothing
-        assert_eq!(
-            fill(&db, &e, &allow_all(dir.path())).await,
-            Outcome::Nothing
-        );
-        assert_eq!(mock.requests().len(), 3);
+            let out = fill(&db, &e, &allow_all(dir.path())).await;
+            assert_eq!(
+                out,
+                Outcome::Filled {
+                    embedded: 130,
+                    denied: 0
+                }
+            );
+            let sizes: Vec<usize> = mock.requests().iter().map(Vec::len).collect();
+            assert_eq!(sizes, [64, 64, 2]);
+            assert_eq!(vectors(&db).await, 130);
+            let model = Embedder::model(&e);
+            assert_eq!(model.len(), 64, "the vectors are keyed by a fingerprint");
+            let stale = db
+                .read(move |c| Ok(vec_stale(c, &model, 10)?))
+                .await
+                .unwrap();
+            assert!(stale.is_empty());
+            // a second round has nothing to do and sends nothing
+            assert_eq!(
+                fill(&db, &e, &allow_all(dir.path())).await,
+                Outcome::Nothing
+            );
+            assert_eq!(mock.requests().len(), 3);
+        })
     }
 
     /// An embedder without a provider: each text's vector is made from its bytes (64 signs of an FNV-1a hash), so a
@@ -1566,87 +1479,91 @@ pub(crate) mod tests {
 
     /// The embedder vs excise and edits (review finding 6): a text excised, retired or changed while the provider is
     /// answering gets no vector of the text that was sent; the vector each one has afterwards is of its text now.
-    #[tokio::test]
-    async fn a_text_changed_while_the_provider_answers_gets_no_old_vector() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        put(&db, "task:keep", None, "kept as it is", json!({})).await;
-        put(&db, "task:gone", None, "a text to excise now", json!({})).await;
-        put(&db, "task:moved", None, "the first text", json!({})).await;
-        put(&db, "task:retired", None, "retired meanwhile", json!({})).await;
-        let e = Fake::new(true);
-        let writer = db.graph_writer().unwrap().clone();
-        let deny = allow_all(dir.path());
-        let (out, ()) = tokio::join!(fill(&db, &e, &deny), async {
-            e.called.notified().await;
-            urdr::graph::excise::excise(
-                &writer,
-                TxMeta::new("user", Class::User, "test"),
-                urdr::graph::excise::Target::Entity("task:gone".into()),
-                None,
-                "a test".into(),
-                Vec::new(),
-            )
-            .await
-            .unwrap();
-            retitle(&db, "task:moved", "the second text").await;
-            db.write(meta(), |tx| {
-                let n = urdr::graph::entity::by_id(tx.sql(), "task:retired")?
-                    .expect("stored")
-                    .n;
-                urdr::graph::entity::retire(tx, n)?;
-                Ok(())
-            })
-            .await
-            .unwrap();
-            e.go.notify_one();
-        });
-        assert!(matches!(out, Outcome::Filled { .. }), "{out:?}");
-        let old = |t: &str| Some(urdr::graph::search::vec::quantize(&Fake::vector(t)).0);
-        assert_ne!(bits_of(&db, "task:gone").await, old("a text to excise now"));
-        assert_ne!(bits_of(&db, "task:moved").await, old("the first text"));
-        assert_eq!(bits_of(&db, "task:retired").await, None);
-        assert_eq!(bits_of(&db, "task:keep").await, old("kept as it is"));
-        let all = vectors_and_texts(&db).await;
-        assert!(all.iter().all(|(_, _, current)| *current), "{all:?}");
+    #[test]
+    fn a_text_changed_while_the_provider_answers_gets_no_old_vector() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            put(&db, "task:keep", None, "kept as it is", json!({})).await;
+            put(&db, "task:gone", None, "a text to excise now", json!({})).await;
+            put(&db, "task:moved", None, "the first text", json!({})).await;
+            put(&db, "task:retired", None, "retired meanwhile", json!({})).await;
+            let e = Fake::new(true);
+            let writer = db.graph_writer().unwrap().clone();
+            let deny = allow_all(dir.path());
+            let (out, ()) = tokio::join!(fill(&db, &e, &deny), async {
+                e.called.notified().await;
+                urdr::graph::excise::excise(
+                    &writer,
+                    TxMeta::new("user", Class::User, "test"),
+                    urdr::graph::excise::Target::Entity("task:gone".into()),
+                    None,
+                    "a test".into(),
+                    Vec::new(),
+                )
+                .await
+                .unwrap();
+                retitle(&db, "task:moved", "the second text").await;
+                db.write(meta(), |tx| {
+                    let n = urdr::graph::entity::by_id(tx.sql(), "task:retired")?
+                        .expect("stored")
+                        .n;
+                    urdr::graph::entity::retire(tx, n)?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+                e.go.notify_one();
+            });
+            assert!(matches!(out, Outcome::Filled { .. }), "{out:?}");
+            let old = |t: &str| Some(urdr::graph::search::vec::quantize(&Fake::vector(t)).0);
+            assert_ne!(bits_of(&db, "task:gone").await, old("a text to excise now"));
+            assert_ne!(bits_of(&db, "task:moved").await, old("the first text"));
+            assert_eq!(bits_of(&db, "task:retired").await, None);
+            assert_eq!(bits_of(&db, "task:keep").await, old("kept as it is"));
+            let all = vectors_and_texts(&db).await;
+            assert!(all.iter().all(|(_, _, current)| *current), "{all:?}");
+        })
     }
 
     /// Stale vectors (review finding 7): a changed title drops the vector in the same tx, so the next round embeds
     /// the new text, and no vector is left of the old one.
-    #[tokio::test]
-    async fn an_edited_text_is_embedded_again() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        put(&db, "task:note", None, "the old words", json!({})).await;
-        let e = Fake::new(false);
-        let deny = allow_all(dir.path());
-        assert_eq!(
-            fill(&db, &e, &deny).await,
-            Outcome::Filled {
-                embedded: 1,
-                denied: 0
-            }
-        );
-        retitle(&db, "task:note", "the new words").await;
-        assert_eq!(
-            vectors(&db).await,
-            0,
-            "the edit dropped the old text's vector"
-        );
-        assert_eq!(
-            fill(&db, &e, &deny).await,
-            Outcome::Filled {
-                embedded: 1,
-                denied: 0
-            }
-        );
-        let all = vectors_and_texts(&db).await;
-        assert_eq!(
-            all,
-            [("task:note".to_owned(), "the new words".to_owned(), true)]
-        );
-        let old = urdr::graph::search::vec::quantize(&Fake::vector("the old words")).0;
-        assert_ne!(bits_of(&db, "task:note").await, Some(old));
+    #[test]
+    fn an_edited_text_is_embedded_again() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            put(&db, "task:note", None, "the old words", json!({})).await;
+            let e = Fake::new(false);
+            let deny = allow_all(dir.path());
+            assert_eq!(
+                fill(&db, &e, &deny).await,
+                Outcome::Filled {
+                    embedded: 1,
+                    denied: 0
+                }
+            );
+            retitle(&db, "task:note", "the new words").await;
+            assert_eq!(
+                vectors(&db).await,
+                0,
+                "the edit dropped the old text's vector"
+            );
+            assert_eq!(
+                fill(&db, &e, &deny).await,
+                Outcome::Filled {
+                    embedded: 1,
+                    denied: 0
+                }
+            );
+            let all = vectors_and_texts(&db).await;
+            assert_eq!(
+                all,
+                [("task:note".to_owned(), "the new words".to_owned(), true)]
+            );
+            let old = urdr::graph::search::vec::quantize(&Fake::vector("the old words")).0;
+            assert_ne!(bits_of(&db, "task:note").await, Some(old));
+        })
     }
 
     #[test]
@@ -1739,90 +1656,94 @@ pub(crate) mod tests {
 
     /// URDR-EMBED-NEVER-IDLE-1: the housekeeping writes every minute (a lease renewed, the event log pruned), yet puts
     /// no text, so a round still starts after the quiet minute.  Counted by every write, it never would.
-    #[tokio::test]
-    async fn housekeeping_every_minute_still_lets_a_round_start() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        claimed_job(&db).await;
-        let t0 = Instant::from_std(skuld::origin());
-        let mut t = Timer::new(t0);
-        let mut by_writes = Timer::new(t0);
-        let (w0, x0) = counts(&db);
-        assert!(x0 > 0, "the job's tasks put text");
-        assert!(!t.due(x0, t0));
-        assert!(!by_writes.due(w0, t0));
-        for minute in 1..=3u32 {
-            let unix = 1.0 + 60.0 * f64::from(minute);
-            housekeeping(&db, unix).await;
-            let (w, x) = counts(&db);
-            assert_eq!(
-                w,
-                w0 + 2 * u64::from(minute),
-                "both housekeeping writes committed"
-            );
-            assert_eq!(x, x0, "the housekeeping put no text");
-            assert_eq!(
-                lease_of(&db).await,
-                (
-                    Some("agent-a".into()),
-                    Some(unix + norn::write::tasks::LEASE_SECS)
-                ),
-                "the lease was renewed: an entity write"
-            );
-            let now = t0 + IDLE * minute;
-            assert!(!by_writes.due(w, now), "every write restarts its minute");
-            // each minute is quiet: its round starts (and ends, which starts the next minute)
-            assert!(t.due(x, now), "minute {minute}: no round");
-            t.finish(now);
-        }
+    #[test]
+    fn housekeeping_every_minute_still_lets_a_round_start() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            claimed_job(&db).await;
+            let t0 = Instant::from_std(skuld::origin());
+            let mut t = Timer::new(t0);
+            let mut by_writes = Timer::new(t0);
+            let (w0, x0) = counts(&db);
+            assert!(x0 > 0, "the job's tasks put text");
+            assert!(!t.due(x0, t0));
+            assert!(!by_writes.due(w0, t0));
+            for minute in 1..=3u32 {
+                let unix = 1.0 + 60.0 * f64::from(minute);
+                housekeeping(&db, unix).await;
+                let (w, x) = counts(&db);
+                assert_eq!(
+                    w,
+                    w0 + 2 * u64::from(minute),
+                    "both housekeeping writes committed"
+                );
+                assert_eq!(x, x0, "the housekeeping put no text");
+                assert_eq!(
+                    lease_of(&db).await,
+                    (
+                        Some("agent-a".into()),
+                        Some(unix + norn::write::tasks::LEASE_SECS)
+                    ),
+                    "the lease was renewed: an entity write"
+                );
+                let now = t0 + IDLE * minute;
+                assert!(!by_writes.due(w, now), "every write restarts its minute");
+                // each minute is quiet: its round starts (and ends, which starts the next minute)
+                assert!(t.due(x, now), "minute {minute}: no round");
+                t.finish(now);
+            }
+        })
     }
 
     /// A write that puts text (a new entity, a changed title) restarts the quiet minute; the housekeeping between them
     /// does not.
-    #[tokio::test]
-    async fn a_content_write_restarts_the_quiet_minute() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        claimed_job(&db).await;
-        let t0 = Instant::from_std(skuld::origin());
-        let mut t = Timer::new(t0);
-        let (_, x0) = counts(&db);
-        assert!(!t.due(x0, t0));
-        // half a minute in, an entity with text is stored
-        put(&db, "task:new", None, "new text", json!({})).await;
-        let (_, x1) = counts(&db);
-        assert_eq!(x1, x0 + 1);
-        assert!(!t.due(x1, t0 + IDLE / 2));
-        housekeeping(&db, 61.0).await;
-        assert_eq!(counts(&db).1, x1);
-        assert!(
-            !t.due(x1, t0 + IDLE),
-            "a minute after the start, half a minute after the text"
-        );
-        // its title changes: the minute starts over again
-        db.write(meta(), |tx| {
-            let n = urdr::graph::entity::by_id(tx.sql(), "task:new")?
-                .expect("stored")
-                .n;
-            urdr::graph::entity::update(
-                tx,
-                n,
-                None,
-                urdr::graph::entity::Changes {
-                    title: Some(Some("newer text".into())),
-                    ..Default::default()
-                },
-            )?;
-            Ok(())
+    #[test]
+    fn a_content_write_restarts_the_quiet_minute() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            claimed_job(&db).await;
+            let t0 = Instant::from_std(skuld::origin());
+            let mut t = Timer::new(t0);
+            let (_, x0) = counts(&db);
+            assert!(!t.due(x0, t0));
+            // half a minute in, an entity with text is stored
+            put(&db, "task:new", None, "new text", json!({})).await;
+            let (_, x1) = counts(&db);
+            assert_eq!(x1, x0 + 1);
+            assert!(!t.due(x1, t0 + IDLE / 2));
+            housekeeping(&db, 61.0).await;
+            assert_eq!(counts(&db).1, x1);
+            assert!(
+                !t.due(x1, t0 + IDLE),
+                "a minute after the start, half a minute after the text"
+            );
+            // its title changes: the minute starts over again
+            db.write(meta(), |tx| {
+                let n = urdr::graph::entity::by_id(tx.sql(), "task:new")?
+                    .expect("stored")
+                    .n;
+                urdr::graph::entity::update(
+                    tx,
+                    n,
+                    None,
+                    urdr::graph::entity::Changes {
+                        title: Some(Some("newer text".into())),
+                        ..Default::default()
+                    },
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+            let (_, x2) = counts(&db);
+            assert_eq!(x2, x1 + 1);
+            let at = t0 + IDLE + IDLE / 4;
+            assert!(!t.due(x2, at));
+            assert!(!t.due(x2, at + IDLE / 2));
+            assert!(t.due(x2, at + IDLE), "a quiet minute after the last text");
         })
-        .await
-        .unwrap();
-        let (_, x2) = counts(&db);
-        assert_eq!(x2, x1 + 1);
-        let at = t0 + IDLE + IDLE / 4;
-        assert!(!t.due(x2, at));
-        assert!(!t.due(x2, at + IDLE / 2));
-        assert!(t.due(x2, at + IDLE), "a quiet minute after the last text");
     }
 
     // ---- the chain (Task 192): fallback in the user's order, backoff per embedder, nothing done while all are down ----
@@ -1852,13 +1773,11 @@ pub(crate) mod tests {
 
         /// The virtual time of each call.
         fn times(&self) -> Vec<Instant> {
-            self.calls.lock().unwrap().iter().map(|c| c.0).collect()
+            saman::lock(&self.calls).iter().map(|c| c.0).collect()
         }
 
         fn texts(&self) -> Vec<Vec<String>> {
-            self.calls
-                .lock()
-                .unwrap()
+            saman::lock(&self.calls)
                 .iter()
                 .map(|c| c.1.clone())
                 .collect()
@@ -1871,8 +1790,8 @@ pub(crate) mod tests {
             texts: &'a [String],
         ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
             Box::pin(async move {
-                let at = *self.at.lock().unwrap();
-                self.calls.lock().unwrap().push((at, texts.to_vec()));
+                let at = *saman::lock(&self.at);
+                saman::lock(&self.calls).push((at, texts.to_vec()));
                 if self.up.load(std::sync::atomic::Ordering::SeqCst) {
                     Ok(texts.iter().map(|t| Fake::vector(t)).collect())
                 } else {
@@ -1920,7 +1839,7 @@ pub(crate) mod tests {
         while now <= until {
             if d.wants(now, false) {
                 for t in chain {
-                    *t.at.lock().unwrap() = now;
+                    *saman::lock(&t.at) = now;
                 }
                 changes.extend(d.step(db, &each, deny, texts, now).await.changes);
             }
@@ -1931,50 +1850,52 @@ pub(crate) mod tests {
 
     const MIN: Duration = Duration::from_secs(60);
 
-    #[tokio::test]
-    async fn a_down_provider_falls_through_to_the_next_in_the_users_order() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        for (id, title) in [("task:a", "one"), ("task:b", "two"), ("task:c", "three")] {
-            put(&db, id, None, title, json!({})).await;
-        }
-        let (tei, builtin) = (Toy::new("tei:tei", false), Toy::new("builtin", true));
-        let mut chain = Chain::default();
-        chain.sync(&["tei:tei".to_owned(), "builtin".to_owned()]);
-        let mut changes = Vec::new();
-        let mut reads = 0;
-        let now = Instant::from_std(skuld::origin());
-        let out = fill_chain(
-            &db,
-            &[&tei, &builtin],
-            &allow_all(dir.path()),
-            &mut chain,
-            now,
-            &mut changes,
-            &mut reads,
-        )
-        .await;
-        assert_eq!(
-            out,
-            Outcome::Filled {
-                embedded: 3,
-                denied: 0
+    #[test]
+    fn a_down_provider_falls_through_to_the_next_in_the_users_order() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            for (id, title) in [("task:a", "one"), ("task:b", "two"), ("task:c", "three")] {
+                put(&db, id, None, title, json!({})).await;
             }
-        );
-        // the same batch, in the same round: TEI was asked first, then the built-in model with the same texts, and
-        // the store was read for it once (the stale list and the rows, then the empty stale list that ends the round)
-        assert_eq!(reads, 3);
-        assert_eq!(tei.texts().len(), 1);
-        assert_eq!(builtin.texts(), tei.texts());
-        assert_eq!(models_of_vectors(&db).await, [("builtin".to_owned(), 3)]);
-        assert_eq!(
-            changes,
-            [Change::Down {
-                model: "tei:tei".into(),
-                why: "tei:tei answered 502: connection refused".into()
-            }]
-        );
-        assert!(!chain.answering("tei:tei") && chain.answering("builtin"));
+            let (tei, builtin) = (Toy::new("tei:tei", false), Toy::new("builtin", true));
+            let mut chain = Chain::default();
+            chain.sync(&["tei:tei".to_owned(), "builtin".to_owned()]);
+            let mut changes = Vec::new();
+            let mut reads = 0;
+            let now = Instant::from_std(skuld::origin());
+            let out = fill_chain(
+                &db,
+                &[&tei, &builtin],
+                &allow_all(dir.path()),
+                &mut chain,
+                now,
+                &mut changes,
+                &mut reads,
+            )
+            .await;
+            assert_eq!(
+                out,
+                Outcome::Filled {
+                    embedded: 3,
+                    denied: 0
+                }
+            );
+            // the same batch, in the same round: TEI was asked first, then the built-in model with the same texts, and
+            // the store was read for it once (the stale list and the rows, then the empty stale list that ends the round)
+            assert_eq!(reads, 3);
+            assert_eq!(tei.texts().len(), 1);
+            assert_eq!(builtin.texts(), tei.texts());
+            assert_eq!(models_of_vectors(&db).await, [("builtin".to_owned(), 3)]);
+            assert_eq!(
+                changes,
+                [Change::Down {
+                    model: "tei:tei".into(),
+                    why: "tei:tei answered 502: connection refused".into()
+                }]
+            );
+            assert!(!chain.answering("tei:tei") && chain.answering("builtin"));
+        })
     }
 
     #[test]
@@ -1989,7 +1910,7 @@ pub(crate) mod tests {
             model: None,
         };
         let models = |steps: &[crate::settings::ChainStep], on: bool| {
-            ordered(steps, servers(), Some(builtin.clone()), on)
+            ordered(steps, servers(), None, Some(builtin.clone()), on)
                 .into_iter()
                 .map(|(l, e)| {
                     assert_eq!(l.model, e.model());
@@ -2011,217 +1932,276 @@ pub(crate) mod tests {
         assert_eq!(models(&[step("a")], true), ["unprobed:a", "builtin"]);
         // an unknown step adds nothing
         assert_eq!(models(&[step("nope"), step("c")], false), ["unprobed:c"]);
-        let labels = ordered(&mid, servers(), Some(builtin.clone()), false);
+        let labels = ordered(&mid, servers(), None, Some(builtin.clone()), false);
         assert_eq!(labels[0].0.label, "TEI at 127.0.0.1:80b");
         assert_eq!(labels[1].0.label, "the built-in model");
     }
 
-    #[tokio::test]
-    async fn backoff_is_1_5_30_min_then_6_h_on_the_virtual_clock() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        put(&db, "task:a", None, "one", json!({})).await;
-        let tei = Toy::new("tei:tei", false);
-        let t0 = Instant::from_std(skuld::origin());
-        let mut d = Driver::new(t0);
-        let deny = allow_all(dir.path());
-        ticks(&mut d, &db, &[&tei], &deny, 0, t0, t0 + MIN * 60 * 13).await;
-        let times = tei.times();
-        // the first round after a quiet minute fails at F; then one text each wait: 1, 5, 30 min, then every 6 h
-        let f = times[0];
-        assert_eq!(f, t0 + MIN);
-        let waits: Vec<Duration> = times.windows(2).map(|w| w[1] - w[0]).collect();
+    #[test]
+    fn default_embed_role_is_llama() {
+        let d = crate::settings::defaults();
+        let chain = crate::settings::providers::role_chain(&[], &d.roles, "embed");
+        let names: Vec<&str> = chain.iter().map(|s| s.provider.as_str()).collect();
+        assert_eq!(names, ["llama"]);
+        let kind = |id: &str| d.presets.iter().find(|p| p.id == id).and_then(|p| p.kind);
         assert_eq!(
-            waits,
-            [MIN, MIN * 5, MIN * 30, MIN * 360, MIN * 360],
-            "{times:?}"
+            kind("llama"),
+            Some(runstav::methods::gateway::ProviderKind::Llama)
         );
-        // each probe is one text
-        assert!(tei.texts()[1..].iter().all(|t| t.len() == 1));
+        assert_eq!(
+            kind("tei"),
+            Some(runstav::methods::gateway::ProviderKind::Tei),
+            "TEI stays a provider"
+        );
+        let llama = d.presets.iter().find(|p| p.id == "llama").unwrap();
+        assert_eq!(llama.url, None, "the engine has no URL");
+        assert_eq!(llama.caps, ["embed"]);
     }
 
-    #[tokio::test]
-    async fn an_answer_resets_the_backoff_and_the_preferred_model_takes_over() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        put(&db, "task:a", None, "one", json!({})).await;
-        put(&db, "task:b", None, "two", json!({})).await;
-        let (tei, builtin) = (Toy::new("tei:tei", false), Toy::new("builtin", true));
-        let t0 = Instant::from_std(skuld::origin());
-        let mut d = Driver::new(t0);
-        let deny = allow_all(dir.path());
-        // TEI down: the built-in model fills; its probes at +1 and +6 min fail
-        ticks(&mut d, &db, &[&tei, &builtin], &deny, 0, t0, t0 + MIN * 3).await;
-        assert_eq!(models_of_vectors(&db).await, [("builtin".to_owned(), 2)]);
-        tei.set_up(true);
-        let changes = ticks(
-            &mut d,
-            &db,
-            &[&tei, &builtin],
-            &deny,
-            0,
-            t0 + MIN * 3,
-            t0 + MIN * 10,
+    /// MP-17: the entity chain is the local engine, the built-in model and servers on this machine; a server elsewhere
+    /// (a remote source) never gets a place in it, whatever the role names.
+    #[test]
+    fn entity_chain_has_no_remote_vectors_source() {
+        let near = ProviderEmbedder::tei(1, "t".into(), "near", "http://127.0.0.1:8080");
+        let far = ProviderEmbedder::tei(1, "t".into(), "far", "https://vectors.example.com");
+        let engine: std::sync::Arc<dyn Embedder> = std::sync::Arc::new(Toy::new("engine", true));
+        let builtin: std::sync::Arc<dyn Embedder> = std::sync::Arc::new(Toy::new("builtin", true));
+        let step = |p: &str| crate::settings::ChainStep {
+            provider: p.into(),
+            model: None,
+        };
+        let steps = [step("far"), step("llama"), step("near"), step("builtin")];
+        let got: Vec<String> = ordered(
+            &steps,
+            vec![far, near],
+            Some(("llama", engine)),
+            Some(builtin),
+            false,
         )
-        .await;
-        // it answered the probe at +7 min (1 + 1 + 5): it is back, and the same step's round filled its own vectors
-        assert_eq!(
-            changes,
-            [Change::Up {
-                model: "tei:tei".into()
-            }]
-        );
-        assert_eq!(tei.times()[2], t0 + MIN * 7);
-        assert_eq!(
-            models_of_vectors(&db).await,
-            [("builtin".to_owned(), 2), ("tei:tei".to_owned(), 2)]
-        );
-        // it fails again: the wait starts over at 1 minute, not 30
-        tei.set_up(false);
-        put(&db, "task:c", None, "three", json!({})).await;
-        let n = tei.times().len();
-        ticks(
-            &mut d,
-            &db,
-            &[&tei, &builtin],
-            &deny,
-            1,
-            t0 + MIN * 10,
-            t0 + MIN * 20,
-        )
-        .await;
-        let times = tei.times();
-        assert_eq!(times[n + 1] - times[n], MIN, "{times:?}");
+        .into_iter()
+        .map(|(l, _)| l.model)
+        .collect();
+        assert_eq!(got, ["engine", "unprobed:near", "builtin"]);
     }
 
-    #[tokio::test]
-    async fn all_down_does_no_record_work() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        for i in 0..10 {
-            put(
+    #[test]
+    fn backoff_is_1_5_30_min_then_6_h_on_the_virtual_clock() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            put(&db, "task:a", None, "one", json!({})).await;
+            let tei = Toy::new("tei:tei", false);
+            let t0 = Instant::from_std(skuld::origin());
+            let mut d = Driver::new(t0);
+            let deny = allow_all(dir.path());
+            ticks(&mut d, &db, &[&tei], &deny, 0, t0, t0 + MIN * 60 * 13).await;
+            let times = tei.times();
+            // the first round after a quiet minute fails at F; then one text each wait: 1, 5, 30 min, then every 6 h
+            let f = times[0];
+            assert_eq!(f, t0 + MIN);
+            let waits: Vec<Duration> = times.windows(2).map(|w| w[1] - w[0]).collect();
+            assert_eq!(
+                waits,
+                [MIN, MIN * 5, MIN * 30, MIN * 360, MIN * 360],
+                "{times:?}"
+            );
+            // each probe is one text
+            assert!(tei.texts()[1..].iter().all(|t| t.len() == 1));
+        })
+    }
+
+    #[test]
+    fn an_answer_resets_the_backoff_and_the_preferred_model_takes_over() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            put(&db, "task:a", None, "one", json!({})).await;
+            put(&db, "task:b", None, "two", json!({})).await;
+            let (tei, builtin) = (Toy::new("tei:tei", false), Toy::new("builtin", true));
+            let t0 = Instant::from_std(skuld::origin());
+            let mut d = Driver::new(t0);
+            let deny = allow_all(dir.path());
+            // TEI down: the built-in model fills; its probes at +1 and +6 min fail
+            ticks(&mut d, &db, &[&tei, &builtin], &deny, 0, t0, t0 + MIN * 3).await;
+            assert_eq!(models_of_vectors(&db).await, [("builtin".to_owned(), 2)]);
+            tei.set_up(true);
+            let changes = ticks(
+                &mut d,
                 &db,
-                &format!("task:e{i}"),
-                None,
-                &format!("text {i}"),
-                json!({}),
+                &[&tei, &builtin],
+                &deny,
+                0,
+                t0 + MIN * 3,
+                t0 + MIN * 10,
             )
             .await;
-        }
-        let (a, b) = (Toy::new("tei:a", false), Toy::new("ollama:b:m", false));
-        let t0 = Instant::from_std(skuld::origin());
-        let mut d = Driver::new(t0);
-        let deny = allow_all(dir.path());
-        // the first round reads its batch and both fail it
-        ticks(&mut d, &db, &[&a, &b], &deny, 0, t0, t0 + MIN).await;
-        let read = d.reads();
-        assert!(read > 0);
-        assert!(!d.chain().any_answering());
-        // 60 virtual minutes with every embedder down: the probes only, no store read
-        ticks(&mut d, &db, &[&a, &b], &deny, 0, t0 + MIN, t0 + MIN * 61).await;
-        assert_eq!(d.reads(), read, "record work while every embedder was down");
-        // the probes: the round, then +1, +6 and +36 min, each one text
-        assert_eq!(a.times().len(), 4);
-        assert_eq!(b.times().len(), 4);
-    }
-
-    #[tokio::test]
-    async fn one_log_line_per_state_change() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        put(&db, "task:a", None, "one", json!({})).await;
-        let tei = Toy::new("tei:tei", false);
-        let t0 = Instant::from_std(skuld::origin());
-        let mut d = Driver::new(t0);
-        let deny = allow_all(dir.path());
-        // 60 failing minutes: one change (it went down), whatever the probes
-        let changes = ticks(&mut d, &db, &[&tei], &deny, 0, t0, t0 + MIN * 61).await;
-        assert_eq!(changes.len(), 1, "{changes:?}");
-        assert!(tei.times().len() > 1);
-        let labels = [Label {
-            model: "tei:tei".into(),
-            label: "TEI at 127.0.0.1:8080".into(),
-        }];
-        assert_eq!(
-            notice_text(d.chain(), &labels).as_deref(),
-            Some(
-                "Embeddings: TEI at 127.0.0.1:8080 is not answering; search falls back to text until it answers"
+            // it answered the probe at +7 min (1 + 1 + 5): it is back, and the same step's round filled its own vectors
+            assert_eq!(
+                changes,
+                [Change::Up {
+                    model: "tei:tei".into()
+                }]
+            );
+            assert_eq!(tei.times()[2], t0 + MIN * 7);
+            assert_eq!(
+                models_of_vectors(&db).await,
+                [("builtin".to_owned(), 2), ("tei:tei".to_owned(), 2)]
+            );
+            // it fails again: the wait starts over at 1 minute, not 30
+            tei.set_up(false);
+            put(&db, "task:c", None, "three", json!({})).await;
+            let n = tei.times().len();
+            ticks(
+                &mut d,
+                &db,
+                &[&tei, &builtin],
+                &deny,
+                1,
+                t0 + MIN * 10,
+                t0 + MIN * 20,
             )
-        );
+            .await;
+            let times = tei.times();
+            assert_eq!(times[n + 1] - times[n], MIN, "{times:?}");
+        })
     }
 
-    #[tokio::test]
-    async fn retry_now_probes_at_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        put(&db, "task:a", None, "one", json!({})).await;
-        let tei = Toy::new("tei:tei", false);
-        let t0 = Instant::from_std(skuld::origin());
-        let mut d = Driver::new(t0);
-        let deny = allow_all(dir.path());
-        ticks(&mut d, &db, &[&tei], &deny, 0, t0, t0 + MIN * 2).await;
-        assert_eq!(tei.times().len(), 2); // the round at +1, the probe at +2
-        // 10 s later the next wait is 5 minutes away; Retry now asks at the next tick
-        let at = t0 + MIN * 2 + Duration::from_secs(10);
-        assert!(!d.wants(at, false));
-        assert!(d.wants(at, true));
-        d.retry_now(at);
-        *tei.at.lock().unwrap() = at;
-        d.step(&db, &[&tei], &deny, 0, at).await;
-        assert_eq!(tei.times().last(), Some(&at));
+    #[test]
+    fn all_down_does_no_record_work() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            for i in 0..10 {
+                put(
+                    &db,
+                    &format!("task:e{i}"),
+                    None,
+                    &format!("text {i}"),
+                    json!({}),
+                )
+                .await;
+            }
+            let (a, b) = (Toy::new("tei:a", false), Toy::new("ollama:b:m", false));
+            let t0 = Instant::from_std(skuld::origin());
+            let mut d = Driver::new(t0);
+            let deny = allow_all(dir.path());
+            // the first round reads its batch and both fail it
+            ticks(&mut d, &db, &[&a, &b], &deny, 0, t0, t0 + MIN).await;
+            let read = d.reads();
+            assert!(read > 0);
+            assert!(!d.chain().any_answering());
+            // 60 virtual minutes with every embedder down: the probes only, no store read
+            ticks(&mut d, &db, &[&a, &b], &deny, 0, t0 + MIN, t0 + MIN * 61).await;
+            assert_eq!(d.reads(), read, "record work while every embedder was down");
+            // the probes: the round, then +1, +6 and +36 min, each one text
+            assert_eq!(a.times().len(), 4);
+            assert_eq!(b.times().len(), 4);
+        })
+    }
+
+    #[test]
+    fn one_log_line_per_state_change() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            put(&db, "task:a", None, "one", json!({})).await;
+            let tei = Toy::new("tei:tei", false);
+            let t0 = Instant::from_std(skuld::origin());
+            let mut d = Driver::new(t0);
+            let deny = allow_all(dir.path());
+            // 60 failing minutes: one change (it went down), whatever the probes
+            let changes = ticks(&mut d, &db, &[&tei], &deny, 0, t0, t0 + MIN * 61).await;
+            assert_eq!(changes.len(), 1, "{changes:?}");
+            assert!(tei.times().len() > 1);
+            let labels = [Label {
+                model: "tei:tei".into(),
+                label: "TEI at 127.0.0.1:8080".into(),
+            }];
+            assert_eq!(
+                notice_text(d.chain(), &labels).as_deref(),
+                Some(
+                    "Embeddings: TEI at 127.0.0.1:8080 is not answering; search falls back to text until it answers"
+                )
+            );
+        })
+    }
+
+    #[test]
+    fn retry_now_probes_at_once() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            put(&db, "task:a", None, "one", json!({})).await;
+            let tei = Toy::new("tei:tei", false);
+            let t0 = Instant::from_std(skuld::origin());
+            let mut d = Driver::new(t0);
+            let deny = allow_all(dir.path());
+            ticks(&mut d, &db, &[&tei], &deny, 0, t0, t0 + MIN * 2).await;
+            assert_eq!(tei.times().len(), 2); // the round at +1, the probe at +2
+            // 10 s later the next wait is 5 minutes away; Retry now asks at the next tick
+            let at = t0 + MIN * 2 + Duration::from_secs(10);
+            assert!(!d.wants(at, false));
+            assert!(d.wants(at, true));
+            d.retry_now(at);
+            *saman::lock(&tei.at) = at;
+            d.step(&db, &[&tei], &deny, 0, at).await;
+            assert_eq!(tei.times().last(), Some(&at));
+        })
     }
 
     /// The perf row `embed-idle-dead-provider`: the hub's embedder over 10 virtual minutes with the only provider (a TEI
     /// that refuses, through the gateway) down costs under its budget of one percent of one core's CPU.
     #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn embed_idle_dead_provider() {
-        // the budget the Lisp era kept in test/perf/budgets.eld (gone with it)
-        let pct: f64 = 1.0;
-        let dir = tempfile::tempdir().unwrap();
-        let port = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            l.local_addr().unwrap().port()
-        };
-        let (_gate, e) = tei(dir.path(), port).await;
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        for i in 0..300 {
-            put(
-                &db,
-                &format!("task:e{i:03}"),
-                None,
-                &format!("text {i:03}"),
-                json!({}),
-            )
-            .await;
-        }
-        let deny = allow_all(dir.path());
-        let t0 = Instant::from_std(skuld::origin());
-        let mut d = Driver::new(t0);
-        let span = MIN * 10;
-        let cpu = || {
-            let mut r = std::mem::MaybeUninit::<libc::rusage>::uninit();
-            // SAFETY: getrusage fills the struct it is given
-            unsafe { libc::getrusage(libc::RUSAGE_THREAD, r.as_mut_ptr()) };
-            // SAFETY: filled above
-            let r = unsafe { r.assume_init() };
-            let us = |t: libc::timeval| t.tv_sec as f64 * 1e6 + t.tv_usec as f64;
-            Duration::from_micros((us(r.ru_utime) + us(r.ru_stime)) as u64)
-        };
-        let before = cpu();
-        let mut now = t0;
-        while now <= t0 + span {
-            if d.wants(now, false) {
-                d.step(&db, &[&e], &deny, 0, now).await;
+    #[test]
+    fn embed_idle_dead_provider() {
+        saman::block_on_current(async move {
+            // the budget the Lisp era kept in test/perf/budgets.eld (gone with it)
+            let pct: f64 = 1.0;
+            let dir = tempfile::tempdir().unwrap();
+            let port = {
+                let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                l.local_addr().unwrap().port()
+            };
+            let (_gate, e) = tei(dir.path(), port).await;
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            for i in 0..300 {
+                put(
+                    &db,
+                    &format!("task:e{i:03}"),
+                    None,
+                    &format!("text {i:03}"),
+                    json!({}),
+                )
+                .await;
             }
-            now += crate::server::SCHEMA_TICK;
-        }
-        let used = cpu() - before;
-        assert!(!d.chain().any_answering(), "the provider is down");
-        let share = used.as_secs_f64() / span.as_secs_f64() * 100.0;
-        assert!(
-            share < pct,
-            "embed-idle-dead-provider: {share:.3} % of one core over 10 virtual minutes (budget {pct} %)"
-        );
+            let deny = allow_all(dir.path());
+            let t0 = Instant::from_std(skuld::origin());
+            let mut d = Driver::new(t0);
+            let span = MIN * 10;
+            let cpu = || {
+                let mut r = std::mem::MaybeUninit::<libc::rusage>::uninit();
+                // SAFETY: getrusage fills the struct it is given
+                unsafe { libc::getrusage(libc::RUSAGE_THREAD, r.as_mut_ptr()) };
+                // SAFETY: filled above
+                let r = unsafe { r.assume_init() };
+                let us = |t: libc::timeval| t.tv_sec as f64 * 1e6 + t.tv_usec as f64;
+                Duration::from_micros((us(r.ru_utime) + us(r.ru_stime)) as u64)
+            };
+            let before = cpu();
+            let mut now = t0;
+            while now <= t0 + span {
+                if d.wants(now, false) {
+                    d.step(&db, &[&e], &deny, 0, now).await;
+                }
+                now += crate::server::SCHEMA_TICK;
+            }
+            let used = cpu() - before;
+            assert!(!d.chain().any_answering(), "the provider is down");
+            let share = used.as_secs_f64() / span.as_secs_f64() * 100.0;
+            assert!(
+                share < pct,
+                "embed-idle-dead-provider: {share:.3} % of one core over 10 virtual minutes (budget {pct} %)"
+            );
+        })
     }
 }

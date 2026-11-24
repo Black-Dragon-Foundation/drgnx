@@ -438,12 +438,11 @@ mod tests {
         let mut c = db7();
         let tx = tx_of(&mut c);
         let a = open(&tx, new("s1", "task:a", StepClass::Think, 0.0)).unwrap();
-        let b = open(&tx, new("s1", "task:a", StepClass::Tool, 1.0)).unwrap();
-        let o = open(&tx, new("s2", "task:a", StepClass::Think, 1.0)).unwrap();
+        open(&tx, new("s1", "task:a", StepClass::Tool, 1.0)).unwrap();
+        open(&tx, new("s2", "task:a", StepClass::Think, 1.0)).unwrap();
         close(&tx, a, end(1.0, 0, None)).unwrap();
         assert!(close(&tx, a, end(2.0, 0, None)).is_err());
         assert!(close(&tx, 999, end(2.0, 0, None)).is_err());
-        let _ = (b, o);
         let all = for_session(tx.sql(), "s1", 0).unwrap();
         assert_eq!(all.iter().map(|s| s.seq).collect::<Vec<_>>(), [1, 2]);
         assert_eq!(all[0].class, StepClass::Think);

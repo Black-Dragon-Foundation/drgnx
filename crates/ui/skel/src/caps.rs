@@ -161,7 +161,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../ritari/profiles/mutter.json"
         );
-        let json = std::fs::read_to_string(path)
+        let json = eitri::read_string(std::path::Path::new(path), 1 << 20)
             .unwrap_or_else(|_| panic!("profiles/mutter.json not found (crates/ui/ritari)"));
         let keys = profile_globals(&json);
         assert!(!keys.is_empty(), "no globals parsed");

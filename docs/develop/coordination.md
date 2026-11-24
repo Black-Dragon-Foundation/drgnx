@@ -311,6 +311,11 @@ commits, and the caller answers with the kept answer.
   **only I close my tasks** (`kv` `setting:only-user-closes`, `1`) is on: then `done` is a `close` card (`card` kind
   `close`, `entity` the task, `data {task, ver, by, note}`, merged while one is open) and a notice to the user, and
   the task is unchanged, so it unblocks nothing. An agent's own task goes `in-review` on `complete`.
+  A `task-write` grant (`norn::grants::may_write_task`) lifts these rules per operation: `update.title|body|acceptance`,
+  `status.dropped`, `status.done` (and so `complete` gives `done`, also on an agent's own task); it is also the only
+  way to write a task of another project (`note`, `claim`, `split`, `link`, `update.*` on its project, plan or task).
+  `status.done` grants do nothing while only-I-close is on. `plans/write` consults the same grant for `done` before
+  it asks the matrix's `task.done` (`runner/effects.rs`). `parked` is never grantable.
 - **Secrets:** a title, body, acceptance, label or note that looks like a credential (`runstav::secrets`) is
   refused with the rule's name.
 
@@ -565,20 +570,27 @@ measured by `tools_schema::the_tool_list_fits_the_budget` against the 24,000-byt
 tools and 36,000 bytes (about 9k tokens) for the 21 with the tracker set.
 
 **The tracker and graph tools** (`tools/tracker.rs`, `tools/graph.rs`; storage §6.1, §6.4) are `RichTool`s behind the
-same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 21 tools, or the 16 above with `tracker: false`.
+same guard: `norn::tools::tools_for(ToolSets { tracker })` lists 22 tools, or the 16 above with `tracker: false`.
 - **The caller** comes from the identity (`Caller::from_identity`) with the project of its folder, resolved once and
   kept in `Coord::projects()`. Writes register a new project; reads use only one the store knows. It is never an
   argument.
 - **Answers** are text plus `structuredContent` (`Authored` text: `{text, by, class, tx, project, trust}`), a
-  `resource_link` (`drgnx://entity/ID`) per entity named only when the call has `links: true` (the rows are already in
-  the text and `structuredContent`), and `_meta["dev.drgnx/notices"] = n`, with a last text line
-  `notices: n (read_inbox)` only when n > 0. Untrusted text, the caller's own included, is fenced in the text. Lists
-  hold 50 rows and a `next_cursor` (`o:N`).
+  `resource_link` (`drgnx://entity/ID`) per entity named only when the call has `links: true`, and `_meta["dev.drgnx/notices"] = n`, with a last text line
+  `notices: n (read_inbox)` only when n > 0. Lists hold 50 rows and a `next_cursor` (`o:N`). The rows of a list or
+  graph answer (`task_read` find, ready and mine; `graph_read` neighbors, path, history and who_touched) are only in
+  `structuredContent`, where every text field carries its `trust`; the text is the header ("3 tasks (rows in the
+  structured result)", with `; more: cursor o:50` on a full page), so an outside agent's context holds each row once
+  (Claude Code hands `structuredContent` to the model, checked 2026-11-23). These tools declare an `outputSchema`, which
+  `mimir` needs to send `structuredContent` at all. `task_read get` and the write answers keep their one task in the
+  text, and untrusted text there, the caller's own included, is fenced.
 - `task_write` and `note_add` take an optional `req`; a repeat returns the first answer. A caller without a project
   (a folder that is no git repository) writes nothing: `task_write create` and `note_add` are refused ("you have no
   project"). `access_request` makes (or
   finds) one open `access` card per session and target and answers `{requested: card}` for a known project and an
-  unknown one alike.
+  unknown one alike. `my_grants` (no arguments; `tools/graph.rs`) answers the caller's own active grants,
+  `{grants: [{id, who, what, access, ops, names, expires}]}`: `norn::grants::list` for the caller, so a grant applies
+  when its `who` is the caller's agent id, kind, session, project or profile (or any outside agent) and never another
+  agent's. The user's `graph grants show WHO [--project P] [--profile NAME]` reads the same set for an actor.
 - `extensions_suggest` (`tools/extensions.rs`) makes or joins the one open `extension` card of a catalog id
   (`Hub::extension_fact`); its title is built from the hub's facts, the agent's `why` only a quote in `data.why`
   (`[{session, text}]`, cleaned and cut to 280 characters); at most 3 a session. Each change goes to the editors as a

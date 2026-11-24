@@ -9,9 +9,8 @@ on:
   schedule:
     - cron: "41 5 * * 3"
   workflow_dispatch:
-  # main only: a push to a PR's branch ran this twice, push and pull_request, on the same commit (ci/* diagnostics run by dispatch)
   push:
-    branches: [main]
+    branches: [main, "ci/*"]
     paths:
       - "crates/hub/gleipnir/**"
       - "crates/hub/ratatoskr/tests/launch_sandboxed.rs"

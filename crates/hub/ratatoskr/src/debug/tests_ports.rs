@@ -4,7 +4,6 @@ use super::ports::{self, Blocks, MAC_EPHEMERAL, free};
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 // The blocks' tests probe with their own function: on Linux other tests' outgoing connections take ports anywhere in
 // 32768-60999, so a real probe of a fixed range would fail now and then. Each test has its own lock directory.
@@ -75,7 +74,10 @@ fn when_every_block_is_taken_the_session_is_refused_with_the_range() {
     let blocks = Blocks::with(46300..46316, 8, |p| p != 46310, &locks(&t));
     let _a = blocks.claim().unwrap();
     let e = blocks.claim().unwrap_err();
-    assert!(e.contains("46300") && e.contains("46315"), "{e}");
+    assert!(
+        e.message().contains("46300") && e.message().contains("46315"),
+        "{e}"
+    );
 }
 
 #[test]
@@ -131,7 +133,7 @@ fn a_lock_directory_others_could_empty_is_refused() {
     let e = Blocks::with(46500..46508, 8, |_| true, &d)
         .claim()
         .unwrap_err();
-    assert!(e.contains("sticky"), "{e}");
+    assert!(e.message().contains("sticky"), "{e}");
 }
 
 const HOLDER: &str = "debug::tests_ports::holder_of_a_block_for_another_test";
@@ -146,16 +148,19 @@ fn holder_of_a_block_for_another_test() {
     };
     let blocks = Blocks::with(46600..46616, 8, |_| true, Path::new(&dir));
     let b = blocks.claim().unwrap();
-    println!("drgnx-held {}", b.ports()[0]);
+    crate::soft::out_line(&format!("drgnx-held {}", b.ports()[0]));
     let mut rest = String::new();
-    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut rest);
+    crate::soft::done(
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut rest),
+        "std::io::Read::read_to_string",
+    );
     drop(b);
 }
 
 #[test]
 fn a_block_another_process_holds_is_passed_over() {
     let t = tempfile::tempdir().unwrap();
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    let mut child = crate::proc::Command::new(std::env::current_exe().unwrap())
         .args([
             "--ignored",
             "--exact",
@@ -164,10 +169,11 @@ fn a_block_another_process_holds_is_passed_over() {
             "--test-threads=1",
         ])
         .env("DRGNX_TEST_HOLD_DIR", locks(&t))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+        .spawn(
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Null,
+        )
         .unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
     let held: u16 = loop {
@@ -200,7 +206,7 @@ fn a_listener_is_the_sessions_only_when_its_process_group_is() {
     assert_eq!(ports::owned(p, &[me]), Ok(true));
     // another group's listener: never connected to, and named
     let e = ports::owned(p, &[me + 1_000_000]).unwrap_err();
-    assert!(e.contains(&p.to_string()), "{e}");
+    assert!(e.message().contains(&p.to_string()), "{e}");
     drop(held);
 }
 
@@ -255,7 +261,7 @@ fn a_listener_that_another_process_of_the_account_could_join_is_refused() {
     let (shared, p) = listen(0, true);
     let e = ports::exclusively_owned(p, &[me]).unwrap_err();
     assert!(
-        e.contains(&p.to_string()) && e.contains("SO_REUSEPORT"),
+        e.message().contains(&p.to_string()) && e.message().contains("SO_REUSEPORT"),
         "{e}"
     );
     // a second same-uid listener on the port (it joined the group): the group's check names it as well, and it is refused too
@@ -318,14 +324,15 @@ fn reserve() -> (std::os::fd::OwnedFd, u16) {
 #[test]
 fn a_command_that_does_not_answer_is_killed_at_its_deadline() {
     // unbounded, it would end after 30 s with Ok
-    let mut c = Command::new("sleep");
+    let mut c = crate::proc::Command::new("sleep");
     c.arg("30");
     let r = ports::output_within(c, std::time::Duration::from_millis(300));
     assert!(
-        r.as_ref().is_err_and(|e| e.contains("did not answer")),
+        r.as_ref()
+            .is_err_and(|e| e.message().contains("did not answer")),
         "{r:?}"
     );
-    let mut c = Command::new("echo");
+    let mut c = crate::proc::Command::new("echo");
     c.arg("hi");
     let r = ports::output_within(c, std::time::Duration::from_secs(5)).unwrap();
     assert_eq!(r.stdout, b"hi\n");

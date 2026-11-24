@@ -3,10 +3,10 @@
 
 use crate::support;
 
+use ratatoskr::proc::{Command, Io};
 use runstav::paths;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
 use support::{BIN, Hub, Root, ping};
 #[cfg(feature = "test-hooks")]
 use {
@@ -22,20 +22,27 @@ fn mode(p: &Path) -> u32 {
 fn methods_prints_the_committed_registry() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let run = |flag: &str| {
-        let out = Command::new(BIN).args(["methods", flag]).output().unwrap();
+        let out = ratatoskr::proc::Command::new(BIN)
+            .args(["methods", flag])
+            .output()
+            .unwrap();
         assert!(out.status.success(), "methods {flag}: {out:?}");
         String::from_utf8(out.stdout).unwrap()
     };
-    let committed = std::fs::read_to_string(repo.join("crates/hub/protocol/methods.json")).unwrap();
+    let committed =
+        ratatoskr::fsio::read_to_string(repo.join("crates/hub/protocol/methods.json")).unwrap();
     assert_eq!(run("--json"), committed);
-    let docs = std::fs::read_to_string(repo.join("docs/develop/hub.md")).unwrap();
+    let docs = ratatoskr::fsio::read_to_string(repo.join("docs/develop/hub.md")).unwrap();
     let table = run("--markdown");
     assert!(table.starts_with("| Method | Class |"), "{table}");
     assert!(
         docs.contains(&table),
         "hub.md's table is not `methods --markdown`"
     );
-    let out = Command::new(BIN).arg("methods").output().unwrap();
+    let out = ratatoskr::proc::Command::new(BIN)
+        .arg("methods")
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(2), "neither flag is a usage error");
 }
 
@@ -92,7 +99,7 @@ fn the_path_is_statted_not_proc_self_exe() {
     let by_link = ExeWatch::new(Path::new(&format!("/proc/{}/exe", child.id()))).unwrap();
     assert!(!by_path.changed());
     // the update: a rename-replace of the file at the path
-    std::fs::rename(&other, &live).unwrap();
+    ratatoskr::fsio::rename(&other, &live).unwrap();
     assert!(by_path.changed(), "the path now holds another file");
     #[cfg(target_os = "linux")]
     assert!(
@@ -102,8 +109,8 @@ fn the_path_is_statted_not_proc_self_exe() {
     // a missing file has not changed (it is looked at again later)
     std::fs::remove_file(&live).unwrap();
     assert!(!by_path.changed());
-    let _ = child.kill();
-    let _ = child.wait();
+    ratatoskr::soft::done(child.kill(), "server");
+    ratatoskr::soft::done(child.wait(), "server");
 }
 
 #[test]
@@ -135,7 +142,7 @@ fn the_stop_command_ends_a_hub_and_signals_nothing_for_a_stale_lock() {
     let root = Root::new();
     let socket = root.socket();
     let stop = |extra: &[&str]| {
-        Command::new(BIN)
+        ratatoskr::proc::Command::new(BIN)
             .arg("stop")
             .args(extra)
             .env_clear()
@@ -144,11 +151,14 @@ fn the_stop_command_ends_a_hub_and_signals_nothing_for_a_stale_lock() {
             .unwrap()
     };
     // a stale lock file naming a live process nobody holds: not running, and the process lives
-    let mut sleeper = Command::new("sleep").arg("60").spawn().unwrap();
+    let mut sleeper = Command::new("sleep")
+        .arg("60")
+        .spawn(Io::Inherit, Io::Inherit, Io::Inherit)
+        .unwrap();
     std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
     // private, as a hub makes it (stop refuses a directory open to others)
     paths::private_dir(socket.parent().unwrap()).unwrap();
-    std::fs::write(paths::lock_path(&socket), format!("{} 1\n", sleeper.id())).unwrap();
+    ratatoskr::fsio::write(paths::lock_path(&socket), format!("{} 1\n", sleeper.id())).unwrap();
     let out = stop(&[]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stdout).contains("not running"));
@@ -156,12 +166,12 @@ fn the_stop_command_ends_a_hub_and_signals_nothing_for_a_stale_lock() {
         sleeper.try_wait().unwrap().is_none(),
         "stop signalled a stale lock's pid"
     );
-    let _ = sleeper.kill();
-    let _ = sleeper.wait();
-    // a running hub: stopped by name and pid
+    ratatoskr::soft::done(sleeper.kill(), "server");
+    ratatoskr::soft::done(sleeper.wait(), "server");
+    // a running hub: stopped by name and pid (`stop` answers at the hub's mark: its budget only bounds a failure)
     let mut hub = Hub::start(&root, 1);
     hub.wait_ready(&socket);
-    let out = stop(&["--timeout", "10"]);
+    let out = stop(&["--timeout", &support::FAILED_AFTER.as_secs().to_string()]);
     assert_eq!(out.status.code(), Some(0), "{out:?} {}", hub.stderr_text());
     assert!(
         String::from_utf8_lossy(&out.stdout)
@@ -178,7 +188,7 @@ fn cap_is_64_hex_0600_and_gone_after_stop() {
     let cap = paths::cap_path(&socket);
     let mut hub = Hub::start(&root, 1);
     hub.wait_ready(&socket);
-    let text = std::fs::read_to_string(&cap).unwrap();
+    let text = ratatoskr::fsio::read_to_string(&cap).unwrap();
     assert_eq!(text.len(), 64, "{text:?}");
     assert!(
         text.bytes()
@@ -200,7 +210,7 @@ fn cap_is_64_hex_0600_and_gone_after_stop() {
     assert!(!socket.exists(), "the socket is removed at stop");
     // the log never holds the cap
     for e in std::fs::read_dir(root.log_dir()).unwrap() {
-        let log = std::fs::read_to_string(e.unwrap().path()).unwrap();
+        let log = ratatoskr::fsio::read_to_string(e.unwrap().path()).unwrap();
         assert!(!log.contains(&text), "the cap is in the log");
     }
 }
@@ -213,7 +223,7 @@ fn the_lock_file_holds_pid_and_start_time() {
     hub.wait_ready(&socket);
     let lock = paths::lock_path(&socket);
     assert_eq!(mode(&lock), 0o600);
-    let text = std::fs::read_to_string(&lock).unwrap();
+    let text = ratatoskr::fsio::read_to_string(&lock).unwrap();
     let fields: Vec<&str> = text
         .strip_suffix('\n')
         .expect("one line")
@@ -224,7 +234,7 @@ fn the_lock_file_holds_pid_and_start_time() {
     let start: u64 = fields[1].parse().expect("a number");
     assert!(start > 0);
     if cfg!(target_os = "linux") {
-        let stat = std::fs::read_to_string(format!("/proc/{}/stat", hub.pid())).unwrap();
+        let stat = ratatoskr::fsio::read_to_string(format!("/proc/{}/stat", hub.pid())).unwrap();
         let field_22 = stat
             .rsplit_once(')')
             .unwrap()
@@ -293,7 +303,7 @@ fn a_stopped_reader_is_dropped_after_16_mib_while_another_keeps_reading() {
         || {
             let log: String = std::fs::read_dir(root.log_dir())
                 .unwrap()
-                .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+                .map(|e| ratatoskr::fsio::read_to_string(e.unwrap().path()).unwrap())
                 .collect();
             log.contains("queued over 16 MiB").then_some(())
         },
@@ -310,7 +320,7 @@ fn test_clock_emits_on_advance_only() {
     let config = root.dir.path().join("h/c");
     std::fs::create_dir_all(&config).unwrap();
     let settings = config.join("settings.el");
-    std::fs::write(
+    ratatoskr::fsio::write(
         &settings,
         format!(
             "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock\" :command ({:?} \"acp\" \"--as\" \"claude\")))))\n",
@@ -379,7 +389,7 @@ fn every_snapshot_the_hub_builds_passes_the_registry_check() {
     let config = root.dir.path().join("h/c");
     std::fs::create_dir_all(&config).unwrap();
     let settings = config.join("settings.el");
-    std::fs::write(
+    ratatoskr::fsio::write(
         &settings,
         format!(
             "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock\" :command ({:?} \"acp\" \"--as\" \"claude\")))))\n",
@@ -469,7 +479,7 @@ fn a_hub_whose_store_is_slow_at_its_end_closes_its_connections_then_writes_its_q
         files.sort();
         files
             .iter()
-            .map(|p| std::fs::read_to_string(p).unwrap())
+            .map(|p| ratatoskr::fsio::read_to_string(p).unwrap())
             .collect::<String>()
     };
     let root = Root::new();
@@ -548,7 +558,7 @@ fn a_second_sigterm_during_the_store_wait_abandons_it() {
         files.sort();
         files
             .iter()
-            .map(|p| std::fs::read_to_string(p).unwrap())
+            .map(|p| ratatoskr::fsio::read_to_string(p).unwrap())
             .collect::<String>()
     };
     let root = Root::new();
@@ -591,8 +601,8 @@ fn a_second_sigterm_during_the_store_wait_abandons_it() {
 
 /// `ratatoskr stop`/`ensure` in ROOT's environment, with ARGS.
 #[cfg(feature = "test-hooks")]
-fn cli(root: &Root, args: &[&str]) -> std::process::Output {
-    Command::new(BIN)
+fn cli(root: &Root, args: &[&str]) -> ratatoskr::proc::Output {
+    ratatoskr::proc::Command::new(BIN)
         .args(args)
         .env_clear()
         .envs(root.vars())
@@ -603,22 +613,27 @@ fn cli(root: &Root, args: &[&str]) -> std::process::Output {
 #[cfg(feature = "test-hooks")]
 #[test]
 fn stop_answers_when_the_hub_stopped_serving_and_its_store_finishes_under_the_lock() {
-    // a hub that ignores `shutdown` (so stop's SIGTERM) with runtime.db's thread held at its end and a write queued
-    // behind it (`--test-hold-store`): `stop` answers within its 2 s once the hub serves no more and has marked its lock
-    // stopping; the hub still writes, under the lock, and `ensure` meanwhile starts no second hub on its store;
-    // released, the queued write is written and the hub ends 0, nothing abandoned
+    // a hub with runtime.db's thread held at its end and a write queued behind it (`--test-hold-store`): `stop` answers
+    // once the hub serves no more and has marked its lock stopping, though the hub still holds the lock; the hub still
+    // writes, under the lock, and `ensure` meanwhile starts no second hub on its store; released, the queued write is
+    // written and the hub ends 0, nothing abandoned.  The store is held until SIGUSR1, so a `stop` that waited for the
+    // lock's release would never answer: its budget is `FAILED_AFTER`, which only bounds that failure, and the hub's
+    // end is slowed past the old 2 s (`--test-slow-stop-ms`), which a loaded machine once took.
     let root = Root::new();
     let socket = root.socket();
     let lock = paths::lock_path(&socket);
-    let mut hub = Hub::start_with(&root, 1, &["--test-ignore-shutdown", "--test-hold-store"]);
+    let mut hub = Hub::start_with(
+        &root,
+        1,
+        &["--test-hold-store", "--test-slow-stop-ms", "2500"],
+    );
     hub.wait_ready(&socket);
-    let out = cli(&root, &["stop", "--timeout", "2"]);
+    let budget = FAILED_AFTER.as_secs().to_string();
+    let out = cli(&root, &["stop", "--timeout", &budget]);
     assert_eq!(out.status.code(), Some(0), "{out:?} {}", hub.stderr_text());
     assert!(
-        String::from_utf8_lossy(&out.stdout).contains(&format!(
-            "stopped Ratatoskr (pid {}, by SIGTERM)",
-            hub.pid()
-        )),
+        String::from_utf8_lossy(&out.stdout)
+            .contains(&format!("stopped Ratatoskr (pid {})", hub.pid())),
         "{out:?}"
     );
     assert!(!socket.exists() && !ping(&socket), "nothing serves");
@@ -631,7 +646,7 @@ fn stop_answers_when_the_hub_stopped_serving_and_its_store_finishes_under_the_lo
     let logs = |root: &Root| -> String {
         std::fs::read_dir(root.log_dir())
             .unwrap()
-            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .map(|e| ratatoskr::fsio::read_to_string(e.unwrap().path()).unwrap())
             .collect()
     };
     skuld::wait_until(
@@ -643,7 +658,7 @@ fn stop_answers_when_the_hub_stopped_serving_and_its_store_finishes_under_the_lo
                 .then_some(())
         },
     );
-    let text = std::fs::read_to_string(&lock).unwrap();
+    let text = ratatoskr::fsio::read_to_string(&lock).unwrap();
     assert!(
         text.starts_with(&format!("{} ", hub.pid())) && text.trim_end().ends_with(" stopping"),
         "the lock says the hub is stopping: {text:?}"
@@ -657,7 +672,7 @@ fn stop_answers_when_the_hub_stopped_serving_and_its_store_finishes_under_the_lo
     );
     assert!(!ping(&socket), "no second hub started");
     assert_eq!(
-        std::fs::read_to_string(&lock).unwrap(),
+        ratatoskr::fsio::read_to_string(&lock).unwrap(),
         text,
         "the lock is still the ending hub's"
     );
@@ -682,28 +697,77 @@ fn stop_answers_when_the_hub_stopped_serving_and_its_store_finishes_under_the_lo
 
 #[cfg(feature = "test-hooks")]
 #[test]
-fn a_stopping_hub_that_is_killed_leaves_ensure_nothing_to_wait_for() {
-    // the stopping hub of the row above dies (SIGKILL) while its store is held: its lock went with it, so `ensure`
-    // starts a hub within its usual budget instead of waiting for a mark nobody holds
+fn stop_signals_a_hub_that_ignores_shutdown() {
+    // `shutdown` is answered and ignored (`--test-ignore-shutdown`): `stop` waits its budget for the mark, then sends
+    // SIGTERM to the process listening on the socket and answers once that hub marked its lock stopping.  One budget
+    // covers both waits, so the first always elapses: `FAILED_AFTER` is what reaching the signal costs, and it only
+    // bounds the second (the hub's end slowed past the old 2 s, as a loaded machine once made it).
     let root = Root::new();
     let socket = root.socket();
-    let mut hub = Hub::start_with(&root, 1, &["--test-ignore-shutdown", "--test-hold-store"]);
+    let mut hub = Hub::start_with(
+        &root,
+        1,
+        &["--test-ignore-shutdown", "--test-slow-stop-ms", "2500"],
+    );
     hub.wait_ready(&socket);
-    let out = cli(&root, &["stop", "--timeout", "2"]);
+    let budget = FAILED_AFTER.as_secs().to_string();
+    let out = cli(&root, &["stop", "--timeout", &budget]);
     assert_eq!(out.status.code(), Some(0), "{out:?} {}", hub.stderr_text());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!(
+            "stopped Ratatoskr (pid {}, by SIGTERM)",
+            hub.pid()
+        )),
+        "{out:?}"
+    );
+    assert_eq!(hub.wait_exit().code(), Some(0), "{}", hub.stderr_text());
+    assert!(!ping(&socket), "nothing serves");
+}
+
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_stopping_hub_that_is_killed_leaves_ensure_nothing_to_wait_for() {
+    // the stopping hub of the row above dies (SIGKILL) while its store is held: its lock went with it, so `ensure`
+    // starts a hub within its usual budget instead of waiting for a mark nobody holds.  The hub is stopped by its
+    // SIGTERM and the row waits for the stopping mark itself (`FAILED_AFTER` only bounds a failure), not for `stop`'s
+    // 2 s: how soon a hub stops is the row above's claim, and a loaded machine once took this row past it.  Its stop
+    // is slowed past those 2 s (`--test-slow-stop-ms`), so the row holds however long the stop takes.
+    let root = Root::new();
+    let socket = root.socket();
+    let lock = paths::lock_path(&socket);
+    let mut hub = Hub::start_with(
+        &root,
+        1,
+        &["--test-hold-store", "--test-slow-stop-ms", "2500"],
+    );
+    hub.wait_ready(&socket);
+    unsafe { libc::kill(hub.pid() as i32, libc::SIGTERM) };
+    skuld::wait_until(
+        "the hub marks its lock stopping",
+        FAILED_AFTER.as_secs(),
+        || {
+            ratatoskr::fsio::read_to_string(&lock)
+                .ok()
+                .filter(|t| t.trim_end().ends_with(" stopping"))
+                .map(|_| ())
+        },
+    );
     unsafe { libc::kill(hub.pid() as i32, libc::SIGKILL) };
     hub.wait_exit();
     assert!(
-        std::fs::read_to_string(paths::lock_path(&socket))
+        ratatoskr::fsio::read_to_string(paths::lock_path(&socket))
             .unwrap()
             .trim_end()
             .ends_with(" stopping"),
         "the dead hub's file still says stopping"
     );
-    let out = cli(&root, &["ensure", "--timeout", "5"]);
+    // `ensure` and `stop` answer at the hub's readiness and its mark: their budget only bounds a failure (an `ensure`
+    // that waited for the dead hub's mark would never answer 0)
+    let budget = FAILED_AFTER.as_secs().to_string();
+    let out = cli(&root, &["ensure", "--timeout", &budget]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert!(ping(&socket), "a hub serves again");
-    let out = cli(&root, &["stop", "--timeout", "10"]);
+    let out = cli(&root, &["stop", "--timeout", &budget]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 }
 
@@ -735,7 +799,7 @@ fn a_child_is_its_image_once_the_exec_handshake_ends() {
     // many spawns at once: `Command::spawn` can return before the exec, and the more threads fork, the likelier
     let threads: Vec<_> = (0..8)
         .map(|_| {
-            std::thread::spawn(|| {
+            saman::spawn_thread("exec-handshake", || {
                 let mut early = 0;
                 for _ in 0..100 {
                     let mut cmd = Command::new("/bin/sleep");
@@ -744,11 +808,12 @@ fn a_child_is_its_image_once_the_exec_handshake_ends() {
                     exec.wait();
                     let exe = image_of(child.id());
                     early += usize::from(exe.file_name().unwrap() != "sleep");
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    ratatoskr::soft::done(child.kill(), "server");
+                    ratatoskr::soft::done(child.wait(), "server");
                 }
                 early
             })
+            .unwrap()
         })
         .collect();
     let early: usize = threads.into_iter().map(|t| t.join().unwrap()).sum();

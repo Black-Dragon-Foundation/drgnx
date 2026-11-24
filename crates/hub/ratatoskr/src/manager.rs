@@ -12,8 +12,8 @@
 //! - a transcript is only ever read in slices of at most [`SLICE_MAX`] steps;
 //! - a merge goes through `RunGit` into the manager's own integration branch `job/<manager>`, never into main.
 
-use crate::agents::Origin;
 use crate::agents::session::{self, Session};
+use crate::agents::{HoldSource, Origin};
 use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::hook_points;
@@ -92,7 +92,7 @@ pub struct Managers {
 
 impl Managers {
     fn st(&self) -> std::sync::MutexGuard<'_, State> {
-        self.st.lock().unwrap_or_else(|e| e.into_inner())
+        saman::lock(&self.st)
     }
 
     /// The user dismissed the before-commit hook for BRANCH: the manager's next merge of it skips the hooks.
@@ -111,8 +111,8 @@ impl Managers {
     }
 }
 
-fn refuse(m: impl AsRef<str>) -> Error {
-    session::refuse(m.as_ref())
+fn refuse(m: impl ToString) -> Error {
+    session::refuse(&m.to_string())
 }
 
 fn now() -> f64 {
@@ -407,9 +407,12 @@ pub async fn run(f: Arc<Front>) {
             }
             let text = digest_now(&f, &s.id, None).await;
             if !text.is_empty() {
-                let _ = s.prompt(
-                    format!("[graph changes since your last turn]\n{text}"),
-                    Origin::Hub,
+                crate::soft::done(
+                    s.prompt(
+                        format!("[graph changes since your last turn]\n{text}"),
+                        Origin::Hub,
+                    ),
+                    "manager",
                 );
             }
         }
@@ -727,12 +730,19 @@ fn children(f: &Front, sid: &str) -> Vec<Arc<Session>> {
 }
 
 /// A worker MANAGER started, or a refusal.
-fn owned(f: &Front, manager: &str, id: &str) -> Result<Arc<Session>, String> {
-    let s = f.core.agents.find(id).map_err(|e| e.message)?;
+fn owned(f: &Front, manager: &str, id: &str) -> villa::Result<Arc<Session>> {
+    let s = f
+        .core
+        .agents
+        .find(id)
+        .map_err(|e| e.message)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if s.parent() == Some(manager) {
         Ok(s)
     } else {
-        Err(format!("{id} is not a worker you started"))
+        Err(villa::Error::invalid(format!(
+            "{id} is not a worker you started"
+        )))
     }
 }
 
@@ -767,7 +777,7 @@ pub(crate) async fn gate(
     a: Action,
     amount: Option<f64>,
     facts: &Facts,
-) -> Result<(), String> {
+) -> villa::Result<()> {
     f.core.matrix.refresh(f);
     let key = (manager.to_owned(), format!("{} {}", a.id(), json!(facts)));
     let waiting = f.core.manager.st().pending.get(&key).copied();
@@ -778,7 +788,7 @@ pub(crate) async fn gate(
                 .db
                 .read(move |c| Ok(m.recheck(c, card, at)))
                 .await
-                .map_err(|e| format!("{e:?}"))?
+                .map_err(|e| villa::Error::invalid(format!("{e:?}")))?
         }
         None => {
             let ctx = ActionCtx {
@@ -799,108 +809,136 @@ pub(crate) async fn gate(
         }
         Gate::Ask(card) => {
             f.core.manager.st().pending.insert(key, card);
-            Err(format!(
+            Err(villa::Error::invalid(format!(
                 "{} needs the user's yes (card {card}); only their answer to that card counts, then call again",
                 a.id()
-            ))
+            )))
         }
         Gate::Never(why) => {
             f.core.manager.st().pending.remove(&key);
-            Err(why)
+            Err(villa::Error::refused(why))
         }
     }
 }
 
 /// The hub's side of a manager tool OP called as session SID.
-pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result<String, String> {
-    let me = f.core.agents.find(sid).map_err(|e| e.message)?;
+pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> villa::Result<String> {
+    let me = f
+        .core
+        .agents
+        .find(sid)
+        .map_err(|e| e.message)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if me.role() != Role::Manager {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{op} is a manager's tool; this session is not a manager"
-        ));
+        )));
     }
     let who = me.who();
     let bad = |e: serde_json::Error| format!("{op}: {e}");
     let facts = call_facts(op, &args);
     match op {
         "agent_start" => {
-            let a = serde_json::from_value(args).map_err(bad)?;
+            let a = serde_json::from_value(args)
+                .map_err(bad)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             agent_start(f, &me, &who, a, &facts).await
         }
         "agent_message" => {
-            let a: norn::tools::manager::AgentMessageArgs =
-                serde_json::from_value(args).map_err(bad)?;
-            let w = owned(f, sid, a.id.as_str())?;
+            let a: norn::tools::manager::AgentMessageArgs = serde_json::from_value(args)
+                .map_err(bad)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            let w =
+                owned(f, sid, a.id.as_str()).map_err(|e| villa::Error::invalid(e.to_string()))?;
             gate(f, sid, &who, Action::AgentsControl, None, &facts).await?;
             w.prompt(
                 a.text.as_str().to_owned(),
                 Origin::Peer(format!("manager {sid}")),
             )
-            .map_err(|e| e.message)?;
+            .map_err(|e| e.message)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
             Ok(json!({"sent": true}).to_string())
         }
         "agent_pause" => {
-            let a: norn::tools::manager::SessionArg = serde_json::from_value(args).map_err(bad)?;
-            owned(f, sid, a.id.as_str())?;
+            let a: norn::tools::manager::SessionArg = serde_json::from_value(args)
+                .map_err(bad)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            owned(f, sid, a.id.as_str()).map_err(|e| villa::Error::invalid(e.to_string()))?;
             gate(f, sid, &who, Action::AgentsControl, None, &facts).await?;
             f.core
                 .agents
-                .cancel_after_tool(a.id.as_str())
-                .map_err(|e| e.message)?;
+                .cancel_after_tool(a.id.as_str(), HoldSource::Manager)
+                .map_err(|e| e.message)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             Ok(json!({"paused": true}).to_string())
         }
         "agent_stop" => {
-            let a: norn::tools::manager::SessionArg = serde_json::from_value(args).map_err(bad)?;
-            owned(f, sid, a.id.as_str())?;
+            let a: norn::tools::manager::SessionArg = serde_json::from_value(args)
+                .map_err(bad)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            owned(f, sid, a.id.as_str()).map_err(|e| villa::Error::invalid(e.to_string()))?;
             gate(f, sid, &who, Action::AgentsControl, None, &facts).await?;
             session::stop(f, &runner::user(), ById { id: a.id })
                 .await
-                .map_err(|e| e.message)?;
+                .map_err(|e| e.message)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             Ok(json!({"stopped": true}).to_string())
         }
         "agent_move" => {
-            let a: runstav::methods::agents::MoveParams =
-                serde_json::from_value(args).map_err(bad)?;
-            owned(f, sid, a.id.as_str())?;
+            let a: runstav::methods::agents::MoveParams = serde_json::from_value(args)
+                .map_err(bad)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            owned(f, sid, a.id.as_str()).map_err(|e| villa::Error::invalid(e.to_string()))?;
             gate(f, sid, &who, Action::AgentsModel, None, &facts).await?;
             let r = session::move_to(f, &runner::user(), a)
                 .await
-                .map_err(|e| e.message)?;
+                .map_err(|e| e.message)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             Ok(json!(r).to_string())
         }
         "report_read" => {
-            let a = serde_json::from_value(args).map_err(bad)?;
+            let a = serde_json::from_value(args)
+                .map_err(bad)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             gate(f, sid, &who, Action::CodeRead, None, &facts).await?;
             // the manager's own project's reports only
             let scope = runner::effects::scope_of_session(f, sid)
                 .await
-                .map_err(|e| e.message)?;
+                .map_err(|e| e.message)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let r = runner::effects::reports_get_in(f, scope, a)
                 .await
-                .map_err(|e| e.message)?;
+                .map_err(|e| e.message)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             Ok(json!(r).to_string())
         }
         "transcript_slice" => {
-            let a: SliceParams = serde_json::from_value(args).map_err(bad)?;
+            let a: SliceParams = serde_json::from_value(args)
+                .map_err(bad)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             if a.id.as_str() != sid {
-                owned(f, sid, a.id.as_str())?;
+                owned(f, sid, a.id.as_str()).map_err(|e| villa::Error::invalid(e.to_string()))?;
             }
             gate(f, sid, &who, Action::CodeRead, None, &facts).await?;
             let r = slice_of(f, a.id.as_str(), a.from_step, a.n)
                 .await
-                .map_err(|e| e.message)?;
+                .map_err(|e| e.message)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             Ok(json!(r).to_string())
         }
         "trial_merge" => {
-            let a: norn::tools::manager::TrialMergeArgs =
-                serde_json::from_value(args).map_err(bad)?;
+            let a: norn::tools::manager::TrialMergeArgs = serde_json::from_value(args)
+                .map_err(bad)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             trial_merge(f, &me, &who, a, &facts).await
         }
         "merge" => {
-            let a: norn::tools::manager::MergeArgs = serde_json::from_value(args).map_err(bad)?;
+            let a: norn::tools::manager::MergeArgs = serde_json::from_value(args)
+                .map_err(bad)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             merge(f, &me, &who, a, &facts).await
         }
-        _ => Err(format!("{op} is not a manager tool")),
+        _ => Err(villa::Error::invalid(format!("{op} is not a manager tool"))),
     }
 }
 
@@ -920,10 +958,12 @@ async fn agent_start(
     who: &Who,
     a: norn::tools::manager::AgentStartArgs,
     facts: &Facts,
-) -> Result<String, String> {
+) -> villa::Result<String> {
     let sid = me.id.as_str();
     if a.role.is_some_and(|r| r != Role::Worker) {
-        return Err("a manager does not start a manager: one level only".into());
+        return Err(villa::Error::invalid(
+            "a manager does not start a manager: one level only",
+        ));
     }
     let profile = a.profile.as_str().to_owned();
     // 1. the grants: never wider than the manager's own (checked before anything starts)
@@ -946,7 +986,7 @@ async fn agent_start(
                 ))
             })
             .await
-            .map_err(|e| format!("{e:?}"))?
+            .map_err(|e| villa::Error::invalid(format!("{e:?}")))?
     };
     let asked = if a.grants.0.is_empty() {
         // no grants named: the worker column, clamped to the manager's own
@@ -972,8 +1012,9 @@ async fn agent_start(
                 })
                 .collect(),
         };
-        narrow(&parent, &asked)
-            .map_err(|w| format!("grant refused: {w}; grants only narrow your own"))?
+        narrow(&parent, &asked).map_err(|w| {
+            villa::Error::invalid(format!("grant refused: {w}; grants only narrow your own"))
+        })?
     };
     // 2. the budget comes out of the manager's own
     let mscope = session::scope_of(Role::Manager, sid);
@@ -986,10 +1027,10 @@ async fn agent_start(
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_owned))
                 .unwrap_or_default();
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "budget refused: {} {unit} is more than the {r} {unit} left of yours",
                 l.amount
-            ));
+            )));
         }
     }
     // 3. the matrix: starting a worker is the manager's `agents.start`, up to its count limit
@@ -1003,36 +1044,38 @@ async fn agent_start(
         Err(_) => {
             runner::tick::git(&repo, &["branch", &branch, "HEAD"])
                 .await
-                .map_err(|e| format!("no integration branch: {}", e.stderr))?;
+                .map_err(|e| {
+                    villa::Error::invalid(format!("no integration branch: {}", e.stderr))
+                })?;
             runner::tick::git(&repo, &["rev-parse", "--verify", &branch])
                 .await
-                .map_err(|e| e.stderr)?
+                .map_err(|e| e.stderr)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?
         }
     };
-    let name = format!(
-        "w{}",
-        &runstav::proof::nonce().map_err(|e| e.to_string())?[..8]
-    );
+    let name = format!("w{}", &runstav::proof::nonce()?[..8]);
     let tree = f
         .core
         .runs
         .git()
         .task_worktree(&repo, sid, &name, &base)
         .await
-        .map_err(|e| format!("no worktree: {}", e.stderr))?;
+        .map_err(|e| villa::Error::invalid(format!("no worktree: {}", e.stderr)))?;
     let task = a.task.as_ref().map(|t| t.to_string());
     // 5. what it may do, recorded before it starts: its launch and first tool call are already under it
-    let wsid = session::new_sid().map_err(|e| e.message)?;
+    let wsid = session::new_sid()
+        .map_err(|e| e.message)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let (g, mwho, ws) = (f.core.matrix.clone(), who.clone(), wsid.clone());
     let delegated = f
         .writer
         .db
         .read(move |c| Ok(g.delegate(c, &mwho, &ctx, &ws, asked, now_s)))
         .await
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| villa::Error::invalid(format!("{e:?}")))?;
     if let Err(w) = delegated {
         // checked above: only a matrix that changed in between gets here
-        return Err(format!("grant refused: {w}"));
+        return Err(villa::Error::invalid(format!("grant refused: {w}")));
     }
     save_delegation(f, &wsid).await;
     let started = f
@@ -1056,7 +1099,7 @@ async fn agent_start(
         .await;
     if let Err(e) = started {
         forget_delegation(f, &wsid).await;
-        return Err(e.message);
+        return Err(villa::Error::unavailable(e.message));
     }
     // and what it may spend
     let wscope = session::scope_of(Role::Worker, &wsid);
@@ -1064,7 +1107,7 @@ async fn agent_start(
         let hits = f.core.budgets.set(&wscope, a.budget.0.clone());
         f.core.budgets.notify(hits);
     }
-    let _ = f.core.runs.git().touched(&tree.path).await;
+    crate::soft::done(f.core.runs.git().touched(&tree.path).await, "manager");
     f.core.manager.st().trees.insert(wsid.clone(), tree.clone());
     // the worker's record: the merge gate finds the user's acceptances through its worktree
     let cwd = tree.path.to_string_lossy().into_owned();
@@ -1095,13 +1138,13 @@ async fn agent_start(
             "[task {t} from your manager {sid}]\n\n{body}\n\nWork only in this directory (a git worktree of your \
              own). Commit your work and report when done."
         );
-        let _ = f.core.agents.prompt(&wsid, prompt, Origin::Hub);
+        crate::soft::done(f.core.agents.prompt(&wsid, prompt, Origin::Hub), "manager");
     }
     Ok(json!({"id": wsid, "branch": tree.branch, "cwd": tree.path}).to_string())
 }
 
 /// The tree of worker W: remembered, else rebuilt from its folder (after a restart).
-async fn tree_of(f: &Front, manager: &str, w: &Session) -> Result<TaskTree, String> {
+async fn tree_of(f: &Front, manager: &str, w: &Session) -> villa::Result<TaskTree> {
     if let Some(t) = f.core.manager.st().trees.get(&w.id) {
         return Ok(t.clone());
     }
@@ -1109,17 +1152,23 @@ async fn tree_of(f: &Front, manager: &str, w: &Session) -> Result<TaskTree, Stri
         .cwd()
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or("no worktree name")?
+        .ok_or_else(|| villa::Error::invalid("no worktree name"))?
         .to_owned();
     let branch = format!("job/{manager}-{name}");
-    let me = f.core.agents.find(manager).map_err(|e| e.message)?;
+    let me = f
+        .core
+        .agents
+        .find(manager)
+        .map_err(|e| e.message)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let base = f
         .core
         .runs
         .git()
         .rebuilt_base(me.cwd(), w.cwd(), &branch, &integration(manager))
         .await
-        .map_err(|e| e.stderr)?;
+        .map_err(|e| e.stderr)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     Ok(TaskTree {
         path: w.cwd().to_path_buf(),
         branch,
@@ -1144,20 +1193,25 @@ async fn trial_merge(
     who: &Who,
     a: norn::tools::manager::TrialMergeArgs,
     facts: &Facts,
-) -> Result<String, String> {
+) -> villa::Result<String> {
     let sid = me.id.as_str();
     let mine = branches_of(f, sid).await;
     let want: Vec<String> = a.branches.0.iter().map(|b| b.as_str().to_owned()).collect();
     for b in &want {
         if !mine.iter().any(|(_, t)| &t.branch == b) {
-            return Err(format!("{b} is not a branch of a worker you started"));
+            return Err(villa::Error::invalid(format!(
+                "{b} is not a branch of a worker you started"
+            )));
         }
     }
     gate(f, sid, who, Action::MergeIntegration, None, facts).await?;
     // a snapshot worker's branch lives in its own folder: bring each wanted one into the trusted repository first
     let git = f.core.runs.git();
     for (_, t) in mine.iter().filter(|(_, t)| want.contains(&t.branch)) {
-        git.import(me.cwd(), t).await.map_err(|e| e.stderr)?;
+        git.import(me.cwd(), t)
+            .await
+            .map_err(|e| e.stderr)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
     }
     let r = f
         .core
@@ -1165,7 +1219,8 @@ async fn trial_merge(
         .git()
         .trial_merge(me.cwd(), &want)
         .await
-        .map_err(|e| e.stderr)?;
+        .map_err(|e| e.stderr)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     Ok(json!({"clean": r.clean, "conflicts": r.conflicts}).to_string())
 }
 
@@ -1175,21 +1230,23 @@ async fn merge(
     who: &Who,
     a: norn::tools::manager::MergeArgs,
     facts: &Facts,
-) -> Result<String, String> {
+) -> villa::Result<String> {
     let sid = me.id.as_str();
     let mine = branches_of(f, sid).await;
     let Some((worker, tree)) = mine
         .into_iter()
         .find(|(_, t)| t.branch == a.branch.as_str())
     else {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{} is not a branch of a worker you started",
             a.branch.as_str()
-        ));
+        )));
     };
     let target = integration(sid);
     if !target.starts_with("job/") {
-        return Err("merges go to integration branches only".into());
+        return Err(villa::Error::invalid(
+            "merges go to integration branches only",
+        ));
     }
     gate(f, sid, who, Action::MergeIntegration, None, facts).await?;
     let repo = me.cwd().to_path_buf();
@@ -1198,7 +1255,8 @@ async fn merge(
     let job_tree: PathBuf = tree.path.with_file_name("_job");
     runner::review::branch_tree(&repo, &target, &job_tree)
         .await
-        .map_err(|e| e.stderr)?;
+        .map_err(|e| e.stderr)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if runner::tick::git(
         &job_tree,
         &["merge-base", "--is-ancestor", &tree.branch, "HEAD"],
@@ -1208,7 +1266,10 @@ async fn merge(
     {
         return Ok(json!({"merged": true, "into": target, "note": "already in"}).to_string());
     }
-    git.prepare(&tree).await.map_err(|e| e.stderr)?;
+    git.prepare(&tree)
+        .await
+        .map_err(|e| e.stderr)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let waiting = f.core.manager.st().gates.get(&tree.branch).copied();
     let answer = match waiting {
         Some(card) => {
@@ -1218,7 +1279,7 @@ async fn merge(
                 .db
                 .read(move |c| Ok(m.recheck(c, card, at)))
                 .await
-                .map_err(|e| format!("{e:?}"))?;
+                .map_err(|e| villa::Error::invalid(format!("{e:?}")))?;
             if g == Gate::Allow {
                 git.clear_gate(&tree.branch);
             }
@@ -1227,18 +1288,24 @@ async fn merge(
             }
             g
         }
-        None => git.merge_gate(&repo, &tree).await.map_err(|e| e.stderr)?,
+        None => git
+            .merge_gate(&repo, &tree)
+            .await
+            .map_err(|e| e.stderr)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?,
     };
     // the job tree's commit before the merge: the history records what the merge changed
     let old = crate::timeline::snapshot::head_of(&job_tree);
     match answer {
         Gate::Ask(card) => {
             f.core.manager.st().gates.insert(tree.branch.clone(), card);
-            Err(format!(
+            Err(villa::Error::invalid(format!(
                 "the merge gate asks the user (card {card}); only their answer counts, then call merge again"
-            ))
+            )))
         }
-        Gate::Never(why) => Err(format!("the merge gate refuses: {why}")),
+        Gate::Never(why) => Err(villa::Error::invalid(format!(
+            "the merge gate refuses: {why}"
+        ))),
         Gate::Allow => {
             // every commit the hub makes into a user's branch goes through the before-commit hooks
             let site = hook_points::JobSite {
@@ -1252,15 +1319,15 @@ async fn merge(
             } else {
                 runner::review::before_commit_hooks(f, site, None, &tree, &job_tree)
                     .await
-                    .map_err(|e| e.message)?
+                    .map_err(|e| e.message)
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?
             };
             let message = match hooked {
                 Some(message) => message,
                 None => {
-                    return Err(
-                        "a before-commit hook holds the merge (a card asks the user); call merge again after it is settled"
-                            .into(),
-                    );
+                    return Err(villa::Error::invalid(
+                        "a before-commit hook holds the merge (a card asks the user); call merge again after it is settled",
+                    ));
                 }
             };
             match git
@@ -1277,7 +1344,7 @@ async fn merge(
                 Ok(runner::git::MergeOutcome::Conflict(files)) => {
                     Ok(json!({"merged": false, "conflicts": files}).to_string())
                 }
-                Err(e) => Err(format!("merge failed: {}", e.stderr)),
+                Err(e) => Err(villa::Error::invalid(format!("merge failed: {}", e.stderr))),
             }
         }
     }

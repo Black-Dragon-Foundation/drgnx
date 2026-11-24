@@ -67,15 +67,18 @@ fn name_of(socket: &Path) -> &Path {
     Path::new(socket.file_name().unwrap_or_default())
 }
 
-fn connect(socket: &Path, within: Duration) -> Result<UnixStream, String> {
-    let dir = trusted(socket).map_err(|e| e.to_string())?;
+fn connect(socket: &Path, within: Duration) -> villa::Result<UnixStream> {
+    let dir = trusted(socket).map_err(|e| villa::Error::invalid(e.to_string()))?;
     match paths::owned_in_trusted(&dir, name_of(socket)) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(villa::Error::io(e.to_string()));
+        }
         _ => {}
     }
-    let s = UnixStream::connect(socket).map_err(|e| format!("{}: {e}", socket.display()))?;
+    let s = UnixStream::connect(socket)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", socket.display())))?;
     s.set_write_timeout(Some(within))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     Ok(s)
 }
 
@@ -119,33 +122,35 @@ pub fn v0_call(socket: &Path, method: &str) -> bool {
 
 impl Client {
     /// A user connection to the hub at ENV's socket.  Errors say what failed (no cap, no socket, a wrong proof).
-    pub fn user(env: &Env, within: Duration) -> Result<Client, String> {
+    pub fn user(env: &Env, within: Duration) -> villa::Result<Client> {
         let socket = paths::socket_path(env);
         Client::user_at(&socket, within)
     }
 
-    pub fn user_at(socket: &Path, within: Duration) -> Result<Client, String> {
+    pub fn user_at(socket: &Path, within: Duration) -> villa::Result<Client> {
         let deadline = crate::clock::real_now() + within;
         let cap_file: PathBuf = paths::cap_path(socket);
-        let dir = trusted(socket).map_err(|e| e.to_string())?;
+        let dir = trusted(socket)?;
         let cap = paths::open_in_trusted(&dir, name_of(&cap_file))
             .and_then(|f| Cap::read_from(f, &cap_file))
-            .map_err(|e| format!("cap {}: {e}", cap_file.display()))?;
-        let stream = connect(socket, within)?;
-        let writer = stream.try_clone().map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::invalid(format!("cap {}: {e}", cap_file.display())))?;
+        let stream = connect(socket, within).map_err(|e| villa::Error::invalid(e.to_string()))?;
+        let writer = stream.try_clone()?;
         let mut reader = BufReader::new(stream);
         // the challenge is the first line
         let hub_nonce = loop {
-            let line = read_line(&mut reader, deadline)?;
-            let v: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+            let line = read_line(&mut reader, deadline)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            let v: Value =
+                serde_json::from_str(&line).map_err(|e| villa::Error::invalid(e.to_string()))?;
             if v["event"] == "challenge" {
                 break v["data"]["nonce"]
                     .as_str()
-                    .ok_or("the challenge has no nonce")?
+                    .ok_or_else(|| villa::Error::invalid("the challenge has no nonce"))?
                     .to_string();
             }
         };
-        let mine = proof::nonce().map_err(|e| e.to_string())?;
+        let mine = proof::nonce()?;
         let mut c = Client {
             reader,
             writer,
@@ -163,38 +168,42 @@ impl Client {
         )?;
         let theirs = reply["proof"].as_str().unwrap_or_default();
         if !proof::verify(&proof::hub_proof(&cap, &mine, &hub_nonce), theirs) {
-            return Err("the hub did not prove it holds the cap: not sending it anything".into());
+            return Err(villa::Error::invalid(
+                "the hub did not prove it holds the cap: not sending it anything",
+            ));
         }
         if reply["class"] != "user" {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "the hub made this connection {}, not user",
                 reply["class"]
-            ));
+            )));
         }
         Ok(c)
     }
 
     /// METHOD with PARAMS: the result, or the error as "code: message".
-    pub fn call(&mut self, method: &str, params: Value, within: Duration) -> Result<Value, String> {
+    pub fn call(&mut self, method: &str, params: Value, within: Duration) -> villa::Result<Value> {
         let deadline = crate::clock::real_now() + within;
         let id = self.next;
         self.next += 1;
         let line = json!({"id": id, "method": method, "params": params}).to_string();
         self.writer
             .write_all(format!("{line}\n").as_bytes())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::io(e.to_string()))?;
         loop {
-            let text = read_line(&mut self.reader, deadline)?;
-            let v: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            let text = read_line(&mut self.reader, deadline)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            let v: Value =
+                serde_json::from_str(&text).map_err(|e| villa::Error::invalid(e.to_string()))?;
             if v["id"] != id {
                 continue;
             }
             if let Some(e) = v.get("error") {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "{}: {}",
                     e["code"].as_str().unwrap_or("error"),
                     e["message"].as_str().unwrap_or("")
-                ));
+                )));
             }
             return Ok(v["result"].clone());
         }
@@ -215,22 +224,25 @@ mod tests {
     ) -> (PathBuf, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         let socket = dir.join("hub-x.sock");
         let cap = "ab".repeat(32);
-        std::fs::write(dir.join("hub-x.cap"), &cap).unwrap();
+        crate::fsio::write(dir.join("hub-x.cap"), &cap).unwrap();
         let listener = UnixListener::bind(&socket).unwrap();
         let taken = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = taken.clone();
-        std::thread::spawn(move || {
+        saman::spawn_thread("ratatoskr:client", move || {
             for s in listener.incoming().flatten() {
                 count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 // a thread per connection: one that stays open must not hold up the accepts behind it
                 let cap = cap.clone();
-                std::thread::spawn(move || {
+                saman::spawn_thread("ratatoskr:client", move || {
                     let mut w = s.try_clone().unwrap();
                     let hub_nonce = "c".repeat(32);
-                    let _ = writeln!(
-                        w,
-                        "{}",
-                        json!({"event": "challenge", "data": {"nonce": hub_nonce}})
+                    crate::soft::done(
+                        writeln!(
+                            w,
+                            "{}",
+                            json!({"event": "challenge", "data": {"nonce": hub_nonce}})
+                        ),
+                        "writeln",
                     );
                     for line in BufReader::new(s).lines().map_while(Result::ok) {
                         let v: Value = serde_json::from_str(&line).unwrap();
@@ -246,11 +258,13 @@ mod tests {
                             }
                             _ => json!({"id": v["id"], "result": {"pid": 7}}),
                         };
-                        let _ = writeln!(w, "{answer}");
+                        crate::soft::done(writeln!(w, "{answer}"), "writeln");
                     }
-                });
+                })
+                .unwrap();
             }
-        });
+        })
+        .unwrap();
         (socket, taken)
     }
 
@@ -302,7 +316,10 @@ mod tests {
         let e = Client::user_at(&socket, Duration::from_secs(2))
             .err()
             .unwrap();
-        assert!(e.contains("is open to other users (mode 755"), "{e}");
+        assert!(
+            e.message().contains("is open to other users (mode 755"),
+            "{e}"
+        );
         assert!(refused(&socket).is_some_and(|r| r.contains("open to other users")));
         assert_eq!(
             taken_by_the_code(&socket, &taken, &own),
@@ -319,6 +336,7 @@ mod tests {
             Client::user_at(&via, Duration::from_secs(2))
                 .err()
                 .unwrap()
+                .message()
                 .contains("is not a directory")
         );
         // a missing directory is no hub, not a refusal
@@ -331,7 +349,7 @@ mod tests {
             let e = Client::user_at(&socket, Duration::from_secs(2))
                 .err()
                 .unwrap();
-            assert!(e.ends_with("belongs to another user"), "{e}");
+            assert!(e.message().ends_with("belongs to another user"), "{e}");
             // (root connects to the other user's socket for the count, whatever its mode)
             assert_eq!(taken_by_the_code(&socket, &taken, &own), before);
         }
@@ -345,7 +363,7 @@ mod tests {
         private(&dir);
         let (socket, taken) = stub(&dir, None);
         let elsewhere = root.path().join("elsewhere.cap");
-        std::fs::write(&elsewhere, "ab".repeat(32)).unwrap();
+        crate::fsio::write(&elsewhere, "ab".repeat(32)).unwrap();
         std::fs::remove_file(dir.join("hub-x.cap")).unwrap();
         std::os::unix::fs::symlink(&elsewhere, dir.join("hub-x.cap")).unwrap();
         assert!(Client::user_at(&socket, Duration::from_secs(2)).is_err());
@@ -369,6 +387,9 @@ mod tests {
         let e = Client::user_at(&socket, Duration::from_secs(2))
             .err()
             .unwrap();
-        assert!(e.contains("did not prove it holds the cap"), "{e}");
+        assert!(
+            e.message().contains("did not prove it holds the cap"),
+            "{e}"
+        );
     }
 }

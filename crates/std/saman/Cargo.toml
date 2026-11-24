@@ -1,0 +1,26 @@
+[package]
+name = "saman"
+description = "Concurrency: the lock that survives a panic, one executor, tasks that cancel on drop, cancellation tokens, the UI queue and its watchdog (the concurrency standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# block_on_paused, for tests on a paused clock (tokio's test-util)
+test-util = ["tokio/test-util"]
+
+[dependencies]
+villa.workspace = true
+stund.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+stund = { workspace = true, features = ["test-hooks"] }
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -56,8 +56,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
      (their bridges fail and their editors open them again), which is accepted because installs are disposable.
   6. The process groups `runtime.db` recorded are reaped ([The reaper](#the-reaper): a crashed run's, or the Emacs
      child an older hub ran).
-  7. What the Lisp hub left in `<state>` is moved aside, once (`legacy::migrate`, [below](#what-the-lisp-runtime-left)),
-     then the session sockets whose owners still run are bound again. No child Emacs is
+  7. The session sockets whose owners still run are bound again. No child Emacs is
      started: the hub serves every method itself ([The registry](#the-registry-protocol-v1)).
 
   It stops on SIGTERM, on SIGINT, or one second after the `--parent-pid` process is gone (`kill(pid, 0)`; the last
@@ -93,6 +92,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `__test_barrier` ([Test hooks](#test-hooks)), `--test-hold-store` (at the hub's end runtime.db's thread is held by a
   job until the hub gets SIGUSR1, with one write queued behind it, so a test sees the end close its connections first
   and then write that queue, or a second SIGTERM abandon it; only SIGUSR1 releases the job, never the runtime's end),
+  `--test-slow-stop-ms N` (the hub's end waits N ms on its clock before it marks its lock stopping: a stop as slow as a
+  loaded machine can make it, so a row that waits for the mark is shown not to lean on `stop`'s budget),
   and `--agent-socket SID[:JOB]`, which is refused without `--foreground`. `DRGNX_HUB_PARENT_PID` does what `--parent-pid` does when the flag is absent, so a hub a test starts through `ensure` ends with the test.
 - **The gateway** (`ratatoskr/src/gateway.rs`, forwarding by `bifrost`) runs inside the hub: never in the
   editing Emacs, so streaming cannot touch the keystroke budget. Besides the 127.0.0.1 port it listens on **per-session
@@ -184,7 +185,8 @@ editor keeps its keys for the next hand-over; start the hub outside the debugger
 `ratatoskr status [--json]` is `status` as a user client (with `"running": true` added with `--json`); with no hub it
 prints `{"running": false}` and exits 1. `ratatoskr doctor --json` prints `{binary: {path, commit, test_hooks},
 running: {commit, pid}?, gateway: {port, registrations, providers, keys_held, warnings, keys_refused?}?, socket_dir:
-{path, mode, ok}, sqlite, job_agents, exe_mode, container_net}` (`container_net`, the text's `networked container jobs:` line,
+{path, mode, ok}, sqlite, job_agents, exe_mode, container_net, tei}` (`tei` is `{version, checked, source, verdicts: [{device, support, reason, command}]}`: whether TEI, an optional provider drgnx never installs, runs on each device,
+`search/tei_support.rs`; the text's `TEI on …` lines) (`container_net`, the text's `networked container jobs:` line,
 says whether container jobs can run here: refused first for a confined `user_u` login, `sleipnir::linux::confined`,
 then without podman, then by `podman info`'s checks; `gateway` is the running hub's: the providers named in `keys_held`, never a key;
 `keys_refused` only from a hub that could not be hardened, above). `exe_mode` (the text's `files run after writing:` line) says how a file the hub writes or copies and then runs is kept from ETXTBSY: `private-table` (the writing on a thread with its own file table), `lock` (where `unshare` is refused, as Docker's default seccomp profile does: a process-wide lock held shared by each write and exclusively by each spawn through draugr; a raw spawn elsewhere is outside it) or `direct` (not Linux). `ratatoskr restart` calls `restart`.
@@ -702,6 +704,20 @@ project's `history.db` to `<data>/backup/history-<project>.db` (one copy each, r
 `messages/send`'s `sender` is refused from every connection (`invalid-params` at `sender`): a message's sender is
 its connection's, and the hub is work.db's one writer (coordination.md, "Who writes what").
 
+### The user's doors (`door_cli`)
+
+What the editor did and an outside agent may never do has a terminal door each, in `crates/hub/ratatoskr/src/door_cli.rs`
+(and `graph forget` in `graph_cli.rs`): a user client of the running hub that calls the method itself, never a second
+implementation. `card list|settle` (`graph/sql` over the `card` table; `cards/settle`), `message send|reply`
+(`messages/send`; a reply reads the question's sender from `message` and sends with `answers`), `task status ID STATUS`
+(`graph/entity` for the version, then `tasks/write update`) and `plan status PLAN TASK STATUS` (`plans/get`, then
+`plans/write` with `base_version`; `done` sends every step ticked so the file and the graph agree). The CLI checks only
+the shape of a status word; the tracker's `STATUSES` is the one set and the hub names it when it refuses a word. A task
+of an imported or scanned plan file is read-only to `tasks/write` (`norn::tracker::is_parsed`: the file's view owns its
+status, "this comes from FILE"); `plans/write` is its only door. The outside bridge serves `plans/get|write` and
+`records/read|write` only (`OUTSIDE_METHODS`); the test `outside::tests` pins that `cards/settle`, `messages/send`,
+`tasks/write`, `graph/put-parsed|grants|settings|excise|revert` and `job/approve` are refused to it.
+
 ### The reaper
 
 `runtime.db`'s `proc` table records process groups by pid, start time, group and boot id. The hubs before phase 7
@@ -711,33 +727,6 @@ start time or boot id is skipped and never signalled; a pid whose start time or 
 deletes them all, so the Emacs child an older or crashed hub left is killed with its group when the new binary starts.
 The window left open is the reused leader ("The window left open", above): the recorded group died and its leader's
 pid went to another process's group before the next start.
-
-### What the Lisp runtime left
-
-`legacy::migrate` (`src/legacy.rs`) runs once per start, after the reaper and before anything is served. It moves, each
-only when present, into `<state>/hub/migrated-p7/` (0700, original names): from `<state>/hub/` the files
-`registrations.eld`, `sessions.eld`, `port` and `hub-timers-report.eld`, the folder `bodies/` and every `hub-*.d/` that
-holds only `backend.sock`; then each entry of `<state>/sandbox/` except `folders.eld` (the editor's VC guard,
-`core/drgnx-sandbox-vc.el`, still reads that list, so it stays; it is written by nothing now); and each `<state>/jobs/<id>/` of the editor's old command jobs
-(the Lisp runtime's, before the hub ran them as `exec/*`) that has ended (an `exit` file, or a `pid` file naming a process that is gone; a job with neither
-counts as ended once its folder has been quiet for a minute). A live job's folder stays and is listed in `left`.
-
-A move is a `rename`; across filesystems (`EXDEV`) it copies into a temporary name beside the target, syncs every file
-and folder, renames it into place and only then removes the source. A copy that fails (a socket in the tree cannot be
-copied) leaves the source untouched and the name in `left`. Once the copy is in place the name is `moved`: if syncing
-its folder or removing the source then fails, the name also goes in `source_left`, and the next start removes the
-source, but only while the copy is there and holds all of it (a source that changed since stays). Nothing is deleted
-otherwise. `migrated-p7/done` is the JSON `Moved` `{at, moved, left, source_left}` (names relative to `<state>`;
-`source_left` is absent when empty); once it exists later starts skip the `hub/` and
-`sandbox/` items and only move the jobs that have ended since, shrinking `left`. A fresh install (nothing to move,
-nothing left) writes nothing.
-
-`doctor --json` has `legacy: {moved, left, at, lisp_processes: [{pid, what}]}`: `moved` and `at` from `done`, `left`
-read afresh (a job may have ended since), and the user's Emacs processes started with the Lisp hub's or the Lisp
-coordination server's entry function (`MARKERS` in `legacy.rs`: `drgnx-hub-main`, `drgnx-coord-mcp-main`) as an
-`-f`/`--funcall`, `-l`/`--load` or `--eval` argument (a command that only names them, such as `rg drgnx-hub-main`, does
-not count; from `/proc/*/cmdline` on Linux; `ps -x -o pid=,command=` with a 2 s deadline on macOS).
-Rows: `lifecycle/{an-old-backend-is-reaped-at-start,lisp-state-is-moved-once,a-second-start-moves-nothing,a-running-lisp-job-is-left-in-place}`.
 
 ## The client
 
@@ -955,8 +944,11 @@ fails the hook open on a timeout, so the snapshot lists those kinds under `hooke
 The hub keeps each live session as a row of `runtime.db`'s `asession` table ([Sessions](#sessions)). A hub that
 starts, once it serves, resumes each (`Hub::resume_all`: ACP `session/resume`, else `session/load`) under its own id
 and name (messages and spend follow them): the agent replays the history into the transcript and the session is idle;
-an editor that reconnects fetches it again (`agents/get`). A session whose agent cannot resume or load it is restarted
-as described below, or ends and says why. What was in flight is gone: a turn that was running, a pending permission or
+an editor that reconnects fetches it again (`agents/get`). The hub serves while they come back, one after the other: a
+client that lists at once sees the ones that are back so far, and each other one follows as an `agent` event (a
+test-hooks hub started with `RATATOSKR_TEST_RESUME_INSERT_DELAY_MS=N` puts each back in the table N ms after its agent
+resumed or loaded it). A session whose agent cannot resume or load it is restarted as described below, or ends and
+says why. What was in flight is gone: a turn that was running, a pending permission or
 edit.
 
 **Everything kept across a restart (Task 24).** The hub starts in this order: the jobs a hub before this one left running
@@ -1447,6 +1439,9 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `doc-comments/close` | user | `{view: string}` | `boolean` | no |
 | `doc-comments/set` | user | `{refresh?: boolean, view: string}` | `boolean` | no |
 | `doc-comments/subscribe` | user | `{record: string, view: string}` | `boolean` | no |
+| `embed/serve-start` | user | `{listen: string, no_embed?: boolean, plain?: boolean}` | `{cert_sha256?: string, token?: string, url: string}` | yes |
+| `embed/serve-stop` | user | `{}` | `boolean` | yes |
+| `embed/serve-token` | user | `{}` | `{token: string}` | yes |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes |
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no |
@@ -1458,11 +1453,11 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
-| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{collapsed?: boolean, minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
+| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{collapsed?: boolean, minus_updates?: boolean, name: string, search: {filters?: {archive?: string, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed", summaries?: [[string]]}]}` | `{}` | no |
 | `extensions/recommended` | user | `{ids: [string], version: natnum}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
-| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
+| `extensions/search` | user, agent | `{filters?: {archive?: string, bundled?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
 | `folds/load` | user | `{path: string, worktree: string}` | `{anchors: [Anchor]}` | no |
 | `folds/save` | user | `{anchors?: [{end: natnum, fold_kind?: string, hash: string, kind: "fold" \| "pin", name?: string, open?: boolean, start: natnum}], path: string, worktree: string}` | `boolean` | yes |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
@@ -1497,7 +1492,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `graph/entity` | user | `{as_of?: natnum, id: string, include?: ["links" \| "notes" \| "history"]}` | `EntityAnswer` | no |
 | `graph/excise` | user | `{fields?: ["title" \| "status" \| "body" \| "assignee" \| "data"], reason: Text, rotate_backups?: boolean, target: ExciseTarget, transcripts?: boolean}` | `ExciseAnswer` | yes |
 | `graph/export` | user | `{history?: boolean, out?: AbsPath, project?: string, since?: natnum, with_activity?: boolean}` | `PortAnswer` | no |
-| `graph/grants` | user | `{grant?: {access: "read" \| "edit-user-tasks" \| "options", expires?: number, names?: [string], what: string, who: string}, list?: {active?: boolean, who?: string}, revoke?: string}` | `{grant?: GrantView, grants?: [GrantView], revoked?: boolean}` | yes |
+| `graph/grants` | user | `{edit?: {clear_expires?: boolean, expires?: number, id: string, ops?: [string]}, grant?: {access: "read" \| "edit-user-tasks" \| "options" \| "task-write", expires?: number, names?: [string], ops?: [string], what: string, who: string}, list?: {active?: boolean, effective_for?: string, profile?: string, project?: string, who?: string}, revoke?: string}` | `{edited?: boolean, grant?: GrantView, grants?: [GrantView], revoked?: boolean}` | yes |
 | `graph/history` | user | `{id: string, since?: natnum}` | `{versions?: [any]}` | no |
 | `graph/import` | user | `{dir: AbsPath}` | `PortAnswer` | yes |
 | `graph/neighbors` | user | `{as_of?: natnum, depth?: natnum, direction?: "out" \| "in" \| "both", id: string, kinds?: [string]}` | `{hidden: natnum, links?: [any], nodes?: [any], truncated?: string}` | no |
@@ -1546,7 +1541,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
 | `machines/move` | user | `{machine: string, target: string}` | `{card?: string, moved: boolean, said: string}` | yes |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
-| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities" \| "chat.project-edit" \| "huddles" \| "debug.read" \| "debug.probe" \| "debug.fork" \| "debug.live-eval" \| "debug.drive", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "chat.project-read" \| "plugin.abilities" \| "chat.project-edit" \| "huddles" \| "debug.read" \| "debug.probe" \| "debug.fork" \| "debug.live-eval" \| "debug.drive", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no |
@@ -1587,13 +1582,13 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `pair/read-answer` | user | `{error?: Text, req: natnum, text?: string, version?: natnum}` | `boolean` | no |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
 | `plans/get` | user | `{plan: string}` | `PlanView` | no |
-| `plans/write` | user | `{base_version?: natnum, path?: string, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
+| `plans/write` | user | `{base_version?: natnum, path?: string, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, reason?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
 | `plugins/approve` | user | `{hash: Hex64, name: string}` | `PluginRow` | yes |
 | `plugins/disable` | user | `{name: string}` | `PluginRow` | yes |
 | `plugins/list` | user | `{}` | `{plugins?: [PluginRow]}` | no |
 | `presence/set` | user | `{away: boolean}` | `boolean` | no |
 | `records/conflict` | user | `{id: Id}` | `{at: number, file: string, graph: string, id: string, path: string}` | no |
-| `records/import` | user | `{dry_run?: boolean, only?: "specs" \| "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board" \| "decisions", path?: AbsPath, root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
+| `records/import` | user | `{dry_run?: boolean, only?: "specs" \| "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board" \| "decisions", path?: AbsPath, root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile], warnings?: [string]}` | yes |
 | `records/read` | user | `{record: string}` | `RecordView` | no |
 | `records/resolve` | user | `{id: Id, keep: "file" \| "graph"}` | `{id: string, keep: "file" \| "graph", path: string}` | yes |
 | `records/status` | user | `{path?: AbsPath}` | `{views?: [ViewStatus]}` | no |
@@ -1626,12 +1621,16 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/applied` | user | `{applied?: [string], change: natnum, inverse?: [{byte_end?: natnum, byte_start?: natnum, col: natnum, end_col: natnum, end_line: natnum, id: string, line: natnum, new: string, old: string}], not_open?: boolean, path: string, saved?: boolean, skipped?: [{id: string, why: string}], tick?: natnum}` | `boolean` | no |
 | `search/apply` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
 | `search/buffer` | user | `{large?: boolean, mirror?: boolean, path: AbsPath, text?: string, tick?: natnum, version?: natnum, view: string}` | `boolean` | no |
+| `search/delete` | user | `{confirm: boolean, root: AbsPath}` | `{bytes: natnum, packs: natnum, root: string, vectors: natnum}` | yes |
 | `search/edit-doc` | user | `{context?: natnum, max?: natnum, view: string}` | `{lines: [EditLine], over?: boolean, skipped?: [EditSkip], total: natnum}` | no |
 | `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], lines?: [{eol?: boolean, line: natnum, line_id: string, new?: [string], old: string, path: AbsPath}], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
 | `search/embed-retry` | user | `{}` | `boolean` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, chain?: [ChainEntry], prefer?: string, servers: [ServerInfo]}` | no |
+| `search/export` | user | `{all_trees?: boolean, branch?: string, out?: AbsPath, root: AbsPath}` | `{keys: natnum, path: AbsPath, sha256: string, warning: string}` | yes |
+| `search/extra-gpus` | user | `{answer: "use" \| "dismiss"}` | `{changed: boolean, gpus: [string]}` | yes |
 | `search/files` | user | `{exclude?: [string], ignore?: "index" \| "real", n?: natnum, name?: boolean, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/fold` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
+| `search/forget-pin` | user | `{provider: string}` | `boolean` | yes |
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
@@ -1640,23 +1639,25 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `search/handoff-context` | user | `{hidden?: boolean, ids?: [string], off?: [string], view: string}` | `{hidden?: [string], rows: [HandoffContextRow], tokens: natnum, total: natnum}` | no |
 | `search/handoff-mark` | user | `{handoff: string, mark: {face: string, glyph: string, name: string}}` | `boolean` | no |
 | `search/handoff-state` | user | `{handoff: string}` | `HandoffState` | no |
+| `search/import` | user | `{file: AbsPath, keep_all?: boolean, root?: AbsPath}` | `ImportAnswer` | yes |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
+| `search/list` | user | `{}` | `{roots: [RootInfo]}` | no |
 | `search/map` | user | `{base?: boolean, budget?: natnum, focus?: [string], names?: [string], root: AbsPath, scope?: "code" \| "all"}` | `{files: [MapFile], files_total: natnum, fresh: Fresh, text: string, tokens: natnum}` | no |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
 | `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
+| `search/pause` | user | `{all?: boolean, root?: AbsPath}` | `{roots: [RootInfo]}` | yes |
 | `search/preview` | user | `{off?: [string], path: AbsPath, replace?: string, view: string}` | `PreviewAnswer` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
+| `search/resume` | user | `{all?: boolean, root?: AbsPath}` | `{roots: [RootInfo]}` | yes |
 | `search/run` | user | `{context?: boolean, count?: boolean, group?: "file" \| "tree" \| "symbol", ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string} \| {lang?: string, mode: "pattern", pattern: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, sort?: "path" \| "count" \| "rank", view: string}` | `{run: natnum}` | no |
 | `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
 | `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
 | `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string} \| {lang?: string, mode: "pattern", pattern: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
 | `search/saved/share` | user | `{name: string, root: AbsPath}` | `{path: AbsPath}` | yes |
 | `search/scope-bases` | user | `{root: AbsPath}` | `{current?: string, default?: string, detached: boolean, recent: [string], upstream?: string}` | no |
-| `search/server-plan` | user | `{kind: "tei" \| "ollama"}` | `ServerPlan` | no |
-| `search/server-start` | user | `{confirm: boolean, kind: "tei" \| "ollama"}` | `{provider: ProviderEntry, started: boolean, unit: string}` | no |
-| `search/server-stop` | user | `{kind: "tei" \| "ollama"}` | `{stopped: boolean}` | no |
 | `search/status` | user | `{root: AbsPath}` | `StatusAnswer` | no |
+| `search/stop` | user | `{all?: boolean, root?: AbsPath}` | `{roots: [RootInfo]}` | yes |
 | `search/symbol-at` | user | `{file: string, line: natnum, root: AbsPath}` | `{name?: string}` | no |
 | `search/symbols` | user | `{base?: boolean, k?: natnum, kind?: [string], match?: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", name: string, path?: string, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code"}` | `{fresh: Fresh, matched: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", symbols: [SymbolHit]}` | no |
 | `search/typing` | user | `{}` | `{}` | no |
@@ -1672,7 +1673,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `subscribe` | user | `{}` | `boolean` | no |
 | `tasks/find` | user | `{assignee?: string, cursor?: natnum, labels?: [string], project?: string, query?: Text, status?: Status}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
-| `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
+| `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools" \| "note", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
 | `term/attach` | user | `{cell_px?: [natnum, natnum], cols: natnum, id: string, rows: natnum, rows_in_sja?: boolean}` | `{id: string, view: string}` | no |
 | `term/clipboard-reply` | user | `{id: string, req: natnum, text?: string}` | `boolean` | no |
 | `term/close` | user | `{id: string, signal?: integer}` | `boolean` | no |
@@ -2857,7 +2858,9 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
 Hrafn's vectors are keyed by the model's fingerprint (64 hex characters; `runtime.md`, "The fingerprint"), never by a
 name. The answers say both: `search/query`'s `model` is the fingerprint of the model whose vectors took part and `label`
 its name (`granite-embedding-small-english-r2`, a server's model id); `lag.model` and `search/status`'s `models[].model`
-are fingerprints (`models[].label` is set when an embedder of this hub states that fingerprint now); `search/embedders`
+are fingerprints (`models[].label` is set when an embedder of this hub states that fingerprint now); `search/status`'s
+`sources[]` is each fingerprint's chain of sources as tier 2's last pass left it (`model`, and `entries[]` of `id`,
+`kind`, `state` and, when down, `why`; runtime.md, "The source chain"); `search/embedders`
 gives `builtin.fingerprint` and `builtin.label`, each server's `fingerprint` (none until it answers a probe) and `label`,
 and `prefer`, a fingerprint. The MCP and CLI clients print the label where they printed the model.
 
@@ -3148,6 +3151,82 @@ took (a commit stalled on its ref's fsync is still one burst; at most 2 s after 
 left or a commit waiting in an editor), and sends what changed; a lock file's events and reads (the hub's own
 `git status` runs with `GIT_OPTIONAL_LOCKS=0`) are not changes. An
 Explorer listing that its watch relisted (a name made or removed outside Emacs) also reads its repositories again.
+
+### Vector packs (`search/export`, `search/import`)
+
+The file format, the proof of possession and the warning are in [runtime.md](runtime.md#vector-packs).
+
+- `search/export {root, out?, branch?, all_trees?}` → `{path, sha256, keys, warning}`: the vectors of the keys the
+  folder's tree references (`branch`: the indexed checkout on that branch, else `invalid_params`; `all_trees`: every tree
+  of the repo's store; not both). Without `out` the pack is `<repo>/.drgnx/packs/<sha16>.vpack`; a place outside the
+  repo is the user's to name. `warning` says the file can recreate the code's text; a client shows it before the path
+  (`ratatoskr search export` does). `invalid_params` when the cache has no vector for the tree yet.
+- `search/import {file, root?, keep_all?}` → `{fingerprint, label, keys_in_pack, kept, skipped_unreferenced,
+  already_had}`: `root` opens that project and brings its index current first. Only keys a repo store on this machine
+  references are kept (every store file under the state's `code/` counts, open or not); `keep_all` keeps the whole
+  pack and also takes a fingerprint no source here serves. `invalid_params` for a file that is not a pack, a format
+  this build does not read, a fingerprint no source here can use (without `keep_all`) and a row of the wrong size.
+
+### Managing indexing (`search/list`, `pause`, `resume`, `stop`, `delete`)
+
+Every root's index has a state the user controls, kept in its store's `meta` (`index_state`: `on`, `paused`,
+`stopped`), so neither a hub restart nor a file change undoes it (`search/manage.rs`, `Project::pause|resume|stop`).
+`ratatoskr search list|status|pause|resume|stop|delete` are the terminal's clients.
+
+- `search/list {}` → `{roots: [{root, id, state, why?, open, files, chunks, bytes}]}`: every store under the state's
+  `code/`, open or not. `state` is `idle`, `running`, `paused` or `stopped`; `why` (`{name, text}`) says what a paused
+  root waits for: `user`, `battery`, `load`, `disk-floor` or `no-embedder` (no source, none that answers its probe,
+  such as a built-in model not downloaded, or one that failed). The user's pause comes first: an automatic
+  reason that clears never lifts it. `search/status` has the same `state` and `why`, and `tier2` says `load` or
+  `disk-floor` while one holds.
+- **The automatic pauses** (`search/host.rs`, read before every pass of tier 2, then every `POWER_POLL` while one
+  holds). *Battery*: the local sources (the built-in model, the engine) wait for AC, unless `index now` or
+  `drgnx-search-battery-engine`. *Load*: the local sources wait while the 1-minute load average is above 2 per online
+  CPU (the machine's CPUs, `/sys/devices/system/cpu/online`, not a container's share), unless `index now`.
+  *Disk floor*: every source waits while the state directory's filesystem has less free than 2 GiB or 5% of it,
+  whichever is more (`statvfs`), even for `index now`, since tier 2 writes vectors. Remote sources are never held by
+  the battery or the load. A stand-in sysfs root (tests) holds `loadavg` and `statvfs` (`AVAIL TOTAL`) files.
+- `search/pause|resume|stop {root} | {all: true}` → `{roots}` (the roots as they are after it). **Pause**: the batch in
+  flight finishes and is written, then tier 2 holds (`Tier2::Paused`) until resume; queries answer from what is
+  indexed. **Resume**: tier 2 goes on with the keys still missing, nothing done is sent again. **Stop**: tier 2 is
+  cancelled now (a request in flight is dropped) and what it wrote stays; the watcher stays on, and the next change
+  (tier 1 with files changed) or `search/index` goes on. A root that is not open gets the state written to its store.
+- `search/extra-gpus {answer: "use"|"dismiss"}` → `{gpus, changed}`: the answer to the one-time **extra-GPU notice**. When the engine
+  is resolved and usable GPUs exist beyond the fastest, the hub sends one `notice` event (`id: "search-extra-gpus"`, `life: "condition"`,
+  `severity: "info"`, `command: "search-use-extra-gpus"`, `actions: ["search-dismiss-extra-gpus"]`, the text naming the GPUs) once per run per set of
+  GPUs, unless `drgnx-search-gpus-noticed` already holds that set's key. The two editor commands call this method. Either answer writes
+  `drgnx-search-gpus-noticed` (the set's key) into the global overrides, "use" also writes `drgnx-search-gpus` `"all"`, and the notice is cleared (`clear: true`).
+  A different set of GPUs shows it once more. It is a notice, never a prompt: nothing waits on it. With no extra GPUs known the answer is `{gpus: [], changed: false}` and nothing is written.
+- `search/delete {root, confirm: true}` → `{root, bytes, vectors, packs}`: the project is closed, then its store files,
+  its `.drgnx/packs/` and the vectors only it held (`VectorCache::drop_holder`: a key another store holds stays) go;
+  `runtime.db`'s `kv` records it (`search.deleted.<id>`: the root, the reason, when, what was freed). `confirm` must be
+  true: the CLI asks (`[y/N]`, a terminal only) unless `--yes`.
+- **Agents.** An agent reads the index with the MCP tools `index_list` (`search/list`) and `index_status`
+  (`search/status` of the session's folder); no tool pauses, resumes, stops or deletes. The MCP search tools call only
+  `search/query`, `symbols`, `outline`, `map`, `usages`, `results`, `list` and `status` (`mcp::MCP_METHODS`); both MCP
+  backends refuse anything else ("… is not for an MCP tool"). On the wire every verb here is the user's class only.
+  Conformance: `search/managing-an-index`, `search/an-agent-cannot-change-an-index`,
+  `mcp/search-tools-read-the-index-only`.
+
+### The vector server (`embed/serve-*`) and remote sources
+
+The protocol, the token, TLS and pinning are in [vector-protocol.md](vector-protocol.md).
+
+- `embed/serve-start {listen, plain?, no_embed?}` → `{url, cert_sha256?, token?}`: serves this machine's caches and its
+  local embedders (the engine, the built-in model); a server already running is replaced. `token` only at the first
+  start. `invalid_params` for an address that is not `ADDR:PORT`, plain HTTP off loopback and Tailscale, or a port that
+  does not bind.
+- `embed/serve-stop {}` → whether one ran. `embed/serve-token {}` → `{token}`: a new token, the old refused from the
+  next request.
+- `search/forget-pin {provider}` → whether a pin was kept: the `vectors` provider's pinned certificate is forgotten
+  (its `kv` row deleted: `gateway::kv_del`).
+- **Spend.** Embeds are spend and lookups are free (MP-9): each `/v1/embed` this hub serves is a `spend` row with
+  provider and agent `embed-serve`, and each request of texts to a trusted remote one under the remote's provider id
+  (agent `hrafn`). Both through the gateway's ledger (`Gate::ledger`, `WorkLedger`), with the model's id; the protocol
+  carries no token counts, so `input` is estimated at four bytes a token, and `cost` is 0.
+- **Remote sources.** Each `vectors` provider of the table (`Gate::vectors`: id, URL, the token its `key_env` handed
+  over, `trusted`) is a `RemoteVectors` source of every project the hub opens; the providers are part of the project's
+  signature, so a change opens it again.
 
 ### Ranked file names as rows (`search/files`)
 
@@ -3902,8 +3981,7 @@ needs one fails over or answers "no key", and the `gateway/need-keys {providers}
 subscriber for the providers kept registrations need) tells the editor to hand them over. The hub is not dumpable
 ([Stopping a hub](#stopping-a-hub)), so another process of the user's cannot read them from its memory.
 
-The registrations, the port and the keys of the Lisp runtime's gateway (`registrations.eld`, `port`) are among what
-[`legacy::migrate`](#what-the-lisp-runtime-left) moves aside; nothing reads them.
+The registrations, the port and the keys of the Lisp runtime's gateway (`registrations.eld`, `port`) are read by nothing.
 
 **The editor's side** (`core/drgnx-hub-client.el`):
 - **The runtime settings** (`core/drgnx-settings-runtime.el`). Once a subscription is answered (`drgnx-hub-core--subscribed`),
@@ -4009,7 +4087,9 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   decoded; no migration), so they survive a restart. An entry that is absent has its default, and no last good value.
 - **The provider table** (design §11.1's mapping, as `drgnx-hub--provider-json` has it): the presets, each of the
   user's `drgnx-ai-providers` entries replacing the preset of its id and going first; `:url` → `base`, `:auth
-  x-api-key` / `:key-env` / neither → `auth`, the known `:caps` once each, `:price (IN . OUT)` → `price`. A provider
+  x-api-key` / `:key-env` / neither → `auth`, the known `:caps` once each, `:price (IN . OUT)` → `price`, `:trusted t`
+  → `trusted: true` (document text may go to a `vectors`, `tei` or `ollama` server off this machine; kind `vectors` is
+  another machine's `embed serve`, [vector-protocol.md](vector-protocol.md)). A provider
   with no `:url` or `:kind` is left out silently, as the editor leaves it out; one the gateway would refuse (a URL
   that is not a provider's) is left out with a problem. `settings::conformance::providers_json_equals_lisp` compares
   the table with the editor's for `test/conformance/settings/providers-settings.el`. The gateway's table is this one
@@ -4811,7 +4891,7 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
   so a refresh run from the command line is seen too. A file that does not read (truncated JSON, a catalog of another
   `version`, a lock with a mistake) keeps its last good copy; `extensions/details` carries a note saying so. A file that
   is gone is empty.
-- **Ids:** `pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`, `bundled:NAME` (a package a module that is on names: kind
+- **Ids:** `pkg:NAME`, `module:NAME`, `plugin:NAME`, `bundled:NAME` (a package a module that is on names: kind
   `package`, state `built-in`, source `drgnx`, `why` the modules; the `bundled` filter keeps them). A plugin's row comes from the plugins' last look
   (`plugins/list`, memory only), with the hub's `unapproved`, `changed`, `disabled` or `broken`, and for an approved one
   `on` or `off` by the global `drgnx-agents-plugins`; `signed` is `hash-approved`. A search never reads the folder.

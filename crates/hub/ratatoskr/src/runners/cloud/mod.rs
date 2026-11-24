@@ -174,7 +174,7 @@ pub fn endpoint(provider: &str, default: String) -> String {
     {
         return v;
     }
-    let _ = provider;
+    let _only_when_used_elsewhere = &provider;
     default
 }
 

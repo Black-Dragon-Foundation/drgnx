@@ -158,35 +158,42 @@ impl Kernelspec {
 }
 
 /// The session's private folder: made 0700 if missing; refused if it is a link, is not ours or is open to others.
-pub fn private_folder(path: &Path) -> Result<PathBuf, String> {
+pub fn private_folder(path: &Path) -> villa::Result<PathBuf> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     if std::fs::symlink_metadata(path).is_err() {
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(path)
-            .map_err(|e| format!("cannot make {}: {e}", path.display()))?;
+            .map_err(|e| villa::Error::io(format!("cannot make {}: {e}", path.display())))?;
     }
-    let m = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let m = std::fs::symlink_metadata(path)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
     if m.file_type().is_symlink() {
-        return Err(format!(
+        return Err(villa::Error::io(format!(
             "{} is a link, not a private folder",
             path.display()
-        ));
+        )));
     }
     if !m.is_dir() {
-        return Err(format!("{} is not a folder", path.display()));
+        return Err(villa::Error::invalid(format!(
+            "{} is not a folder",
+            path.display()
+        )));
     }
     // SAFETY: geteuid has no preconditions.
     if m.uid() != unsafe { libc::geteuid() } {
-        return Err(format!("{} belongs to another user", path.display()));
+        return Err(villa::Error::invalid(format!(
+            "{} belongs to another user",
+            path.display()
+        )));
     }
     if m.mode() & 0o777 != 0o700 {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{} must be mode 0700 (it is {:04o})",
             path.display(),
             m.mode() & 0o777
-        ));
+        )));
     }
     Ok(path.to_path_buf())
 }
@@ -217,18 +224,18 @@ fn check_id(id: &str) -> Result<(), String> {
 
 impl Connection {
     /// A new file `kernel-<id>.json` in FOLDER (which must be [`private_folder`]'s answer), over ipc.
-    pub fn create(folder: &Path, id: &str, kernel_name: &str) -> Result<Connection, String> {
-        check_id(id)?;
+    pub fn create(folder: &Path, id: &str, kernel_name: &str) -> villa::Result<Connection> {
+        check_id(id).map_err(|e| villa::Error::invalid(e.to_string()))?;
         let prefix = folder.join(format!("k-{id}"));
         let prefix_text = prefix
             .to_str()
-            .ok_or("the session folder's path is not text")?
+            .ok_or_else(|| villa::Error::invalid("the session folder's path is not text"))?
             .to_string();
         if prefix_text.len() + 2 > MAX_SOCKET_PATH {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "the socket path under {} is too long for a unix socket",
                 folder.display()
-            ));
+            )));
         }
         let mut ports = [0u16; 5];
         for (i, p) in ports.iter_mut().enumerate() {
@@ -252,8 +259,8 @@ impl Connection {
         id: &str,
         kernel_name: &str,
         ports: [u16; 5],
-    ) -> Result<Connection, String> {
-        check_id(id)?;
+    ) -> villa::Result<Connection> {
+        check_id(id).map_err(|e| villa::Error::invalid(e.to_string()))?;
         Self::write(
             folder,
             id,
@@ -276,9 +283,8 @@ impl Connection {
         ports: [u16; 5],
         prefix: PathBuf,
         tcp: Option<[u16; 5]>,
-    ) -> Result<Connection, String> {
+    ) -> villa::Result<Connection> {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
         let key = Key::generate()?;
         let mut body = serde_json::json!({
             "transport": transport,
@@ -291,15 +297,15 @@ impl Connection {
             body[format!("{ch}_port")] = port.into();
         }
         let path = folder.join(format!("kernel-{id}.json"));
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|e| format!("cannot create {}: {e}", path.display()))?;
+        let mut f = eitri::create_exclusive(&path, 0o600)
+            .map_err(std::io::Error::from)
+            .map_err(|e| villa::Error::io(format!("cannot create {}: {e}", path.display())))?;
         if let Err(e) = f.write_all(body.to_string().as_bytes()) {
-            let _ = std::fs::remove_file(&path);
-            return Err(format!("cannot write {}: {e}", path.display()));
+            crate::soft::done(std::fs::remove_file(&path), "std::fs::remove_file");
+            return Err(villa::Error::io(format!(
+                "cannot write {}: {e}",
+                path.display()
+            )));
         }
         Ok(Connection {
             path,
@@ -326,12 +332,12 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        crate::soft::done(std::fs::remove_file(&self.path), "std::fs::remove_file");
         // a real kernel (ipykernel) leaves its ipc socket files behind when it ends
         if self.ports.is_none() {
             for ch in CHANNELS {
                 if let Some(s) = self.socket(ch) {
-                    let _ = std::fs::remove_file(s);
+                    crate::soft::done(std::fs::remove_file(s), "std::fs::remove_file");
                 }
             }
         }
@@ -367,7 +373,7 @@ fn private_group(gid: u32) -> bool {
     let me = unsafe { libc::geteuid() };
     // a shared primary group (`users`, 100) has no member listed either: it is the user's own only if no other account has it
     let alone = gid == me
-        || std::fs::read_to_string("/etc/passwd")
+        || crate::fsio::read_to_string("/etc/passwd")
             .ok()
             .is_some_and(|p| only_primary_of(&p, gid, me));
     alone && group_has_no_members(gid)
@@ -438,12 +444,10 @@ fn trusted(m: &std::fs::Metadata) -> Result<(), String> {
 /// KERNEL.JSON opened without following a link and without blocking (a FIFO put there after a check would hold the open), then
 /// looked at: a regular file, small enough, trusted. The file and its metadata, or why not.
 pub(crate) fn open_spec_file(path: &Path) -> Result<std::fs::File, String> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|e| format!("cannot be opened: {e}"))?;
+    let f = eitri::open_read(path).map_err(|e| match e {
+        eitri::FsError::NotRegular => "kernel.json is not a regular file".to_string(),
+        e => format!("cannot be opened: {e}"),
+    })?;
     let meta = f.metadata().map_err(|e| format!("cannot be read: {e}"))?;
     if !meta.is_file() {
         return Err("kernel.json is not a regular file".into());

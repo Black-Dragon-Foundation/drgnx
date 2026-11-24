@@ -20,7 +20,7 @@ use std::sync::{Mutex, MutexGuard};
 use vegvisir::State;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
 /// The Agents side views of every connection.

@@ -35,57 +35,61 @@ pub struct Policy {
 impl Policy {
     /// The policy at commit REV of REPO, with PACK (the job's, frozen at its approval).  A policy file REV doesn't
     /// have reads as empty; one that doesn't read is an error.
-    pub async fn at(repo: &Path, rev: &str, pack: &Pack) -> Result<Policy, String> {
+    pub async fn at(repo: &Path, rev: &str, pack: &Pack) -> villa::Result<Policy> {
         let (repo, rev) = (repo.to_owned(), rev.to_owned());
         let (frozen, flaky) = crate::clock::blocking(move || {
-            Ok::<_, String>((
+            Ok::<_, villa::Error>((
                 show(&repo, &rev, "test/frozen.eld")?,
                 show(&repo, &rev, "test/flaky.eld")?,
             ))
         })
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| villa::Error::internal(e.to_string()))??;
         Ok(Policy {
             pack: pack.clone(),
-            frozen: frozen_rows(&frozen)?,
-            flaky: heads(&flaky)?,
+            frozen: frozen_rows(&frozen).map_err(|e| villa::Error::invalid(e.to_string()))?,
+            flaky: heads(&flaky).map_err(|e| villa::Error::invalid(e.to_string()))?,
         })
     }
 }
 
 /// FILE at REV in REPO; empty when REV has no such file.
-fn show(repo: &Path, rev: &str, file: &str) -> Result<String, String> {
-    let out = std::process::Command::new("git")
+fn show(repo: &Path, rev: &str, file: &str) -> villa::Result<String> {
+    let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(["show", &format!("{rev}:{file}")])
         .output()
-        .map_err(|e| format!("git show {rev}:{file}: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("git show {rev}:{file}: {e}")))?;
     if out.status.success() {
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
     // a missing path is "no rows"; a missing revision is an error
-    let has_rev = std::process::Command::new("git")
+    let has_rev = crate::proc::Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(["cat-file", "-e", &format!("{rev}^{{commit}}")])
         .status()
-        .map_err(|e| format!("git cat-file {rev}: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("git cat-file {rev}: {e}")))?;
     if has_rev.success() {
         Ok(String::new())
     } else {
-        Err(format!("no commit {rev} in {}", repo.display()))
+        Err(villa::Error::invalid(format!(
+            "no commit {rev} in {}",
+            repo.display()
+        )))
     }
 }
 
 /// TEXT's one top-level list (a policy file), as its items.
-fn top(text: &str) -> Result<Vec<Node>, String> {
-    let nodes = read_all(text.as_bytes(), Limits::default()).map_err(|r| r.to_string())?;
+fn top(text: &str) -> villa::Result<Vec<Node>> {
+    let nodes = read_all(text.as_bytes(), Limits::default())
+        .map_err(|r| villa::Error::invalid(r.to_string()))?;
     match nodes.into_iter().next().map(|n| n.datum) {
         None => Ok(Vec::new()),
         Some(Datum::List(items)) => Ok(items),
         Some(Datum::Sym(s)) if s == "nil" => Ok(Vec::new()),
-        Some(_) => Err("a policy file is one list".into()),
+        Some(_) => Err(villa::Error::invalid("a policy file is one list")),
     }
 }
 
@@ -97,7 +101,7 @@ fn text(n: &Node) -> Option<&str> {
 }
 
 /// Each row's head (a row is `(NAME :key value …)`).
-fn heads(text_: &str) -> Result<Vec<String>, String> {
+fn heads(text_: &str) -> villa::Result<Vec<String>> {
     Ok(top(text_)?
         .iter()
         .filter_map(|row| match &row.datum {
@@ -108,7 +112,7 @@ fn heads(text_: &str) -> Result<Vec<String>, String> {
 }
 
 /// `test/frozen.eld`'s rows: `(FILE … :tests (NAME …) …)`.
-fn frozen_rows(text_: &str) -> Result<Vec<Frozen>, String> {
+fn frozen_rows(text_: &str) -> villa::Result<Vec<Frozen>> {
     let mut out = Vec::new();
     for row in top(text_)? {
         let Datum::List(items) = &row.datum else {
@@ -135,15 +139,19 @@ fn frozen_rows(text_: &str) -> Result<Vec<Frozen>, String> {
 }
 
 /// TEXT (a pack file) as a pack; refused when it doesn't read or names what the hub doesn't know.
-pub fn read_pack(text_: &str) -> Result<Pack, String> {
-    let nodes = read_all(text_.as_bytes(), Limits::default()).map_err(|r| r.to_string())?;
-    let node = nodes.first().ok_or("the pack file is empty")?;
-    let pack: Pack = huginn::de::from_node(node).map_err(|e| e.to_string())?;
+pub fn read_pack(text_: &str) -> villa::Result<Pack> {
+    let nodes = read_all(text_.as_bytes(), Limits::default())
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let node = nodes
+        .first()
+        .ok_or_else(|| villa::Error::invalid("the pack file is empty"))?;
+    let pack: Pack =
+        huginn::de::from_node(node).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let problems = pack.problems();
     if problems.is_empty() {
         Ok(pack)
     } else {
-        Err(problems.join("; "))
+        Err(villa::Error::invalid(problems.join("; ")))
     }
 }
 
@@ -165,7 +173,7 @@ mod tests {
         assert!(p.on("red-first") && p.on("author-check") && p.on("affected-groups"));
         assert!(!p.on("push-gate"));
         assert!(!p.on("merge-notes") && !p.on("trailers"));
-        assert!(p.build_reds("rust") && p.build_reds("elisp"));
+        assert!(p.build_reds("rust"));
         assert_eq!(p.batch(), 3);
         assert!(p.is_test_path("runtime/crates/x/src/a/tests.rs"));
         // any project's: no project's commands (the author check is the task's own tests)

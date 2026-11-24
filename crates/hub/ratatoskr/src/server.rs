@@ -14,7 +14,7 @@
 //! 6. the process groups `runtime.db` recorded reaped (a crashed hub's children, an old hub's Lisp backend), the
 //!    sessions' `mcp.sock` of live owners bound again ([`crate::sessions`]; their owners watched each second), the
 //!    gateway listening on 127.0.0.1 and its registrations of live owners kept ([`crate::gateway`]; pruned each
-//!    second), and the `events` broadcaster.  No child Emacs is started: every method is the front's.
+//!    second), and the `events` broadcaster.  Every method is the front's.
 //!
 //! Every socket is close-on-exec (Rust's default, tested), so no child (an agent, a job) inherits a listener.
 //!
@@ -36,7 +36,7 @@ use crate::{Exit, log, runtime_db};
 use runstav::paths::{self, Env};
 use runstav::proof::Cap;
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -78,16 +78,18 @@ pub async fn run(args: ServeArgs) -> Exit {
     }
     // the executable's path, once, while it still names the file on disk (restart-when-idle, re-exec)
     if let Err(e) = idle::resolve_exe() {
-        eprintln!("ratatoskr: cannot resolve its own path ({e}): restart-when-idle is off");
+        crate::soft::err_line(&format!(
+            "ratatoskr: cannot resolve its own path ({e}): restart-when-idle is off"
+        ));
     }
     if let Err(e) = urdr::check_floor(SQLITE_FLOOR) {
         let have = urdr::sqlite_version_number();
-        eprintln!(
+        crate::soft::err_line(&format!(
             "ratatoskr: cannot start: SQLite {}.{}.{} is below 3.51.3 ({e})",
             have / 1_000_000,
             have / 1000 % 1000,
             have % 1000
-        );
+        ));
         return Exit::CannotStart;
     }
     let env = Env::process();
@@ -100,7 +102,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         &log_dir,
     ] {
         if let Err(e) = paths::private_dir(dir) {
-            eprintln!("ratatoskr: cannot start: {e}");
+            crate::soft::err_line(&format!("ratatoskr: cannot start: {e}"));
             return Exit::CannotStart;
         }
     }
@@ -110,10 +112,10 @@ pub async fn run(args: ServeArgs) -> Exit {
     let _log = match log::init(&log_dir) {
         Ok(g) => g,
         Err(e) => {
-            eprintln!(
+            crate::soft::err_line(&format!(
                 "ratatoskr: cannot start: the log in {}: {e}",
                 log_dir.display()
-            );
+            ));
             return Exit::CannotStart;
         }
     };
@@ -127,7 +129,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         0
     };
     let lock = match lock::acquire_retrying(&lock_path, &lock::System, tries, || {
-        std::thread::sleep(Duration::from_millis(50));
+        stund::real::sleep_blocking(Duration::from_millis(50));
     }) {
         Ok(l) => l,
         Err(LockError::LispHub { pid }) => {
@@ -217,17 +219,6 @@ pub async fn run(args: ServeArgs) -> Exit {
     if let Err(e) = reap_recorded(&runtime).await {
         tracing::warn!("{e}");
     }
-    // what the Lisp hub left in the state dir, moved aside (never deleted), before anything is served
-    let moving = env.clone();
-    match crate::clock::blocking(move || crate::legacy::migrate(&moving)).await {
-        Ok(Ok(m)) => {
-            if !m.moved.is_empty() || !m.left.is_empty() {
-                tracing::info!(moved = ?m.moved, left = ?m.left, "what the Lisp hub left");
-            }
-        }
-        Ok(Err(e)) => tracing::warn!("cannot move what the Lisp hub left: {e}"),
-        Err(e) => tracing::warn!("moving what the Lisp hub left failed: {e}"),
-    }
     // what the hub's end reads of work.db's writer while it stops (its queue)
     let graph_queue = graph.writer.clone();
     let front = Arc::new(Front::with_graph(
@@ -240,20 +231,15 @@ pub async fn run(args: ServeArgs) -> Exit {
     front.tool_hub.bind(&front);
     // what the browser sessions' web proxies never reach: the host's addresses and the hub's loopback ports, kept
     // live from now on (the gateway's port is added once it listens)
-    front
-        .browser_nevers
-        .start(crate::browser::nevers::emacs_server_dirs(
-            &home,
-            env.vars
-                .get("XDG_CONFIG_HOME")
-                .map(Path::new)
-                .filter(|p| p.is_absolute()),
-        ));
-    let _ = front.dirs.set(crate::graph::StoreDirs {
-        home,
-        config: paths::config_dir(&env),
-        hub: hub_dir.clone(),
-    });
+    front.browser_nevers.start();
+    crate::soft::done(
+        front.dirs.set(crate::graph::StoreDirs {
+            home,
+            config: paths::config_dir(&env),
+            hub: hub_dir.clone(),
+        }),
+        "server",
+    );
     front.extensions.configure(&env);
     front.search.bind(&front);
     front.debug.bind(&front);
@@ -482,7 +468,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     let tick = idle::TICK;
     crate::clock::spawn("idle:run", idle::run(front.clone(), tick));
     for (l, s) in agents {
-        tokio::spawn(accept(l, front.clone(), s));
+        crate::clock::spawn_untracked(module_path!(), accept(l, front.clone(), s));
     }
     tracing::info!(
         pid = front.pid,
@@ -570,6 +556,10 @@ pub async fn run(args: ServeArgs) -> Exit {
     // nothing more is served: the clients hear the end now, before any wait below that can hang
     front.end_connections().await;
     stage("the connections closed");
+    #[cfg(feature = "test-hooks")]
+    if let Some(ms) = args.test_slow_stop_ms {
+        crate::clock::sleep(Duration::from_millis(ms)).await;
+    }
     // the hub has stopped: `stop` is answered by this mark, while the lock stays held until the store's queue is
     // written (`ensure` waits for its release, so no second hub opens the store meanwhile)
     if let Err(e) = lock.mark_stopping() {
@@ -617,25 +607,27 @@ pub async fn run(args: ServeArgs) -> Exit {
 /// may `ptrace` it or read its memory.  Linux and Android: `PR_SET_DUMPABLE 0`; macOS: `PT_DENY_ATTACH` (it fails
 /// when the hub was started under a debugger or tracer); elsewhere nothing can be done.  An `Err` says why: the hub
 /// then serves, but refuses every key (`Gate::set_hardened`, fail closed), and `status`/`doctor` say so.
-pub fn harden() -> Result<(), String> {
+pub fn harden() -> villa::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     let r = rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
-        .map_err(|e| format!("cannot make the hub not dumpable: {e}"));
+        .map_err(|e| villa::Error::invalid(format!("cannot make the hub not dumpable: {e}")));
     #[cfg(target_os = "macos")]
     let r = {
         // SAFETY: PT_DENY_ATTACH takes no address or data
         let denied = unsafe { libc::ptrace(libc::PT_DENY_ATTACH, 0, std::ptr::null_mut(), 0) };
         if denied != 0 {
-            Err(format!(
+            Err(villa::Error::invalid(format!(
                 "cannot deny debuggers the hub: {}",
                 std::io::Error::last_os_error()
-            ))
+            )))
         } else {
             Ok(())
         }
     };
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
-    let r = Err("this platform cannot keep other processes out of the hub's memory".to_string());
+    let r = Err(villa::Error::io(
+        "this platform cannot keep other processes out of the hub's memory",
+    ));
     if let Err(why) = &r {
         tracing::warn!("{why}: provider keys are refused");
     }
@@ -644,7 +636,7 @@ pub fn harden() -> Result<(), String> {
 
 /// Every process group `runtime.db` recorded (a crashed hub's, or an older hub's Lisp backend, purpose `backend`)
 /// reaped: a live one whose pid, start time and boot still match is killed, a reused pid is left alone.  The rows go.
-async fn reap_recorded(db: &urdr::Handle) -> Result<(), String> {
+async fn reap_recorded(db: &urdr::Handle) -> villa::Result<()> {
     let rows: Vec<draugr::Record> = db
         .read(|c| {
             let mut st = c.prepare("select pid, start_time, pgid, boot_id from proc")?;
@@ -662,7 +654,7 @@ async fn reap_recorded(db: &urdr::Handle) -> Result<(), String> {
             Ok(rows)
         })
         .await
-        .map_err(|e| format!("cannot read runtime.db's processes: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("cannot read runtime.db's processes: {e}")))?;
     let outcomes = draugr::reap(&rows, &draugr::RealSignaller).await;
     for (r, o) in rows.iter().zip(&outcomes) {
         if *o == draugr::ReapOutcome::Killed {
@@ -673,7 +665,7 @@ async fn reap_recorded(db: &urdr::Handle) -> Result<(), String> {
     }
     db.write(|c| Ok(c.execute("delete from proc", [])?))
         .await
-        .map_err(|e| format!("cannot clear runtime.db's processes: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("cannot clear runtime.db's processes: {e}")))?;
     Ok(())
 }
 
@@ -684,7 +676,7 @@ const STOP_NOTE_EVERY: Duration = Duration::from_secs(5);
 struct Stopping {
     what: &'static str,
     queued: Box<dyn Fn() -> usize + Send>,
-    join: tokio::task::JoinHandle<()>,
+    join: saman::Task<()>,
 }
 
 impl Stopping {
@@ -697,7 +689,7 @@ impl Stopping {
         Stopping {
             what,
             queued: Box::new(queued),
-            join: tokio::task::spawn_blocking(stop),
+            join: saman::spawn_blocking("server:stop-store", stop),
         }
     }
 }
@@ -722,7 +714,7 @@ async fn stop_threads(mut threads: Vec<Stopping>, term: &mut Signal, int: &mut S
         }
         let all = async {
             for t in threads.iter_mut() {
-                let _ = (&mut t.join).await;
+                crate::soft::done((&mut t.join).await, "server");
             }
         };
         let signal = tokio::select! {
@@ -769,9 +761,9 @@ async fn hold_store(db: &urdr::Handle) {
     let (release, released) = std::sync::mpsc::channel::<()>();
     let h = db.clone();
     crate::clock::spawn("server:hold-store", async move {
-        let _ = h
-            .read(move |_| {
-                let _ = held.send(());
+        crate::soft::done(
+            h.read(move |_| {
+                crate::soft::done(held.send(()), "held send");
                 // only SIGUSR1 releases it: a runtime that ends (the sender dropped) leaves it held, as a hung job
                 if released.recv().is_err() {
                     loop {
@@ -780,21 +772,25 @@ async fn hold_store(db: &urdr::Handle) {
                 }
                 Ok(())
             })
-            .await;
+            .await,
+            "held send",
+        );
     });
-    let _ = holding.await;
+    crate::soft::done(holding.await, "server");
     // queued now, behind the job holding the thread: its first poll sends it on the channel
     let h = db.clone();
     let mut queued = Box::pin(async move {
-        let _ = h
-            .write(|c| {
+        crate::soft::done(
+            h.write(|c| {
                 c.execute(
                     "insert or replace into meta(key, value) values ('test-hold-store', 'written')",
                     [],
                 )?;
                 Ok(())
             })
-            .await;
+            .await,
+            "server",
+        );
     });
     let done =
         std::future::poll_fn(|cx| std::task::Poll::Ready(queued.as_mut().poll(cx).is_ready()))
@@ -804,7 +800,7 @@ async fn hold_store(db: &urdr::Handle) {
     }
     crate::clock::spawn("server:hold-store", async move {
         usr1.recv().await;
-        let _ = release.send(());
+        crate::soft::done(release.send(()), "release send");
     });
 }
 
@@ -849,7 +845,7 @@ async fn open_store(
         .map_err(|e| format!("{}: {e}", data.display()))?;
     let home = env
         .vars
-        .get("HOME")
+        .get(stig::HOME_VAR)
         .filter(|h| Path::new(h).is_absolute())
         .map(PathBuf::from)
         .ok_or("HOME is not set to an absolute path: the personal-notes deny-list needs it")?;
@@ -916,7 +912,10 @@ async fn watch_schema(front: Arc<Front>) {
             front.note_migration(report.as_deref());
         }
         let db = front.writer.db.clone();
-        let _ = crate::clock::blocking(move || db.tick()).await;
+        crate::soft::done(
+            crate::clock::blocking(move || db.tick()).await,
+            "crate::clock::blocking",
+        );
         // the personal-notes opt-ins: applied when their file changed (norn::privacy, Task 9b)
         if let (Some(g), Some(d)) = (front.tools.graph(), front.dirs.get())
             && let Some(r) =
@@ -950,7 +949,8 @@ const EMBED_NOTICE: &str = "embed-chain";
 /// The entity embedder (`embed`, Task 192): the embed role's chain in the user's order ([`crate::embed::ordered`]),
 /// stepped on its own task when the store is ready and [`crate::embed::Driver::wants`] it, one step at a time.  A step
 /// probes the down embedders whose backoff is over and runs a round after a quiet minute while one answers.  Each
-/// change of state is one log line, and the Notices row follows the chain.  It never starts a provider.
+/// change of state is one log line, and the Notices row follows the chain.  It never starts a provider; the local engine
+/// (MP-17), a process of the hub's own, starts when the chain asks it for vectors, once its download was consented.
 fn embed_idle(front: &Arc<Front>) {
     let Some(g) = front.tools.graph() else { return };
     let st = g.writer.status();
@@ -993,9 +993,19 @@ fn embed_idle(front: &Arc<Front>) {
         // a server's vectors are keyed by the fingerprint it proves: each provider states its model before the chain
         // is built, and one that does not answer stays `unprobed:<provider>` (it embeds nothing)
         for p in &providers {
-            let _ = crate::search::DocEmbedder::probe(p).await;
+            crate::soft::done(
+                crate::search::DocEmbedder::probe(p).await,
+                "crate::search::DocEmbedder::probe",
+            );
         }
-        let entries = crate::embed::ordered(&steps, providers, builtin, search_builtin);
+        // the local engine, when the role names it and it may run (its download consented and in place)
+        let engine = front
+            .search
+            .engine(&front)
+            .await
+            .map(|(id, e)| (id, e as Arc<dyn urdr::graph::search::Embedder>));
+        let engine = engine.as_ref().map(|(id, e)| (id.as_str(), e.clone()));
+        let entries = crate::embed::ordered(&steps, providers, engine, builtin, search_builtin);
         let mut guard = guard;
         let driver = guard.get_or_insert_with(|| crate::embed::Driver::new(now));
         if retry {
@@ -1021,7 +1031,8 @@ fn embed_idle(front: &Arc<Front>) {
             tracing::info!(embedded, denied, "entity vectors made");
         }
         let chain = driver.chain();
-        if let Ok(mut view) = shared.view.lock() {
+        {
+            let mut view = saman::lock(&shared.view);
             *view = labels
                 .iter()
                 .filter_map(|l| {
@@ -1074,22 +1085,23 @@ fn bind_agent(
     env: &Env,
     socket: &Path,
     a: &AgentSocket,
-) -> Result<(PathBuf, UnixListener, Socket), String> {
-    let dir = paths::make_session_dir(env, socket, &a.sid).map_err(|e| e.to_string())?;
+) -> villa::Result<(PathBuf, UnixListener, Socket)> {
+    let dir = paths::make_session_dir(env, socket, &a.sid)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let path = dir.join(paths::SESSION_HUB_SOCKET);
     match std::fs::remove_file(&path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(format!(
+            return Err(villa::Error::io(format!(
                 "cannot remove the stale socket {}: {e}",
                 path.display()
-            ));
+            )));
         }
         _ => {}
     }
-    let listener =
-        UnixListener::bind(&path).map_err(|e| format!("cannot bind {}: {e}", path.display()))?;
+    let listener = UnixListener::bind(&path)
+        .map_err(|e| villa::Error::invalid(format!("cannot bind {}: {e}", path.display())))?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| format!("cannot chmod {}: {e}", path.display()))?;
+        .map_err(|e| villa::Error::io(format!("cannot chmod {}: {e}", path.display())))?;
     tracing::info!(sid = a.sid, "agent socket {}", path.display());
     let s = Socket::Agent {
         sid: a.sid.clone(),
@@ -1111,23 +1123,23 @@ fn remove_all(dirs: &[PathBuf]) {
 }
 
 /// Under the lock: the stale socket removed, the cap written, the socket bound and made 0600.
-fn bind(socket: &Path, cap_path: &Path) -> Result<(UnixListener, Cap), String> {
+fn bind(socket: &Path, cap_path: &Path) -> villa::Result<(UnixListener, Cap)> {
     match std::fs::remove_file(socket) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(format!(
+            return Err(villa::Error::io(format!(
                 "cannot remove the stale socket {}: {e}",
                 socket.display()
-            ));
+            )));
         }
         _ => {}
     }
-    let cap = Cap::generate().map_err(|e| format!("no cap: {e}"))?;
+    let cap = Cap::generate().map_err(|e| villa::Error::invalid(format!("no cap: {e}")))?;
     write_private(cap_path, cap.expose().as_bytes())
-        .map_err(|e| format!("cannot write {}: {e}", cap_path.display()))?;
-    let listener =
-        UnixListener::bind(socket).map_err(|e| format!("cannot bind {}: {e}", socket.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("cannot write {}: {e}", cap_path.display())))?;
+    let listener = UnixListener::bind(socket)
+        .map_err(|e| villa::Error::invalid(format!("cannot bind {}: {e}", socket.display())))?;
     std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| format!("cannot chmod {}: {e}", socket.display()))?;
+        .map_err(|e| villa::Error::io(format!("cannot chmod {}: {e}", socket.display())))?;
     // close-on-exec, and never a child's (call 14)
     draugr::spawn::never_pass(&listener);
     Ok((listener, cap))
@@ -1138,20 +1150,15 @@ fn write_private(file: &Path, text: &[u8]) -> std::io::Result<()> {
     let mut name = file.as_os_str().to_owned();
     name.push(format!(".tmp-{}", std::process::id()));
     let tmp = PathBuf::from(name);
-    let _ = std::fs::remove_file(&tmp);
+    crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     let written = (|| {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)?;
+        let mut f = eitri::create_exclusive(&tmp, 0o600).map_err(std::io::Error::from)?;
         f.write_all(text)?;
         f.sync_all()?;
-        std::fs::rename(&tmp, file)
+        crate::fsio::rename(&tmp, file)
     })();
     if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     }
     written
 }
@@ -1174,7 +1181,7 @@ mod tests {
     /// Whether this process has `CAP_SYS_PTRACE` (bit 19 of `CapEff`), which reads a non-dumpable process anyway.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     fn has_cap_sys_ptrace() -> bool {
-        std::fs::read_to_string("/proc/self/status")
+        crate::fsio::read_to_string("/proc/self/status")
             .ok()
             .and_then(|s| {
                 s.lines()
@@ -1199,7 +1206,7 @@ mod tests {
         let pid = unsafe { libc::fork() };
         assert!(pid >= 0, "fork failed");
         if pid == 0 {
-            let _ = harden(); // what it did is read back below
+            crate::soft::done(harden(), "harden"); // what it did is read back below
             // SAFETY: prctl(PR_GET_DUMPABLE) takes no pointer
             let d = unsafe { libc::prctl(libc::PR_GET_DUMPABLE) } as u8;
             // SAFETY: one byte from a live buffer to the pipe's write end
@@ -1234,8 +1241,8 @@ mod tests {
         r.read_exact(&mut d).unwrap();
         assert_eq!(d[0], 0, "the child is not dumpable after harden");
         if has_cap_sys_ptrace() {
-            eprintln!(
-                "skipped: CAP_SYS_PTRACE is effective here, so /proc/PID/exe of a non-dumpable process reads"
+            crate::soft::err_line(
+                "skipped: CAP_SYS_PTRACE is effective here, so /proc/PID/exe of a non-dumpable process reads",
             );
         } else {
             assert!(
@@ -1250,70 +1257,75 @@ mod tests {
         assert_eq!(unsafe { libc::prctl(libc::PR_GET_DUMPABLE) }, 1);
     }
 
-    #[tokio::test]
-    async fn the_listening_socket_is_cloexec() {
-        let dir = tempfile::tempdir().unwrap();
-        let (listener, _cap) = bind(
-            &dir.path().join("hub-x.sock"),
-            &dir.path().join("hub-x.cap"),
-        )
-        .unwrap();
-        let cloexec = |fd: std::os::fd::BorrowedFd<'_>| {
-            rustix::io::fcntl_getfd(fd)
-                .unwrap()
-                .contains(rustix::io::FdFlags::CLOEXEC)
-        };
-        use std::os::fd::AsFd;
-        assert!(cloexec(listener.as_fd()), "the main socket");
-        // and the gateway's loopback listener, bound as `Gate::listen` binds it
-        let tcp = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
+    #[test]
+    fn the_listening_socket_is_cloexec() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (listener, _cap) = bind(
+                &dir.path().join("hub-x.sock"),
+                &dir.path().join("hub-x.cap"),
+            )
             .unwrap();
-        assert!(cloexec(tcp.as_fd()), "the gateway's listener");
+            let cloexec = |fd: std::os::fd::BorrowedFd<'_>| {
+                rustix::io::fcntl_getfd(fd)
+                    .unwrap()
+                    .contains(rustix::io::FdFlags::CLOEXEC)
+            };
+            use std::os::fd::AsFd;
+            assert!(cloexec(listener.as_fd()), "the main socket");
+            // and the gateway's loopback listener, bound as `Gate::listen` binds it
+            let tcp = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            assert!(cloexec(tcp.as_fd()), "the gateway's listener");
+        })
     }
 
     /// A signal tokio buffered before the wait for the store threads began (a second SIGTERM during the hub's first
     /// steps of ending) does not abandon their queues; one that comes during the wait does.  SIGUSR2 stands in for
     /// SIGTERM and SIGINT: this test process handles it, through tokio, from the first `signal` on.
-    #[tokio::test]
-    async fn only_a_signal_during_the_wait_abandons_the_store_threads() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        let kind = SignalKind::user_defined2();
-        let (mut term, mut int, mut seen) = (
-            signal(kind).unwrap(),
-            signal(kind).unwrap(),
-            signal(kind).unwrap(),
-        );
-        // raised, and handed to every listener (SEEN's recv returns once tokio has dispatched it)
-        let raise = || {
-            // SAFETY: raise(3) of a signal this process handles from the `signal` calls above on.
-            assert_eq!(unsafe { libc::raise(libc::SIGUSR2) }, 0);
-        };
-        raise();
-        seen.recv().await;
-        let (release, released) = std::sync::mpsc::channel::<()>();
-        let done = Arc::new(AtomicBool::new(false));
-        let d = done.clone();
-        let threads = vec![Stopping::start(
-            "a test thread",
-            || 1,
-            move || {
-                let _ = released.recv();
-                d.store(true, Ordering::SeqCst);
-            },
-        )];
-        let mut wait = Box::pin(stop_threads(threads, &mut term, &mut int));
-        let ended =
-            std::future::poll_fn(|cx| std::task::Poll::Ready(wait.as_mut().poll(cx).is_ready()))
-                .await;
-        assert!(!ended, "a signal from before the wait abandoned the queue");
-        raise();
-        seen.recv().await;
-        wait.await;
-        assert!(
-            !done.load(Ordering::SeqCst),
-            "the signal during the wait abandoned it"
-        );
-        release.send(()).unwrap();
+    #[test]
+    fn only_a_signal_during_the_wait_abandons_the_store_threads() {
+        saman::block_on_current(async move {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            let kind = SignalKind::user_defined2();
+            let (mut term, mut int, mut seen) = (
+                signal(kind).unwrap(),
+                signal(kind).unwrap(),
+                signal(kind).unwrap(),
+            );
+            // raised, and handed to every listener (SEEN's recv returns once tokio has dispatched it)
+            let raise = || {
+                // SAFETY: raise(3) of a signal this process handles from the `signal` calls above on.
+                assert_eq!(unsafe { libc::raise(libc::SIGUSR2) }, 0);
+            };
+            raise();
+            seen.recv().await;
+            let (release, released) = std::sync::mpsc::channel::<()>();
+            let done = Arc::new(AtomicBool::new(false));
+            let d = done.clone();
+            let threads = vec![Stopping::start(
+                "a test thread",
+                || 1,
+                move || {
+                    crate::soft::done(released.recv(), "server");
+                    d.store(true, Ordering::SeqCst);
+                },
+            )];
+            let mut wait = Box::pin(stop_threads(threads, &mut term, &mut int));
+            let ended = std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(wait.as_mut().poll(cx).is_ready())
+            })
+            .await;
+            assert!(!ended, "a signal from before the wait abandoned the queue");
+            raise();
+            seen.recv().await;
+            wait.await;
+            assert!(
+                !done.load(Ordering::SeqCst),
+                "the signal during the wait abandoned it"
+            );
+            release.send(()).unwrap();
+        })
     }
 }

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// The variables a job's sandbox sets itself: a tool's record never overrides them.
 pub const JOB_OWNED: &[&str] = &[
-    "HOME",
+    stig::HOME_VAR,
     "TMPDIR",
     "PATH",
     "LANG",
@@ -126,19 +126,19 @@ pub fn job_env(mut base: Vec<(String, String)>, records: &[Record]) -> Vec<(Stri
 }
 
 /// The records of FEATURES' `tool:` pins under ROOT; a pin without one is named in the error.
-pub fn records_for(root: &Path, features: &[String]) -> Result<Vec<Record>, String> {
+pub fn records_for(root: &Path, features: &[String]) -> villa::Result<Vec<Record>> {
     features
         .iter()
         .filter_map(|f| f.strip_prefix("tool:"))
         .map(|pin| {
             let file = env_dir(root).join(format!("{pin}.json"));
-            std::fs::read(&file)
+            crate::fsio::read(&file)
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok())
                 .ok_or_else(|| {
-                    format!(
+                    villa::Error::not_found(format!(
                         "no {pin} on this Mac (`drgnx runner check` installs the project's pins)"
-                    )
+                    ))
                 })
         })
         .collect()
@@ -159,6 +159,9 @@ pub struct Outcome {
     /// None: installed and recorded; else why not.
     pub failed: Option<String>,
 }
+
+/// The most one `mise` call may take: a toolchain's download and build.
+const MISE_LIMIT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// PINS installed by MISE into ROOT, each recorded (`mise install`, then `mise env --json`), with BASE_PATH as their
 /// `PATH`. mise's data, cache, state and config, and Rust's homes, are all under ROOT; HOME stays the account's.
@@ -191,21 +194,25 @@ pub fn install(mise: &Path, root: &Path, base_path: &str, pins: &[String]) -> Ve
     ])
     .collect();
     let run = |args: &[&str]| -> Result<String, String> {
-        let mut cmd = std::process::Command::new(mise);
-        cmd.args(args)
-            .current_dir(root)
-            .env_clear()
-            .envs(vars.iter().map(|(k, v)| (k, v)));
-        for k in ["HOME", "USER", "LOGNAME", "LANG"] {
-            if let Some(v) = std::env::var_os(k) {
-                cmd.env(k, v);
-            }
-        }
-        let out = cmd.output().map_err(|e| format!("mise: {e}"))?;
+        // the account's own HOME, USER, LOGNAME and LANG, then the install's variables
+        let set: Vec<(&str, &std::ffi::OsStr)> = vars
+            .iter()
+            .map(|(k, v)| (k.as_str(), std::ffi::OsStr::new(v.as_str())))
+            .collect();
+        let spec = draugr::Spec {
+            program: mise.to_path_buf(),
+            args: args.iter().map(std::ffi::OsString::from).collect(),
+            env: draugr::env::build(&[stig::HOME_VAR, "USER", "LOGNAME", "LANG"], &[], &set),
+            cwd: Some(root.to_path_buf()),
+            stdin_null: true,
+            pass_fds: vec![],
+            new_session: false,
+        };
+        let out = draugr::run(spec, MISE_LIMIT).map_err(|e| format!("mise: {e}"))?;
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
         } else {
-            let err = String::from_utf8_lossy(&out.stderr);
+            let err = &out.stderr;
             let last = err
                 .lines()
                 .rev()
@@ -231,9 +238,7 @@ pub fn install(mise: &Path, root: &Path, base_path: &str, pins: &[String]) -> Ve
                     serde_json::from_str(&out).map_err(|e| format!("mise env: {e}"))?;
                 let rec = record(&env, base_path, &homes);
                 let file = dir.join(format!("{pin}.json"));
-                let part = dir.join(format!("{pin}.json.part"));
-                std::fs::write(&part, serde_json::to_vec(&rec).expect("record"))
-                    .and_then(|_| std::fs::rename(&part, &file))
+                crate::fsio::write(&file, serde_json::to_vec(&rec).expect("record"))
                     .map_err(|e| format!("{}: {e}", file.display()))
             })()
             .err();
@@ -307,7 +312,7 @@ mod tests {
     #[test]
     fn a_job_gets_its_tools() {
         let base = vec![
-            ("HOME".to_string(), "/a/home".to_string()),
+            (stig::HOME_VAR.to_string(), "/a/home".to_string()),
             ("PATH".to_string(), "/usr/bin:/bin".to_string()),
         ];
         let recs = [
@@ -315,7 +320,7 @@ mod tests {
                 path: vec!["/r/rust/bin".into()],
                 env: vec![
                     ("RUSTUP_TOOLCHAIN".into(), "1.95".into()),
-                    ("HOME".into(), "/evil".into()),
+                    (stig::HOME_VAR.into(), "/evil".into()),
                 ],
             },
             Record {
@@ -328,7 +333,7 @@ mod tests {
             "PATH".into(),
             "/r/rust/bin:/r/node/bin:/usr/bin:/bin".into()
         )));
-        assert!(env.contains(&("HOME".into(), "/a/home".into())));
+        assert!(env.contains(&(stig::HOME_VAR.into(), "/a/home".into())));
         assert!(env.contains(&("RUSTUP_TOOLCHAIN".into(), "1.95".into())));
         assert_eq!(job_env(base.clone(), &[]), base);
     }
@@ -342,7 +347,7 @@ mod tests {
             path: vec!["/x/bin".into()],
             env: vec![],
         };
-        std::fs::write(
+        crate::fsio::write(
             env_dir(root.path()).join("rust@1.95.json"),
             serde_json::to_vec(&rec).unwrap(),
         )
@@ -350,7 +355,7 @@ mod tests {
         let f = ["xcode-clt", "tool:rust@1.95"].map(String::from);
         assert_eq!(records_for(root.path(), &f).unwrap(), [rec]);
         let why = records_for(root.path(), &["tool:node@22".into()]).unwrap_err();
-        assert!(why.contains("no node@22"), "{why}");
+        assert!(why.message().contains("no node@22"), "{why}");
         assert_eq!(installed(root.path()), ["rust@1.95.json"]);
     }
 
@@ -399,7 +404,7 @@ mod tests {
             proxy_port: None,
         });
         let ctx = gleipnir::Context {
-            home: std::env::var_os("HOME")
+            home: std::env::var_os(stig::HOME_VAR)
                 .map(PathBuf::from)
                 .unwrap_or_default(),
             closed: vec![],
@@ -419,87 +424,69 @@ mod tests {
             env_deny: vec![],
         };
         let valid = gleipnir::validate(spec, &ctx, gleipnir::spec::Target::Macos).unwrap();
-        let dev = std::process::Command::new("/usr/bin/xcode-select")
-            .arg("-p")
-            .output()
-            .unwrap();
-        let dev = String::from_utf8_lossy(&dev.stdout).to_string();
-        let user = std::process::Command::new("/usr/bin/getconf")
-            .arg("DARWIN_USER_DIR")
-            .output()
-            .unwrap();
+        let tool = |program: &str, args: &[&str]| {
+            crate::linux::run::limited(
+                Path::new(program),
+                args,
+                &[],
+                std::time::Duration::from_secs(30),
+            )
+            .unwrap()
+        };
+        let dev =
+            String::from_utf8_lossy(&tool("/usr/bin/xcode-select", &["-p"]).stdout).to_string();
+        let user = tool("/usr/bin/getconf", &["DARWIN_USER_DIR"]);
         let mac = super::super::sandbox::mac_context(&dev, &String::from_utf8_lossy(&user.stdout))
             .unwrap();
         let profile = gleipnir::sbpl::profile(&valid, &mac).unwrap();
         let sb = dir.join("job.sb");
-        std::fs::write(&sb, profile).unwrap();
-        let run = std::process::Command::new("/usr/bin/sandbox-exec")
-            .arg("-f")
-            .arg(&sb)
-            .args(["cargo", "--version"])
-            .env_clear()
-            .envs(valid.spec().env.iter().map(|(k, v)| (k, v)))
-            .current_dir(&valid.spec().chdir)
-            .output()
-            .unwrap();
-        let said = format!(
-            "{}{}",
-            String::from_utf8_lossy(&run.stdout),
-            String::from_utf8_lossy(&run.stderr)
-        );
+        crate::fsio::write(&sb, profile).unwrap();
+        // a command inside the job's profile, with exactly the job's environment, in its working directory
+        let in_job = |args: &[&str]| {
+            let mut a: Vec<std::ffi::OsString> = vec!["-f".into(), sb.clone().into()];
+            a.extend(args.iter().map(std::ffi::OsString::from));
+            draugr::run(
+                draugr::Spec {
+                    program: "/usr/bin/sandbox-exec".into(),
+                    args: a,
+                    env: valid
+                        .spec()
+                        .env
+                        .iter()
+                        .map(|(k, v)| (k.into(), v.into()))
+                        .collect(),
+                    cwd: Some(PathBuf::from(&valid.spec().chdir)),
+                    stdin_null: true,
+                    pass_fds: vec![],
+                    new_session: false,
+                },
+                std::time::Duration::from_secs(300),
+            )
+            .unwrap()
+        };
+        let run = in_job(&["cargo", "--version"]);
+        let said = format!("{}{}", String::from_utf8_lossy(&run.stdout), run.stderr);
         assert!(run.status.success(), "{said}");
         assert!(said.starts_with(&format!("cargo {ver}")), "{said}");
 
         // a configure asks brew where a package is: brew runs in the job, read-only (mise is installed, from Homebrew)
-        let brew = std::process::Command::new("/usr/bin/sandbox-exec")
-            .arg("-f")
-            .arg(&sb)
-            .args(["brew", "--prefix", "--installed", "mise"])
-            .env_clear()
-            .envs(valid.spec().env.iter().map(|(k, v)| (k, v)))
-            .current_dir(&valid.spec().chdir)
-            .output()
-            .unwrap();
-        let said = format!(
-            "{}{}",
-            String::from_utf8_lossy(&brew.stdout),
-            String::from_utf8_lossy(&brew.stderr)
-        );
+        let brew = in_job(&["brew", "--prefix", "--installed", "mise"]);
+        let said = format!("{}{}", String::from_utf8_lossy(&brew.stdout), brew.stderr);
         assert!(brew.status.success(), "{said}");
         assert!(said.trim().ends_with("/opt/mise"), "{said}");
 
         // what needs the network or writes Homebrew fails loudly, naming the shim
-        let install = std::process::Command::new("/usr/bin/sandbox-exec")
-            .arg("-f")
-            .arg(&sb)
-            .args(["brew", "install", "gmp"])
-            .env_clear()
-            .envs(valid.spec().env.iter().map(|(k, v)| (k, v)))
-            .current_dir(&valid.spec().chdir)
-            .output()
-            .unwrap();
-        let said = String::from_utf8_lossy(&install.stderr);
+        let install = in_job(&["brew", "install", "gmp"]);
+        let said = install.stderr;
         assert!(
             !install.status.success() && said.contains("brew shim"),
             "{said}"
         );
 
         // the account's real home is out of reach: listing it fails (read only; nothing is written there)
-        let real_home = std::env::var("HOME").expect("HOME");
-        let ls = std::process::Command::new("/usr/bin/sandbox-exec")
-            .arg("-f")
-            .arg(&sb)
-            .args(["/bin/ls", &real_home])
-            .env_clear()
-            .envs(valid.spec().env.iter().map(|(k, v)| (k, v)))
-            .current_dir(&valid.spec().chdir)
-            .output()
-            .unwrap();
-        let said = format!(
-            "{}{}",
-            String::from_utf8_lossy(&ls.stdout),
-            String::from_utf8_lossy(&ls.stderr)
-        );
+        let real_home = std::env::var(stig::HOME_VAR).expect("the home variable");
+        let ls = in_job(&["/bin/ls", &real_home]);
+        let said = format!("{}{}", String::from_utf8_lossy(&ls.stdout), ls.stderr);
         assert!(
             !ls.status.success() && said.contains("Operation not permitted"),
             "{said}"
@@ -509,22 +496,10 @@ mod tests {
         // says) works, and the job still can't make any other file in /tmp or /var/tmp, nor one inside an `sh-thd`
         // folder
         let sh = |script: &str| {
-            let o = std::process::Command::new("/usr/bin/sandbox-exec")
-                .arg("-f")
-                .arg(&sb)
-                .args(["/bin/sh", "-c", script])
-                .env_clear()
-                .envs(valid.spec().env.iter().map(|(k, v)| (k, v)))
-                .current_dir(&valid.spec().chdir)
-                .output()
-                .unwrap();
+            let o = in_job(&["/bin/sh", "-c", script]);
             (
                 o.status.success(),
-                format!(
-                    "{}{}",
-                    String::from_utf8_lossy(&o.stdout),
-                    String::from_utf8_lossy(&o.stderr)
-                ),
+                format!("{}{}", String::from_utf8_lossy(&o.stdout), o.stderr),
             )
         };
         // from `/`, which nobody writes: this row's root is in the account's per-user folder, which a build writes, so
@@ -552,7 +527,10 @@ mod tests {
             );
             assert!(!Path::new(&path).exists(), "{path}");
         }
-        let _ = std::fs::remove_dir(format!("/private/tmp/sh-thd-dir-{tag}"));
+        // the folder may never have been made (the job could not): nothing to clean up then
+        drop(std::fs::remove_dir(format!(
+            "/private/tmp/sh-thd-dir-{tag}"
+        )));
     }
 
     /// [D] The install: mise runs in the root with its folders and Rust's homes there, and each pin is recorded; a
@@ -614,7 +592,7 @@ mod tests {
             "RUSTUP_HOME".into(),
             tools.join("rustup").display().to_string()
         )));
-        let log = std::fs::read_to_string(tools.join("mise.log")).unwrap();
+        let log = crate::fsio::read_to_string(tools.join("mise.log")).unwrap();
         let first = log.lines().next().unwrap();
         assert_eq!(
             first,

@@ -94,7 +94,7 @@ pub struct Session {
     stdin: mpsc::Sender<ZmqMessage>,
     control: mpsc::Sender<ZmqMessage>,
     limits: Limits,
-    tasks: Vec<tokio::task::JoinHandle<()>>,
+    tasks: Vec<crate::clock::Spawned<()>>,
 }
 
 fn dealer(identity: &[u8]) -> Result<DealerSocket, String> {
@@ -118,36 +118,38 @@ impl Session {
         conn: &Connection,
         identity: &str,
         limits: Limits,
-    ) -> Result<Session, String> {
+    ) -> villa::Result<Session> {
         let (events_tx, events) = mpsc::unbounded_channel();
         let queued = Arc::new(AtomicUsize::new(0));
         let dropped = Arc::new(Dropped::default());
         let mut tasks = Vec::new();
-        let mut shell = dealer(identity.as_bytes())?;
-        let mut stdin = dealer(identity.as_bytes())?;
+        let mut shell =
+            dealer(identity.as_bytes()).map_err(|e| villa::Error::invalid(e.to_string()))?;
+        let mut stdin =
+            dealer(identity.as_bytes()).map_err(|e| villa::Error::invalid(e.to_string()))?;
         let mut control = DealerSocket::new();
         let mut iopub = SubSocket::new();
         let at = |n| conn.endpoint(n);
         shell
             .connect(&at(1))
             .await
-            .map_err(|e| format!("shell: {e}"))?;
+            .map_err(|e| villa::Error::invalid(format!("shell: {e}")))?;
         iopub
             .connect(&at(2))
             .await
-            .map_err(|e| format!("iopub: {e}"))?;
+            .map_err(|e| villa::Error::invalid(format!("iopub: {e}")))?;
         stdin
             .connect(&at(3))
             .await
-            .map_err(|e| format!("stdin: {e}"))?;
+            .map_err(|e| villa::Error::invalid(format!("stdin: {e}")))?;
         control
             .connect(&at(4))
             .await
-            .map_err(|e| format!("control: {e}"))?;
+            .map_err(|e| villa::Error::invalid(format!("control: {e}")))?;
         iopub
             .subscribe("")
             .await
-            .map_err(|e| format!("iopub subscribe: {e}"))?;
+            .map_err(|e| villa::Error::invalid(format!("iopub subscribe: {e}")))?;
         let mut sender = |sock: DealerSocket, channel: Channel| {
             let (mut send, recv) = sock.split();
             let (tx, mut rx) = mpsc::channel::<ZmqMessage>(limits.send_queue);
@@ -162,7 +164,10 @@ impl Session {
                             Ok(Err(e)) => e.to_string(),
                             Err(_) => "a send took too long".to_string(),
                         };
-                        let _ = events_tx2.send(Event::Closed { channel, why });
+                        crate::soft::done(
+                            events_tx2.send(Event::Closed { channel, why }),
+                            "events_tx2 send",
+                        );
                         return;
                     }
                 },
@@ -222,21 +227,22 @@ impl Session {
     }
 
     /// Queue MESSAGE for CHANNEL (shell, stdin or control); an error when the queue is full or the socket is gone.
-    pub fn send(&self, channel: Channel, message: &Message) -> Result<(), String> {
+    pub fn send(&self, channel: Channel, message: &Message) -> villa::Result<()> {
         let tx = match channel {
             Channel::Shell => &self.shell,
             Channel::Stdin => &self.stdin,
             Channel::Control => &self.control,
-            Channel::Iopub => return Err("iopub only receives".into()),
+            Channel::Iopub => return Err(villa::Error::invalid("iopub only receives")),
         };
         let frames: Vec<bytes::Bytes> = wire::encode(&self.key, message)
             .into_iter()
             .map(bytes::Bytes::from)
             .collect();
-        let m =
-            ZmqMessage::try_from(frames).map_err(|e| format!("a message of no frames: {e:?}"))?;
-        tx.try_send(m)
-            .map_err(|e| format!("{} is not taking messages: {e}", channel.name()))
+        let m = ZmqMessage::try_from(frames)
+            .map_err(|e| villa::Error::invalid(format!("a message of no frames: {e:?}")))?;
+        tx.try_send(m).map_err(|e| {
+            villa::Error::invalid(format!("{} is not taking messages: {e}", channel.name()))
+        })
     }
 
     /// How many messages did not verify or were not messages.
@@ -346,7 +352,7 @@ fn reader<R: Recv>(
     dropped: Arc<Dropped>,
     key: Key,
     limits: Limits,
-) -> tokio::task::JoinHandle<()> {
+) -> crate::clock::Spawned<()> {
     crate::clock::spawn(format!("notebook-{}-reader", channel.name()), async move {
         // the start of the window, the messages that did not verify in it, their bytes
         let mut bad = (crate::clock::now(), 0usize, 0usize);
@@ -354,7 +360,7 @@ fn reader<R: Recv>(
             let frames = match socket.next().await {
                 Ok(f) => f,
                 Err(why) => {
-                    let _ = events.send(Event::Closed { channel, why });
+                    crate::soft::done(events.send(Event::Closed { channel, why }), "events send");
                     return;
                 }
             };
@@ -377,7 +383,7 @@ fn reader<R: Recv>(
                         message
                     };
                     if queued.fetch_add(bytes, Ordering::SeqCst) + bytes > limits.flood_bytes {
-                        let _ = events.send(Event::Flood);
+                        crate::soft::done(events.send(Event::Flood), "events send");
                         return;
                     }
                     if events
@@ -401,7 +407,7 @@ fn reader<R: Recv>(
                     bad.1 += 1;
                     bad.2 += bytes;
                     if bad.1 > limits.bad_count || bad.2 > limits.flood_bytes {
-                        let _ = events.send(Event::Flood);
+                        crate::soft::done(events.send(Event::Flood), "events send");
                         return;
                     }
                 }

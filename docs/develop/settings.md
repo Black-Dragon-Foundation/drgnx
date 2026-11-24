@@ -115,6 +115,58 @@ reads it at every search call, so a change counts from the next hourly sweep.
 (drgnx-search-cache-cap 4294967296)   ; 4 GiB of vectors no checkout uses
 ```
 
+## `drgnx-search-battery-engine`
+
+Whether Hrafn's local vector sources (the built-in model, the local engine) embed while the machine runs on battery
+(runtime.md, "The source chain"). `nil` (the default): they wait for AC or `index now`. Remote sources (a TEI or Ollama
+server) are never held by battery. The hub reads it at every search call, so a change counts from the next pass.
+
+```elisp
+(drgnx-search-battery-engine t)   ; embed on battery too
+```
+
+
+## `drgnx-search-gpus`, `-battery-gpu`, `-no-gpu`
+
+Which GPUs the local engine pool uses and what it does without one (runtime.md, "The local engine"). Global.
+
+- `drgnx-search-gpus`: `nil` (the default: the fastest GPU only; `doctor` lists the others), `"all"`, `"top:N"` (the N
+  fastest) or `"ids:CUDA0,ROCm1"`.
+- `drgnx-search-battery-gpu`: on battery, `"pause"` (the default: bulk indexing waits for AC), `"igpu"` (only the
+  integrated GPU) or `"dgpu"` (the chosen GPUs).
+- `drgnx-search-gpus-noticed`: the set of extra GPUs the one-time notice was answered for (the hub writes it; see `search/extra-gpus` in hub.md). Not for the user to set.
+- `drgnx-search-no-gpu`: with no usable GPU, `"cpu"`, `"cpu-idle"` (the CPU only while idle) or `"pack"` (vectors from a
+  pack or a remote GPU). `nil`: bulk indexing waits for the choice and `doctor` lists the options.
+
+A value outside these is named in `doctor` and the default holds.
+
+```elisp
+(drgnx-search-gpus "top:2")
+(drgnx-search-no-gpu "cpu-idle")
+```
+
+## `drgnx-search-cpu-limit`, `-memory-limit`, `-vram-limit`, `-gpu-busy`
+
+The user's limits on the local engine, `nil` for none. All enforced; hitting one slows indexing (runtime.md, "The local
+engine").
+
+- `drgnx-search-cpu-limit`: percent (1 to 100) of the machine's CPUs: the engine's `-t` threads, and `cpu.max` through a
+  systemd user scope.
+- `drgnx-search-memory-limit`: MiB of RAM, `memory.max` (no swap).
+- `drgnx-search-vram-limit`: MiB of video memory. A start whose model, context and ubatch need more is refused, and one
+  that took more is stopped.
+- `drgnx-search-gpu-busy`: percent (1 to 100) the GPU may be busy: after each batch the engine rests for busy x (100 - P) / P.
+
+```elisp
+(drgnx-search-cpu-limit 50)
+(drgnx-search-gpu-busy 60)
+```
+
+Beyond the limits, the engine holds itself while another program works on its GPU (`search::engine_hold`): after the
+batch it is on it waits, `search status` shows the source as `held` with the program, and it goes on when the GPU is
+free again. The signals are another process using at least 10 percent of the GPU (NVML's list on NVIDIA, the DRM
+`fdinfo` clients on AMD and Intel; our own engines excluded) and free video memory under the engine's need.
+
 ## Conformance
 
 The two readers are held to each other by four things, all under `test/fixtures/huginn/` and `crates/core/huginn`:
@@ -725,6 +777,11 @@ after `drgnx-settings-live-start` get their watcher at the next sync.
   the three `defconst`s take their values from it. `test/fixtures/settings/defconsts-before.eld` is the three constants
   as `main` had them: `drgnx-settings-defaults/equal-the-old-defconsts` compares. Ratatoskr embeds the same file
   (Task 20).
+- **Provider kinds.** A provider's `:kind` is `openai`, `ollama`, `llamacpp` (a llama.cpp server you run, at its
+  `:url`), `tei`, `anthropic` or `llama`. `llama` is drgnx's own llama.cpp engine (the `llama` preset, `:caps (embed)`):
+  it has no `:url`, so it is in no provider table the gateway forwards by; the hub starts it for Hrafn once you
+  consented to its download (`search/model-download`, runtime.md "The local engine"). The shipped `embed` role is
+  `(llama)`; the `tei` preset stays for a TEI server you run and name in the role.
 - **The old files.** `drgnx-config-define 'agents` and `'ai` stay, for the migration only (it reads the old files
   through them). `agents` and `ai` are out of `drgnx-settings-shim-areas`, so a file that stayed is no longer read.
   The project's `.drgnx/ai.eld` (`ai-project`) is unchanged until the workspace layers fold it in.

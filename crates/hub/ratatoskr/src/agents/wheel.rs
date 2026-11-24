@@ -19,7 +19,7 @@
 //! core together, under the session's lock.
 
 use super::queue::{Origin, Queued};
-use super::session::turn_core::{QueueEdit, TurnCore, TurnEffect, TurnEvent};
+use super::session::turn_core::{HoldSource, QueueEdit, TurnCore, TurnEffect, TurnEvent};
 use runstav::methods::agents::SessionStatus;
 use runstav::methods::matrix::Role;
 
@@ -119,7 +119,7 @@ pub(crate) fn untracked_only(diff: &str, tracked: &[String]) -> String {
     out
 }
 
-/// The user takes the wheel: the turn running is paused after its tool call (`Stop` with `after_tool`) and no turn
+/// The user takes the wheel: the turn running is paused after its tool call (`PauseAfterTool`) and no turn
 /// starts until the give.  Refused when the session has exited.
 pub(crate) fn take(
     w: &mut Wheel,
@@ -128,7 +128,9 @@ pub(crate) fn take(
     if *w != Wheel::Free {
         return Ok((Taken::Already, Vec::new()));
     }
-    let fx = core.step(TurnEvent::Stop { after_tool: true });
+    let fx = core.step(TurnEvent::PauseAfterTool {
+        source: HoldSource::Wheel,
+    });
     if fx.contains(&TurnEffect::Exited) {
         return Err("the session has exited");
     }

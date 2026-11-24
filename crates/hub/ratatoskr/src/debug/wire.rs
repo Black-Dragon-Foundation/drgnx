@@ -103,7 +103,7 @@ impl Hub {
     }
 
     pub(super) fn is_trusted(&self, root: &str) -> bool {
-        self.trusted.lock().expect("debug trust").contains(root)
+        saman::lock(&self.trusted).contains(root)
     }
 
     /// The hub is stopping: every session stops (children first).
@@ -114,18 +114,18 @@ impl Hub {
     }
 }
 
-fn err(message: impl Into<String>) -> Error {
+fn err(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
 
-fn bad(path: &str, message: impl Into<String>) -> Error {
+fn bad(path: &str, message: impl ToString) -> Error {
     Error {
         code: ErrorCode::InvalidParams,
-        message: message.into(),
+        message: message.to_string(),
         path: Some(path.into()),
     }
 }
@@ -147,7 +147,7 @@ fn read_launch(root: &str) -> (Option<LaunchFile>, Option<DebugFileError>) {
                 }),
             );
         }
-        Ok(_) => match std::fs::read_to_string(&path) {
+        Ok(_) => match crate::fsio::read_to_string(&path) {
             Ok(t) => t,
             Err(e) => {
                 return (
@@ -295,13 +295,7 @@ async fn configs(front: &Front, p: DebugConfigs) -> Result<DebugConfigList, Erro
             ));
         }
     }
-    let last = front
-        .debug
-        .last
-        .lock()
-        .expect("debug last")
-        .get(&p.root)
-        .cloned();
+    let last = saman::lock(&front.debug.last).get(&p.root).cloned();
     Ok(DebugConfigList {
         configs: out,
         last,
@@ -379,7 +373,10 @@ pub(super) fn vars(front: &Front, p: &DebugStart) -> Vars {
         .into_iter()
         .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
         .collect();
-    let home = env.get("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = env
+        .get(stig::HOME_VAR)
+        .map(PathBuf::from)
+        .unwrap_or_default();
     let config = launch::CONFIG_NAMES
         .iter()
         .filter_map(|(_, d)| {
@@ -397,10 +394,12 @@ pub(super) fn vars(front: &Front, p: &DebugStart) -> Vars {
         selection: p.selection.clone(),
         home,
         exec_path: std::env::current_exe().unwrap_or_default(),
-        default_build_task: std::fs::read_to_string(Path::new(&p.root).join(".vscode/tasks.json"))
-            .ok()
-            .and_then(|t| super::tasks::parse(&t).ok())
-            .and_then(|t| super::tasks::default_build_task(&t)),
+        default_build_task: crate::fsio::read_to_string(
+            Path::new(&p.root).join(".vscode/tasks.json"),
+        )
+        .ok()
+        .and_then(|t| super::tasks::parse(&t).ok())
+        .and_then(|t| super::tasks::default_build_task(&t)),
         env,
         config,
     }
@@ -417,18 +416,20 @@ fn launcher(
     file: Option<&str>,
     config: &Value,
     adapter: &Adapter,
-) -> Result<Arc<dyn Launcher>, String> {
+) -> villa::Result<Arc<dyn Launcher>> {
     if let Some(addr) = launch::debug_server(config)? {
         return Ok(Arc::new(Server { addr }));
     }
     let env_os = front.shell_env.vars_os();
     let env = adapter_env(front);
-    let found = adapters::find(adapter, &env).ok_or_else(|| {
-        format!(
-            "{} is not installed: install it with Debug: Install Adapter, or put it on PATH",
-            adapter.name
-        )
-    })?;
+    let found = adapters::find(adapter, &env)
+        .ok_or_else(|| {
+            format!(
+                "{} is not installed: install it with Debug: Install Adapter, or put it on PATH",
+                adapter.name
+            )
+        })
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if let Some(lsp) = adapter.start.as_ref().and_then(|s| s.lsp_command.clone()) {
         let base = runstav::paths::data_dir(&front.shell_env.paths_env()).join("debug-lsp");
         return Ok(Arc::new(super::lsp_command::LspLauncher::new(
@@ -442,7 +443,10 @@ fn launcher(
     }
     let tcp = adapter.start.as_ref().is_some_and(|s| s.stdio.is_none());
     let port = if tcp {
-        Some(adapters::free_port().map_err(|e| format!("no free port: {e}"))?)
+        Some(
+            adapters::free_port()
+                .map_err(|e| villa::Error::invalid(format!("no free port: {e}")))?,
+        )
     } else {
         None
     };
@@ -548,12 +552,7 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
             }
         });
     }
-    front
-        .debug
-        .last
-        .lock()
-        .expect("debug last")
-        .insert(p.root, p.config);
+    saman::lock(&front.debug.last).insert(p.root, p.config);
     Ok(DebugStarted {
         session: Some(id),
         ..DebugStarted::default()
@@ -625,14 +624,16 @@ async fn start_compound(
             }) => ids.push(id),
             other => {
                 for id in &ids {
-                    let _ = d
-                        .control(
+                    crate::soft::done(
+                        d.control(
                             id,
                             Op::Stop {
                                 kill_debuggee: None,
                             },
                         )
-                        .await;
+                        .await,
+                        "wire",
+                    );
                 }
                 return match other {
                     Err(e) => Err(e),
@@ -654,31 +655,28 @@ async fn start_compound(
                 let (d, id, tx) = (d.clone(), id.clone(), tx.clone());
                 crate::clock::spawn("debug:compound-member", async move {
                     d.wait_end(&id).await;
-                    let _ = tx.send(()).await;
+                    crate::soft::done(tx.send(()).await, "tx send");
                 });
             }
             drop(tx);
             // the first to end stops the rest
             if rx.recv().await.is_some() {
                 for id in &ids {
-                    let _ = d
-                        .control(
+                    crate::soft::done(
+                        d.control(
                             id,
                             Op::Stop {
                                 kill_debuggee: None,
                             },
                         )
-                        .await;
+                        .await,
+                        "wire",
+                    );
                 }
             }
         });
     }
-    front
-        .debug
-        .last
-        .lock()
-        .expect("debug last")
-        .insert(p.root.clone(), p.config.clone());
+    saman::lock(&front.debug.last).insert(p.root.clone(), p.config.clone());
     Ok(DebugStarted {
         session: ids.first().cloned(),
         sessions: ids,
@@ -743,30 +741,22 @@ async fn select(front: &Front, p: DebugSelect) -> Result<bool, Error> {
 
 async fn trust(front: &Front, p: DebugTrust) -> Result<bool, Error> {
     if p.trusted {
-        front
-            .debug
-            .trusted
-            .lock()
-            .expect("debug trust")
-            .insert(p.root);
+        saman::lock(&front.debug.trusted).insert(p.root);
         return Ok(true);
     }
-    front
-        .debug
-        .trusted
-        .lock()
-        .expect("debug trust")
-        .remove(&p.root);
+    saman::lock(&front.debug.trusted).remove(&p.root);
     let d = front.debug.debug(front);
     for id in d.in_root(&p.root) {
-        let _ = d
-            .control(
+        crate::soft::done(
+            d.control(
                 &id,
                 Op::Stop {
                     kill_debuggee: None,
                 },
             )
-            .await;
+            .await,
+            "wire",
+        );
     }
     Ok(true)
 }
@@ -973,7 +963,7 @@ async fn disassemble(front: &Front, p: DebugDisassemble) -> Result<DebugDisassem
 /// Line LINE (1-based) of file PATH, read off the hub's workers; none when it cannot be read.
 async fn line_text(path: String, line: u32) -> Option<String> {
     crate::clock::blocking(move || {
-        let text = std::fs::read_to_string(&path).ok()?;
+        let text = crate::fsio::read_to_string(&path).ok()?;
         text.lines()
             .nth(line.saturating_sub(1) as usize)
             .map(str::to_owned)
@@ -1190,7 +1180,7 @@ pub async fn serve(
 }
 
 /// A TCP connection to ADDR, waiting up to [`LISTEN_WITHIN`] for the adapter to listen.
-pub(super) async fn connect_tcp(addr: SocketAddr) -> Result<tokio::net::TcpStream, String> {
+pub(super) async fn connect_tcp(addr: SocketAddr) -> villa::Result<tokio::net::TcpStream> {
     connect_tcp_within(addr, LISTEN_WITHIN).await
 }
 
@@ -1198,13 +1188,15 @@ pub(super) async fn connect_tcp(addr: SocketAddr) -> Result<tokio::net::TcpStrea
 async fn connect_tcp_within(
     addr: SocketAddr,
     within: Duration,
-) -> Result<tokio::net::TcpStream, String> {
+) -> villa::Result<tokio::net::TcpStream> {
     let deadline = crate::clock::now() + within;
     loop {
         match tokio::net::TcpStream::connect(addr).await {
             Ok(s) => return Ok(s),
             Err(e) if crate::clock::now() >= deadline => {
-                return Err(format!("the adapter did not listen on {addr}: {e}"));
+                return Err(villa::Error::invalid(format!(
+                    "the adapter did not listen on {addr}: {e}"
+                )));
             }
             Err(_) => crate::clock::sleep(Duration::from_millis(50)).await,
         }
@@ -1230,9 +1222,13 @@ pub(super) struct Spawned {
 }
 
 impl Launcher for Spawned {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
-            let (program, args) = self.argv.split_first().ok_or("an empty command line")?;
+            let (program, args) = self
+                .argv
+                .split_first()
+                .ok_or("an empty command line")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let mut child = draugr::spawn(draugr::Spec {
                 program: PathBuf::from(program),
                 args: args.iter().map(OsString::from).collect(),
@@ -1243,7 +1239,8 @@ impl Launcher for Spawned {
                 new_session: false,
             })
             .await
-            .map_err(|e| format!("{program}: {e}"))?;
+            .map_err(|e| format!("{program}: {e}"))
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
             if let Some(port) = self.port {
                 // the hub freed the port for the adapter, so another process could have taken it: connected only once
                 // the listener is the adapter's (its process group), never a stranger's
@@ -1255,13 +1252,13 @@ impl Launcher for Spawned {
                     Ok(s) => Ok(over_tcp(s, Box::new(child))),
                     Err(e) => {
                         super::session::Proc::signal(&mut child, super::session::Sig::Kill);
-                        let _ = child.wait().await;
+                        crate::soft::done(child.wait().await, "wire");
                         Err(e)
                     }
                 };
             }
             let (Some(stdin), Some(stdout)) = (child.take_stdin(), child.take_stdout()) else {
-                return Err(format!("{program}: no stdio"));
+                return Err(villa::Error::unavailable(format!("{program}: no stdio")));
             };
             let (client, incoming) = vor::Client::new(stdout, stdin);
             Ok(Connected {
@@ -1273,7 +1270,7 @@ impl Launcher for Spawned {
     }
 
     /// A TCP adapter's child sessions are second connections to its port.
-    fn child(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn child(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
             match self.port {
                 Some(port) => Ok(over_tcp(
@@ -1292,7 +1289,7 @@ pub(super) struct Server {
 }
 
 impl Launcher for Server {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move { Ok(over_tcp(connect_tcp(self.addr).await?, Box::new(NoProc))) })
     }
 }
@@ -1310,7 +1307,7 @@ impl Terminals for TermDoor {
         cwd: String,
         args: Vec<String>,
         env: Vec<(String, String)>,
-    ) -> BoxFut<'_, Result<Opened, String>> {
+    ) -> BoxFut<'_, villa::Result<Opened>> {
         Box::pin(async move {
             let mut all: Vec<(String, String)> = self
                 .base
@@ -1389,7 +1386,7 @@ async fn run_tasks(
     conn: u64,
     tab: bool,
     steps: &[super::tasks::Step],
-) -> Result<Vec<super::tasks::Watch>, String> {
+) -> villa::Result<Vec<super::tasks::Watch>> {
     let env = front.shell_env.vars_os();
     let mut watches = vec![];
     for chunk in steps.chunk_by(|a, b| a.background.is_some() == b.background.is_some()) {

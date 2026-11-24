@@ -36,11 +36,7 @@ impl WaylandShell {
             Some("") => return Err(ShellError::Arg),
             Some(t) => manager.activate(t.to_owned(), &surface),
             None => {
-                let serial = self
-                    .shared
-                    .serials
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                let serial = saman::lock(&self.shared.serials)
                     .selection_serial()
                     .ok_or(ShellError::State)?
                     .as_raw();
@@ -85,11 +81,7 @@ impl WaylandShell {
         let manager = m.activation.as_ref().ok_or(ShellError::Unsupported)?;
         let surface = m.surfaces.get(&id).ok_or(ShellError::State)?;
         let seat = m.seat.as_ref().ok_or(ShellError::State)?;
-        let serial = self
-            .shared
-            .serials
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        let serial = saman::lock(&self.shared.serials)
             .selection_serial()
             .ok_or(ShellError::State)?
             .as_raw();
@@ -143,7 +135,7 @@ impl Dispatch<XdgActivationTokenV1, u64> for MainState {
             request.destroy();
             // this runs from `next_event`'s dispatch, which does not flush
             if let Some(shared) = &state.shared {
-                let _ = shared.host_flush(conn);
+                let _outcome_not_needed = shared.host_flush(conn);
             }
         }
     }

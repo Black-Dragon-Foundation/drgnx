@@ -213,7 +213,7 @@ pub(crate) async fn worker(
     };
     let note = handover(front, job, task, tr).await;
     runs.set_busy(tid, Some("starting"));
-    let _ = front.core.agents.kill(&snap.id).await;
+    crate::soft::done(front.core.agents.kill(&snap.id).await, "fallback");
     runs.session_finished(front, &snap.id);
     let started = match set_status(front, tid, "ready", None).await {
         Ok(()) => tick::start(front, job, task, Some(&note), Some(&to)).await,
@@ -318,21 +318,24 @@ pub async fn resume(front: &Front, caller: &Caller, p: WithLimits) -> Result<Job
             && front.core.budgets.holder_of_session(&s.id).is_none()
             && let Ok(sid) = Id::new(s.id.clone())
         {
-            let _ = front
-                .core
-                .agents
-                .do_op(
-                    caller,
-                    DoParams {
-                        id: sid,
-                        op: AgentOp::DeliverQueue,
-                        n: None,
-                        text: None,
-                        item: None,
-                        reject: None,
-                    },
-                )
-                .await;
+            crate::soft::done(
+                front
+                    .core
+                    .agents
+                    .do_op(
+                        caller,
+                        DoParams {
+                            id: sid,
+                            op: AgentOp::DeliverQueue,
+                            n: None,
+                            text: None,
+                            item: None,
+                            reject: None,
+                        },
+                    )
+                    .await,
+                "fallback",
+            );
         }
     }
     front.core.runs.wake();

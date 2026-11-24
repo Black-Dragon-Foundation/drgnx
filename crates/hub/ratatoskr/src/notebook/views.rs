@@ -538,21 +538,21 @@ pub struct NbViews {
 
 impl NbViews {
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().expect("notebook views")
+        saman::lock(&self.state)
     }
 
     /// The notebooks and the stage the views read and write (once; the first wins).
     pub fn attach(&self, nb: &Arc<Notebooks>, front: Option<Weak<Front>>) {
-        let _ = self.nb.set(Arc::downgrade(nb));
+        crate::soft::done(self.nb.set(Arc::downgrade(nb)), "views");
         if let Some(f) = front {
-            let _ = self.stage.set(Arc::new(FrontStage(f)));
+            crate::soft::done(self.stage.set(Arc::new(FrontStage(f))), "views");
         }
     }
 
     /// [`NbViews::attach`] with a stage of the caller's.
     pub fn attach_stage(&self, nb: &Arc<Notebooks>, stage: Arc<dyn Stage>) {
-        let _ = self.nb.set(Arc::downgrade(nb));
-        let _ = self.stage.set(stage);
+        crate::soft::done(self.nb.set(Arc::downgrade(nb)), "views");
+        crate::soft::done(self.stage.set(stage), "views");
     }
 
     /// The editor on CONN wants a view of KIND of notebook ID (which it owns; CELL for a full output): the view's id.
@@ -562,7 +562,7 @@ impl NbViews {
         id: &str,
         kind: NotebookViewKind,
         cell: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> villa::Result<String> {
         let mut s = self.lock();
         let w = s.watch.entry((conn, id.to_owned())).or_default();
         match kind {
@@ -575,7 +575,8 @@ impl NbViews {
                 Ok(log_view(id))
             }
             NotebookViewKind::Output => {
-                let cell = cell.ok_or("a full output names its cell")?;
+                let cell =
+                    cell.ok_or_else(|| villa::Error::invalid("a full output names its cell"))?;
                 let n = match w.outputs.iter().position(|c| c.as_deref() == Some(cell)) {
                     Some(n) => n,
                     None => match w.outputs.iter().position(Option::is_none) {
@@ -585,9 +586,9 @@ impl NbViews {
                             w.outputs.len() - 1
                         }
                         None => {
-                            return Err(format!(
+                            return Err(villa::Error::invalid(format!(
                                 "{OUTPUT_VIEWS} outputs are shown: close one first"
-                            ));
+                            )));
                         }
                     },
                 };

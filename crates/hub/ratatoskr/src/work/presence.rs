@@ -26,7 +26,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 /// `presence-stale-after`: an entry older than this is history, unless it is its session's latest.
@@ -538,7 +538,7 @@ pub struct Live {
 pub type Listener = Arc<dyn Fn(&[RepoPath]) + Send + Sync>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }
 
 fn wire(e: &Entry) -> PresenceEntry {
@@ -588,9 +588,9 @@ fn top_and_main(file: &Path) -> Option<(PathBuf, PathBuf)> {
                 dotgit
             } else {
                 // a linked worktree (or a submodule): `gitdir: DIR`, whose `commondir` names the shared one
-                let text = std::fs::read_to_string(&dotgit).ok()?;
+                let text = crate::fsio::read_to_string(&dotgit).ok()?;
                 let gitdir = dir.join(text.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim());
-                match std::fs::read_to_string(gitdir.join("commondir")) {
+                match crate::fsio::read_to_string(gitdir.join("commondir")) {
                     Ok(c) => gitdir.join(c.trim()),
                     Err(_) => gitdir,
                 }
@@ -628,7 +628,7 @@ impl Live {
 
     /// L is told the files each change touches from now on (one listener; a second is ignored).
     pub fn on_change(&self, l: Listener) {
-        let _ = self.listener.set(l);
+        crate::soft::done(self.listener.set(l), "presence");
     }
 
     /// Who is in each of FILES now (at the hub's time), file by file.
@@ -916,9 +916,9 @@ pub async fn subscribe(
     p: PresenceSubscribe,
 ) -> Result<PresenceFiles, runstav::wire::Error> {
     let live = &f.core.presence;
-    let _ = live.editors.set(f.editors.clone());
+    crate::soft::done(live.editors.set(f.editors.clone()), "presence");
     if let Some(front) = f.core.views.front_weak() {
-        let _ = live.front.set(front);
+        crate::soft::done(live.front.set(front), "presence");
     }
     let at = crate::clock::wall_secs();
     // the names asked, by their true names (the model's keys): a root's files are named as the model has them, a

@@ -33,7 +33,7 @@ impl Fx {
         std::os::unix::fs::symlink(b.join("realbin"), b.join("linkbin")).unwrap();
         std::os::unix::fs::symlink(b.join("real-data"), b.join("data-link")).unwrap();
         for f in ["agent.sock", "bin/ratatoskr"] {
-            fs::write(b.join(f), "x").unwrap();
+            crate::fsio::write(b.join(f), "x").unwrap();
         }
         Fx { _dir: dir, b }
     }
@@ -58,9 +58,9 @@ impl Fx {
         );
         Env::new(
             &[
-                ("HOME", &self.s("home")),
-                ("XDG_RUNTIME_DIR", &self.s("run")),
-                ("XDG_DATA_HOME", &self.s("data-link")),
+                (stig::HOME_VAR, &self.s("home")),
+                (stig::SYSTEM_RUNTIME_VAR, &self.s("run")),
+                (stig::Xdg::Data.var(), &self.s("data-link")),
                 ("TMPDIR", &self.s("t")),
                 ("DRGNX_DIR", &self.s("src")),
                 ("SSH_AUTH_SOCK", &self.s("agent.sock")),
@@ -84,10 +84,6 @@ fn context_closes_data_state_config_and_sockets() {
         fx.p("home/.local/state/drgnx/hub"),
         fx.p("run/drgnx"),
         fx.p("t/drgnx-hub-1000"),
-        fx.p("t/emacs1000"),
-        // the true name: on macOS /tmp is a link to /private/tmp, and the context closes true names
-        std::fs::canonicalize("/tmp").unwrap().join("emacs1000"),
-        fx.p("run/emacs"),
         fx.p("src"),
         fx.p("bin"),
     ] {
@@ -170,7 +166,7 @@ fn an_agent_cannot_write_the_trusted_folders_file() {
     let ctx = context_for(&fx.env(), Some(&fx.p("bin/ratatoskr")));
     let file = fx.p("home/.local/state/drgnx/trusted-folders.eld");
     fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(&file, "(:version 2 :folders ())\n").unwrap();
+    crate::fsio::write(&file, "(:version 2 :folders ())\n").unwrap();
     let spec = |write: PathBuf, chdir: PathBuf| Spec {
         read: vec![],
         write: vec![write],
@@ -213,12 +209,12 @@ fn an_agent_session_dir_reaches_nothing_else_beside_the_socket() {
     let ctx = context_for(&env, Some(&fx.p("bin/ratatoskr")));
     let socket = paths::socket_path(&env);
     let session = paths::make_session_dir(&env, &socket, "0123456789ab").unwrap();
-    fs::write(session.join(paths::SESSION_HUB_SOCKET), "").unwrap();
+    crate::fsio::write(session.join(paths::SESSION_HUB_SOCKET), "").unwrap();
     let stem = socket.file_stem().unwrap().to_string_lossy().into_owned();
     let backend_dir = socket.parent().unwrap().join(format!("{stem}.d"));
     let backend = backend_dir.join("backend.sock");
     paths::private_dir(&backend_dir).unwrap();
-    fs::write(&backend, "").unwrap();
+    crate::fsio::write(&backend, "").unwrap();
     assert!(!session.join("backend.sock").exists());
     assert!(!backend.starts_with(&session) && !session.starts_with(&backend_dir));
     let spec = |run: Option<Bind>, read: Vec<PathBuf>, sockets: Vec<PathBuf>| Spec {
@@ -357,7 +353,7 @@ fn to_draugr_maps_every_field() {
 fn browser(fx: &Fx) -> BrowserShape {
     let program = fx.p("chrome/headless_shell");
     fs::create_dir_all(program.parent().unwrap()).unwrap();
-    fs::write(&program, "#!/bin/sh\n").unwrap();
+    crate::fsio::write(&program, "#!/bin/sh\n").unwrap();
     let found = crate::browser::resolve::Found {
         path: program,
         kind: crate::browser::resolve::Kind::HeadlessShell,
@@ -429,7 +425,7 @@ fn lock_files_are_written_bound_or_refused() {
     )
     .unwrap_or_else(|r| panic!("refused: {r}"));
     assert_eq!(
-        fs::read_to_string(run.join("lock/policy.toml")).unwrap(),
+        crate::fsio::read_to_string(run.join("lock/policy.toml")).unwrap(),
         "a = 1\n"
     );
     let bind = built
@@ -440,7 +436,10 @@ fn lock_files_are_written_bound_or_refused() {
         .expect("bound at its path");
     assert_eq!(bind.mode, Mode::Ro);
     assert!(bind.source.starts_with(&scratch), "{bind:?}");
-    assert_eq!(fs::read_to_string(&bind.source).unwrap(), "b = 2\n");
+    assert_eq!(
+        crate::fsio::read_to_string(&bind.source).unwrap(),
+        "b = 2\n"
+    );
     let refused = session_spec(
         &env,
         &ctx,
@@ -466,7 +465,7 @@ fn a_keyed_jobs_key_socket_is_allowed_by_its_path_alone() {
     fs::create_dir_all(fx.p("wt")).unwrap();
     let bin = fx.p("hub/drgnx-key");
     fs::create_dir_all(bin.parent().unwrap()).unwrap();
-    fs::write(&bin, "x").unwrap();
+    crate::fsio::write(&bin, "x").unwrap();
     let env = fx.env();
     let ctx = context_for(&env, None);
     let run = paths::session_dir(&env, &paths::socket_path(&env), "S4").unwrap();
@@ -605,7 +604,7 @@ fn the_locks_config_toml_in_a_hub_home_stays_read_only_inside_the_session() {
         .expect("bound at its path");
     assert_eq!(bind.mode, Mode::Ro);
     assert_eq!(
-        fs::read_to_string(&bind.source).unwrap(),
+        crate::fsio::read_to_string(&bind.source).unwrap(),
         "default_yolo = false\n"
     );
     // no write grant covers it, and the home's own state folders are the only writes there
@@ -694,7 +693,12 @@ fn browser_spec_shape() {
     );
     assert_eq!(get("DRGNX_BROWSER_CDP"), [url]);
     assert_eq!(get("KEPT"), ["1"]);
-    for gone in ["WAYLAND_DISPLAY", "DISPLAY", "XDG_RUNTIME_DIR", "SOCK"] {
+    for gone in [
+        "WAYLAND_DISPLAY",
+        "DISPLAY",
+        stig::SYSTEM_RUNTIME_VAR,
+        "SOCK",
+    ] {
         assert!(get(gone).is_empty(), "{gone} is in {:?}", spec.env);
     }
     assert!(spec.env.iter().all(|(_, v)| !v.contains("/run/user")));
@@ -775,8 +779,8 @@ fn a_one_shot_run_removes_only_the_stubs_it_made() {
     fs::create_dir_all(&scratch).unwrap();
     fs::create_dir_all(&wt).unwrap();
     // the session's launch pinned `.envrc`
-    fs::write(wt.join(".envrc"), "").unwrap();
-    fs::write(
+    crate::fsio::write(wt.join(".envrc"), "").unwrap();
+    crate::fsio::write(
         stubs_file(&scratch),
         format!("{}\n", wt.join(".envrc").display()),
     )
@@ -793,16 +797,16 @@ fn a_one_shot_run_removes_only_the_stubs_it_made() {
     )
     .unwrap();
     assert_eq!(made, [wt.join("mise.toml"), wt.join(".claude")]);
-    let mut list = fs::read_to_string(stubs_file(&scratch)).unwrap();
+    let mut list = crate::fsio::read_to_string(stubs_file(&scratch)).unwrap();
     for p in &made {
         list.push_str(&format!("{}\n", p.display()));
     }
-    fs::write(stubs_file(&scratch), list).unwrap();
+    crate::fsio::write(stubs_file(&scratch), list).unwrap();
     remove_stubs_since(&scratch, &wt, mark);
     assert!(!wt.join("mise.toml").exists() && !wt.join(".claude").exists());
     assert!(wt.join(".envrc").is_file(), "the session's own stub stays");
     assert_eq!(
-        fs::read_to_string(stubs_file(&scratch)).unwrap(),
+        crate::fsio::read_to_string(stubs_file(&scratch)).unwrap(),
         format!("{}\n", wt.join(".envrc").display())
     );
     // the session's end removes its own as before
@@ -818,7 +822,7 @@ fn a_job_removes_the_stubs_its_launch_made() {
     let fx = Fx::new();
     let wt = fx.p("wt");
     fs::create_dir_all(&wt).unwrap();
-    fs::write(wt.join(".envrc"), "export A=1\n").unwrap();
+    crate::fsio::write(wt.join(".envrc"), "export A=1\n").unwrap();
     let protected: Vec<PathBuf> = [".envrc", "mise.toml", ".claude", ".codex"]
         .iter()
         .map(|p| wt.join(p))
@@ -830,7 +834,7 @@ fn a_job_removes_the_stubs_its_launch_made() {
         made,
         [wt.join("mise.toml"), wt.join(".claude"), wt.join(".codex")]
     );
-    fs::write(wt.join(".codex").join("x"), "").unwrap();
+    crate::fsio::write(wt.join(".codex").join("x"), "").unwrap();
     remove_made(&list);
     assert!(!wt.join("mise.toml").exists() && !wt.join(".claude").exists());
     assert!(
@@ -838,7 +842,7 @@ fn a_job_removes_the_stubs_its_launch_made() {
         "a folder written meanwhile stays"
     );
     assert_eq!(
-        fs::read_to_string(wt.join(".envrc")).unwrap(),
+        crate::fsio::read_to_string(wt.join(".envrc")).unwrap(),
         "export A=1\n"
     );
     assert!(!list.exists());
@@ -850,39 +854,42 @@ fn a_job_removes_the_stubs_its_launch_made() {
 // GL-T12-4: `run_probe` reads the helper's status line without holding the runtime's thread. On a runtime of one
 // thread, a task that wakes only when the child signals (after the read has begun) writes the line the read waits
 // for. With the read on the thread itself the task never runs and the read times out.
-#[tokio::test(flavor = "current_thread")]
-async fn run_probe_reads_the_status_without_holding_the_runtime_thread() {
-    use std::io::Write;
-    use std::os::fd::OwnedFd;
-    let (status_r, mut status_w) = std::io::pipe().unwrap();
-    let (go_r, go_w) = std::io::pipe().unwrap();
-    let prepared = gleipnir::backend::Prepared {
-        invocation: gleipnir::backend::Invocation {
-            program: "/bin/sh".into(),
-            args: vec!["-c".into(), "sleep 0.3; echo go >&5; exec sleep 30".into()],
-            env: vec![("PATH".into(), "/usr/bin:/bin".into())],
-            cwd: None,
-            fds: vec![(OwnedFd::from(go_w), 5)],
-            new_session: false,
-        },
-        status: Some(OwnedFd::from(status_r)),
-        layers: None,
-        browser: false,
-    };
-    let task = tokio::spawn(async move {
-        let go =
-            tokio::net::unix::pipe::Receiver::from_file(std::fs::File::from(OwnedFd::from(go_r)))
-                .unwrap();
-        go.readable().await.unwrap();
-        status_w
-            .write_all(b"{\"ok\":false,\"error\":\"from the task\"}\n")
+#[test]
+fn run_probe_reads_the_status_without_holding_the_runtime_thread() {
+    saman::block_on_current(async move {
+        use std::io::Write;
+        use std::os::fd::OwnedFd;
+        let (status_r, mut status_w) = std::io::pipe().unwrap();
+        let (go_r, go_w) = std::io::pipe().unwrap();
+        let prepared = gleipnir::backend::Prepared {
+            invocation: gleipnir::backend::Invocation {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), "sleep 0.3; echo go >&5; exec sleep 30".into()],
+                env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+                cwd: None,
+                fds: vec![(OwnedFd::from(go_w), 5)],
+                new_session: false,
+            },
+            status: Some(OwnedFd::from(status_r)),
+            layers: None,
+            browser: false,
+        };
+        let task = crate::clock::spawn_untracked(module_path!(), async move {
+            let go = tokio::net::unix::pipe::Receiver::from_file(std::fs::File::from(
+                OwnedFd::from(go_r),
+            ))
             .unwrap();
-        status_w
-    });
-    let ran = run_probe(prepared, Duration::from_millis(2500)).await;
-    let _w = task.await.unwrap();
-    let why = ran.layers.expect_err("the line says ok false").message;
-    assert!(why.contains("from the task"), "{why}");
+            go.readable().await.unwrap();
+            status_w
+                .write_all(b"{\"ok\":false,\"error\":\"from the task\"}\n")
+                .unwrap();
+            status_w
+        });
+        let ran = run_probe(prepared, Duration::from_millis(2500)).await;
+        let _w = task.await.unwrap();
+        let why = ran.layers.expect_err("the line says ok false").message;
+        assert!(why.contains("from the task"), "{why}");
+    })
 }
 
 // GL-T15-4: a refused start's `exit` in the result file is the helper's setup failure, whichever of the helper and
@@ -914,11 +921,11 @@ fn past_fixture(fx: &Fx, sid: &str) -> (PathBuf, PathBuf, SessionShape, PathBuf)
     let dir = fx.p("home/.claude");
     let project = crate::agents::lock::claude_project(&dir, &fx.p("home/proj")).unwrap();
     fs::create_dir_all(project.join("A/subagents")).unwrap();
-    fs::write(project.join("A.jsonl"), "{\"a\":1}\n").unwrap();
-    fs::write(project.join("B.jsonl"), "{\"b\":1}\n").unwrap();
-    fs::write(project.join("A/subagents/agent-1.jsonl"), "{\"s\":1}\n").unwrap();
+    crate::fsio::write(project.join("A.jsonl"), "{\"a\":1}\n").unwrap();
+    crate::fsio::write(project.join("B.jsonl"), "{\"b\":1}\n").unwrap();
+    crate::fsio::write(project.join("A/subagents/agent-1.jsonl"), "{\"s\":1}\n").unwrap();
     fs::create_dir_all(dir.join("projects/-other")).unwrap();
-    fs::write(dir.join("projects/-other/C.jsonl"), "{\"c\":1}\n").unwrap();
+    crate::fsio::write(dir.join("projects/-other/C.jsonl"), "{\"c\":1}\n").unwrap();
     let shape = SessionShape {
         sid: sid.into(),
         cwd: fx.p("home/proj"),
@@ -991,11 +998,11 @@ fn a_resume_on_a_copy_writes_only_the_jails_own_folder() {
         login_grants(&dir, &shape, &scratch, Target::LinuxBwrap).unwrap_or_else(|r| panic!("{r}"));
     let own = scratch.join("claude-project");
     assert_eq!(
-        fs::read_to_string(own.join("A.jsonl")).unwrap(),
+        crate::fsio::read_to_string(own.join("A.jsonl")).unwrap(),
         "{\"a\":1}\n"
     );
     assert_eq!(
-        fs::read_to_string(own.join("A/subagents/agent-1.jsonl")).unwrap(),
+        crate::fsio::read_to_string(own.join("A/subagents/agent-1.jsonl")).unwrap(),
         "{\"s\":1}\n"
     );
     assert!(!own.join("B.jsonl").exists());
@@ -1055,7 +1062,7 @@ fn a_link_or_a_file_outside_the_clis_folder_is_never_granted() {
         runstav::methods::past::PastRoute::Original,
     );
     assert!(login_grants(&dir, &shape, &scratch, Target::LinuxBwrap).is_err());
-    fs::write(fx.p("home/proj/x.jsonl"), "{}\n").unwrap();
+    crate::fsio::write(fx.p("home/proj/x.jsonl"), "{}\n").unwrap();
     grant_past(
         "P3",
         &dir,
@@ -1142,7 +1149,7 @@ exit $fail"#,
         p = p,
         d = dir.to_str().unwrap()
     );
-    let out = std::process::Command::new("bwrap")
+    let out = crate::proc::Command::new("bwrap")
         .args(&args)
         .args(["sh", "-c", &probe])
         .output()
@@ -1155,15 +1162,15 @@ exit $fail"#,
     );
     // outside: the one file changed, nothing else of the real folder
     assert_eq!(
-        fs::read_to_string(project.join("A.jsonl")).unwrap(),
+        crate::fsio::read_to_string(project.join("A.jsonl")).unwrap(),
         "{\"a\":1}\n{\"more\":1}\n"
     );
     assert_eq!(
-        fs::read_to_string(project.join("B.jsonl")).unwrap(),
+        crate::fsio::read_to_string(project.join("B.jsonl")).unwrap(),
         "{\"b\":1}\n"
     );
     assert_eq!(
-        fs::read_to_string(project.join("A/subagents/agent-1.jsonl")).unwrap(),
+        crate::fsio::read_to_string(project.join("A/subagents/agent-1.jsonl")).unwrap(),
         "{\"s\":1}\n"
     );
     let mut names: Vec<_> = fs::read_dir(&project)

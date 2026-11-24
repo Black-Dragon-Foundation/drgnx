@@ -12,7 +12,7 @@ use std::sync::Mutex;
 static EMACS: Mutex<()> = Mutex::new(());
 
 fn lock() -> std::sync::MutexGuard<'static, ()> {
-    EMACS.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(&EMACS)
 }
 
 fn ok(op: i32, args: &[SjaArg]) -> Ans {

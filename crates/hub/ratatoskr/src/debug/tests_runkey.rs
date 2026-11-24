@@ -28,7 +28,7 @@ fn path(p: &str) -> OwnedObjectPath {
 }
 
 fn note(s: &Shared, call: &str) {
-    s.lock().unwrap().calls.push(call.to_owned());
+    saman::lock(s).calls.push(call.to_owned());
 }
 
 struct Service(Shared);
@@ -37,7 +37,7 @@ struct Service(Shared);
 impl Service {
     fn read_alias(&self, _name: &str) -> OwnedObjectPath {
         note(&self.0, "ReadAlias");
-        path(if self.0.lock().unwrap().no_default {
+        path(if saman::lock(&self.0).no_default {
             "/"
         } else {
             COLLECTION
@@ -71,11 +71,11 @@ struct Collection(Shared);
 impl Collection {
     #[zbus(property)]
     fn locked(&self) -> bool {
-        self.0.lock().unwrap().locked
+        saman::lock(&self.0).locked
     }
     fn search_items(&self, _attrs: HashMap<String, String>) -> Vec<OwnedObjectPath> {
         note(&self.0, "SearchItems");
-        if self.0.lock().unwrap().secret.is_some() {
+        if saman::lock(&self.0).secret.is_some() {
             vec![path(ITEM)]
         } else {
             vec![]
@@ -88,7 +88,7 @@ impl Collection {
         _replace: bool,
     ) -> (OwnedObjectPath, OwnedObjectPath) {
         note(&self.0, "CreateItem");
-        let mut s = self.0.lock().unwrap();
+        let mut s = saman::lock(&self.0);
         if s.create_prompts {
             return (path("/"), path(PROMPT));
         }
@@ -107,7 +107,7 @@ impl Item {
     }
     fn get_secret(&self, _session: OwnedObjectPath) -> (OwnedObjectPath, Vec<u8>, Vec<u8>, String) {
         note(&self.0, "GetSecret");
-        let v = self.0.lock().unwrap().secret.clone().unwrap_or_default();
+        let v = saman::lock(&self.0).secret.clone().unwrap_or_default();
         (path(SESSION), vec![], v, "application/octet-stream".into())
     }
 }
@@ -159,8 +159,7 @@ fn shared(f: impl FnOnce(&mut State)) -> Shared {
 }
 
 fn asked(s: &Shared) -> Vec<String> {
-    s.lock()
-        .unwrap()
+    saman::lock(s)
         .calls
         .iter()
         .filter(|c| matches!(c.as_str(), "Unlock" | "CreateCollection" | "Prompt"))
@@ -168,53 +167,61 @@ fn asked(s: &Shared) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test]
-async fn no_default_collection_is_missing_and_nothing_is_created_or_prompted() {
-    let s = shared(|s| s.no_default = true);
-    let conn = fake(&s).await;
-    let r = key_on(&conn, true).await;
-    assert!(
-        matches!(&r, Err(Unavailable::Missing(w)) if w.contains("no default collection")),
-        "{:?}",
-        r.as_ref().err()
-    );
-    assert_eq!(asked(&s), Vec::<String>::new());
-    assert!(!s.lock().unwrap().calls.contains(&"CreateItem".into()));
+#[test]
+fn no_default_collection_is_missing_and_nothing_is_created_or_prompted() {
+    saman::block_on_current(async move {
+        let s = shared(|s| s.no_default = true);
+        let conn = fake(&s).await;
+        let r = key_on(&conn, true).await;
+        assert!(
+            matches!(&r, Err(Unavailable::Missing(w)) if w.contains("no default collection")),
+            "{:?}",
+            r.as_ref().err()
+        );
+        assert_eq!(asked(&s), Vec::<String>::new());
+        assert!(!saman::lock(&s).calls.contains(&"CreateItem".into()));
+    })
 }
 
-#[tokio::test]
-async fn a_locked_collection_is_never_unlocked_or_prompted() {
-    let s = shared(|s| s.locked = true);
-    let conn = fake(&s).await;
-    assert_eq!(key_on(&conn, true).await.err(), Some(Unavailable::Locked));
-    assert_eq!(asked(&s), Vec::<String>::new());
-    assert!(!s.lock().unwrap().calls.contains(&"CreateItem".into()));
+#[test]
+fn a_locked_collection_is_never_unlocked_or_prompted() {
+    saman::block_on_current(async move {
+        let s = shared(|s| s.locked = true);
+        let conn = fake(&s).await;
+        assert_eq!(key_on(&conn, true).await.err(), Some(Unavailable::Locked));
+        assert_eq!(asked(&s), Vec::<String>::new());
+        assert!(!saman::lock(&s).calls.contains(&"CreateItem".into()));
+    })
 }
 
-#[tokio::test]
-async fn the_key_is_made_in_an_unlocked_collection_and_reads_back() {
-    let s = shared(|_| {});
-    let conn = fake(&s).await;
-    // reading only: none yet, none made
-    assert!(matches!(
-        key_on(&conn, false).await,
-        Err(Unavailable::Missing(_))
-    ));
-    assert!(!s.lock().unwrap().calls.contains(&"CreateItem".into()));
-    let made = key_on(&conn, true).await.unwrap();
-    let read = key_on(&conn, false).await.unwrap();
-    assert_eq!(*made, *read);
-    assert_eq!(asked(&s), Vec::<String>::new());
-    assert!(s.lock().unwrap().calls.contains(&"Close".into()));
+#[test]
+fn the_key_is_made_in_an_unlocked_collection_and_reads_back() {
+    saman::block_on_current(async move {
+        let s = shared(|_| {});
+        let conn = fake(&s).await;
+        // reading only: none yet, none made
+        assert!(matches!(
+            key_on(&conn, false).await,
+            Err(Unavailable::Missing(_))
+        ));
+        assert!(!saman::lock(&s).calls.contains(&"CreateItem".into()));
+        let made = key_on(&conn, true).await.unwrap();
+        let read = key_on(&conn, false).await.unwrap();
+        assert_eq!(*made, *read);
+        assert_eq!(asked(&s), Vec::<String>::new());
+        assert!(saman::lock(&s).calls.contains(&"Close".into()));
+    })
 }
 
-#[tokio::test]
-async fn a_prompt_handed_back_is_dismissed_never_shown() {
-    let s = shared(|s| s.create_prompts = true);
-    let conn = fake(&s).await;
-    assert_eq!(key_on(&conn, true).await.err(), Some(Unavailable::Locked));
-    assert_eq!(asked(&s), Vec::<String>::new());
-    assert!(s.lock().unwrap().calls.contains(&"Dismiss".into()));
+#[test]
+fn a_prompt_handed_back_is_dismissed_never_shown() {
+    saman::block_on_current(async move {
+        let s = shared(|s| s.create_prompts = true);
+        let conn = fake(&s).await;
+        assert_eq!(key_on(&conn, true).await.err(), Some(Unavailable::Locked));
+        assert_eq!(asked(&s), Vec::<String>::new());
+        assert!(saman::lock(&s).calls.contains(&"Dismiss".into()));
+    })
 }
 
 /// A locked keychain with user interaction off answers errSecInteractionNotAllowed or errSecAuthFailed (macOS 27's

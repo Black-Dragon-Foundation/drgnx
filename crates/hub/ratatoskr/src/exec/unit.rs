@@ -64,7 +64,7 @@ const SCRIPT_TO_HUB: &str = r#"d=$1; shift; exec 2>&1; "$@"; c=$?; echo "$c" > "
 
 /// Whether a user systemd answers here: its runtime dir exists and `systemd-run` is on the PATH.
 pub fn systemd_user() -> bool {
-    let rt = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+    let rt = std::env::var_os(stig::SYSTEM_RUNTIME_VAR).map(PathBuf::from);
     rt.is_some_and(|d| d.join("systemd").is_dir()) && on_path("systemd-run")
 }
 
@@ -161,10 +161,10 @@ fn wrap_with(
     let mut env = inner.env;
     if unit.is_some() {
         for k in [
-            "XDG_RUNTIME_DIR",
+            stig::SYSTEM_RUNTIME_VAR,
             "DBUS_SESSION_BUS_ADDRESS",
             "PATH",
-            "HOME",
+            stig::HOME_VAR,
         ] {
             if !env.iter().any(|(n, _)| n == k)
                 && let Some(v) = shell.var_os(k)
@@ -219,7 +219,7 @@ pub fn session_scope(spec: Spec, sid: &str, memory: &str) -> Spec {
     args.push(spec.program.into());
     args.extend(spec.args);
     let mut env = spec.env;
-    for k in ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] {
+    for k in [stig::SYSTEM_RUNTIME_VAR, "DBUS_SESSION_BUS_ADDRESS"] {
         if !env.iter().any(|(n, _)| n == k)
             && let Some(v) = std::env::var_os(k)
         {
@@ -244,7 +244,7 @@ pub fn same_process(pid: i32, start_time: u64) -> bool {
 
 /// The exit code the wrapper wrote, if it got that far.
 pub fn read_exit(dir: &Path) -> Option<i32> {
-    std::fs::read_to_string(dir.join("exit"))
+    crate::fsio::read_to_string(dir.join("exit"))
         .ok()?
         .trim()
         .parse()
@@ -334,11 +334,9 @@ mod tests {
         );
         // the sandbox's own environment and fds, stdin as the session has it
         assert_eq!(s.env[0], ("A".into(), "1".into()));
-        assert!(
-            s.env.iter().all(|(k, _)| k == "A"
-                || k == "XDG_RUNTIME_DIR"
-                || k == "DBUS_SESSION_BUS_ADDRESS")
-        );
+        assert!(s.env.iter().all(|(k, _)| k == "A"
+            || k == stig::SYSTEM_RUNTIME_VAR
+            || k == "DBUS_SESSION_BUS_ADDRESS"));
         assert!(!s.stdin_null);
         assert_eq!(s.pass_fds.len(), 1);
         assert_eq!(s.pass_fds[0].target, 5);
@@ -348,7 +346,7 @@ mod tests {
     fn no_exit_file_is_no_exit() {
         let d = tempfile::tempdir().unwrap();
         assert_eq!(read_exit(d.path()), None);
-        std::fs::write(d.path().join("exit"), "3\n").unwrap();
+        crate::fsio::write(d.path().join("exit"), "3\n").unwrap();
         assert_eq!(read_exit(d.path()), Some(3));
     }
 }

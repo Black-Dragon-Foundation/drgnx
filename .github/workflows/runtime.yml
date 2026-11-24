@@ -42,39 +42,36 @@ concurrency:
   group: runtime-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
-# The cargo caches (docs/develop/ci.md, "What is cached"): one target entry per build job, through one action
-# (.github/actions/cargo-target). The key is the job, the toolchain (`rustc -V`), the hash of Cargo.lock and
-# .cargo/config.toml, and the commit (.github/ci/cache-key.sh); a run restores the newest entry of its job, toolchain
-# and lock, else of its toolchain, never another one's, and cargo rebuilds whatever is stale. Saved at the end of a job
-# whose build passed, after .github/ci/cargo-prune.sh dropped what every run rebuilds, and only by a push or a manual
-# run on main, ci/* or scratch/drgnx-mac-rounds (.github/ci/cache-policy.sh; the `cache-prune` job then deletes the
-# ref's superseded entries). A pull request and a fork never save: their entries (scoped to their merge refs, read by
-# no other run) pushed main's out of the repository's 10 GB (2026-11-06: 9.2 GB of PR 3's entries, none of main's
-# left). No incremental data: CI never reuses it. Each entry carries the commit it was built from
-# (target/.drgnx-built-from): after the restore, .github/ci/commit-times.sh gives each tracked file its last commit's
-# time and leaves what changed since then new, so cargo rebuilds only that (a checkout's files all carry its time); the
-# checkouts fetch the whole history for it (fetch-depth 0, no old file contents). `mt1` in the keys: the entries that
-# carry that commit. No per-unit compiler cache: one build per job leaves nothing for it to share, and it wrote one entry per unit.
+# The cargo caches (docs/develop/ci.md, "What is cached"): keyed by the job, the toolchain and the hash of Cargo.lock
+# and the manifests, restored from the newest entry of the same job and toolchain when the lock moved (cargo rebuilds
+# whatever is stale); saved at the end of a job whose build passed, after .github/ci/cargo-prune.sh dropped what every
+# run rebuilds. Saved only by main's runs (CACHE_SAVE), and only for `linux` (and the fuzz build the fuzz shards take):
+# the repository has 10 GB, and entries saved by pull requests (scoped to their merge refs, never read by another
+# one) pushed main's out (2026-11-06: 9.2 GB of PR 3's entries, none of main's left). A pull request restores main's;
+# the other jobs get their speed from sccache (.github/actions/sccache), which main writes and pull requests only read
+# (docs/develop/ci.md, "What is cached": the budget). ci/*
+# branches and a fork's pull requests only restore. No incremental data: CI never reuses it. Each entry carries the commit it was built from (target/.drgnx-built-from): after the
+# restore, .github/ci/commit-times.sh gives each tracked file its last commit's time and leaves what changed since
+# then new, so cargo rebuilds only that (a checkout's files all carry its time); the checkouts fetch the whole history
+# for it (fetch-depth 0, no old file contents). `mt1` in the keys: the entries that carry that commit.
 # Line tables only, not full debug info: backtraces keep their file and line, and the kept build (the local crates'
 # artifacts too) halves (the linux job's test build: 5.3 GB on disk, 1.1 GB compressed, against 2.6 GB and 0.6 GB),
-# so the entries stay well inside the repository's 10 GB.
+# so main's entries stay well inside the repository's 10 GB with room for a branch's.
 env:
   CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CACHE_SAVE: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
 jobs:
   # The Fedora 45 job's prebuilt container (`Test images`, images.yml: test/container/Containerfile.rust), by digest: a
   # job's container is named before its steps run, so this job looks it up, by the tag of this checkout's inputs
   # (test/container/image-tag.sh). ci.yml's `images` job built and pushed any missing tag before this workflow ran; the
   # output is empty when GHCR still has none (a fork's pull request), and the job then installs what the image holds
-  # itself. (The escape legs look their bubblewrap up in their own step.) The same lookup finds the prebuilt assets
-  # (`drgnx-assets`: the model files, the libghostty-vt and Zig tarballs, the macOS Nidhogg tarball, .github/ci/assets.sh)
-  # for the jobs that unpack them (the Fedora job, the live debug adapters and the macOS jobs): none of them downloads
-  # from Hugging Face or the tarballs' sites, whose transfers cancelled on every Mac job of PR 5's round 5.
+  # itself. (The escape legs look their bubblewrap up in their own step.)
   images:
     name: Prebuilt image (Fedora 45 job)
-    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ') || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -82,7 +79,6 @@ jobs:
       packages: read
     outputs:
       rust: ${{ steps.ref.outputs.rust }}
-      assets: ${{ steps.ref.outputs.assets }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,7 +87,6 @@ jobs:
           sparse-checkout: |
             .github/ci
             test/container
-            crates/hub/ghostty-vt-sys
       - id: ref
         env:
           TOKEN: ${{ github.token }}
@@ -99,8 +94,6 @@ jobs:
         run: |
           rust="$(bash .github/ci/ghcr.sh ref drgnx-test-rust "$(bash test/container/image-tag.sh test/container/Containerfile.rust)")"
           echo "rust=$rust" | tee -a "$GITHUB_OUTPUT"
-          assets="$(bash .github/ci/ghcr.sh ref drgnx-assets "$(bash .github/ci/assets.sh tag)")"
-          echo "assets=$assets" | tee -a "$GITHUB_OUTPUT"
 
   linux:
     name: fmt, clippy, tests, conformance, perf (Fedora 45)
@@ -137,6 +130,7 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
+      - uses: ./.github/actions/sccache
       - name: Tools (in the prebuilt image already)
         if: ${{ env.PREBUILT == '' }}
         working-directory: ${{ github.workspace }}
@@ -145,32 +139,65 @@ jobs:
         if: ${{ env.PREBUILT == '' }}
         working-directory: ${{ github.workspace }}
         run: bash test/container/zig.sh linux
-      # The prebuilt assets (`drgnx-assets`, by digest): the pinned model files the tests run the built-in model from
-      # (they fail without DRGNX_TEST_MODELS), beside the checkout, not in it (the tests that list a checkout would find
-      # them), and the libghostty-vt tarballs (build.rs never downloads). models.sh checks each file's sum and fetches
-      # only what is missing (a fork's run, with no GHCR token for the image)
-      - name: the prebuilt assets (models, libghostty-vt tarballs)
-        working-directory: ${{ github.workspace }}
-        env:
-          TOKEN: ${{ github.token }}
-          ACTOR: ${{ github.actor }}
-        run: bash .github/ci/assets.sh use "${{ needs.images.outputs.assets }}"
       - name: libghostty-vt's pinned tarballs (build.rs never downloads)
         working-directory: ${{ github.workspace }}
         run: bash crates/hub/ghostty-vt-sys/fetch.sh
+      - id: rv
+        run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
+      - id: registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: cargo-${{ runner.os }}-fedora45-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/*/Cargo.toml', 'app/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-fedora45-mt1-${{ steps.rv.outputs.v }}-
+      - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
+        working-directory: ${{ github.workspace }}
+        run: bash .github/ci/commit-times.sh target/.drgnx-built-from
+      - run: cargo fmt --check
+      - if: ${{ !cancelled() }}
+        run: cargo clippy --locked --workspace --all-targets --features ratatoskr/test-hooks,ferja/test-hooks -- -D warnings
+      # The standards table, the generated clippy configs, the scanner and the ownership check (docs/develop/standards/);
+      # it fails on a finding in the table or in a crate standards.toml marks clean
+      - name: the standards (cargo xtask standards)
+        if: ${{ !cancelled() }}
+        run: cargo xtask standards
+      # The extension API's version rule (docs/develop/standards/api-versioning.md): crates/ext/mal/drgnx.wit against the
+      # last tag's; it passes when no tag is fetched
+      - name: the extension API's version (cargo xtask wit-check)
+        if: ${{ !cancelled() }}
+        run: cargo xtask wit-check
+      # The pinned model files the tests run the built-in model from (they fail without DRGNX_TEST_MODELS), beside the
+      # checkout, not in it (the tests that list a checkout would find them): one cache for Linux and macOS, kept by
+      # the list's hash; models.sh checks each restored file's sum and fetches what is missing from Hugging Face at its
+      # pinned revision. A same-repository pull request saves it too (950 MB a fetch).
+      - id: models
+        if: ${{ !cancelled() }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ../test-models
+          key: models-${{ hashFiles('.github/ci/models.txt') }}
+          enableCrossOsArchive: true
       - name: the model files (DRGNX_TEST_MODELS)
         id: models-fetch
+        if: ${{ !cancelled() }}
         working-directory: ${{ github.workspace }}
         run: |
           bash .github/ci/models.sh ../test-models
           echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
-      - uses: ./.github/actions/cargo-target
+      - if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: fedora45
-          mode: restore
-      - run: cargo fmt --check
-      - if: ${{ !cancelled() }}
-        run: cargo clippy --locked --workspace --all-targets --features ratatoskr/test-hooks,ferja/test-hooks -- -D warnings
+          path: ../test-models
+          key: ${{ steps.models.outputs.cache-primary-key }}
+          enableCrossOsArchive: true
       # the plugin tests load WASM components built for wasm32-wasip2 (Fedora's packaged Rust has no wasip2 standard
       # library and cannot use an upstream one: wasm-target.sh installs the same rustc version with rustup-init, checked
       # by its SHA-256, for the fixtures alone and sets DRGNX_WASM_CARGO): built first, so a missing target or a broken
@@ -185,24 +212,13 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: ${{ github.workspace }}
         run: bash .github/ci/nextest.sh
-      # the test-hooks binary and the harness for the steps below, first: the pack grammars below are built with this
-      # hub (no second `cargo run` build of it)
-      # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM;
-      # + drgnx-key beside the hub, which a keyed job here runs in front of its command)
-      - id: build
-        if: ${{ !cancelled() }}
-        run: |
-          cargo build --locked -p ratatoskr -p domr -p gleipnir-escape --features ratatoskr/test-hooks
-          cargo build --locked -p sleipnir --no-default-features --bin drgnx-key
-      # the hub parses code with the pack-built grammars (language packs): built once by the pack job, with the hub the
-      # build above made (RATATOSKR, as the macOS jobs do), and handed to the tests as DRGNX_PACK_LOCK /
-      # DRGNX_PACK_GRAMMARS (test/packs/hub-grammars.sh)
+      # the hub parses code with the pack-built grammars (language packs): built once by the pack job and handed to the
+      # tests as DRGNX_PACK_LOCK / DRGNX_PACK_GRAMMARS (test/packs/hub-grammars.sh)
       - name: Pack grammars for the tests
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() }}
         working-directory: ${{ github.workspace }}
         run: |
-          [ -x target/debug/ratatoskr ] || { echo "::error::the build made no hub binary"; exit 1; }
-          line="$(RATATOSKR="$PWD/target/debug/ratatoskr" bash test/packs/hub-grammars.sh "$RUNNER_TEMP/hub-grammars" | grep '^export DRGNX_PACK_LOCK=')"
+          line="$(bash test/packs/hub-grammars.sh "$RUNNER_TEMP/hub-grammars" | grep '^export DRGNX_PACK_LOCK=')"
           eval "$line"
           echo "DRGNX_PACK_LOCK=$DRGNX_PACK_LOCK" >> "$GITHUB_ENV"
           echo "DRGNX_PACK_GRAMMARS=$DRGNX_PACK_GRAMMARS" >> "$GITHUB_ENV"
@@ -214,6 +230,19 @@ jobs:
         run: cargo nextest run --locked --no-fail-fast --retries 0 --workspace --features ratatoskr/test-hooks,ferja/test-hooks
       - if: ${{ !cancelled() }}
         run: cargo test --locked --no-fail-fast --workspace --doc --features ratatoskr/test-hooks,ferja/test-hooks
+      # The sentinel-HOME run (docs/develop/standards/test-harness.md): the clean crates' tests with HOME an empty
+      # read-only directory; it fails if anything appears there
+      - name: the sentinel-HOME run (cargo xtask test-sandbox)
+        if: ${{ !cancelled() }}
+        run: cargo xtask test-sandbox
+      # the test-hooks binary and the harness for the steps below
+      # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM;
+      # + drgnx-key beside the hub, which a keyed job here runs in front of its command)
+      - id: build
+        if: ${{ !cancelled() }}
+        run: |
+          cargo build --locked -p ratatoskr -p domr -p gleipnir-escape --features ratatoskr/test-hooks
+          cargo build --locked -p sleipnir --no-default-features --features std-owners --bin drgnx-key
       # gleipnir's test hooks (landlock_omit, abi_cap) must never be on in a build without --features (review M5).
       # The inverted form: the forward `cargo tree` does not show gleipnir's feature even when it is on (Task 0).
       # `shell: bash` adds pipefail (a failed `cargo tree` fails the step), and the tree must name gleipnir at all, so
@@ -295,13 +324,28 @@ jobs:
           path: perf-linux.json
           if-no-files-found: error
       # last, whatever the tests said: a red test keeps the dependencies the build made
-      - if: ${{ !cancelled() }}
-        uses: ./.github/actions/cargo-target
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        working-directory: ${{ github.workspace }}
+        run: |
+          bash .github/ci/cargo-prune.sh Cargo.toml target
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > target/.drgnx-built-from; fi
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: fedora45
-          mode: save
-          build-outcome: ${{ steps.build.outcome }}
-          status: ${{ job.status }}
+          path: target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: ${{ steps.registry.outputs.cache-primary-key }}
 
   msrv:
     name: MSRV 1.95 builds
@@ -315,13 +359,24 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
-      # the toolchain first: its `rustc -V` names the cache's key
-      - run: rustup toolchain install 1.95.0 --profile minimal
-      - uses: ./.github/actions/cargo-target
+      - uses: ./.github/actions/sccache
+      - id: registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: msrv195
-          mode: restore
-          toolchain: 1.95.0
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: cargo-${{ runner.os }}-msrv195-mt1-1.95.0-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/*/Cargo.toml', 'app/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-msrv195-mt1-1.95.0-
+      - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
+        run: bash .github/ci/commit-times.sh target/.drgnx-built-from
+      - run: rustup toolchain install 1.95.0 --profile minimal
       - name: Zig and libghostty-vt's pinned tarballs (the terminal engine's build)
         run: |
           sudo bash test/container/zig.sh linux
@@ -330,15 +385,24 @@ jobs:
         run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libwayland-dev libxkbcommon-dev libpixman-1-dev
       - id: build
         run: cargo +1.95.0 build --locked --manifest-path Cargo.toml
-      - if: ${{ !cancelled() }}
-        uses: ./.github/actions/cargo-target
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         env:
           RUSTUP_TOOLCHAIN: 1.95.0
+        run: |
+          bash .github/ci/cargo-prune.sh Cargo.toml target
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > target/.drgnx-built-from; fi
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: msrv195
-          mode: save
-          build-outcome: ${{ steps.build.outcome }}
-          status: ${{ job.status }}
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: ${{ steps.registry.outputs.cache-primary-key }}
 
   # The escape suite on the runner itself, no container: the full tier (bubblewrap with user namespaces) and, on the arm64
   # runner (free for public repositories), a real arm64 Linux run of the seccomp tests (GL-T4-2: the aarch64 syscall
@@ -379,6 +443,7 @@ jobs:
       # by digest), else built here (build.sh, the image's own recipe: checksum verified, from source). /usr/bin:
       # Gleipnir trusts a bwrap only where root alone can change it, and the runner image makes /usr/local
       # group-writable (Gleipnir rightly refuses /usr/local/bin/bwrap)
+      - uses: ./.github/actions/sccache
       - name: bubblewrap 0.12.0 (prebuilt, or built from source)
         env:
           ARCH: ${{ runner.arch == 'ARM64' && 'arm64' || 'x64' }}
@@ -410,13 +475,25 @@ jobs:
           sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone || true
           /usr/bin/bwrap --unshare-all --ro-bind / / true && echo "bwrap: user namespaces work" || echo "bwrap: refused (exit $?)"
       - run: bash .github/ci/rust.sh
-      # one cache for the job's builds (the escape suite's and the agent core's tests), saved at its end. One entry an
-      # architecture, shared by its 24.04 and 26.04 legs and saved by the 24.04 one (the oldest glibc, as the build-once
-      # design's x64-build): four entries of 2.7 GB each would not fit the repository's 10 GB beside the others
-      - uses: ./.github/actions/cargo-target
+      # one cache for the job's builds (the escape suite's and the agent core's tests), saved at its end
+      - id: rv
+        run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
+      - id: registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: escape
-          mode: restore
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-escape-${{ matrix.os }}-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/*/Cargo.toml', 'app/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-escape-${{ matrix.os }}-mt1-${{ steps.rv.outputs.v }}-
+      - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
+        run: bash .github/ci/commit-times.sh target/.drgnx-built-from
       # the seccomp real-install cases and everything else of the three Linux crates, on this architecture
       - run: cargo test --locked --no-fail-fast --manifest-path Cargo.toml -p gleipnir -p draugr -p eitri -p gleipnir-escape
       # eitri's trust checks chown their fixtures: they run as root, in a target dir of their own (root's files stay out of
@@ -539,13 +616,22 @@ jobs:
           target/release/domr --hub-bin target/release/ratatoskr \
             --scenarios test/conformance --only 'real-start/*' --require-all
       # last, whatever the tests said
-      - if: ${{ !cancelled() && !startsWith(matrix.os, 'ubuntu-26.04') }}
-        uses: ./.github/actions/cargo-target
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && (steps.build.outcome == 'success' || steps.core-build.outcome == 'success') }}
+        run: |
+          bash .github/ci/cargo-prune.sh Cargo.toml target
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > target/.drgnx-built-from; fi
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: escape
-          mode: save
-          build-outcome: ${{ steps.build.outcome == 'success' && 'success' || steps.core-build.outcome }}
-          status: ${{ job.status }}
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: ${{ steps.registry.outputs.cache-primary-key }}
 
   # The agent core's container rows (agent system part 1, Tasks 11b/11c): a container job runs only an allowed image,
   # with only its worktree mounted, inside its caps, and every escape row is refused. GitHub's Ubuntu runners ship
@@ -555,7 +641,8 @@ jobs:
   # namespace of their own: tests_live_adapters starts delve, CodeLLDB, lldb-dap, debugpy and js-debug for real (the
   # native debuggers trace their debuggee, so the container has CAP_SYS_PTRACE), and tests_blocked_live asserts that
   # every TCP listener in the namespace is in its port block, which a shared runner's never are: a job container's
-  # namespace is ours. The Python and JS fork rows (tests_fork_live) need bubblewrap and run in escape-host's sandbox lane. It runs with
+  # namespace is ours. No sccache here (its server listens on 4226, inside the namespace the second row inspects).
+  # The Python and JS fork rows (tests_fork_live) need bubblewrap and run in escape-host's sandbox lane. It runs with
   # rt-linux, whose image it takes (and whose test build it will take).
   debug-live:
     name: live debug adapters (Fedora 45, the adapter image's adapters)
@@ -615,23 +702,39 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
+      - uses: ./.github/actions/sccache
       - run: podman --version
       - run: bash .github/ci/rust.sh
-      - uses: ./.github/actions/cargo-target
+      - id: rv
+        run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
+      - id: registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: agent-containers
-          mode: restore
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - name: cargo cache (containers)
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/*/Cargo.toml', 'app/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-mt1-${{ steps.rv.outputs.v }}-
+      - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
+        run: bash .github/ci/commit-times.sh target/.drgnx-built-from
       # + the relay sidecar a job granted network runs, static (as `drgnx runtime build` makes it: its own target dir)
       # and beside the hub under the name the hub looks for (ferja::image::binary_for); and drgnx-key the same way,
       # the entrypoint of a keyed container job (exec::keys::static_key_name)
       - id: build
         run: |
           cargo build --locked --manifest-path Cargo.toml -p ratatoskr -p domr --features ratatoskr/test-hooks
-          cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --bin drgnx-key
+          cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --features std-owners --bin drgnx-key
           rustup target add x86_64-unknown-linux-musl
           cargo build --locked --manifest-path Cargo.toml -p ferja --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir target/fwd
           cp target/fwd/x86_64-unknown-linux-musl/debug/drgnx-px target/debug/drgnx-px-x86_64-linux-musl
-          cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --bin drgnx-key --target x86_64-unknown-linux-musl --target-dir target/fwd
+          cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --features std-owners --bin drgnx-key --target x86_64-unknown-linux-musl --target-dir target/fwd
           cp target/fwd/x86_64-unknown-linux-musl/debug/drgnx-key target/debug/drgnx-key-x86_64-linux-musl
       # sleipnir in jobq's shape (`linux,sync`: docs/develop/sleipnir.md) builds static too, in the same musl target dir
       - if: ${{ !cancelled() }}
@@ -673,13 +776,22 @@ jobs:
           DRGNX_TEST_PX_DIR="$PWD/target/bundle/x86_64" \
             cargo test --locked --manifest-path Cargo.toml -p ferja --lib --no-fail-fast -- --ignored an_imported_image_runs_px
       # last, whatever the rows said
-      - if: ${{ !cancelled() }}
-        uses: ./.github/actions/cargo-target
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        run: |
+          bash .github/ci/cargo-prune.sh Cargo.toml target
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > target/.drgnx-built-from; fi
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: agent-containers
-          mode: save
-          build-outcome: ${{ steps.build.outcome }}
-          status: ${{ job.status }}
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: ${{ steps.registry.outputs.cache-primary-key }}
 
   # The fake fleet (test/runners/README.md): containers with sshd and rootless podman inside, as SSH runners. On demand
   # only until the spike's verdict is in (`only: rt-fleet`); it is never part of a push's gate.
@@ -697,6 +809,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/sccache
       - run: podman --version
       - run: bash .github/ci/rust.sh
       - name: runners up
@@ -726,11 +839,27 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
+      # No sccache here: cc-rs runs the fake C compiler above through rustc's wrapper, and sccache refuses `true` as a
+      # compiler ("failed to execute compile"); the target cache below already keeps the type-check short
       - run: bash .github/ci/rust.sh --target aarch64-linux-android --component clippy
-      - uses: ./.github/actions/cargo-target
+      - id: rv
+        run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
+      - id: registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: android
-          mode: restore
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: cargo-${{ runner.os }}-android-mt1-${{ steps.rv.outputs.v }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/*/Cargo.toml', 'app/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-android-mt1-${{ steps.rv.outputs.v }}-
+      - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
+        run: bash .github/ci/commit-times.sh target/.drgnx-built-from
       # + the runner's protocol and sync alone: the shape jobq and the Android door take (docs/develop/sleipnir.md)
       - id: build
         run: |
@@ -743,13 +872,22 @@ jobs:
         run: |
           cargo clippy --locked --manifest-path Cargo.toml --target aarch64-linux-android --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -p forseti -- -D warnings
           cargo clippy --locked --manifest-path Cargo.toml --target aarch64-linux-android --all-targets -p sleipnir --no-default-features --features proto,sync -- -D warnings
-      - if: ${{ !cancelled() }}
-        uses: ./.github/actions/cargo-target
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        run: |
+          bash .github/ci/cargo-prune.sh Cargo.toml target
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > target/.drgnx-built-from; fi
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: android
-          mode: save
-          build-outcome: ${{ steps.build.outcome }}
-          status: ${{ job.status }}
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: ${{ steps.registry.outputs.cache-primary-key }}
 
   deny:
     name: cargo deny (advisories, licenses, bans, sources)
@@ -793,22 +931,19 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/sccache
       - run: rustup toolchain install "$NIGHTLY" --profile minimal
-      # the key names the nightly (its `rustc -V`) and the cargo-fuzz version (the step below), so a bump is a new cache;
-      # the entry holds the built cargo-fuzz and its own registry. A shallow checkout: no commit times
-      - uses: ./.github/actions/cargo-target
+      # the key names the nightly and the cargo-fuzz version (the step below), so a bump is a new cache
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: fuzz-cargo-fuzz-0.13.2
-          mode: restore
-          toolchain: ${{ env.NIGHTLY }}
-          lock: crates/hub/hrista/Cargo.lock
-          target: crates/hub/hrista/target
-          registry: "false"
-          commit-times: "false"
-          paths: |
+          path: |
             ~/.cargo/bin/cargo-fuzz
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
+            crates/hub/hrista/target
+          key: cargo-${{ runner.os }}-fuzz-${{ env.NIGHTLY }}-cargo-fuzz-0.13.2-${{ hashFiles('crates/hub/hrista/Cargo.lock', 'Cargo.toml', 'crates/*/*/Cargo.toml', 'app/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-fuzz-${{ env.NIGHTLY }}-cargo-fuzz-0.13.2-
       - name: cargo-fuzz 0.13.2
         id: tool
         run: test -x ~/.cargo/bin/cargo-fuzz || cargo "+$NIGHTLY" install cargo-fuzz --version 0.13.2 --locked
@@ -849,23 +984,20 @@ jobs:
           path: ${{ runner.temp }}/fuzz-bins/3
           if-no-files-found: error
           retention-days: 1
-      - if: ${{ !cancelled() }}
-        uses: ./.github/actions/cargo-target
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         env:
           RUSTUP_TOOLCHAIN: ${{ env.NIGHTLY }}
+        run: bash .github/ci/cargo-prune.sh crates/hub/hrista/Cargo.toml crates/hub/hrista/target
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: fuzz-cargo-fuzz-0.13.2
-          mode: save
-          build-outcome: ${{ steps.build.outcome }}
-          status: ${{ job.status }}
-          manifest: crates/hub/hrista/Cargo.toml
-          target: crates/hub/hrista/target
-          registry: "false"
-          commit-times: "false"
-          paths: |
+          path: |
             ~/.cargo/bin/cargo-fuzz
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
+            crates/hub/hrista/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
   # A consumer of fuzz-build's artifacts: it runs (and fails) when that build failed. Not on a pull request, and not on
   # main's push, which only builds and saves the caches (the daily run fuzzes main).
@@ -888,10 +1020,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-          sparse-checkout: |
-            crates/hub/hrista
-            .github/actions
-            .github/ci
+          sparse-checkout: crates/hub/hrista
       - name: How long
         run: |
           case "$EVENT" in
@@ -939,14 +1068,7 @@ jobs:
           name: fuzz-crashes-${{ matrix.shard }}
           path: crates/hub/hrista/artifacts
           if-no-files-found: ignore
-      # saved by the daily run (main) and by the writer runs (cache-policy: a manual run on main, ci/* or
-      # scratch/drgnx-mac-rounds), after the targets ran, whatever they found; never by a pull request
-      - id: corpus-policy
-        if: ${{ !cancelled() && (steps.run.outcome == 'success' || steps.run.outcome == 'failure') }}
-        uses: ./.github/actions/cache-policy
-        with:
-          build-outcome: success
-      - if: ${{ !cancelled() && (steps.run.outcome == 'success' || steps.run.outcome == 'failure') && (steps.corpus-policy.outputs.save == 'true' || (github.event_name == 'schedule' && github.ref == 'refs/heads/main')) }}
+      - if: ${{ !cancelled() && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (steps.run.outcome == 'success' || steps.run.outcome == 'failure') }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: crates/hub/hrista/corpus
@@ -954,19 +1076,14 @@ jobs:
 
   # macOS 27 runs as four jobs at once (of the five macOS slots), each well inside its 45 minutes: one job ran all
   # of it in about 105 (tests 19 min, conformance 21, the release build and perf 20, the builds between). Each job
-  # sets itself up through .github/actions/macos-runtime and builds what it runs; the target cache (one entry, `macos-dev`) shares the compiled crates
+  # sets itself up through .github/actions/macos-runtime and builds what it runs; sccache shares the compiled crates
   # between them. docs/develop/ci.md
   macos:
     name: tests (macOS 27)
-    needs: images
-    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
     runs-on: xcode-27
-    permissions:
-      contents: read
-      packages: read      # the prebuilt assets (drgnx-assets)
     # 90 until the build-once redesign (docs: the CI flow redesign, 2026-11-22). The test build alone took 17 minutes
-    # with a warm compiler cache from a run of the same commit, and was cut at 45 after 43 without it (the pull
-    # request's run)
+    # with sccache warm from a run of the same commit, and was cut at 45 after 43 without it (the pull request's run)
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -975,9 +1092,8 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
-      - uses: ./.github/actions/macos-runtime
-        with:
-          assets: ${{ needs.images.outputs.assets }}
+      - id: setup
+        uses: ./.github/actions/macos-runtime
       # The dependencies' debug info is line tables only: file and line in a backtrace, without each crate's full
       # DWARF, which is a large part of a cold build's compile and link time. The workspace's crates keep full debug
       # info, so a debugger session on a Mac still steps through drgnx's code (the test profile inherits the dev one's)
@@ -1194,27 +1310,31 @@ jobs:
           env "CARGO_TARGET_${l}_LINKER=rust-lld" "CARGO_TARGET_${l}_RUSTFLAGS=-C link-self-contained=yes" \
             cargo build --locked --manifest-path Cargo.toml -p ferja --bin drgnx-px --target "$arch-unknown-linux-musl"
           env "CARGO_TARGET_${l}_LINKER=rust-lld" "CARGO_TARGET_${l}_RUSTFLAGS=-C link-self-contained=yes" \
-            cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --bin drgnx-key --target "$arch-unknown-linux-musl"
+            cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --features std-owners --bin drgnx-key --target "$arch-unknown-linux-musl"
       # (clippy on darwin runs in conformance 1/2: here it was cut at this job's 45 minutes)
-      # the one saver of the macOS dev entry (the setup action restored it for every macOS job)
-      - if: ${{ !cancelled() }}
-        uses: ./.github/actions/cargo-target
+      - id: prune
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.setup.outputs.target-hit != 'true' && steps.test.outcome == 'success' }}
+        run: |
+          bash .github/ci/cargo-prune.sh Cargo.toml target
+          # the commit it was built from, only when every step before passed: after a step that failed some outputs
+          # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
+          if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > target/.drgnx-built-from; fi
+      # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
+      # main's) is not saved again
+      - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.setup.outputs.registry-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          job: macos-dev
-          mode: save
-          build-outcome: ${{ steps.build.outcome }}
-          status: ${{ job.status }}
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: ${{ steps.setup.outputs.registry-key }}
 
   # The conformance suite in two halves (domr --shard K/2: every other row, so both take about as long), each against
   # its own debug build; the Seatbelt escape rows and clippy on darwin with the first half.
   macos-conformance:
     name: conformance ${{ matrix.shard }}/2 (macOS 27)
-    needs: images
-    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
     runs-on: xcode-27
-    permissions:
-      contents: read
-      packages: read      # the prebuilt assets (drgnx-assets)
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -1230,7 +1350,6 @@ jobs:
       - uses: ./.github/actions/macos-runtime
         with:
           nidhogg: "true"
-          assets: ${{ needs.images.outputs.assets }}
       # as the tests job: the dependencies' debug info is line tables only, the workspace's crates keep theirs
       - name: dependencies' debug info is line tables only
         run: |
@@ -1241,7 +1360,7 @@ jobs:
       - id: build
         run: |
           cargo build --locked --manifest-path Cargo.toml -p ratatoskr -p domr -p gleipnir-escape --features ratatoskr/test-hooks
-          cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --bin drgnx-key
+          cargo build --locked --manifest-path Cargo.toml -p sleipnir --no-default-features --features std-owners --bin drgnx-key
       # the hub parses code with the pack-built grammars: built once with the build's own hub (the pack job, `packs sync
       # --builtin`, as the Linux job does with cargo run) and handed to the tests as DRGNX_PACK_LOCK / DRGNX_PACK_GRAMMARS
       - name: Pack grammars for the tests
@@ -1297,12 +1416,8 @@ jobs:
   # The perf baseline on a release build (a recorded baseline, no budgets, as on Linux)
   macos-perf:
     name: perf (macOS 27)
-    needs: images
-    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
+    if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-macos ')) }}
     runs-on: xcode-27
-    permissions:
-      contents: read
-      packages: read      # the prebuilt assets (drgnx-assets)
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1314,7 +1429,6 @@ jobs:
       - uses: ./.github/actions/macos-runtime
         with:
           nidhogg: "true"
-          assets: ${{ needs.images.outputs.assets }}
       - name: perf baseline (release build)
         id: perf
         run: |
@@ -1334,32 +1448,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo test --locked --no-fail-fast --release --manifest-path Cargo.toml -p hrafn-embed --test parity_cpu
 
-  # After the builds: this ref's superseded target caches go (.github/ci/cache-prune.sh keeps the newest entry of each job,
-  # toolchain and lock). Each commit's run saves a new entry per job (the key ends in the commit), so without this a
-  # branch's old ones fill the repository's 10 GB. Only on the runs that save (cache-policy: a push or a manual run on
-  # main, ci/* or scratch/drgnx-mac-rounds, never a pull request), and the only job with `actions: write` (it deletes
-  # caches). It runs whichever builds ran or failed: a prune after a failed build still finds the entries of earlier runs.
-  cache-prune:
-    name: Prune superseded caches
-    needs: [linux, msrv, escape-host, agent-containers, android, fuzz-build, macos]
-    if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/ci/') || github.ref == 'refs/heads/scratch/drgnx-mac-rounds') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
-          sparse-checkout: .github/ci
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          REF: ${{ github.ref }}
-        run: bash .github/ci/cache-prune.sh
-
   # This workflow's gate: every job above succeeded, or is one this run may skip (.github/ci/runtime-skips.sh over the
   # job table .github/ci/runtime-jobs.txt: a job the narrowed or path-filtered `only` leaves out and no running job
   # needs, a pull request's fuzzing, main's push's consumers, the on-demand fleet). A called workflow whose jobs were
@@ -1368,7 +1456,7 @@ jobs:
   gate:
     name: Runtime gate
     if: always()
-    needs: [images, linux, msrv, escape-host, debug-live, agent-containers, fleet, android, deny, fuzz-build, fuzz, macos, macos-conformance, macos-perf, cache-prune]
+    needs: [images, linux, msrv, escape-host, debug-live, agent-containers, fleet, android, deny, fuzz-build, fuzz, macos, macos-conformance, macos-perf]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

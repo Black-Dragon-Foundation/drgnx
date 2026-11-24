@@ -54,7 +54,7 @@ fn vars(dir: &std::path::Path) -> Vars {
 fn tmp() -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(d.path().join("src")).unwrap();
-    std::fs::write(d.path().join("src/main.py"), "").unwrap();
+    crate::fsio::write(d.path().join("src/main.py"), "").unwrap();
     d
 }
 
@@ -142,7 +142,7 @@ fn paths_are_given_by_their_true_names() {
         .parent()
         .unwrap()
         .join(format!("link-{}", std::process::id()));
-    let _ = std::fs::remove_file(&link);
+    crate::soft::done(std::fs::remove_file(&link), "std::fs::remove_file");
     std::os::unix::fs::symlink(d.path(), &link).unwrap();
     let mut v = vars(&link);
     v.file = Some(link.join("src/main.py"));
@@ -166,21 +166,21 @@ fn an_unknown_variable_or_setting_is_an_error_that_names_it() {
     let d = tmp();
     let e =
         launch::substitute(&json!({"a": "${nope}"}), &vars(d.path()), &HashMap::new()).unwrap_err();
-    assert!(e.contains("${nope}"), "{e}");
+    assert!(e.message().contains("${nope}"), "{e}");
     let e = launch::substitute(
         &json!({"a": "${config:editor.fontSize}"}),
         &vars(d.path()),
         &HashMap::new(),
     )
     .unwrap_err();
-    assert!(e.contains("editor.fontSize"), "{e}");
+    assert!(e.message().contains("editor.fontSize"), "{e}");
     let e = launch::substitute(
         &json!({"a": "${workspaceFolder:other}"}),
         &vars(d.path()),
         &HashMap::new(),
     )
     .unwrap_err();
-    assert!(e.contains("other"), "{e}");
+    assert!(e.message().contains("other"), "{e}");
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn inputs_and_the_process_picker_are_asked_for_first() {
         &HashMap::new(),
     )
     .unwrap_err();
-    assert!(e.contains("missing"), "{e}");
+    assert!(e.message().contains("missing"), "{e}");
 }
 
 #[test]
@@ -233,6 +233,7 @@ fn a_pick_string_answer_must_be_one_of_its_options() {
     assert!(
         launch::check_answers(&c, &f.inputs, &bad)
             .unwrap_err()
+            .message()
             .contains("medium")
     );
     let good = HashMap::from([("mode".to_owned(), "slow".to_owned())]);
@@ -259,6 +260,7 @@ fn a_debug_server_is_this_machine_only() {
     assert!(
         launch::debug_server(&json!({"debugServer": "10.0.0.2:4711"}))
             .unwrap_err()
+            .message()
             .contains("10.0.0.2")
     );
     assert!(launch::debug_server(&json!({"debugServer": 0})).is_err());
@@ -292,8 +294,7 @@ fn file_variables_without_a_file_are_an_error() {
     let mut v = vars(d.path());
     v.file = None;
     let e = launch::substitute(&json!({"a": "${file}"}), &v, &HashMap::new()).unwrap_err();
-    assert!(e.contains("file"), "{e}");
-    let _ = Value::Null;
+    assert!(e.message().contains("file"), "{e}");
 }
 
 /// A debugpy child (`startDebugging`) is an attach whose `connect` names the parent adapter's own client listener: the
@@ -349,11 +350,15 @@ fn a_compound_names_its_configurations() {
     assert_eq!(launch::compound_members(&both, &configs), Ok(vec![1, 0]));
     let bad = json!({"name": "Bad", "configurations": ["Client", "Nope"]});
     let e = launch::compound_members(&bad, &configs).unwrap_err();
-    assert!(e.contains("Bad") && e.contains("Nope"), "{e}");
+    assert!(
+        e.message().contains("Bad") && e.message().contains("Nope"),
+        "{e}"
+    );
     let none = json!({"name": "Empty", "configurations": []});
     assert!(
         launch::compound_members(&none, &configs)
             .unwrap_err()
+            .message()
             .contains("Empty")
     );
     assert!(launch::stop_all(&json!({"stopAll": true})));

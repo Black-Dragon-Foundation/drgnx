@@ -1,0 +1,296 @@
+//! The scale-zoom standard's conformance test: four zoom levels on a display's scale, one rounding rule, a scale per
+//! display (docs/develop/standards/scale-zoom.md).
+
+use kvardi::{DisplayId, Lp, MAX_ZOOM, MIN_ZOOM, Px, Rect, Scale, Screens, Window, clamp_zoom};
+
+fn two_displays() -> Screens {
+    // a 1.0 display on the left and a 1.5 display on the right, side by side
+    let mut s = Screens::new();
+    s.set_display(DisplayId(1), Rect::new(0, 0, 1920, 1080), 1.0);
+    s.set_display(DisplayId(2), Rect::new(1920, 0, 2880, 1620), 1.5);
+    s
+}
+
+#[test]
+fn four_level_zoom_multiplies() {
+    let s = Scale {
+        output: 1.5,
+        app: 1.25,
+        window: 2.0,
+        pane: 0.5,
+        panel: 2.0,
+    };
+    assert!((s.effective() - 1.5 * 1.25 * 2.0 * 0.5 * 2.0).abs() < 1e-6);
+    // each level counts: change one and the product follows
+    for (name, with) in [
+        (
+            "output",
+            Scale {
+                output: 2.0,
+                ..Scale::default()
+            },
+        ),
+        (
+            "app",
+            Scale {
+                app: 2.0,
+                ..Scale::default()
+            },
+        ),
+        (
+            "window",
+            Scale {
+                window: 2.0,
+                ..Scale::default()
+            },
+        ),
+        (
+            "pane",
+            Scale {
+                pane: 2.0,
+                ..Scale::default()
+            },
+        ),
+        (
+            "panel",
+            Scale {
+                panel: 2.0,
+                ..Scale::default()
+            },
+        ),
+    ] {
+        assert_eq!(Lp(10.0).to_px(&with), Px(20), "{name}");
+    }
+    assert_eq!(Scale::default().effective(), 1.0);
+}
+
+#[test]
+fn rounding_is_stable_at_1_5() {
+    let s = Scale {
+        output: 1.5,
+        ..Scale::default()
+    };
+    // a 1-lp hairline at 1.5 is 2 px, the same every frame
+    for _ in 0..1000 {
+        assert_eq!(Lp(1.0).to_px(&s), Px(2));
+    }
+    // half away from zero, both ways
+    assert_eq!(Lp(3.0).to_px(&s), Px(5), "4.5");
+    assert_eq!(Lp(-1.0).to_px(&s), Px(-2), "-1.5");
+    assert_eq!(Lp(-3.0).to_px(&s), Px(-5), "-4.5");
+    assert_eq!(Lp(0.2).to_px(&s), Px(0), "0.3");
+}
+
+#[test]
+fn a_window_moving_to_another_display_takes_its_scale() {
+    let screens = two_displays();
+    let mut w = Window::new("main", Rect::new(100, 100, 800, 600));
+    screens.place(&mut w, Rect::new(100, 100, 800, 600));
+    assert_eq!(w.display(), Some(DisplayId(1)));
+    let hair = |w: &Window| Lp(1.0).to_px(&screens.scale(w, None, None));
+    assert_eq!(hair(&w), Px(1));
+    assert_eq!(w.layouts(), 1, "the first placement lays out");
+    // dragged over to the 1.5 display: it lays out once, and a hairline is 2 px
+    screens.place(&mut w, Rect::new(2100, 100, 800, 600));
+    assert_eq!(w.display(), Some(DisplayId(2)));
+    assert_eq!(hair(&w), Px(2));
+    assert_eq!(w.layouts(), 2);
+    // moving about on the same display lays out nothing more
+    screens.place(&mut w, Rect::new(2200, 150, 800, 600));
+    screens.place(&mut w, Rect::new(2300, 150, 700, 500));
+    assert_eq!(w.layouts(), 2);
+}
+
+#[test]
+fn pane_zoom_survives_a_display_change() {
+    let mut screens = two_displays();
+    let mut w = Window::new("main", Rect::new(100, 100, 800, 600));
+    screens.place(&mut w, Rect::new(100, 100, 800, 600));
+    w.set_pane_zoom("editor", 1.25);
+    w.set_panel_zoom("agents", 0.8);
+    screens.set_app_zoom(1.1);
+    let before = screens.scale(&w, Some("editor"), Some("agents"));
+    screens.place(&mut w, Rect::new(2100, 100, 800, 600));
+    let after = screens.scale(&w, Some("editor"), Some("agents"));
+    assert_eq!((before.output, after.output), (1.0, 1.5));
+    assert_eq!((after.pane, after.panel, after.app), (1.25, 0.8, 1.1));
+    // a pane with no zoom of its own is not affected by another's
+    assert_eq!(screens.scale(&w, Some("terminal"), None).pane, 1.0);
+}
+
+#[test]
+fn zoom_is_remembered_per_display() {
+    let mut screens = two_displays();
+    let mut w = Window::new("main", Rect::new(100, 100, 800, 600));
+    screens.place(&mut w, Rect::new(100, 100, 800, 600));
+    screens.set_window_zoom(&w, 1.2);
+    screens.place(&mut w, Rect::new(2100, 100, 800, 600));
+    assert_eq!(
+        screens.scale(&w, None, None).window,
+        1.0,
+        "the other display has none yet"
+    );
+    screens.set_window_zoom(&w, 1.5);
+    // back: that display's zoom comes back, and the other's is still its own
+    screens.place(&mut w, Rect::new(100, 100, 800, 600));
+    assert_eq!(screens.scale(&w, None, None).window, 1.2);
+    screens.place(&mut w, Rect::new(2100, 100, 800, 600));
+    assert_eq!(screens.scale(&w, None, None).window, 1.5);
+    // a window of another preset has its own memory
+    let mut other = Window::new("review", Rect::new(100, 100, 800, 600));
+    screens.place(&mut other, Rect::new(100, 100, 800, 600));
+    assert_eq!(screens.scale(&other, None, None).window, 1.0);
+}
+
+#[test]
+fn a_window_spanning_two_displays_uses_the_one_holding_most_of_it() {
+    let screens = two_displays();
+    // 1000 px wide across the seam at x = 1920: 700 on the left, 300 on the right
+    let mut w = Window::new("main", Rect::new(1220, 0, 1000, 600));
+    screens.place(&mut w, Rect::new(1220, 0, 1000, 600));
+    assert_eq!(w.display(), Some(DisplayId(1)));
+    // dragged until 700 are on the right
+    screens.place(&mut w, Rect::new(1920 - 300, 0, 1000, 600));
+    assert_eq!(w.display(), Some(DisplayId(2)));
+    // exactly half and half: the lowest id, always
+    screens.place(&mut w, Rect::new(1920 - 500, 0, 1000, 600));
+    assert_eq!(w.display(), Some(DisplayId(1)));
+    // a window off every display keeps the one it had
+    screens.place(&mut w, Rect::new(-9000, -9000, 100, 100));
+    assert_eq!(w.display(), Some(DisplayId(1)));
+}
+
+#[test]
+fn a_zoom_is_kept_within_bounds() {
+    assert_eq!(clamp_zoom(100.0), MAX_ZOOM);
+    assert_eq!(clamp_zoom(0.0), MIN_ZOOM);
+    assert_eq!(clamp_zoom(f32::NAN), 1.0);
+    let mut screens = two_displays();
+    screens.set_app_zoom(1000.0);
+    let w = Window::new("main", Rect::default());
+    assert_eq!(screens.scale(&w, None, None).app, MAX_ZOOM);
+}
+
+#[test]
+fn a_display_that_changes_scale_changes_the_window_on_it() {
+    let mut screens = two_displays();
+    let mut w = Window::new("main", Rect::new(100, 100, 800, 600));
+    screens.place(&mut w, Rect::new(100, 100, 800, 600));
+    screens.set_display(DisplayId(1), Rect::new(0, 0, 1920, 1080), 2.0);
+    assert_eq!(Lp(1.0).to_px(&screens.scale(&w, None, None)), Px(2));
+    screens.remove_display(DisplayId(1));
+    screens.place(&mut w, Rect::new(2100, 100, 800, 600));
+    assert_eq!(w.display(), Some(DisplayId(2)));
+}
+
+#[test]
+fn a_length_in_device_pixels_unrounded() {
+    let s = Scale {
+        output: 1.5,
+        ..Scale::default()
+    };
+    assert_eq!(Lp(3.0).to_px_f32(&s), 4.5);
+    assert_eq!(Lp(3.0).to_px(&s), Px(5), "the rounded one is a pixel count");
+    assert_eq!(Lp(2.0).to_px_f32(&Scale::default()), 2.0);
+}
+
+#[test]
+fn a_length_in_f64_device_pixels() {
+    assert_eq!(kvardi::device_f64(3.0, 1.5), 4.5);
+    assert_eq!(kvardi::device_f64(0.0, 2.0), 0.0);
+}
+
+mod snapping {
+    use kvardi::snap::*;
+
+    #[test]
+    fn stable_rounding_is_mutters_rule() {
+        // 1.25: 120ths 150
+        assert_eq!(stable_origin(3, 150), 4, "3.75 rounds up");
+        assert_eq!(stable_origin(2, 150), 3, "2.5 rounds away from zero");
+        assert_eq!(stable_origin(-2, 150), -3, "-2.5 rounds away from zero");
+        assert_eq!(stable_extent(1, 2, 150), 4 - 1, "3.75 -> 4 less 1.25 -> 1");
+        // edges of neighbours meet: the extent of a then b is the extent of both
+        for s in [120, 150, 180, 144, 201] {
+            for p in -5..6 {
+                assert_eq!(
+                    stable_extent(p, 3, s) + stable_extent(p + 3, 4, s),
+                    stable_extent(p, 7, s),
+                    "at {s}/120 from {p}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn outward_edges_hold_the_device_coordinate() {
+        for s in [90, 120, 150, 180, 200, 240] {
+            for d in -20..60 {
+                let (b, a) = (outward_before(d, s), outward_after(d, s));
+                assert!(
+                    stable_origin(b, s) <= d && stable_origin(b + 1, s) > d,
+                    "before {d} at {s}"
+                );
+                assert!(
+                    stable_origin(a, s) >= d && stable_origin(a - 1, s) < d,
+                    "after {d} at {s}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn snapping_follows_css_values_four() {
+        assert_eq!(scale_120ths(1.5), 180);
+        assert_eq!(scale_120ths(1.005), 121);
+        assert!(identity_scale(2.0) && identity_scale(0.0) && identity_scale(f64::NAN));
+        assert!(!identity_scale(1.5));
+        // a thin line is at least one device pixel; a thick one is whole pixels
+        assert_eq!(snap_line(0.5, 1.5), 1.0 / 1.5);
+        assert_eq!(snap_line(2.0, 1.5), 3.0 / 1.5);
+        assert_eq!(
+            snap_line(2.5, 1.5),
+            4.0 / 1.5,
+            "3.75 device pixels is 4, not 3"
+        );
+        // an axis at 1.5: start 1.2 -> device 1.8 -> 2 -> 4/3; length 2 -> end 3.2 -> 4.8 -> 5, so 3 px
+        let (p, l) = snap_span(1.2, 2.0, 1.5);
+        assert_eq!((p, l), (2.0 / 1.5, 3.0 / 1.5));
+        // under two device pixels: floor, at least 1
+        assert_eq!(snap_span(1.0, 0.5, 1.5), (2.0 / 1.5, 1.0 / 1.5));
+    }
+}
+
+#[test]
+fn pixels_add_subtract_and_scale_by_whole_numbers() {
+    let (a, b) = (Px(7), Px(3));
+    assert_eq!(a + b, Px(10));
+    assert_eq!(a - b, Px(4));
+    assert_eq!(a + 2, Px(9), "a count of pixels");
+    assert_eq!(a - 2, Px(5));
+    assert_eq!(a * 3, Px(21));
+    assert_eq!(a * Px(2), Px(14));
+    assert_eq!(a / 2, Px(3), "whole division");
+    assert_eq!(-a, Px(-7));
+    assert_eq!(Px(-4).abs(), Px(4));
+    assert_eq!(Px::ZERO, Px(0));
+    let mut c = Px(1);
+    c += 4;
+    c += Px(1);
+    c -= 2;
+    c *= 3;
+    c /= 2;
+    assert_eq!(c, Px(6));
+    assert!(a > 6 && a == 7 && b < Px(4), "compared with plain counts");
+    assert_eq!(i32::from(a), 7);
+}
+
+#[test]
+fn a_logical_length_reaches_pixels_only_through_the_scale() {
+    // `Px + Lp` is not defined (a compile-fail test in glitnir proves the other side); the one road is `to_px`
+    let s = Scale {
+        output: 2.0,
+        ..Scale::default()
+    };
+    assert_eq!(Lp(3.0).to_px(&s) + 1, Px(7));
+}

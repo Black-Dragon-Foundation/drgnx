@@ -350,20 +350,18 @@ impl Helper {
         let shared = Arc::new((Mutex::new(HState::default()), Condvar::new()));
         let s2 = shared.clone();
         let rd = ctl[0];
-        let _ = std::thread::Builder::new()
-            .name("nhmac-io".into())
-            .spawn(move || {
-                #[cfg(feature = "test-hooks")]
-                // SAFETY: this thread's own handle.
-                HELPER_THREAD.store(unsafe { libc::pthread_self() } as usize, Ordering::Release);
-                helper_loop(&s2, rd)
-            });
+        let _detached_io_thread = saman::spawn_thread("nhmac-io", move || {
+            #[cfg(feature = "test-hooks")]
+            // SAFETY: this thread's own handle.
+            HELPER_THREAD.store(unsafe { libc::pthread_self() } as usize, Ordering::Release);
+            helper_loop(&s2, rd)
+        });
         Helper { shared, ctl }
     }
 
     fn arm(&self, set: &[Reg]) {
         let (m, cv) = &*self.shared;
-        let mut s = m.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = saman::lock(&m);
         s.set = set.to_vec();
         s.armed = true;
         cv.notify_all();
@@ -371,7 +369,7 @@ impl Helper {
 
     fn disarm(&self) {
         let (m, cv) = &*self.shared;
-        let mut s = m.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = saman::lock(&m);
         s.armed = false;
         if s.in_select {
             // SAFETY: our pipe's write end; one byte (non-blocking; a full pipe already wakes the thread).
@@ -408,19 +406,17 @@ pub fn signal_helper(n: u32) -> bool {
         libc::sigaction(libc::SIGURG, &sa, &mut old);
         old
     };
-    let _ = std::thread::Builder::new()
-        .name("nhmac-test-signals".into())
-        .spawn(move || {
-            for _ in 0..n {
-                std::thread::sleep(Duration::from_millis(20));
-                // SAFETY: as above.
-                unsafe { libc::pthread_kill(t as libc::pthread_t, libc::SIGURG) };
-            }
-            // the last signal delivered first (SIGURG's default action is to ignore it)
-            std::thread::sleep(Duration::from_millis(200));
-            // SAFETY: the action read above, put back.
-            unsafe { libc::sigaction(libc::SIGURG, &old, std::ptr::null_mut()) };
-        });
+    let _detached_signals_thread = saman::spawn_thread("nhmac-test-signals", move || {
+        for _ in 0..n {
+            stund::sleep_blocking(Duration::from_millis(20));
+            // SAFETY: as above.
+            unsafe { libc::pthread_kill(t as libc::pthread_t, libc::SIGURG) };
+        }
+        // the last signal delivered first (SIGURG's default action is to ignore it)
+        stund::sleep_blocking(Duration::from_millis(200));
+        // SAFETY: the action read above, put back.
+        unsafe { libc::sigaction(libc::SIGURG, &old, std::ptr::null_mut()) };
+    });
     true
 }
 
@@ -428,7 +424,7 @@ fn helper_loop(shared: &(Mutex<HState>, Condvar), ctl: i32) {
     let (m, cv) = shared;
     loop {
         let set = {
-            let mut s = m.lock().unwrap_or_else(|e| e.into_inner());
+            let mut s = saman::lock(&m);
             while !s.armed {
                 s = cv.wait(s).unwrap_or_else(|e| e.into_inner());
             }
@@ -439,7 +435,7 @@ fn helper_loop(shared: &(Mutex<HState>, Condvar), ctl: i32) {
         regs.push((ctl, FILT_READ));
         let mut ready = Vec::new();
         blocking_select(&regs, &mut ready);
-        let mut s = m.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = saman::lock(&m);
         s.in_select = false;
         let mut buf = [0u8; 16];
         // SAFETY: our pipe's read end, non-blocking.

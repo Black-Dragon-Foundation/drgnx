@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use skuld::{Bound, Partial, every_order};
 use vegvisir::{
     CardFact, CardKind, Core, EdgeKind, Effect, Event, GraphFact, ItemId, MachineFact, Mode, Model,
-    PresenceEntry, PresenceFact, RefFact, SessionFact, State, StepFact, ViewKey, ViewOp, ViewState,
+    PresenceEntry, PresenceFact, RefFact, SessionFact, State, StepFact, ViewId, ViewOp, ViewState,
 };
 
 #[derive(Clone, Debug)]
@@ -249,8 +249,8 @@ fn task(id: &str, plan: &str) -> Event {
     })
 }
 
-fn view(n: &str) -> ViewKey {
-    ViewKey {
+fn view(n: &str) -> ViewId {
+    ViewId {
         conn: 1,
         view: n.to_string(),
     }

@@ -45,7 +45,7 @@ pub struct Args {
 
 impl Args {
     /// `--dir D [--hub-allow FILE]`, and in test builds `--key-wait-s N`.
-    pub fn parse(args: &[&str]) -> Result<Args, String> {
+    pub fn parse(args: &[&str]) -> villa::Result<Args> {
         let mut a = Args {
             dir: PathBuf::new(),
             hub_allow: None,
@@ -53,20 +53,26 @@ impl Args {
         };
         let mut it = args.iter();
         while let Some(o) = it.next() {
-            let mut val = || it.next().ok_or_else(|| format!("{o} needs a value"));
+            let mut val = || {
+                it.next()
+                    .ok_or_else(|| villa::Error::invalid(format!("{o} needs a value")))
+            };
             match *o {
                 "--dir" => a.dir = PathBuf::from(val()?),
                 "--hub-allow" => a.hub_allow = Some(PathBuf::from(val()?)),
                 #[cfg(feature = "test-hooks")]
                 "--key-wait-s" => {
-                    a.key_wait =
-                        Duration::from_secs(val()?.parse().map_err(|_| "--key-wait-s: seconds")?)
+                    a.key_wait = Duration::from_secs(
+                        val()?
+                            .parse()
+                            .map_err(|_| villa::Error::invalid("--key-wait-s: seconds"))?,
+                    )
                 }
-                other => return Err(format!("unknown option {other}")),
+                other => return Err(villa::Error::invalid(format!("unknown option {other}"))),
             }
         }
         if !a.dir.is_absolute() {
-            return Err("--dir must be absolute".into());
+            return Err(villa::Error::invalid("--dir must be absolute"));
         }
         Ok(a)
     }
@@ -94,11 +100,12 @@ pub fn harden() -> io::Result<()> {
 }
 
 pub(crate) fn say(dir: &Path, what: &str) {
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join(LOG))
+    let wrote = crate::fsio::append(dir.join(LOG), true)
         .and_then(|mut f| writeln!(f, "sleipnir job-helper: {what}"));
+    if wrote.is_err() {
+        // no log to write to: stderr is the unit's journal
+        crate::eline!("sleipnir job-helper: {what}");
+    }
 }
 
 /// Runs the helper until its stdin ends; the exit status.
@@ -107,7 +114,7 @@ pub fn run(a: &Args) -> i32 {
         Ok(()) => 0,
         Err(e) => {
             say(&a.dir, &e);
-            eprintln!("sleipnir job-helper: {e}");
+            crate::eline!("sleipnir job-helper: {e}");
             2
         }
     }
@@ -128,9 +135,9 @@ fn serve(a: &Args) -> Result<(), String> {
         (true, Some(n)) => {
             let allow = match &a.hub_allow {
                 Some(f) => {
-                    let text =
-                        std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?;
-                    net::allow_list(&text)?
+                    let text = crate::fsio::read_to_string(f)
+                        .map_err(|e| format!("{}: {e}", f.display()))?;
+                    net::allow_list(&text).map_err(|e| e.message().to_string())?
                 }
                 // a keyed job without network: the relay carries its keys, and its proxy reaches nothing
                 None => vec![],
@@ -142,14 +149,17 @@ fn serve(a: &Args) -> Result<(), String> {
                     wait: a.key_wait,
                 }) as Arc<dyn ferja::owner::KeySource>
             });
-            Some(net::Relay::start(
-                &a.dir,
-                allow,
-                &h.sidecar_argv,
-                &n.sidecar,
-                h.container.clone(),
-                keys,
-            )?)
+            Some(
+                net::Relay::start(
+                    &a.dir,
+                    allow,
+                    &h.sidecar_argv,
+                    &n.sidecar,
+                    h.container.clone(),
+                    keys,
+                )
+                .map_err(|e| e.to_string())?,
+            )
         }
     };
     #[cfg(not(feature = "runner"))]
@@ -163,20 +173,20 @@ fn serve(a: &Args) -> Result<(), String> {
         disk::watch(h.root.clone(), a.dir.clone(), h.container.clone());
     }
     let pid = std::process::id();
-    let _ = std::fs::write(a.dir.join(PID), pid.to_string());
-    {
-        let mut out = io::stdout().lock();
-        writeln!(out, "ready {pid}")
-            .and_then(|()| out.flush())
-            .map_err(|e| format!("the ready line: {e}"))?;
-    }
-    let _ = io::copy(&mut io::stdin().lock().take(u64::MAX), &mut io::sink());
+    crate::fsio::write(a.dir.join(PID), pid.to_string()).map_err(|e| format!("{}: {e}", PID))?;
+    annall::cli_out(&format!("ready {pid}")).map_err(|e| format!("the ready line: {e}"))?;
+    // the helper lives until its starter lets go of stdin: how the copy ended does not matter
+    drop(io::copy(
+        &mut io::stdin().lock().take(u64::MAX),
+        &mut io::sink(),
+    ));
     // the end: the job's container, then its sidecar; the keys are zeroed now, whatever thread still holds the store
     #[cfg(feature = "runner")]
     if let Some(r) = relay {
         r.end();
     }
     store.clear();
-    let _ = std::fs::remove_file(a.dir.join(keys::HELPER_SOCK));
+    // the socket file goes with the helper; a leftover is removed with the attempt's folder
+    drop(std::fs::remove_file(a.dir.join(keys::HELPER_SOCK)));
     Ok(())
 }

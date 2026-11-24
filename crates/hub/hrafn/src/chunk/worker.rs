@@ -21,8 +21,8 @@ use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// The longest frame either side accepts.
 pub const MAX_FRAME: usize = 32 << 20;
@@ -268,7 +268,7 @@ pub fn serve_with(
     match serve_inner(lib, grammar, sha256, r, w, between) {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("hrafn-parse: {e}");
+            drop(annall::cli_err(&format!("hrafn-parse: {e}")));
             2
         }
     }
@@ -456,7 +456,7 @@ fn answer(
                         crate::structural::Pattern::in_grammar(grammar.clone(), &pattern, None)
                             .map_err(|e| e.to_string());
                     if patterns.len() >= PATTERNS {
-                        let _ = patterns.remove(0);
+                        drop(patterns.remove(0));
                     }
                     patterns.push((pattern, built));
                     patterns.len() - 1
@@ -638,7 +638,7 @@ pub struct Worker {
     init: Init,
     launch: Arc<dyn Launch>,
     live: Option<Live>,
-    failures: VecDeque<Instant>,
+    failures: VecDeque<stund::Instant>,
     dead: Option<String>,
     next_id: u64,
     pub request_deadline: Duration,
@@ -681,7 +681,7 @@ impl Worker {
             why = l.because(why);
             l.end();
         }
-        let now = Instant::now();
+        let now = stund::Instant::now();
         self.failures.push_back(now);
         while self
             .failures
@@ -718,43 +718,39 @@ impl Worker {
         };
         let (tx, rx) = mpsc::sync_channel(1);
         let mut stdout = started.stdout;
-        std::thread::Builder::new()
-            .name("hrafn-parse-reader".into())
-            .spawn(move || {
-                loop {
-                    match read_frame(&mut stdout, MAX_FRAME) {
-                        Ok(Some(b)) => {
-                            if tx.send(Ok(b)).is_err() {
-                                return;
-                            }
-                        }
-                        Ok(None) => {
-                            let _ = tx.send(Err(FrameError::Truncated));
-                            return;
-                        }
-                        Err(e) => {
-                            let _ = tx.send(Err(e));
+        saman::spawn_thread("hrafn-parse-reader", move || {
+            loop {
+                match read_frame(&mut stdout, MAX_FRAME) {
+                    Ok(Some(b)) => {
+                        if tx.send(Ok(b)).is_err() {
                             return;
                         }
                     }
-                }
-            })
-            .map_err(|e| WorkerError::File(e.to_string()))?;
-        let (to_worker, jobs) = mpsc::sync_channel::<Vec<u8>>(1);
-        let (done, written) = mpsc::channel();
-        let mut stdin = started.stdin;
-        std::thread::Builder::new()
-            .name("hrafn-parse-writer".into())
-            .spawn(move || {
-                for body in jobs {
-                    let r = write_frame(&mut stdin, &body);
-                    let failed = r.is_err();
-                    if done.send(r).is_err() || failed {
+                    Ok(None) => {
+                        saman::delivered(tx.send(Err(FrameError::Truncated)), "parse worker reply");
+                        return;
+                    }
+                    Err(e) => {
+                        saman::delivered(tx.send(Err(e)), "parse worker reply");
                         return;
                     }
                 }
-            })
-            .map_err(|e| WorkerError::File(e.to_string()))?;
+            }
+        })
+        .map_err(|e| WorkerError::File(e.to_string()))?;
+        let (to_worker, jobs) = mpsc::sync_channel::<Vec<u8>>(1);
+        let (done, written) = mpsc::channel();
+        let mut stdin = started.stdin;
+        saman::spawn_thread("hrafn-parse-writer", move || {
+            for body in jobs {
+                let r = write_frame(&mut stdin, &body);
+                let failed = r.is_err();
+                if done.send(r).is_err() || failed {
+                    return;
+                }
+            }
+        })
+        .map_err(|e| WorkerError::File(e.to_string()))?;
         let mut live = Live {
             to_worker,
             written,
@@ -835,7 +831,8 @@ impl Worker {
             r if r.id() == Some(id) => {
                 // one answer for one request: more is a worker that is not doing what it was asked
                 if self.live.as_ref().is_some_and(Live::unsolicited) {
-                    let _ = self.fail("the worker wrote more than one answer".into());
+                    // recorded as a failure (the worker is ended); this answer is still the one asked for
+                    drop(self.fail("the worker wrote more than one answer".into()));
                 }
                 Ok(r)
             }
@@ -1121,19 +1118,14 @@ pub fn install(packs: Vec<Fetched>, launch: Arc<dyn Launch>) {
             })
         })
         .collect();
-    let old = std::mem::replace(
-        &mut *PACKS.lock().unwrap_or_else(PoisonError::into_inner),
-        entries,
-    );
+    let old = std::mem::replace(&mut *saman::lock(&PACKS), entries);
     drop(old);
 }
 
 /// A string that changes when the set of fetched packs, or any pack's library or queries, does: part of the language
 /// stamp, so the index parses a project's files again when a pack is installed, updated or removed.
 pub fn stamp_part() -> String {
-    PACKS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&PACKS)
         .iter()
         .map(|e| format!("{}={}", e.pack, e.digest))
         .collect::<Vec<_>>()
@@ -1143,9 +1135,7 @@ pub fn stamp_part() -> String {
 /// The fetched pack whose files have PATH's extension.
 pub fn claims(path: &str) -> Option<String> {
     let ext = path.rsplit('/').next()?.rsplit_once('.')?.1;
-    PACKS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&PACKS)
         .iter()
         .find(|e| e.extensions.iter().any(|x| x == ext))
         .map(|e| e.pack.clone())
@@ -1161,7 +1151,7 @@ pub fn chunk(
     budget: usize,
 ) -> Result<Chunked, WorkerError> {
     let entry = entry(pack)?;
-    let mut w = entry.worker.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut w = saman::lock(&entry.worker);
     w.chunk(path, generated, text, budget)
 }
 
@@ -1171,20 +1161,12 @@ pub fn find(
     pattern: &str,
     text: &str,
 ) -> Result<Vec<crate::structural::Match>, WorkerError> {
-    entry(pack)?
-        .worker
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .find(pattern, text)
+    saman::lock(&entry(pack)?.worker).find(pattern, text)
 }
 
 /// The fold ranges of TEXT by PACK's worker.
 pub fn folds(pack: &str, text: &str) -> Result<Vec<super::folds::Fold>, WorkerError> {
-    entry(pack)?
-        .worker
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .folds(text)
+    saman::lock(&entry(pack)?.worker).folds(text)
 }
 
 /// The names inline values show for a stop at ROW (from 0) of TEXT, by PACK's worker.
@@ -1193,17 +1175,11 @@ pub fn scan(
     text: &str,
     row: usize,
 ) -> Result<Vec<(usize, usize, String)>, WorkerError> {
-    entry(pack)?
-        .worker
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .scan(text, row)
+    saman::lock(&entry(pack)?.worker).scan(text, row)
 }
 
 fn entry(pack: &str) -> Result<Arc<Entry>, WorkerError> {
-    PACKS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&PACKS)
         .iter()
         .find(|e| e.pack == pack)
         .cloned()
@@ -1212,12 +1188,10 @@ fn entry(pack: &str) -> Result<Arc<Entry>, WorkerError> {
 
 /// (pack, reason) of each fetched pack that reads as text now: what the doctor prints.
 pub fn dead() -> Vec<(String, String)> {
-    PACKS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+    saman::lock(&PACKS)
         .iter()
         .filter_map(|e| {
-            let w = e.worker.lock().unwrap_or_else(PoisonError::into_inner);
+            let w = saman::lock(&e.worker);
             w.dead().map(|d| (e.pack.clone(), d.to_owned()))
         })
         .collect()
@@ -1362,10 +1336,11 @@ mod tests {
             let (req_r, req_w) = io::pipe().map_err(|e| e.to_string())?;
             let (rep_r, rep_w) = io::pipe().map_err(|e| e.to_string())?;
             let script = self.script.clone();
-            std::thread::spawn(move || {
+            saman::spawn_thread("hrafn-parse-script", move || {
                 let (mut r, mut w) = (req_r, rep_w);
                 script(&mut r, &mut w);
-            });
+            })
+            .map_err(|e| e.to_string())?;
             let kills = self.kills.clone();
             Ok(Started {
                 stdin: Box::new(req_w),
@@ -1460,16 +1435,16 @@ mod tests {
         type Break = fn(&mut dyn Write);
         let breaks: Vec<(&str, Break)> = vec![
             ("an oversized frame", |w| {
-                let _ = w.write_all(&[0xff, 0xff, 0xff, 0xff]);
+                drop(w.write_all(&[0xff, 0xff, 0xff, 0xff]));
             }),
             ("a frame that stops short", |w| {
-                let _ = w.write_all(&[0, 0, 0, 100, b'x', b'y']);
+                drop(w.write_all(&[0, 0, 0, 100, b'x', b'y']));
             }),
             ("a frame that is not JSON", |w| {
-                let _ = write_frame(w, b"not json at all");
+                drop(write_frame(w, b"not json at all"));
             }),
             ("an answer of another id", |w| {
-                let _ = send(
+                drop(send(
                     w,
                     &Reply::Chunked {
                         id: 999,
@@ -1477,10 +1452,10 @@ mod tests {
                         symbols: vec![],
                         refs: vec![],
                     },
-                );
+                ));
             }),
             ("a chunk outside the file", |w| {
-                let _ = send(
+                drop(send(
                     w,
                     &Reply::Chunked {
                         id: 1,
@@ -1498,10 +1473,10 @@ mod tests {
                         symbols: vec![],
                         refs: vec![],
                     },
-                );
+                ));
             }),
             ("a reply that is the wrong kind", |w| {
-                let _ = send(w, &Reply::Ready { abi: 15 });
+                drop(send(w, &Reply::Ready { abi: 15 }));
             }),
         ];
         for (what, brk) in breaks {
@@ -1523,7 +1498,7 @@ mod tests {
             );
             assert!(!w.running(), "{what}");
             // the next file starts a new one (and fails the same way: this is about the restart)
-            let _ = w.chunk("b.x", false, "text", 100);
+            drop(w.chunk("b.x", false, "text", 100));
             assert_eq!(starts.load(Ordering::SeqCst), 2, "{what}");
         }
     }
@@ -1565,7 +1540,7 @@ mod tests {
     fn three_failures_make_the_pack_text_and_it_is_not_started_again() {
         let (mut w, starts, _) = worker_with(|r, _| {
             // exits at once: the hub's init write or its wait fails
-            let _ = read_frame(r, MAX_FRAME);
+            drop(read_frame(r, MAX_FRAME));
         });
         for _ in 0..2 {
             assert!(matches!(
@@ -1631,9 +1606,10 @@ mod tests {
     /// Runs F on a thread and fails the test, instead of hanging it, when F has not returned within SECS.
     fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
         let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(f());
-        });
+        saman::spawn_thread("hrafn-within", move || {
+            saman::delivered(tx.send(f()), "within");
+        })
+        .expect("a thread for the call");
         rx.recv_timeout(Duration::from_secs(secs))
             .expect("the hub blocked: it waited on the worker past any deadline")
     }
@@ -1704,14 +1680,16 @@ mod tests {
         let (mut w, _, kills) = worker_with(move |r, wr| {
             if big_init {
                 // never reads: the init write fills the pipe and blocks
-                let _ = done_rx.lock().unwrap().recv();
+                // the test ends it by dropping the sender; the answer is never read
+                saman::lock(&done_rx).recv().unwrap_or_default();
                 return;
             }
             if !ready(r, wr) {
                 return;
             }
             // ready, then deaf: a request larger than the pipe's buffer blocks the write
-            let _ = done_rx.lock().unwrap().recv();
+            // the test ends it by dropping the sender; the answer is never read
+            saman::lock(&done_rx).recv().unwrap_or_default();
         });
         if big_init {
             w.set_init_for_test(Init {

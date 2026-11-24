@@ -8,7 +8,7 @@ use crate::{Item, ItemId, Kind};
 
 /// One map view of one editor connection: the hub keeps state per (connection, view).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct ViewKey {
+pub struct ViewId {
     pub conn: u64,
     pub view: String,
 }
@@ -175,19 +175,19 @@ pub struct ViewState {
 #[serde(tag = "op", rename_all = "kebab-case")]
 pub enum ViewOp {
     Open {
-        view: ViewKey,
+        view: ViewId,
         state: ViewState,
         shown: bool,
     },
     Set {
-        view: ViewKey,
+        view: ViewId,
         state: ViewState,
     },
     Shown {
-        view: ViewKey,
+        view: ViewId,
         shown: bool,
     },
     Close {
-        view: ViewKey,
+        view: ViewId,
     },
 }

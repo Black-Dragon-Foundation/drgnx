@@ -453,8 +453,7 @@ pub fn compile_browser(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
 /// Compiles [`browser_rules`]: Unsupported off Linux (Android: no backend; apps get no user namespaces; fails
 /// closed).
 #[cfg(not(target_os = "linux"))]
-pub fn compile_browser(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
-    let _ = arch;
+pub fn compile_browser(_arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
     Err(SeccompError::Unsupported)
 }
 
@@ -603,8 +602,7 @@ pub fn compile(arch: Arch) -> Result<Vec<SockFilter>, SeccompError> {
 /// Compiles [`rules_for`] `tier` for `arch`: Unsupported off Linux (Android: no backend; apps get no user
 /// namespaces; fails closed).
 #[cfg(not(target_os = "linux"))]
-pub fn compile_for(arch: Arch, tier: Tier) -> Result<Vec<SockFilter>, SeccompError> {
-    let _ = (arch, tier);
+pub fn compile_for(_arch: Arch, _tier: Tier) -> Result<Vec<SockFilter>, SeccompError> {
     Err(SeccompError::Unsupported)
 }
 
@@ -627,8 +625,7 @@ pub fn install(prog: &[SockFilter]) -> Result<(), SeccompError> {
 
 /// Installs `prog`: Unsupported off Linux (Android: no backend; apps get no user namespaces; fails closed).
 #[cfg(not(target_os = "linux"))]
-pub fn install(prog: &[SockFilter]) -> Result<(), SeccompError> {
-    let _ = prog;
+pub fn install(_prog: &[SockFilter]) -> Result<(), SeccompError> {
     Err(SeccompError::Unsupported)
 }
 
@@ -636,7 +633,6 @@ pub fn install(prog: &[SockFilter]) -> Result<(), SeccompError> {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     // Written out here, not taken from the module, so a slip in either is caught.
     const EPERM_: i32 = 1;
@@ -2194,21 +2190,26 @@ mod tests {
         let prog = filter_of(case.name);
         let control = fork_run(case.name, None);
         if !case.unfiltered.contains(&control) {
-            eprintln!(
+            annall::cli_err(&format!(
                 "skip {name}: unfiltered gave {control:?}, not one of {:?}",
                 case.unfiltered
-            );
+            ))
+            .unwrap();
             std::process::exit(SKIP);
         }
         let filtered = fork_run(case.name, Some(&prog));
         if filtered != case.filtered {
-            eprintln!(
+            annall::cli_err(&format!(
                 "FAIL {name}: filtered gave {filtered:?}, want {:?} (unfiltered {control:?})",
                 case.filtered
-            );
+            ))
+            .unwrap();
             std::process::exit(1);
         }
-        eprintln!("pass {name}: unfiltered {control:?}, filtered {filtered:?}");
+        annall::cli_err(&format!(
+            "pass {name}: unfiltered {control:?}, filtered {filtered:?}"
+        ))
+        .unwrap();
         std::process::exit(0);
     }
 
@@ -2220,31 +2221,47 @@ mod tests {
             if case.name == "x32-getpid" && native() != Some(Arch::X86_64) {
                 continue;
             }
-            let out = Command::new(&exe)
-                .args([
-                    "--exact",
-                    "seccomp::tests::seccomp_case_child",
-                    "--ignored",
-                    "--nocapture",
-                ])
-                .args(["--test-threads=1", "-q"])
-                .env(CASE_ENV, case.name)
-                .output()
-                .unwrap();
-            let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            let out = draugr::run(
+                draugr::Spec {
+                    program: exe.clone(),
+                    args: [
+                        "--exact",
+                        "seccomp::tests::seccomp_case_child",
+                        "--ignored",
+                        "--nocapture",
+                        "--test-threads=1",
+                        "-q",
+                    ]
+                    .map(Into::into)
+                    .into(),
+                    env: draugr::env::build(
+                        &["PATH", "TMPDIR", "RUST_BACKTRACE"],
+                        &[],
+                        &[(CASE_ENV, std::ffi::OsStr::new(case.name))],
+                    ),
+                    cwd: None,
+                    stdin_null: true,
+                    pass_fds: Vec::new(),
+                    new_session: false,
+                },
+                std::time::Duration::from_secs(120),
+            )
+            .unwrap();
+            let said = out.stderr.trim().to_string();
             match out.status.code() {
                 Some(0) => passed.push(said),
                 Some(SKIP) => skipped.push(said),
                 _ => failed.push(format!("{}: {:?}: {said}", case.name, out.status)),
             }
         }
-        eprintln!(
+        annall::cli_err(&format!(
             "seccomp real install: {} passed, {} skipped",
             passed.len(),
             skipped.len()
-        );
+        ))
+        .unwrap();
         for line in passed.iter().chain(&skipped) {
-            eprintln!("  {line}");
+            annall::cli_err(&format!("  {line}")).unwrap();
         }
         assert!(failed.is_empty(), "failed:\n{}", failed.join("\n"));
         // getpid and socket(AF_UNIX) cannot skip, so the filter was installed and ran at least there.

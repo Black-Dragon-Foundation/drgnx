@@ -207,53 +207,58 @@ mod tests {
 
     /// [D] The 31st snapshot in a window waits, the latest of a session replaces its older one, and the window
     /// opening sends them, cap again.
-    #[tokio::test(start_paused = true)]
-    async fn pacer_caps_a_window_and_keeps_the_latest() {
-        let mut p = Pacer::default();
-        let t0 = Instant::now();
-        for i in 0..SNAPSHOTS_PER_WINDOW {
-            let o = p.offer(t0, &format!("s{i:02}"), line("a"));
-            assert!(o.send.is_some() && o.arm.is_none());
-        }
-        let o = p.offer(t0, "s00", line("old"));
-        assert_eq!(o.send, None);
-        assert_eq!(o.arm, Some(SNAPSHOT_WINDOW));
-        // the same session again: replaces, and the timer is armed once
-        let o = p.offer(
-            t0 + std::time::Duration::from_millis(100),
-            "s00",
-            line("new"),
-        );
-        assert_eq!(o, Offered::default());
-        let _ = p.offer(t0 + std::time::Duration::from_millis(100), "s01", line("b"));
-        let (lines, again) = p.flush(t0 + SNAPSHOT_WINDOW);
-        assert_eq!(lines, vec![line("new"), line("b")]);
-        assert_eq!(again, None);
-        // a full window, then 40 waiting: 30 go when it opens, 10 wait for the one after
-        let t1 = t0 + SNAPSHOT_WINDOW * 2;
-        for i in 0..SNAPSHOTS_PER_WINDOW {
-            assert!(p.offer(t1, &format!("u{i:02}"), line("u")).send.is_some());
-        }
-        for i in 0..40 {
-            let _ = p.offer(t1, &format!("t{i:02}"), line("c"));
-        }
-        let (lines, again) = p.flush(t1 + SNAPSHOT_WINDOW);
-        assert_eq!(lines.len(), SNAPSHOTS_PER_WINDOW as usize);
-        assert_eq!(again, Some(SNAPSHOT_WINDOW));
+    #[test]
+    fn pacer_caps_a_window_and_keeps_the_latest() {
+        saman::block_on_paused(async move {
+            let mut p = Pacer::default();
+            let t0 = Instant::from_std(crate::clock::real_now());
+            for i in 0..SNAPSHOTS_PER_WINDOW {
+                let o = p.offer(t0, &format!("s{i:02}"), line("a"));
+                assert!(o.send.is_some() && o.arm.is_none());
+            }
+            let o = p.offer(t0, "s00", line("old"));
+            assert_eq!(o.send, None);
+            assert_eq!(o.arm, Some(SNAPSHOT_WINDOW));
+            // the same session again: replaces, and the timer is armed once
+            let o = p.offer(
+                t0 + std::time::Duration::from_millis(100),
+                "s00",
+                line("new"),
+            );
+            assert_eq!(o, Offered::default());
+
+            p.offer(t0 + std::time::Duration::from_millis(100), "s01", line("b"));
+            let (lines, again) = p.flush(t0 + SNAPSHOT_WINDOW);
+            assert_eq!(lines, vec![line("new"), line("b")]);
+            assert_eq!(again, None);
+            // a full window, then 40 waiting: 30 go when it opens, 10 wait for the one after
+            let t1 = t0 + SNAPSHOT_WINDOW * 2;
+            for i in 0..SNAPSHOTS_PER_WINDOW {
+                assert!(p.offer(t1, &format!("u{i:02}"), line("u")).send.is_some());
+            }
+            for i in 0..40 {
+                p.offer(t1, &format!("t{i:02}"), line("c"));
+            }
+            let (lines, again) = p.flush(t1 + SNAPSHOT_WINDOW);
+            assert_eq!(lines.len(), SNAPSHOTS_PER_WINDOW as usize);
+            assert_eq!(again, Some(SNAPSHOT_WINDOW));
+        })
     }
 
     /// [D] A session shown to the connection drops what waited for it.
-    #[tokio::test(start_paused = true)]
-    async fn pacer_forgets_a_shown_session() {
-        let mut p = Pacer::default();
-        let t0 = Instant::now();
-        for i in 0..SNAPSHOTS_PER_WINDOW {
-            let _ = p.offer(t0, &format!("s{i:02}"), line("a"));
-        }
-        let _ = p.offer(t0, "x", line("w"));
-        p.forget("x");
-        let (lines, _) = p.flush(t0 + SNAPSHOT_WINDOW);
-        assert!(lines.is_empty());
+    #[test]
+    fn pacer_forgets_a_shown_session() {
+        saman::block_on_paused(async move {
+            let mut p = Pacer::default();
+            let t0 = Instant::from_std(crate::clock::real_now());
+            for i in 0..SNAPSHOTS_PER_WINDOW {
+                p.offer(t0, &format!("s{i:02}"), line("a"));
+            }
+            p.offer(t0, "x", line("w"));
+            p.forget("x");
+            let (lines, _) = p.flush(t0 + SNAPSHOT_WINDOW);
+            assert!(lines.is_empty());
+        })
     }
 
     /// [D] A raw input within the cap comes back whole; a larger one comes back cut, and said so.

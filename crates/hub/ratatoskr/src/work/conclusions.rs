@@ -18,7 +18,7 @@ use norn::write::work::{Source, StepDetail};
 use runstav::methods::work as wire;
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 /// The drgnx MCP tools that record a conclusion.
 pub const TOOLS: &[&str] = &["record_decision", "note_add"];
@@ -373,10 +373,7 @@ pub struct Stamps(Mutex<StampCore>);
 
 impl Stamps {
     pub fn step(&self, ev: StampEv) -> Vec<Stamp> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .step(ev)
+        saman::lock(&self.0).step(ev)
     }
 }
 

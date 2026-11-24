@@ -228,7 +228,7 @@ async fn fetch_record(db: &CoordDb, id: &str) -> Result<Option<Record>, CoordErr
 fn text_of(r: &Record) -> String {
     r.file
         .as_ref()
-        .and_then(|f| std::fs::read_to_string(f).ok())
+        .and_then(|f| crate::fsio::read_to_string(f).ok())
         .map(|t| saga::view::strip_header(&t).to_owned())
         .unwrap_or_else(|| r.body.clone())
 }
@@ -355,10 +355,13 @@ pub async fn add_thread(
     a: &Anchor,
     text: &str,
     at: f64,
-) -> Result<(String, Anchor), String> {
-    let r = record_of(db, record).await?;
+) -> villa::Result<(String, Anchor)> {
+    let r = record_of(db, record)
+        .await
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     let paras = paragraphs(&text_of(&r));
-    let p = find(&paras, a).ok_or("no paragraph of the record has that key or text")?;
+    let p = find(&paras, a)
+        .ok_or_else(|| villa::Error::invalid("no paragraph of the record has that key or text"))?;
     let anchor = anchor_at(p, "here");
     let (rec, data) = (record.to_owned(), json!(anchor));
     let c = CommentNew {
@@ -372,7 +375,7 @@ pub async fn add_thread(
             w::new_comment(tx, c, &rec, data)
         })
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     Ok((id, anchor))
 }
 
@@ -390,11 +393,11 @@ pub async fn agent_reply(
     comment: &str,
     text: &str,
     at: f64,
-) -> Result<String, String> {
+) -> villa::Result<String> {
     let root = root_of(db, comment)
         .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("no comment {comment}"))?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?
+        .ok_or_else(|| villa::Error::invalid(format!("no comment {comment}")))?;
     let sent: Option<String> = {
         let id = root.clone();
         db.read(move |c| {
@@ -402,12 +405,12 @@ pub async fn agent_reply(
                 .and_then(|e| e.data["sent_to"].as_str().map(str::to_owned)))
         })
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| villa::Error::invalid(e.to_string()))?
     };
     if sent.as_deref() != Some(sid) {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{root} was not sent to you: only the agent it was sent to answers it"
-        ));
+        )));
     }
     let c = CommentNew {
         text: text.to_owned(),
@@ -419,7 +422,7 @@ pub async fn agent_reply(
         w::new_reply(tx, c, &root)
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| villa::Error::invalid(e.to_string()))
 }
 
 /// Every thread on a record whose file is PATH finds its paragraph again in the file as it is now ([`realign`]); the
@@ -430,7 +433,7 @@ pub async fn reanchor(db: &CoordDb, path: &Path) -> Result<usize, CoordError> {
     if rs.is_empty() {
         return Ok(0);
     }
-    let Ok(raw) = std::fs::read_to_string(path) else {
+    let Ok(raw) = crate::fsio::read_to_string(path) else {
         return Ok(0);
     };
     let paras = paragraphs(saga::view::strip_header(&raw));
@@ -608,7 +611,7 @@ pub async fn add(f: &Front, _: &Caller, p: AddParams) -> Result<Added, Error> {
     let (id, anchor) = add_thread(&f.writer.db, &p.record, &p.anchor, &p.text, at)
         .await
         .map_err(|e| {
-            let at = if e.starts_with("no record") {
+            let at = if e.message().starts_with("no record") {
                 "record"
             } else {
                 "anchor"
@@ -659,7 +662,7 @@ pub async fn reply(f: &Front, _: &Caller, p: ReplyParams) -> Result<Comment, Err
                 deliver(&s, steer_text(&title, &t.anchor, &p.text, &root), &id);
             }
             None => {
-                let _ = send(f, &root, &t.record, &t.anchor, &p.text).await;
+                send(f, &root, &t.record, &t.anchor, &p.text).await;
             }
         }
     }
@@ -718,7 +721,7 @@ pub async fn resolve(f: &Front, _: &Caller, p: ResolveParams) -> Result<bool, Er
 }
 
 /// `comment_reply` from session SID.
-pub async fn reply_from(f: &Front, sid: &str, comment: &str, text: &str) -> Result<String, String> {
+pub async fn reply_from(f: &Front, sid: &str, comment: &str, text: &str) -> villa::Result<String> {
     let id = agent_reply(&f.writer.db, sid, comment, text, crate::clock::wall_secs()).await?;
     f.writer.signals.wrote();
     Ok(format!("replied as {id}"))
@@ -738,7 +741,7 @@ pub async fn deliver_waiting(f: &Front) {
     };
     for r in waiting {
         let text = r.data["text"].as_str().unwrap_or_default().to_owned();
-        let _ = send(f, &r.id, &r.record, &r.anchor, &text).await;
+        send(f, &r.id, &r.record, &r.anchor, &text).await;
     }
 }
 

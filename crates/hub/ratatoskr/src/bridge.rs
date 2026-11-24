@@ -182,20 +182,20 @@ pub fn main(args: BridgeArgs) -> u8 {
         ..defaults
     };
     // warnings (the hub went away, came back) on stderr, which MCP stdio leaves to the server's log
-    let _ = tracing_subscriber::fmt()
-        .with_ansi(false)
-        .without_time()
-        .with_target(false)
-        .with_writer(std::io::stderr)
-        .with_max_level(tracing::Level::WARN)
-        .try_init();
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
+    crate::soft::done(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(annall::raw_err)
+            .with_max_level(tracing::Level::WARN)
+            .try_init(),
+        "tracing_subscriber::fmt",
+    );
+    let runtime = match saman::Executor::new(1) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("ratatoskr mcp-bridge: no async runtime: {e}");
+            crate::soft::err_line(&format!("ratatoskr mcp-bridge: no async runtime: {e}"));
             return 1;
         }
     };
@@ -203,7 +203,7 @@ pub fn main(args: BridgeArgs) -> u8 {
     let end = match args.target {
         BridgeTarget::Socket(socket) => {
             if let Err(why) = is_socket(&socket) {
-                eprintln!("ratatoskr mcp-bridge: {why}");
+                crate::soft::err_line(&format!("ratatoskr mcp-bridge: {why}"));
                 return 1;
             }
             runtime.block_on(mimir::bridge::run(Inside { socket }, stdin, stdout, opts))
@@ -221,7 +221,7 @@ pub fn main(args: BridgeArgs) -> u8 {
     // stdin's read runs on a blocking thread that cannot be cancelled: never wait for it
     runtime.shutdown_background();
     if let BridgeEnd::GaveUp(why) | BridgeEnd::Fatal(why) = &end {
-        eprintln!("ratatoskr mcp-bridge: {why}");
+        crate::soft::err_line(&format!("ratatoskr mcp-bridge: {why}"));
     }
     end.code()
 }
@@ -238,7 +238,7 @@ mod tests {
     fn stub(dir: &Path, answer: Value) -> (PathBuf, std::thread::JoinHandle<Vec<Value>>) {
         let socket = dir.join("hub-x.sock");
         let listener = UnixListener::bind(&socket).unwrap();
-        let hub = std::thread::spawn(move || {
+        let hub = saman::spawn_thread("ratatoskr:bridge", move || {
             let (s, _) = listener.accept().unwrap();
             let mut w = s.try_clone().unwrap();
             writeln!(
@@ -263,7 +263,8 @@ mod tests {
                 seen.push(v);
             }
             seen
-        });
+        })
+        .unwrap();
         (socket, hub)
     }
 
@@ -286,87 +287,93 @@ mod tests {
         c.prelude(BufReader::new(r), w).await
     }
 
-    #[tokio::test]
-    async fn outside_says_hello_without_a_proof_then_attaches() {
-        let root = private_dir();
-        let (socket, hub) = stub(
-            root.path(),
-            json!({"result": {"identity": "ext:codex:7-abcdef"}}),
-        );
-        let (mut r, mut w) = dial(&outside(socket)).await.expect("attached");
-        // the connection is MCP's now
-        w.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"ping\"}\n")
-            .await
-            .unwrap();
-        let mut text = String::new();
-        r.read_line(&mut text).await.unwrap();
-        assert_eq!(
-            serde_json::from_str::<Value>(&text).unwrap()["result"],
-            "mcp"
-        );
-        drop((r, w));
-        let seen = hub.join().unwrap();
-        assert_eq!(seen[0]["method"], "hello");
-        let hello = &seen[0]["params"];
-        assert_eq!(hello["proto"], 1);
-        assert_eq!(hello["client"], "mcp-bridge");
-        assert_eq!(hello["cwd"], "/w/proj");
-        assert!(
-            hello["nonce"].as_str().is_some_and(|n| n.len() == 32),
-            "{hello}"
-        );
-        assert!(
-            hello.get("proof").is_none(),
-            "no proof: the bridge never reads the cap"
-        );
-        assert_eq!(seen[1]["method"], "mcp/attach");
-        assert_eq!(seen[1]["params"], json!({"kind": "codex"}));
-        assert_eq!(seen[2]["method"], "ping");
+    #[test]
+    fn outside_says_hello_without_a_proof_then_attaches() {
+        saman::block_on_current(async move {
+            let root = private_dir();
+            let (socket, hub) = stub(
+                root.path(),
+                json!({"result": {"identity": "ext:codex:7-abcdef"}}),
+            );
+            let (mut r, mut w) = dial(&outside(socket)).await.expect("attached");
+            // the connection is MCP's now
+            w.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"ping\"}\n")
+                .await
+                .unwrap();
+            let mut text = String::new();
+            r.read_line(&mut text).await.unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&text).unwrap()["result"],
+                "mcp"
+            );
+            drop((r, w));
+            let seen = hub.join().unwrap();
+            assert_eq!(seen[0]["method"], "hello");
+            let hello = &seen[0]["params"];
+            assert_eq!(hello["proto"], 1);
+            assert_eq!(hello["client"], "mcp-bridge");
+            assert_eq!(hello["cwd"], "/w/proj");
+            assert!(
+                hello["nonce"].as_str().is_some_and(|n| n.len() == 32),
+                "{hello}"
+            );
+            assert!(
+                hello.get("proof").is_none(),
+                "no proof: the bridge never reads the cap"
+            );
+            assert_eq!(seen[1]["method"], "mcp/attach");
+            assert_eq!(seen[1]["params"], json!({"kind": "codex"}));
+            assert_eq!(seen[2]["method"], "ping");
+        })
     }
 
-    #[tokio::test]
-    async fn a_refused_attach_ends_it_and_no_hub_dials_again() {
-        let root = private_dir();
-        let (socket, _hub) = stub(
-            root.path(),
-            json!({"error": {"code": "not-allowed", "message": "an outside agent needs a parent process"}}),
-        );
-        let e = dial(&outside(socket)).await.expect_err("refused");
-        assert_eq!(
+    #[test]
+    fn a_refused_attach_ends_it_and_no_hub_dials_again() {
+        saman::block_on_current(async move {
+            let root = private_dir();
+            let (socket, _hub) = stub(
+                root.path(),
+                json!({"error": {"code": "not-allowed", "message": "an outside agent needs a parent process"}}),
+            );
+            let e = dial(&outside(socket)).await.expect_err("refused");
+            assert_eq!(
             e,
             Dial::Fatal(
                 "the drgnx hub refused mcp/attach: not-allowed: an outside agent needs a parent process".into()
             )
         );
-        // no directory yet, or no socket in it: no hub, try again later
-        let gone = root.path().join("gone").join("hub-x.sock");
-        assert!(matches!(dial(&outside(gone)).await, Err(Dial::Again(_))));
-        let none = root.path().join("hub-y.sock");
-        assert!(matches!(dial(&outside(none)).await, Err(Dial::Again(_))));
+            // no directory yet, or no socket in it: no hub, try again later
+            let gone = root.path().join("gone").join("hub-x.sock");
+            assert!(matches!(dial(&outside(gone)).await, Err(Dial::Again(_))));
+            let none = root.path().join("hub-y.sock");
+            assert!(matches!(dial(&outside(none)).await, Err(Dial::Again(_))));
+        })
     }
 
-    #[tokio::test]
-    async fn an_untrusted_directory_ends_it_before_connecting() {
-        let root = private_dir();
-        let dir = root.path().join("run");
-        std::fs::create_dir(&dir).unwrap();
-        let socket = dir.join("hub-x.sock");
-        let listener = UnixListener::bind(&socket).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let e = dial(&outside(socket)).await.expect_err("refused");
-        let Dial::Fatal(why) = e else {
-            panic!("{e:?}");
-        };
-        assert!(why.contains("is open to other users (mode 755"), "{why}");
-        assert!(listener.accept().is_err(), "nothing connected");
+    #[test]
+    fn an_untrusted_directory_ends_it_before_connecting() {
+        saman::block_on_current(async move {
+            let root = private_dir();
+            let dir = root.path().join("run");
+            std::fs::create_dir(&dir).unwrap();
+            let socket = dir.join("hub-x.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let e = dial(&outside(socket)).await.expect_err("refused");
+            let Dial::Fatal(why) = e else {
+                panic!("{e:?}");
+            };
+            assert!(why.contains("is open to other users (mode 755"), "{why}");
+            assert!(listener.accept().is_err(), "nothing connected");
+        })
     }
 
     #[test]
     fn the_socket_must_be_a_socket() {
         let root = private_dir();
         let file = root.path().join("mcp.sock");
-        std::fs::write(&file, "").unwrap();
+        crate::fsio::write(&file, "").unwrap();
         assert!(is_socket(&file).unwrap_err().ends_with("is not a socket"));
         assert!(is_socket(&root.path().join("none")).is_err());
         let socket = root.path().join("real.sock");

@@ -120,7 +120,7 @@ fn a_root_that_is_no_repository_is_an_error_not_no_changes() {
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = crate::proc::Command::new("git")
         .args([
             "-c",
             "user.name=t",
@@ -145,25 +145,26 @@ fn git(dir: &std::path::Path, args: &[&str]) {
 #[test]
 fn a_repository_s_watch_reads_again_after_git_changes_it() {
     let dir = std::env::temp_dir().join(format!("letters-watch-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    crate::soft::done(std::fs::remove_dir_all(&dir), "std::fs::remove_dir_all");
     std::fs::create_dir_all(&dir).unwrap();
     git(&dir, &["init", "-q"]);
-    std::fs::write(dir.join("a"), "1").unwrap();
+    crate::fsio::write(dir.join("a"), "1").unwrap();
     git(&dir, &["add", "a"]);
     git(&dir, &["commit", "-qm", "one"]);
     let (tx, rx) = channel();
     let (reads_tx, reads) = channel();
     let (root, poke) = (dir.clone(), tx.clone());
-    let watch = std::thread::spawn(move || {
+    let watch = saman::spawn_thread("ratatoskr:tests", move || {
         watch_repo(&root, tx, rx, &mut || {
             // what the hub's read does: a status read, which must not count as a change
-            let _ = read_status(&root);
+            crate::soft::done(read_status(&root), "read_status");
             reads_tx.send(()).is_ok()
         });
-    });
+    })
+    .unwrap();
     // the watch is set once a change in the gitdir is read; then the probe's burst is drained
     skuld::wait_until("the watch is set", 10, || {
-        std::fs::write(dir.join(".git").join("description"), "probe\n").unwrap();
+        crate::fsio::write(dir.join(".git").join("description"), "probe\n").unwrap();
         reads.recv_timeout(Duration::from_millis(50)).ok()
     });
     while reads.recv_timeout(Duration::from_millis(600)).is_ok() {}
@@ -177,14 +178,14 @@ fn a_repository_s_watch_reads_again_after_git_changes_it() {
             "one read per burst ({what})"
         );
     };
-    std::fs::write(dir.join("b"), "2").unwrap();
+    crate::fsio::write(dir.join("b"), "2").unwrap();
     git(&dir, &["add", "b"]);
     next("git add");
     // a commit that stalls while it holds its locks (an fsync of the ref under IO load), forced: the hook holds it
     // past SETTLE_MAX between its first writes and its ref and index; still one read, after git lets go
     let hook = dir.join(".git").join("hooks").join("reference-transaction");
     std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
-    std::fs::write(
+    crate::fsio::write(
         &hook,
         "#!/bin/sh\n[ \"$1\" = prepared ] && sleep 0.5\nexit 0\n",
     )
@@ -209,7 +210,7 @@ fn a_repository_s_watch_reads_again_after_git_changes_it() {
         common.canonicalize().unwrap(),
         dir.join(".git").canonicalize().unwrap()
     );
-    let _ = reads.recv_timeout(Duration::from_secs(2)); // the worktree add moved refs: one read
+    crate::soft::done(reads.recv_timeout(Duration::from_secs(2)), "tests"); // the worktree add moved refs: one read
     poke.send(Heard::Stop).unwrap();
     watch.join().unwrap();
     assert!(git_dirs(&dir.join("a")).is_none());

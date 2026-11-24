@@ -15,6 +15,7 @@ fixture = []
 
 [dependencies]
 serde.workspace = true
+kvardi.workspace = true
 # the rows the hub sends the editor (render): the row type, the fitter, the SVG writer
 rodd = { path = "../../core/rodd", version = "0.1.0" }
 # the rows' text properties (render)
@@ -24,6 +25,9 @@ serde_json.workspace = true
 # the crate itself with the fixture, so its integration tests read the 30-agent fixture
 vegvisir = { path = ".", version = "0.1.0", features = ["fixture"] }
 serde_json.workspace = true
+eitri.workspace = true
+stund.workspace = true
+tracing.workspace = true
 skuld = { path = "../skuld", version = "0.1.0" }
 proptest.workspace = true
 
@@ -36,3 +40,6 @@ path = "tests/main.rs"
 # timing rows measure latency: no other test's load beside them
 [[test]]
 name = "timing"
+
+[lints]
+workspace = true

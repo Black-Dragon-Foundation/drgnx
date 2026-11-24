@@ -6,7 +6,6 @@ mod active;
 mod builtin;
 mod format;
 mod job;
-mod translate;
 
 /// The test files that are binaries of their own (Cargo.toml says why).
 const APART: &[&str] = &["registry"];

@@ -1,6 +1,6 @@
 use saga::table::Block;
 use saga::{board_md, deferred, org};
-use std::time::Instant;
+use stund::Instant;
 
 const DEFERRED: &str = include_str!("fixtures/deferred-a.md");
 const BOARD: &str = include_str!("fixtures/board-a.md");
@@ -163,8 +163,8 @@ fn a_1600_row_table_parses_under_50_ms() {
     let text = a_1600_row_table();
     let start = Instant::now();
     let d = deferred::parse(&text);
-    let _ = deferred::render(&d);
-    let _ = board_md::parse(&text);
+    drop(deferred::render(&d));
+    drop(board_md::parse(&text));
     let elapsed = start.elapsed();
     assert!(elapsed.as_millis() < 50, "took {elapsed:?}");
 }

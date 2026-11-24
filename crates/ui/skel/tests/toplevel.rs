@@ -10,7 +10,8 @@ use skel::api::{
 };
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 /// The raw token after `"key":` (a string keeps its quotes).
 fn token<'a>(json: &'a str, key: &str) -> Option<&'a str> {
@@ -50,7 +51,7 @@ fn wait_commit(rec: &Recorder, since: u64, pred: impl Fn(&str) -> bool) -> Vec<S
         if all.iter().any(|c| pred(c)) || Instant::now() > deadline {
             return all;
         }
-        std::thread::sleep(Duration::from_millis(10));
+        stund::sleep_blocking(Duration::from_millis(10));
     }
 }
 
@@ -203,7 +204,7 @@ mod toplevel {
     fn force_csd_env() {
         let rec = Recorder::start("sway");
         let mut shell = {
-            let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+            let _env = saman::lock(&ENV);
             // SAFETY: every open in this binary holds ENV, and only open reads the variable.
             unsafe { std::env::set_var("NIDHOGG_SHELL_FORCE_CSD", "1") };
             let shell = rec.open_locked();

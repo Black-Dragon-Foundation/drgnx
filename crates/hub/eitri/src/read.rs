@@ -1,6 +1,6 @@
 //! Bounded reads of regular files, opened beneath a directory fd (Task 1).
 
-use std::os::fd::BorrowedFd;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::path::Path;
 
 use rustix::fs::{FileType, fstat};
@@ -38,6 +38,29 @@ pub fn read_regular(dir: BorrowedFd<'_>, rel: &Path, cap: u64) -> Result<Vec<u8>
         return Err(FsError::TooLarge { cap });
     }
     Ok(out)
+}
+
+/// Reads the regular file at the absolute path `abs`: the parent opened with `open_path` (a link in any component is
+/// refused), then [`read_regular`] there. At most `cap` bytes.
+pub fn read_file(abs: &Path, cap: u64) -> Result<Vec<u8>, FsError> {
+    let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) else {
+        return Err(FsError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the path names no file",
+        )));
+    };
+    let parent = crate::open_path(parent, crate::Kind::Dir)?;
+    read_regular(parent.fd.as_fd(), Path::new(name), cap)
+}
+
+/// [`read_file`], as text: bytes that are not UTF-8 are an `Io` error of kind `InvalidData`.
+pub fn read_string(abs: &Path, cap: u64) -> Result<String, FsError> {
+    String::from_utf8(read_file(abs, cap)?).map_err(|e| {
+        FsError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            e.utf8_error(),
+        ))
+    })
 }
 
 /// Opens `rel` for reading and returns it with its status, a regular file only.
@@ -120,12 +143,13 @@ mod tests {
         // SAFETY: a valid NUL-terminated path.
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
         let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
+        saman::spawn_thread("fifo-reader", move || {
             let read = read_regular(fd.as_fd(), Path::new("p"), 16).map(drop);
             let pin = crate::open_beneath(fd.as_fd(), Path::new("p"), crate::Kind::File).map(drop);
             let pin_abs = crate::open_path(&fifo, crate::Kind::File).map(drop);
             tx.send((read, pin, pin_abs)).unwrap();
-        });
+        })
+        .unwrap();
         let (read, pin, pin_abs) = rx
             .recv_timeout(Duration::from_secs(1))
             .expect("a FIFO blocked");
@@ -147,11 +171,12 @@ mod tests {
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
         let (tx, rx) = mpsc::channel();
         let path = fifo.clone();
-        let writer = std::thread::spawn(move || {
+        let writer = saman::spawn_thread("fifo-writer", move || {
             let f = fs::OpenOptions::new().write(true).open(&path); // blocks until a reader opens
             tx.send(f.is_ok()).unwrap();
-        });
-        std::thread::sleep(Duration::from_millis(200)); // the writer is inside open(2)
+        })
+        .unwrap();
+        stund::real::sleep_blocking(Duration::from_millis(200)); // the writer is inside open(2)
         let r = read_regular(fd.as_fd(), Path::new("p"), 16);
         assert!(matches!(r, Err(FsError::NotRegular)), "{r:?}");
         assert!(

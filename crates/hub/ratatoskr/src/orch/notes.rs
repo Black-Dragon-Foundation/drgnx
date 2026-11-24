@@ -33,7 +33,7 @@ impl Needs {
     }
 }
 
-fn diff(dir: &Path, from: &str, to: &str) -> Result<Diff, String> {
+fn diff(dir: &Path, from: &str, to: &str) -> villa::Result<Diff> {
     Ok(notes::ranges(&git(
         dir,
         &["diff", "-U0", "--no-color", "--no-renames", from, to],
@@ -41,7 +41,7 @@ fn diff(dir: &Path, from: &str, to: &str) -> Result<Diff, String> {
 }
 
 /// What merging THEIRS into OURS (commits in DIR) needs notes for, with SHARED the pack's shared-path globs.
-pub fn needs(dir: &Path, ours: &str, theirs: &str, shared: &[String]) -> Result<Needs, String> {
+pub fn needs(dir: &Path, ours: &str, theirs: &str, shared: &[String]) -> villa::Result<Needs> {
     let base = git(dir, &["merge-base", ours, theirs])?.trim().to_owned();
     let (o, t) = (diff(dir, &base, ours)?, diff(dir, &base, theirs)?);
     let hunks = notes::conflicts(&o, &t);
@@ -85,7 +85,7 @@ fn touches(dir: &Path, n: &Needs, side: Side, key: &str, sha: &str) -> bool {
 
 /// What keeps the merges in BASE..TIP from passing: each two-parent merge's `Merge-note:` lines against what it
 /// needs (its first parent is ours, the merged one theirs).  Empty: they pass.
-pub fn check(dir: &Path, base: &str, tip: &str, shared: &[String]) -> Result<Vec<String>, String> {
+pub fn check(dir: &Path, base: &str, tip: &str, shared: &[String]) -> villa::Result<Vec<String>> {
     let list = git(
         dir,
         &[
@@ -116,10 +116,9 @@ pub fn check(dir: &Path, base: &str, tip: &str, shared: &[String]) -> Result<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     fn run(dir: &Path, args: &[&str]) -> (bool, String) {
-        let out = Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -147,7 +146,7 @@ mod tests {
     fn commit(dir: &Path, file: &str, text: &str, message: &str) -> String {
         let p = dir.join(file);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, text).unwrap();
+        crate::fsio::write(p, text).unwrap();
         sh(dir, &["add", "-A"]);
         sh(dir, &["commit", "-q", "-m", message]);
         sh(dir, &["rev-parse", "HEAD"])
@@ -192,7 +191,7 @@ mod tests {
         let numerals = commit(p, "f.txt", &LINES.replace("3\n", "III\n"), "task: numerals");
         let (ok, _) = run(p, &["merge", "-q", "line"]);
         assert!(!ok, "the merge conflicts");
-        std::fs::write(p.join("f.txt"), LINES.replace("3\n", "III three\n")).unwrap();
+        crate::fsio::write(p.join("f.txt"), LINES.replace("3\n", "III three\n")).unwrap();
         sh(p, &["add", "-A"]);
         let s = Shas {
             base,

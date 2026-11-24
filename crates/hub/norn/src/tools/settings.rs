@@ -108,7 +108,7 @@ fn secret(text: &str) -> Option<&'static str> {
 /// C's name, value and reason as an agent may send them: the value one datum of Lisp data (`huginn`: no reader macro,
 /// nothing evaluated), no secret in the value or the reason, and the name not on the deny-list. Each refusal starts
 /// with the argument's path.
-pub fn check_change(name: &str, value: &str, reason: &str) -> Result<(), String> {
+pub(crate) fn check_change(name: &str, value: &str, reason: &str) -> Result<(), String> {
     check_name("name", name)?;
     if value.len() > MAX_VALUE {
         return Err(format!("value: at most {MAX_VALUE} bytes"));
@@ -218,7 +218,7 @@ pub async fn propose(
     change: &Change,
     req: Option<String>,
     wait: Duration,
-) -> Result<(i64, EditorAnswer), String> {
+) -> villa::Result<(i64, EditorAnswer)> {
     let mut meta = caller.tx_meta(PROPOSED_TOOL);
     meta.state = TxState::Proposed;
     meta.note = Some(change.reason.clone());
@@ -232,7 +232,7 @@ pub async fn propose(
             Ok(tx.id())
         })
         .await
-        .map_err(err)?;
+        .map_err(|e| villa::Error::refused(err(e)))?;
     coord.hub().notify();
     let event = Proposed {
         tx,
@@ -269,7 +269,12 @@ pub fn card_data(caller: &Caller, change: &Change, project: &str) -> Value {
 
 /// A settings access card's DATA as the agent that asked and its change, checked again ([`check_change`]); `None`
 /// when the card is not a settings card. The caller is always of class agent: an outside agent never gets a card.
-pub fn card_request(data: &Value) -> Option<Result<(Caller, Change), String>> {
+pub fn card_request(data: &Value) -> Option<villa::Result<(Caller, Change)>> {
+    card_text(data).map(|r| r.map_err(villa::Error::invalid))
+}
+
+/// [`card_request`] with its refusal as the text the tools show.
+fn card_text(data: &Value) -> Option<Result<(Caller, Change), String>> {
     let s = data.get("setting")?;
     Some((|| {
         let session = data["session"]
@@ -430,7 +435,9 @@ async fn settings_change(coord: &Coord, who: &Identity, a: ChangeArgs) -> Result
         }
         Err(e) => return Err(CoordError::from(e).to_string()),
     }
-    let (tx, answer) = propose(coord, &caller, &change, None, CONFIRM_WAIT).await?;
+    let (tx, answer) = propose(coord, &caller, &change, None, CONFIRM_WAIT)
+        .await
+        .map_err(|e| e.to_string())?;
     let name = &change.name;
     Ok(match answer {
         EditorAnswer::Confirmed { ok: true, .. } => Answer {
@@ -577,10 +584,10 @@ mod tests {
         fn notify(&self) {}
         fn propose(&self, event: Proposed, _wait: Duration) -> BoxFuture<'_, EditorAnswer> {
             Box::pin(async move {
-                let a = self.answer.lock().unwrap().clone();
+                let a = saman::lock(&self.answer).clone();
                 match a {
                     Some(a) => {
-                        self.proposed.lock().unwrap().push(event);
+                        saman::lock(&self.proposed).push(event);
                         a
                     }
                     None => EditorAnswer::NoEditor,
@@ -593,7 +600,7 @@ mod tests {
             _names: Option<Vec<String>>,
             _root: Option<String>,
         ) -> BoxFuture<'_, Option<Vec<Value>>> {
-            Box::pin(async move { self.explained.lock().unwrap().clone() })
+            Box::pin(async move { saman::lock(&self.explained).clone() })
         }
         fn known_settings(&self, names: Option<&[String]>) -> Vec<Value> {
             self.known
@@ -640,7 +647,7 @@ mod tests {
             let home = dir.path().join("alpha");
             std::fs::create_dir_all(&home).unwrap();
             let sha = format!("{:040x}", 0xa1fa_u128);
-            coord.projects().lock().unwrap().insert(
+            saman::lock(coord.projects()).insert(
                 home.clone(),
                 Some(ProjectRef {
                     id: format!("project:{}", &sha[28..]),
@@ -720,10 +727,7 @@ mod tests {
 
         /// The project `n` of the session's folder (after a tool registered it).
         fn project_n(&self) -> i64 {
-            self.coord
-                .projects()
-                .lock()
-                .unwrap()
+            saman::lock(self.coord.projects())
                 .project_n(&self.home)
                 .unwrap()
         }
@@ -769,195 +773,200 @@ mod tests {
             0
         );
         assert_eq!(w.count("select count(*) from card"), 0);
-        assert!(w.hub.proposed.lock().unwrap().is_empty());
+        assert!(saman::lock(&w.hub.proposed).is_empty());
     }
 
-    #[tokio::test]
-    async fn a_secret_is_refused() {
-        let w = World::new(editor(ok())).await;
-        w.grant(
-            Who::Session("s1".into()),
-            What::OptionsGlobal,
-            Access::Options,
-            None,
-        )
-        .await;
-        let me = w.agent("s1");
-        let key = concat!("\"sk-or-", "v1-0a1b2c3d4e5f60718293a4b5c6d7e8f9\"");
-        let out = w
-            .call(&me, "settings_change", change("global", "my-api-key", key))
+    #[test]
+    fn a_secret_is_refused() {
+        saman::block_on_current(async {
+            let w = World::new(editor(ok())).await;
+            w.grant(
+                Who::Session("s1".into()),
+                What::OptionsGlobal,
+                Access::Options,
+                None,
+            )
             .await;
-        assert!(
-            out.err && out.text.starts_with("value: looks like a secret"),
-            "{}",
-            out.text
-        );
-        // inside a printed string too
-        let quoted = concat!(
-            "\"{\\\"api_key\\\": \\\"sk-ant-",
-            "api03-Xy7Kp2Qm9Rt4Vw8Zb3Nc6Hd1Jf5Lg0Ps\\\"}\""
-        );
-        let out = w
-            .call(&me, "settings_change", change("global", "my-json", quoted))
-            .await;
-        assert!(
-            out.err && out.text.starts_with("value: looks like a secret"),
-            "{}",
-            out.text
-        );
-        // a secret as the reason
-        let mut args = change("global", "fill-column", "80");
-        args["reason"] = json!(concat!("ghp_", "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3h"));
-        let out = w.call(&me, "settings_change", args).await;
-        assert!(
-            out.err && out.text.starts_with("reason: looks like a secret"),
-            "{}",
-            out.text
-        );
-        untouched(&w);
-    }
-
-    #[tokio::test]
-    async fn a_denied_name_is_refused() {
-        let w = World::new(editor(ok())).await;
-        w.grant(
-            Who::Session("s1".into()),
-            What::OptionsGlobal,
-            Access::Options,
-            Some(&["*"]),
-        )
-        .await;
-        let me = w.agent("s1");
-        for name in [
-            "load-path",
-            "drgnx-agents-allow-unsandboxed",
-            "safe-local-variable-values",
-            "after-save-hook",
-            "python-shell-interpreter",
-            "eval",
-        ] {
+            let me = w.agent("s1");
+            let key = concat!("\"sk-or-", "v1-0a1b2c3d4e5f60718293a4b5c6d7e8f9\"");
             let out = w
-                .call(&me, "settings_change", change("global", name, "nil"))
+                .call(&me, "settings_change", change("global", "my-api-key", key))
                 .await;
-            assert!(out.err, "{name}");
-            assert_eq!(out.text, format!("name: {name} {DENY_LISTED}"), "{name}");
-        }
-        untouched(&w);
-        // the store's rule refuses it too, whatever the tool says (the mutation check's other layer)
-        let caller = Caller {
-            class: Class::Agent,
-            actor: "agent:s1".into(),
-            session: Some("s1".into()),
-            profile: None,
-            job: None,
-            project: None,
-        };
-        let change = Change {
-            scope: SettingScope::Global,
-            name: "load-path".into(),
-            value: "nil".into(),
-            reason: "r".into(),
-            root: None,
-        };
-        let e = propose(&w.coord, &caller, &change, None, Duration::ZERO)
-            .await
-            .unwrap_err();
-        assert_eq!(e, options::DENIED);
-        // a name no variable has (a keyword, nil, the editor's refused characters): the store's rule refuses it as
-        // deny-listed too (the tool refuses it as no name: `value_is_parsed_as_data`), so no grant or card carries it
-        for name in [
-            ":eval",
-            ":mode",
-            ":dir",
-            "nil",
-            "t",
-            "fill(column",
-            "a;b",
-            "a#b",
-            "a[b",
-        ] {
             assert!(
-                check_change(name, "nil", "r")
-                    .unwrap_err()
-                    .starts_with("name: a variable's name"),
-                "{name}"
+                out.err && out.text.starts_with("value: looks like a secret"),
+                "{}",
+                out.text
             );
+            // inside a printed string too
+            let quoted = concat!(
+                "\"{\\\"api_key\\\": \\\"sk-ant-",
+                "api03-Xy7Kp2Qm9Rt4Vw8Zb3Nc6Hd1Jf5Lg0Ps\\\"}\""
+            );
+            let out = w
+                .call(&me, "settings_change", change("global", "my-json", quoted))
+                .await;
+            assert!(
+                out.err && out.text.starts_with("value: looks like a secret"),
+                "{}",
+                out.text
+            );
+            // a secret as the reason
+            let mut args = change("global", "fill-column", "80");
+            args["reason"] = json!(concat!("ghp_", "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3h"));
+            let out = w.call(&me, "settings_change", args).await;
+            assert!(
+                out.err && out.text.starts_with("reason: looks like a secret"),
+                "{}",
+                out.text
+            );
+            untouched(&w);
+        })
+    }
+
+    #[test]
+    fn a_denied_name_is_refused() {
+        saman::block_on_current(async {
+            let w = World::new(editor(ok())).await;
+            w.grant(
+                Who::Session("s1".into()),
+                What::OptionsGlobal,
+                Access::Options,
+                Some(&["*"]),
+            )
+            .await;
+            let me = w.agent("s1");
+            for name in [
+                "load-path",
+                "drgnx-agents-allow-unsandboxed",
+                "safe-local-variable-values",
+                "after-save-hook",
+                "python-shell-interpreter",
+                "eval",
+            ] {
+                let out = w
+                    .call(&me, "settings_change", change("global", name, "nil"))
+                    .await;
+                assert!(out.err, "{name}");
+                assert_eq!(out.text, format!("name: {name} {DENY_LISTED}"), "{name}");
+            }
+            untouched(&w);
+            // the store's rule refuses it too, whatever the tool says (the mutation check's other layer)
+            let caller = Caller {
+                class: Class::Agent,
+                actor: "agent:s1".into(),
+                session: Some("s1".into()),
+                profile: None,
+                job: None,
+                project: None,
+            };
             let change = Change {
-                name: name.into(),
-                ..change.clone()
+                scope: SettingScope::Global,
+                name: "load-path".into(),
+                value: "nil".into(),
+                reason: "r".into(),
+                root: None,
             };
             let e = propose(&w.coord, &caller, &change, None, Duration::ZERO)
                 .await
                 .unwrap_err();
-            assert_eq!(e, options::DENIED, "{name}");
-        }
-        untouched(&w);
+            assert_eq!(e.to_string(), options::DENIED);
+            // a name no variable has (a keyword, nil, the editor's refused characters): the store's rule refuses it as
+            // deny-listed too (the tool refuses it as no name: `value_is_parsed_as_data`), so no grant or card carries it
+            for name in [
+                ":eval",
+                ":mode",
+                ":dir",
+                "nil",
+                "t",
+                "fill(column",
+                "a;b",
+                "a#b",
+                "a[b",
+            ] {
+                assert!(
+                    check_change(name, "nil", "r")
+                        .unwrap_err()
+                        .starts_with("name: a variable's name"),
+                    "{name}"
+                );
+                let change = Change {
+                    name: name.into(),
+                    ..change.clone()
+                };
+                let e = propose(&w.coord, &caller, &change, None, Duration::ZERO)
+                    .await
+                    .unwrap_err();
+                assert_eq!(e.to_string(), options::DENIED, "{name}");
+            }
+            untouched(&w);
+        })
     }
 
     /// R3: a card's "Allow once" grant covers only the hub's proposal of that card's change (its request key), once;
     /// the agent's own change while it lives, with a second value, gets a card of its own.
-    #[tokio::test]
-    async fn a_once_grant_covers_only_its_cards_proposal() {
-        let w = World::new(editor(ok())).await;
-        w.db.write(TxMeta::new("user", Class::User, "test"), |tx| {
-            grants::create_options_once(
-                tx,
-                Who::Session("s1".into()),
-                What::OptionsGlobal,
-                "fill-column".into(),
-                7,
-                None,
-            )?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-        let me = w.agent("s1");
-        let out = w
-            .call(
-                &me,
-                "settings_change",
-                change("global", "fill-column", "999"),
+    #[test]
+    fn a_once_grant_covers_only_its_cards_proposal() {
+        saman::block_on_current(async {
+            let w = World::new(editor(ok())).await;
+            w.db.write(TxMeta::new("user", Class::User, "test"), |tx| {
+                grants::create_options_once(
+                    tx,
+                    Who::Session("s1".into()),
+                    What::OptionsGlobal,
+                    "fill-column".into(),
+                    7,
+                    None,
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+            let me = w.agent("s1");
+            let out = w
+                .call(
+                    &me,
+                    "settings_change",
+                    change("global", "fill-column", "999"),
+                )
+                .await;
+            assert!(!out.err, "{}", out.text);
+            assert!(out.structured["card"].as_i64().is_some(), "{}", out.text);
+            assert_eq!(
+                w.count("select count(*) from entity where kind = 'option'"),
+                0
+            );
+            let caller = Caller {
+                class: Class::Agent,
+                actor: "agent:s1".into(),
+                session: Some("s1".into()),
+                profile: None,
+                job: None,
+                project: None,
+            };
+            let ch = |value: &str| Change {
+                scope: SettingScope::Global,
+                name: "fill-column".into(),
+                value: value.into(),
+                reason: "r".into(),
+                root: None,
+            };
+            // the store's rule too: no key, or another card's, is not covered
+            for req in [None, Some(options::card_req(8))] {
+                let e = propose(&w.coord, &caller, &ch("999"), req, Duration::ZERO)
+                    .await
+                    .unwrap_err();
+                assert_eq!(e.to_string(), options::NO_GRANT);
+            }
+            propose(
+                &w.coord,
+                &caller,
+                &ch("100"),
+                Some(options::card_req(7)),
+                Duration::ZERO,
             )
-            .await;
-        assert!(!out.err, "{}", out.text);
-        assert!(out.structured["card"].as_i64().is_some(), "{}", out.text);
-        assert_eq!(
-            w.count("select count(*) from entity where kind = 'option'"),
-            0
-        );
-        let caller = Caller {
-            class: Class::Agent,
-            actor: "agent:s1".into(),
-            session: Some("s1".into()),
-            profile: None,
-            job: None,
-            project: None,
-        };
-        let ch = |value: &str| Change {
-            scope: SettingScope::Global,
-            name: "fill-column".into(),
-            value: value.into(),
-            reason: "r".into(),
-            root: None,
-        };
-        // the store's rule too: no key, or another card's, is not covered
-        for req in [None, Some(options::card_req(8))] {
-            let e = propose(&w.coord, &caller, &ch("999"), req, Duration::ZERO)
-                .await
-                .unwrap_err();
-            assert_eq!(e, options::NO_GRANT);
-        }
-        propose(
-            &w.coord,
-            &caller,
-            &ch("100"),
-            Some(options::card_req(7)),
-            Duration::ZERO,
-        )
-        .await
-        .unwrap();
-        let value: String = w
+            .await
+            .unwrap();
+            let value: String = w
             .conn()
             .query_row(
                 "select json_extract(data, '$.value') from entity where id = 'option:global:fill-column'",
@@ -965,152 +974,156 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(value, "100");
+            assert_eq!(value, "100");
+        })
     }
 
-    #[tokio::test]
-    async fn without_a_grant_a_card() {
-        let w = World::new(editor(ok())).await;
-        let me = w.agent("s1");
-        let out = w
-            .call(
-                &me,
-                "settings_change",
-                change("shared", "fill-column", "100"),
+    #[test]
+    fn without_a_grant_a_card() {
+        saman::block_on_current(async {
+            let w = World::new(editor(ok())).await;
+            let me = w.agent("s1");
+            let out = w
+                .call(
+                    &me,
+                    "settings_change",
+                    change("shared", "fill-column", "100"),
+                )
+                .await;
+            assert!(!out.err, "{}", out.text);
+            let card = out.structured["card"].as_i64().unwrap();
+            let (kind, state, title, data): (String, String, String, String) = w
+                .conn()
+                .query_row(
+                    "select kind, state, title, data from card where id = ?1",
+                    [card],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!((kind.as_str(), state.as_str()), ("access", "open"));
+            assert_eq!(
+                title,
+                "s1 (p) in alpha asks to set fill-column to 100 (shared)"
+            );
+            let data: Value = serde_json::from_str(&data).unwrap();
+            assert_eq!(data["choices"], json!(CARD_CHOICES));
+            assert_eq!(data["project_n"], json!(w.project_n()));
+            // the card names the request exactly: the hub settles it into this caller and change
+            let (caller, ch) = card_request(&data).unwrap().unwrap();
+            assert_eq!(
+                (
+                    caller.class,
+                    caller.actor.as_str(),
+                    caller.session.as_deref(),
+                    caller.profile.as_deref()
+                ),
+                (Class::Agent, "agent:s1", Some("s1"), Some("p"))
+            );
+            assert_eq!(caller.project, Some(w.project_n()));
+            assert_eq!(
+                ch,
+                Change {
+                    scope: SettingScope::Shared,
+                    name: "fill-column".into(),
+                    value: "100".into(),
+                    reason: "the tests need it".into(),
+                    root: Some(w.home.display().to_string()),
+                }
+            );
+            // the same request again is the same card; another value is another card
+            let again = w
+                .call(
+                    &me,
+                    "settings_change",
+                    change("shared", "fill-column", "100"),
+                )
+                .await;
+            assert_eq!(again.structured["card"].as_i64(), Some(card));
+            let other = w
+                .call(
+                    &me,
+                    "settings_change",
+                    change("shared", "fill-column", "90"),
+                )
+                .await;
+            assert_ne!(other.structured["card"].as_i64(), Some(card));
+            // a grant for another name, or a read grant, is no grant to change it
+            w.grant(
+                Who::Session("s1".into()),
+                What::OptionsProject,
+                Access::Options,
+                Some(&["tab-*"]),
             )
             .await;
-        assert!(!out.err, "{}", out.text);
-        let card = out.structured["card"].as_i64().unwrap();
-        let (kind, state, title, data): (String, String, String, String) = w
-            .conn()
-            .query_row(
-                "select kind, state, title, data from card where id = ?1",
-                [card],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )
-            .unwrap();
-        assert_eq!((kind.as_str(), state.as_str()), ("access", "open"));
-        assert_eq!(
-            title,
-            "s1 (p) in alpha asks to set fill-column to 100 (shared)"
-        );
-        let data: Value = serde_json::from_str(&data).unwrap();
-        assert_eq!(data["choices"], json!(CARD_CHOICES));
-        assert_eq!(data["project_n"], json!(w.project_n()));
-        // the card names the request exactly: the hub settles it into this caller and change
-        let (caller, ch) = card_request(&data).unwrap().unwrap();
-        assert_eq!(
-            (
-                caller.class,
-                caller.actor.as_str(),
-                caller.session.as_deref(),
-                caller.profile.as_deref()
-            ),
-            (Class::Agent, "agent:s1", Some("s1"), Some("p"))
-        );
-        assert_eq!(caller.project, Some(w.project_n()));
-        assert_eq!(
-            ch,
-            Change {
-                scope: SettingScope::Shared,
-                name: "fill-column".into(),
-                value: "100".into(),
-                reason: "the tests need it".into(),
-                root: Some(w.home.display().to_string()),
-            }
-        );
-        // the same request again is the same card; another value is another card
-        let again = w
-            .call(
-                &me,
-                "settings_change",
-                change("shared", "fill-column", "100"),
-            )
-            .await;
-        assert_eq!(again.structured["card"].as_i64(), Some(card));
-        let other = w
-            .call(
-                &me,
-                "settings_change",
-                change("shared", "fill-column", "90"),
-            )
-            .await;
-        assert_ne!(other.structured["card"].as_i64(), Some(card));
-        // a grant for another name, or a read grant, is no grant to change it
-        w.grant(
-            Who::Session("s1".into()),
-            What::OptionsProject,
-            Access::Options,
-            Some(&["tab-*"]),
-        )
-        .await;
-        w.grant(Who::Session("s1".into()), What::All, Access::Read, None)
-            .await;
-        let out = w
-            .call(
-                &me,
-                "settings_change",
-                change("shared", "fill-column", "70"),
-            )
-            .await;
-        assert!(out.structured["card"].is_i64(), "{}", out.text);
-        assert_eq!(
-            w.count("select count(*) from entity where kind = 'option'"),
-            0
-        );
-        assert!(w.hub.proposed.lock().unwrap().is_empty());
-        // a card that is not a settings card, and one whose change does not check
-        assert!(card_request(&json!({"session": "s1", "target": "beta"})).is_none());
-        let mut bad = data.clone();
-        bad["setting"]["name"] = json!("load-path");
-        assert!(card_request(&bad).unwrap().is_err());
-        let mut bad = data.clone();
-        bad["session"] = json!("");
-        assert!(card_request(&bad).unwrap().is_err());
-        let mut bad = data;
-        bad["setting"]["scope"] = json!("everywhere");
-        assert!(card_request(&bad).unwrap().is_err());
+            w.grant(Who::Session("s1".into()), What::All, Access::Read, None)
+                .await;
+            let out = w
+                .call(
+                    &me,
+                    "settings_change",
+                    change("shared", "fill-column", "70"),
+                )
+                .await;
+            assert!(out.structured["card"].is_i64(), "{}", out.text);
+            assert_eq!(
+                w.count("select count(*) from entity where kind = 'option'"),
+                0
+            );
+            assert!(saman::lock(&w.hub.proposed).is_empty());
+            // a card that is not a settings card, and one whose change does not check
+            assert!(card_request(&json!({"session": "s1", "target": "beta"})).is_none());
+            let mut bad = data.clone();
+            bad["setting"]["name"] = json!("load-path");
+            assert!(card_request(&bad).unwrap().is_err());
+            let mut bad = data.clone();
+            bad["session"] = json!("");
+            assert!(card_request(&bad).unwrap().is_err());
+            let mut bad = data;
+            bad["setting"]["scope"] = json!("everywhere");
+            assert!(card_request(&bad).unwrap().is_err());
+        })
     }
 
-    #[tokio::test]
-    async fn with_a_grant_a_proposed_tx() {
-        let w = World::new(editor(ok())).await;
-        w.grant(
-            Who::Session("s1".into()),
-            What::OptionsGlobal,
-            Access::Options,
-            Some(&["fill-*"]),
-        )
-        .await;
-        let me = w.agent("s1");
-        let out = w
-            .call(
-                &me,
-                "settings_change",
-                change("global", "fill-column", " 80 "),
+    #[test]
+    fn with_a_grant_a_proposed_tx() {
+        saman::block_on_current(async {
+            let w = World::new(editor(ok())).await;
+            w.grant(
+                Who::Session("s1".into()),
+                What::OptionsGlobal,
+                Access::Options,
+                Some(&["fill-*"]),
             )
             .await;
-        assert!(!out.err, "{}", out.text);
-        let tx = out.structured["changed"].as_i64().unwrap();
-        let row: (String, String, String, String, Option<String>) = w
-            .conn()
-            .query_row(
-                "select actor, class, tool, state, note from tx where id = ?1",
-                [tx],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            row,
-            (
-                "agent:s1".into(),
-                "agent".into(),
-                PROPOSED_TOOL.into(),
-                "proposed".into(),
-                Some("the tests need it".into())
-            )
-        );
-        let (value, project): (String, Option<i64>) = w
+            let me = w.agent("s1");
+            let out = w
+                .call(
+                    &me,
+                    "settings_change",
+                    change("global", "fill-column", " 80 "),
+                )
+                .await;
+            assert!(!out.err, "{}", out.text);
+            let tx = out.structured["changed"].as_i64().unwrap();
+            let row: (String, String, String, String, Option<String>) = w
+                .conn()
+                .query_row(
+                    "select actor, class, tool, state, note from tx where id = ?1",
+                    [tx],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                row,
+                (
+                    "agent:s1".into(),
+                    "agent".into(),
+                    PROPOSED_TOOL.into(),
+                    "proposed".into(),
+                    Some("the tests need it".into())
+                )
+            );
+            let (value, project): (String, Option<i64>) = w
             .conn()
             .query_row(
                 "select json_extract(data, '$.value'), project from entity where id = 'option:global:fill-column'",
@@ -1118,111 +1131,112 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!((value.as_str(), project), ("80", None));
-        let sent = w.hub.proposed.lock().unwrap().clone();
-        assert_eq!(
-            sent,
-            [Proposed {
-                tx,
-                scope: SettingScope::Global,
-                name: "fill-column".into(),
-                value: "80".into(),
-                root: Some(w.home.display().to_string()),
-                agent: "agent:s1".into(),
-                reason: "the tests need it".into(),
-            }]
-        );
-        // the project's settings under a project grant: the id is the project's, the entity in it
-        w.grant(
-            Who::Session("s1".into()),
-            What::OptionsProject,
-            Access::Options,
-            None,
-        )
-        .await;
-        let out = w
-            .call(&me, "settings_change", change("private", "tab-width", "4"))
-            .await;
-        assert!(out.structured["changed"].is_i64(), "{}", out.text);
-        let p = w.project_n();
-        let bare: String = w
-            .conn()
-            .query_row("select id from entity where n = ?1", [p], |r| r.get(0))
-            .unwrap();
-        let id = format!(
-            "option:private/{}:tab-width",
-            bare.strip_prefix("project:").unwrap()
-        );
-        assert_eq!(
-            w.count(&format!(
-                "select count(*) from entity where id = '{id}' and project = {p}"
-            )),
-            1
-        );
-        // a second change of a setting is a new version of it
-        let out = w
-            .call(
-                &me,
-                "settings_change",
-                change("global", "fill-column", "72"),
+            assert_eq!((value.as_str(), project), ("80", None));
+            let sent = saman::lock(&w.hub.proposed).clone();
+            assert_eq!(
+                sent,
+                [Proposed {
+                    tx,
+                    scope: SettingScope::Global,
+                    name: "fill-column".into(),
+                    value: "80".into(),
+                    root: Some(w.home.display().to_string()),
+                    agent: "agent:s1".into(),
+                    reason: "the tests need it".into(),
+                }]
+            );
+            // the project's settings under a project grant: the id is the project's, the entity in it
+            w.grant(
+                Who::Session("s1".into()),
+                What::OptionsProject,
+                Access::Options,
+                None,
             )
             .await;
-        assert!(out.structured["changed"].is_i64(), "{}", out.text);
-        assert_eq!(
-            w.count("select ver from entity where id = 'option:global:fill-column'"),
-            2
-        );
-        // the editor's refusal is the agent's answer
-        *w.hub.answer.lock().unwrap() = Some(EditorAnswer::Confirmed {
-            ok: false,
-            error: Some("not a number".into()),
-        });
-        let out = w
-            .call(&me, "settings_change", change("global", "fill-column", "x"))
-            .await;
-        assert_eq!(out.structured["error"], "not a number");
-        assert!(out.structured["refused"].is_i64());
-        *w.hub.answer.lock().unwrap() = Some(EditorAnswer::Sent);
-        let out = w
-            .call(
-                &me,
-                "settings_change",
-                change("global", "fill-column", "60"),
+            let out = w
+                .call(&me, "settings_change", change("private", "tab-width", "4"))
+                .await;
+            assert!(out.structured["changed"].is_i64(), "{}", out.text);
+            let p = w.project_n();
+            let bare: String = w
+                .conn()
+                .query_row("select id from entity where n = ?1", [p], |r| r.get(0))
+                .unwrap();
+            let id = format!(
+                "option:private/{}:tab-width",
+                bare.strip_prefix("project:").unwrap()
+            );
+            assert_eq!(
+                w.count(&format!(
+                    "select count(*) from entity where id = '{id}' and project = {p}"
+                )),
+                1
+            );
+            // a second change of a setting is a new version of it
+            let out = w
+                .call(
+                    &me,
+                    "settings_change",
+                    change("global", "fill-column", "72"),
+                )
+                .await;
+            assert!(out.structured["changed"].is_i64(), "{}", out.text);
+            assert_eq!(
+                w.count("select ver from entity where id = 'option:global:fill-column'"),
+                2
+            );
+            // the editor's refusal is the agent's answer
+            *saman::lock(&w.hub.answer) = Some(EditorAnswer::Confirmed {
+                ok: false,
+                error: Some("not a number".into()),
+            });
+            let out = w
+                .call(&me, "settings_change", change("global", "fill-column", "x"))
+                .await;
+            assert_eq!(out.structured["error"], "not a number");
+            assert!(out.structured["refused"].is_i64());
+            *saman::lock(&w.hub.answer) = Some(EditorAnswer::Sent);
+            let out = w
+                .call(
+                    &me,
+                    "settings_change",
+                    change("global", "fill-column", "60"),
+                )
+                .await;
+            assert!(out.structured["pending"].is_i64(), "{}", out.text);
+            // an outside agent never changes a setting, grant or not
+            w.grant(
+                Who::Session("ext:claude:1-ab".into()),
+                What::OptionsGlobal,
+                Access::Options,
+                None,
             )
             .await;
-        assert!(out.structured["pending"].is_i64(), "{}", out.text);
-        // an outside agent never changes a setting, grant or not
-        w.grant(
-            Who::Session("ext:claude:1-ab".into()),
-            What::OptionsGlobal,
-            Access::Options,
-            None,
-        )
-        .await;
-        let outside = Identity::Outside {
-            id: "ext:claude:1-ab".into(),
-            kind: "claude".into(),
-            home: Some(w.home.clone()),
-            role: None,
-        };
-        let out = w
-            .call(
-                &outside,
-                "settings_change",
-                change("global", "fill-column", "50"),
-            )
-            .await;
-        assert!(out.err, "{}", out.text);
-        assert_eq!(out.text, options::SETTINGS_ARE_THE_USERS);
-        // no identity: read-only
-        let out = w
-            .call(
-                &Identity::None,
-                "settings_change",
-                change("global", "fill-column", "50"),
-            )
-            .await;
-        assert!(out.err);
+            let outside = Identity::Outside {
+                id: "ext:claude:1-ab".into(),
+                kind: "claude".into(),
+                home: Some(w.home.clone()),
+                role: None,
+            };
+            let out = w
+                .call(
+                    &outside,
+                    "settings_change",
+                    change("global", "fill-column", "50"),
+                )
+                .await;
+            assert!(out.err, "{}", out.text);
+            assert_eq!(out.text, options::SETTINGS_ARE_THE_USERS);
+            // no identity: read-only
+            let out = w
+                .call(
+                    &Identity::None,
+                    "settings_change",
+                    change("global", "fill-column", "50"),
+                )
+                .await;
+            assert!(out.err);
+        })
     }
 
     /// The bounds of a name and a value: 1 to 256 characters, at most 16 KiB (the mutation check's misses).
@@ -1239,233 +1253,239 @@ mod tests {
         assert!(check_change("a\tb", "1", "r").is_err());
     }
 
-    #[tokio::test]
-    async fn no_editor_is_pending() {
-        let w = World::new(editor(None)).await;
-        w.grant(
-            Who::Session("s1".into()),
-            What::OptionsGlobal,
-            Access::Options,
-            None,
-        )
-        .await;
-        let out = w
-            .call(
-                &w.agent("s1"),
-                "settings_change",
-                change("global", "fill-column", "80"),
+    #[test]
+    fn no_editor_is_pending() {
+        saman::block_on_current(async {
+            let w = World::new(editor(None)).await;
+            w.grant(
+                Who::Session("s1".into()),
+                What::OptionsGlobal,
+                Access::Options,
+                None,
             )
             .await;
-        assert!(!out.err, "{}", out.text);
-        let tx = out.structured["pending"].as_i64().unwrap();
-        assert!(out.text.contains("no editor"), "{}", out.text);
-        assert_eq!(
-            w.count(&format!(
-                "select count(*) from tx where id = {tx} and state = 'proposed'"
-            )),
-            1
-        );
-        // a project setting with no project: refused, nothing written
-        let w = World::new(editor(None)).await;
-        w.grant(
-            Who::Session("s2".into()),
-            What::OptionsProject,
-            Access::Options,
-            None,
-        )
-        .await;
-        // `/`: no repository, so no project (a temp folder might sit inside a checkout)
-        let nowhere = PathBuf::from("/");
-        let out = w
-            .call(
-                &agent_at("s2", &nowhere),
-                "settings_change",
-                change("private", "fill-column", "80"),
+            let out = w
+                .call(
+                    &w.agent("s1"),
+                    "settings_change",
+                    change("global", "fill-column", "80"),
+                )
+                .await;
+            assert!(!out.err, "{}", out.text);
+            let tx = out.structured["pending"].as_i64().unwrap();
+            assert!(out.text.contains("no editor"), "{}", out.text);
+            assert_eq!(
+                w.count(&format!(
+                    "select count(*) from tx where id = {tx} and state = 'proposed'"
+                )),
+                1
+            );
+            // a project setting with no project: refused, nothing written
+            let w = World::new(editor(None)).await;
+            w.grant(
+                Who::Session("s2".into()),
+                What::OptionsProject,
+                Access::Options,
+                None,
             )
             .await;
-        assert!(out.err);
-        assert_eq!(out.text, options::NO_PROJECT);
-        untouched(&w);
+            // `/`: no repository, so no project (a temp folder might sit inside a checkout)
+            let nowhere = PathBuf::from("/");
+            let out = w
+                .call(
+                    &agent_at("s2", &nowhere),
+                    "settings_change",
+                    change("private", "fill-column", "80"),
+                )
+                .await;
+            assert!(out.err);
+            assert_eq!(out.text, options::NO_PROJECT);
+            untouched(&w);
+        })
     }
 
-    #[tokio::test]
-    async fn get_without_editor_is_partial() {
-        let hub = EditorHub {
-            known: vec![
-                json!({"name": "drgnx-agents-default", "value": "claude", "source": "hub"}),
-                json!({"name": "drgnx-ai-providers", "value": [{"id": "x", "key": concat!("sk-or-", "v1-0a1b2c3d4e5f60718293a4b5c6d7e8f9")}], "source": "hub"}),
-            ],
-            ..EditorHub::default()
-        };
-        let w = World::new(hub).await;
-        let me = w.agent("s1");
-        // no grant: refused
-        let out = w
-            .call(&me, "settings_get", json!({"scope": "global"}))
-            .await;
-        assert!(out.err);
-        assert_eq!(out.text, options::NO_READ_GRANT);
-        // a read grant to `*` covers it
-        w.grant(Who::Session("s1".into()), What::All, Access::Read, None)
-            .await;
-        let out = w
-            .call(&me, "settings_get", json!({"scope": "global"}))
-            .await;
-        assert!(!out.err, "{}", out.text);
-        assert_eq!(out.structured["complete"], false);
-        assert_eq!(out.structured["note"], NO_EDITOR);
-        assert_eq!(out.structured["settings"][0]["value"], "claude");
-        // a secret never goes to an agent
-        assert_eq!(
-            out.structured["settings"][1]["value"][0]["key"],
-            "[redacted]"
-        );
-        assert!(
-            out.text.contains("drgnx-agents-default = claude"),
-            "{}",
-            out.text
-        );
-        assert!(out.text.contains(NO_EDITOR), "{}", out.text);
-        let out = w
-            .call(
-                &me,
-                "settings_get",
-                json!({"scope": "global", "names": ["drgnx-agents-default"]}),
-            )
-            .await;
-        assert_eq!(out.structured["settings"].as_array().unwrap().len(), 1);
-        // with an editor: its rows, complete
-        *w.hub.explained.lock().unwrap() = Some(vec![
-            json!({"name": "fill-column", "value": "80", "file": "settings.el", "line": 3}),
-        ]);
-        let out = w
-            .call(&me, "settings_get", json!({"scope": "shared"}))
-            .await;
-        assert_eq!(out.structured["complete"], true);
-        assert!(out.structured.get("note").is_none());
-        assert_eq!(out.structured["settings"][0]["line"], 3);
-        // bad arguments
-        let out = w.call(&me, "settings_get", json!({"scope": "local"})).await;
-        assert!(out.err && out.text.starts_with("scope:"), "{}", out.text);
-        let out = w
-            .call(
-                &me,
-                "settings_get",
-                json!({"scope": "global", "names": ["a b"]}),
-            )
-            .await;
-        assert!(out.err && out.text.starts_with("names[0]:"), "{}", out.text);
-        let many: Vec<String> = (0..=MAX_NAMES).map(|i| format!("v{i}")).collect();
-        let out = w
-            .call(
-                &me,
-                "settings_get",
-                json!({"scope": "global", "names": many}),
-            )
-            .await;
-        assert!(out.err && out.text.starts_with("names:"), "{}", out.text);
+    #[test]
+    fn get_without_editor_is_partial() {
+        saman::block_on_current(async {
+            let hub = EditorHub {
+                known: vec![
+                    json!({"name": "drgnx-agents-default", "value": "claude", "source": "hub"}),
+                    json!({"name": "drgnx-ai-providers", "value": [{"id": "x", "key": concat!("sk-or-", "v1-0a1b2c3d4e5f60718293a4b5c6d7e8f9")}], "source": "hub"}),
+                ],
+                ..EditorHub::default()
+            };
+            let w = World::new(hub).await;
+            let me = w.agent("s1");
+            // no grant: refused
+            let out = w
+                .call(&me, "settings_get", json!({"scope": "global"}))
+                .await;
+            assert!(out.err);
+            assert_eq!(out.text, options::NO_READ_GRANT);
+            // a read grant to `*` covers it
+            w.grant(Who::Session("s1".into()), What::All, Access::Read, None)
+                .await;
+            let out = w
+                .call(&me, "settings_get", json!({"scope": "global"}))
+                .await;
+            assert!(!out.err, "{}", out.text);
+            assert_eq!(out.structured["complete"], false);
+            assert_eq!(out.structured["note"], NO_EDITOR);
+            assert_eq!(out.structured["settings"][0]["value"], "claude");
+            // a secret never goes to an agent
+            assert_eq!(
+                out.structured["settings"][1]["value"][0]["key"],
+                "[redacted]"
+            );
+            assert!(
+                out.text.contains("drgnx-agents-default = claude"),
+                "{}",
+                out.text
+            );
+            assert!(out.text.contains(NO_EDITOR), "{}", out.text);
+            let out = w
+                .call(
+                    &me,
+                    "settings_get",
+                    json!({"scope": "global", "names": ["drgnx-agents-default"]}),
+                )
+                .await;
+            assert_eq!(out.structured["settings"].as_array().unwrap().len(), 1);
+            // with an editor: its rows, complete
+            *saman::lock(&w.hub.explained) = Some(vec![
+                json!({"name": "fill-column", "value": "80", "file": "settings.el", "line": 3}),
+            ]);
+            let out = w
+                .call(&me, "settings_get", json!({"scope": "shared"}))
+                .await;
+            assert_eq!(out.structured["complete"], true);
+            assert!(out.structured.get("note").is_none());
+            assert_eq!(out.structured["settings"][0]["line"], 3);
+            // bad arguments
+            let out = w.call(&me, "settings_get", json!({"scope": "local"})).await;
+            assert!(out.err && out.text.starts_with("scope:"), "{}", out.text);
+            let out = w
+                .call(
+                    &me,
+                    "settings_get",
+                    json!({"scope": "global", "names": ["a b"]}),
+                )
+                .await;
+            assert!(out.err && out.text.starts_with("names[0]:"), "{}", out.text);
+            let many: Vec<String> = (0..=MAX_NAMES).map(|i| format!("v{i}")).collect();
+            let out = w
+                .call(
+                    &me,
+                    "settings_get",
+                    json!({"scope": "global", "names": many}),
+                )
+                .await;
+            assert!(out.err && out.text.starts_with("names:"), "{}", out.text);
+        })
     }
 
-    #[tokio::test]
-    async fn value_is_parsed_as_data() {
-        let w = World::new(editor(ok())).await;
-        w.grant(
-            Who::Session("s1".into()),
-            What::OptionsGlobal,
-            Access::Options,
-            None,
-        )
-        .await;
-        let me = w.agent("s1");
-        for (value, want) in [
-            ("#.(shell-command \"touch x\")", "value: not Lisp data"),
-            ("`(a ,b)", "value: not Lisp data"),
-            ("(a", "value: not Lisp data"),
-            ("", "value: one Lisp value"),
-            ("1 2", "value: one Lisp value"),
-        ] {
+    #[test]
+    fn value_is_parsed_as_data() {
+        saman::block_on_current(async {
+            let w = World::new(editor(ok())).await;
+            w.grant(
+                Who::Session("s1".into()),
+                What::OptionsGlobal,
+                Access::Options,
+                None,
+            )
+            .await;
+            let me = w.agent("s1");
+            for (value, want) in [
+                ("#.(shell-command \"touch x\")", "value: not Lisp data"),
+                ("`(a ,b)", "value: not Lisp data"),
+                ("(a", "value: not Lisp data"),
+                ("", "value: one Lisp value"),
+                ("1 2", "value: one Lisp value"),
+            ] {
+                let out = w
+                    .call(
+                        &me,
+                        "settings_change",
+                        change("global", "fill-column", value),
+                    )
+                    .await;
+                assert!(
+                    out.err && out.text.starts_with(want),
+                    "{value:?}: {}",
+                    out.text
+                );
+            }
+            let big = format!("\"{}\"", "x".repeat(MAX_VALUE));
             let out = w
                 .call(
                     &me,
                     "settings_change",
-                    change("global", "fill-column", value),
+                    change("global", "fill-column", &big),
                 )
                 .await;
             assert!(
-                out.err && out.text.starts_with(want),
-                "{value:?}: {}",
+                out.err && out.text.starts_with("value: at most"),
+                "{}",
                 out.text
             );
-        }
-        let big = format!("\"{}\"", "x".repeat(MAX_VALUE));
-        let out = w
-            .call(
-                &me,
-                "settings_change",
-                change("global", "fill-column", &big),
-            )
-            .await;
-        assert!(
-            out.err && out.text.starts_with("value: at most"),
-            "{}",
-            out.text
-        );
-        untouched(&w);
-        // data is data, whatever it looks like: a list that would be code is still only a value
-        for value in [
-            "(a . 1)",
-            "(shell-command \"touch x\")",
-            "\"text\"",
-            "?a",
-            "[1 2]",
-            "'x",
-        ] {
+            untouched(&w);
+            // data is data, whatever it looks like: a list that would be code is still only a value
+            for value in [
+                "(a . 1)",
+                "(shell-command \"touch x\")",
+                "\"text\"",
+                "?a",
+                "[1 2]",
+                "'x",
+            ] {
+                let out = w
+                    .call(
+                        &me,
+                        "settings_change",
+                        change("global", "fill-column", value),
+                    )
+                    .await;
+                assert!(out.structured["changed"].is_i64(), "{value}: {}", out.text);
+                assert_eq!(saman::lock(&w.hub.proposed).last().unwrap().value, value);
+            }
+            // a name that would read as a section, or is no name
+            for name in [
+                "mode/c-mode:fill-column",
+                "dir/src/:x",
+                "fill column",
+                "",
+                ":eval",
+                "nil",
+                "t",
+                "a\"b",
+                "a'b",
+                "a`b",
+                "a,b",
+                "a)b",
+                "a]b",
+                "a\\b",
+            ] {
+                let out = w
+                    .call(&me, "settings_change", change("global", name, "1"))
+                    .await;
+                assert!(out.err, "{name:?}");
+            }
+            // the shape refusals are the tool's own, before any grant or card
+            for name in [":eval", "nil", "t", "a\"b", "a)b", "a]b", "a\\b"] {
+                let out = w
+                    .call(&me, "settings_change", change("global", name, "1"))
+                    .await;
+                assert!(
+                    out.text.starts_with("name: a variable's name"),
+                    "{name:?}: {}",
+                    out.text
+                );
+            }
             let out = w
-                .call(
-                    &me,
-                    "settings_change",
-                    change("global", "fill-column", value),
-                )
+                .call(&me, "settings_change", change("everywhere", "x", "1"))
                 .await;
-            assert!(out.structured["changed"].is_i64(), "{value}: {}", out.text);
-            assert_eq!(w.hub.proposed.lock().unwrap().last().unwrap().value, value);
-        }
-        // a name that would read as a section, or is no name
-        for name in [
-            "mode/c-mode:fill-column",
-            "dir/src/:x",
-            "fill column",
-            "",
-            ":eval",
-            "nil",
-            "t",
-            "a\"b",
-            "a'b",
-            "a`b",
-            "a,b",
-            "a)b",
-            "a]b",
-            "a\\b",
-        ] {
-            let out = w
-                .call(&me, "settings_change", change("global", name, "1"))
-                .await;
-            assert!(out.err, "{name:?}");
-        }
-        // the shape refusals are the tool's own, before any grant or card
-        for name in [":eval", "nil", "t", "a\"b", "a)b", "a]b", "a\\b"] {
-            let out = w
-                .call(&me, "settings_change", change("global", name, "1"))
-                .await;
-            assert!(
-                out.text.starts_with("name: a variable's name"),
-                "{name:?}: {}",
-                out.text
-            );
-        }
-        let out = w
-            .call(&me, "settings_change", change("everywhere", "x", "1"))
-            .await;
-        assert!(out.err && out.text.starts_with("scope:"), "{}", out.text);
+            assert!(out.err && out.text.starts_with("scope:"), "{}", out.text);
+        })
     }
 }

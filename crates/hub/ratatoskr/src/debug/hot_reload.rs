@@ -15,20 +15,19 @@ const PYTHON: &[&str] = &["debugpy", "python"];
 
 /// Session ID's program takes PATH's functions as saved: `{patched: [qualname], skipped: [{name, why}],
 /// restarted}`. Refused while it runs and for adapters other than Python's.
-pub async fn hot_reload(d: &Debug, id: &str, path: &str) -> Result<Value, String> {
+pub async fn hot_reload(d: &Debug, id: &str, path: &str) -> villa::Result<Value> {
     let adapter = d
         .adapter_of(id)
-        .ok_or_else(|| format!("no debug session {id}"))?;
+        .ok_or_else(|| villa::Error::invalid(format!("no debug session {id}")))?;
     if !PYTHON.contains(&adapter.as_str()) {
-        return Err(
-            "hot reload is for Python sessions (debugpy): this adapter has no way to replace code"
-                .into(),
-        );
+        return Err(villa::Error::invalid(
+            "hot reload is for Python sessions (debugpy): this adapter has no way to replace code",
+        ));
     }
     let (h, caps) = d.handle_caps(id)?;
     let stop = d
         .stop_of(id)
-        .ok_or("hot reload needs the program stopped")?;
+        .ok_or_else(|| villa::Error::invalid("hot reload needs the program stopped"))?;
     let expression = format!(
         "(lambda g: (exec(compile({program}, '<drgnx-hot-reload>', 'exec'), g), \
          __import__('json').dumps(g['OUT']).encode().hex())[1])({{'PATH': {path}}})",
@@ -42,7 +41,8 @@ pub async fn hot_reload(d: &Debug, id: &str, path: &str) -> Result<Value, String
         )
         .await?;
     let answer = b.get("result").and_then(Value::as_str).unwrap_or_default();
-    let mut out = decode(answer).ok_or_else(|| format!("hot reload failed: {answer}"))?;
+    let mut out = decode(answer)
+        .ok_or_else(|| villa::Error::invalid(format!("hot reload failed: {answer}")))?;
     let restart = caps.get("supportsRestartFrame").and_then(Value::as_bool) == Some(true)
         && out["patched"].as_array().is_some_and(|p| !p.is_empty());
     if restart {

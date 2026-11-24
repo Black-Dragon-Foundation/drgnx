@@ -754,7 +754,7 @@ fn watcher(tx: Sender<Heard>) -> Option<notify::RecommendedWatcher> {
             },
             Err(_) => Heard::Rescan,
         };
-        let _ = tx.send(heard);
+        crate::soft::done(tx.send(heard), "tx send");
     })
     .ok()
 }
@@ -771,7 +771,7 @@ fn rewatch(
     use notify::{RecursiveMode, Watcher};
     let Some(w) = watcher.as_mut() else { return };
     for gone in watching.difference(&want) {
-        let _ = w.unwatch(gone);
+        crate::soft::done(w.unwatch(gone), "explorer");
     }
     watching.retain(|d| want.contains(d));
     aliases.retain(|_, d| want.contains(d));
@@ -954,7 +954,7 @@ struct Run {
 impl Run {
     fn end(&self) {
         self.cancel.store(true, Ordering::Relaxed);
-        let _ = self.stop.send(Heard::Stop);
+        crate::soft::done(self.stop.send(Heard::Stop), "stop send");
     }
 }
 
@@ -1305,35 +1305,33 @@ pub fn subscribe(f: &Front, c: &Caller, p: ExplorerParams) -> Result<ExplorerSta
     let Some(front) = views.front.get().cloned() else {
         return Err(invalid("view", "the hub is starting"));
     };
-    std::thread::Builder::new()
-        .name("explorer".into())
-        .spawn(move || {
-            if let Some(files) = only {
-                // Find: the tree of the files it found, from nothing on disk, not watched
-                let (kids, open) = only_tree(&roots, &files);
-                let entries = list_tree(&roots, &open, compact, &cancel, &mut |d| {
-                    kids.get(d).cloned().unwrap_or_default()
-                });
-                if let (Some(entries), Some(f)) = (entries, front.upgrade()) {
-                    f.core.views.explorer_listed(&f, conn, &view, id, entries);
-                }
-                return;
-            }
-            list_and_watch(first, &cancel, (tx, rx), &mut |at, entries, watched| {
-                front.upgrade().is_some_and(|f| {
-                    // a name made or removed outside Emacs may change git's status too
-                    if watched {
-                        f.core.views.letters.poke(conn, &at.roots);
-                    }
-                    // a listing a newer subscribe overtook is dropped; the thread goes on (the newer one is queued)
-                    f.core
-                        .views
-                        .explorer_listed(&f, conn, &view, at.id, entries);
-                    true
-                })
+    saman::spawn_thread("explorer", move || {
+        if let Some(files) = only {
+            // Find: the tree of the files it found, from nothing on disk, not watched
+            let (kids, open) = only_tree(&roots, &files);
+            let entries = list_tree(&roots, &open, compact, &cancel, &mut |d| {
+                kids.get(d).cloned().unwrap_or_default()
             });
-        })
-        .map_err(|e| invalid("view", &e.to_string()))?;
+            if let (Some(entries), Some(f)) = (entries, front.upgrade()) {
+                f.core.views.explorer_listed(&f, conn, &view, id, entries);
+            }
+            return;
+        }
+        list_and_watch(first, &cancel, (tx, rx), &mut |at, entries, watched| {
+            front.upgrade().is_some_and(|f| {
+                // a name made or removed outside Emacs may change git's status too
+                if watched {
+                    f.core.views.letters.poke(conn, &at.roots);
+                }
+                // a listing a newer subscribe overtook is dropped; the thread goes on (the newer one is queued)
+                f.core
+                    .views
+                    .explorer_listed(&f, conn, &view, at.id, entries);
+                true
+            })
+        });
+    })
+    .map_err(|e| invalid("view", e.message()))?;
     Ok(ExplorerStarted { listing: id })
 }
 

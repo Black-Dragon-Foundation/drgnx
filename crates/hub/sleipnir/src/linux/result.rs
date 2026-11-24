@@ -45,12 +45,10 @@ pub const RESULT: &str = "result.json";
 impl ResultJson {
     /// Writes it into DIR by rename, so a reader never sees half of it.
     pub fn write(&self, dir: &Path) -> io::Result<()> {
-        let tmp = dir.join(format!(".{RESULT}.tmp"));
-        std::fs::write(
-            &tmp,
+        crate::fsio::write(
+            dir.join(RESULT),
             serde_json::to_vec_pretty(self).map_err(io::Error::other)?,
-        )?;
-        std::fs::rename(&tmp, dir.join(RESULT))
+        )
     }
 
     /// Reads DIR's.

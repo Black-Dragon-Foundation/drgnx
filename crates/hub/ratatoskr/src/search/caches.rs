@@ -14,7 +14,7 @@ use hrafn::{StoreError, VectorCache};
 use hrafn_embed::fingerprint::Identity;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 /// How often the caches are swept.
@@ -40,7 +40,7 @@ impl Caches {
     /// The caches of STATE (`STATE/vectors/`): one per state directory in this process, so two projects of the state
     /// share each cache's one writer.
     pub fn shared(state: &Path) -> Arc<Caches> {
-        let mut r = registry().lock().unwrap_or_else(PoisonError::into_inner);
+        let mut r = saman::lock(registry());
         if let Some(c) = r.get(state).and_then(Weak::upgrade) {
             return c;
         }
@@ -86,9 +86,41 @@ impl Caches {
         self.open.lock().await.values().cloned().collect()
     }
 
+    /// The state directory the caches belong to (`<state>/code/` holds the repo stores).
+    pub fn state(&self) -> &Path {
+        &self.state
+    }
+
+    /// The ids of the repo stores on disk (`<state>/code/*.db`), sorted.
+    pub fn stores(&self) -> Vec<String> {
+        repo_stores(&self.state)
+    }
+
+    /// The identity (record and a label) of every cache file on disk, opened or not.
+    pub fn stored(&self) -> Vec<Identity> {
+        let Ok(rd) = std::fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<Identity> = rd
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "db"))
+            .filter_map(|p| {
+                let c = urdr::open_readonly(&p).ok()?;
+                let record = hrafn_embed::fingerprint::FingerprintRecord::from_json(
+                    &urdr::meta(&c, "record").ok()??,
+                )
+                .ok()?;
+                let id = Identity::new(record.clone(), record.model_id.clone());
+                (urdr::meta(&c, "fingerprint").ok()?? == id.fp.hex()).then_some(id)
+            })
+            .collect();
+        out.sort_by_key(|i| i.fp);
+        out
+    }
+
     /// `drgnx-search-cache-cap`: the bytes of unheld keys a collection keeps (none: MP-7's rule).
     pub fn set_cap(&self, cap: Option<u64>) {
-        *self.cap.lock().unwrap_or_else(PoisonError::into_inner) = cap;
+        *saman::lock(&self.cap) = cap;
     }
 
     /// The sweep, when [`CACHE_SWEEP`] has passed since the last (NOW the virtual clock's, NOW_MS the wall clock's
@@ -99,16 +131,13 @@ impl Caches {
         now_ms: i64,
     ) -> Result<Option<u32>, StoreError> {
         {
-            let mut last = self
-                .last_sweep
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut last = saman::lock(&self.last_sweep);
             if last.is_some_and(|t| now.saturating_duration_since(t) < CACHE_SWEEP) {
                 return Ok(None);
             }
             *last = Some(now);
         }
-        let cap = *self.cap.lock().unwrap_or_else(PoisonError::into_inner);
+        let cap = *saman::lock(&self.cap);
         let mut gone = 0u32;
         for c in self.opened().await {
             c.release_gone(now_ms, TREE_IDLE).await?;

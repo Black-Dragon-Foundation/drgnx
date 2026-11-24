@@ -13,7 +13,7 @@ fn config(entries: &str) -> tempfile::TempDir {
 
 fn write(dir: &Path, entries: &str) {
     let file = dir.join("settings.el");
-    std::fs::write(
+    crate::fsio::write(
         &file,
         format!(";;; settings.el\n(drgnx-settings\n :version 1\n{entries})\n"),
     )
@@ -29,7 +29,7 @@ fn ids(l: &Loaded) -> Vec<&str> {
 fn defaults_parse() {
     let d = defaults();
     assert_eq!(d.problems, Vec::<String>::new());
-    assert_eq!(d.presets.len(), 16);
+    assert_eq!(d.presets.len(), 17);
     assert_eq!(d.presets[0].id, "openrouter");
     assert_eq!(d.presets[0].key_env.as_deref(), Some("OPENROUTER_API_KEY"));
     assert_eq!(
@@ -218,8 +218,8 @@ fn only_runtime_names_decode() {
     // and the model price table; and the plugin list with the hook rules and their off list; and search's base
     // checkout and ignore rules; and a Mac runner's Homebrew packages and toolchains; and the past sessions' switch
     // and their CLIs)
-    // (search's include and exclude globs became one setting, the rules: 56 less one; then the vector caches' cap)
-    assert_eq!(RUNTIME_NAMES.len(), 56);
+    // (search's include and exclude globs became one setting, the rules: 56 less one; then the vector caches' cap; then the battery rule for the local sources; then the engine's seven: GPUs, battery GPU, no-GPU choice, CPU, memory, VRAM and GPU-busy limits)
+    assert_eq!(RUNTIME_NAMES.len(), 65);
     assert!(RUNTIME_NAMES.iter().all(|n| {
         n.starts_with("drgnx-agents-")
             || n.starts_with("drgnx-ai-")
@@ -349,7 +349,7 @@ fn a_broken_file_gives_strict_defaults_and_last_good() {
     assert!(good.values.agents_allow_unsandboxed);
     assert_eq!(ids(&good)[0], "mine");
     // the same file, broken: an unbalanced paren
-    std::fs::write(
+    crate::fsio::write(
         dir.path().join("settings.el"),
         "(drgnx-settings :version 1\n (drgnx-agents-allow-unsandboxed t)\n (drgnx-ai-providers ((other :kind openai :url \"https://o.example\")))\n",
     )
@@ -398,7 +398,7 @@ fn a_group_writable_file_is_refused() {
         l.problems[0].text
     );
     std::fs::remove_dir(&file).unwrap();
-    std::fs::write(&file, vec![b' '; (load::MAX_BYTES + 1) as usize]).unwrap();
+    crate::fsio::write(&file, vec![b' '; (load::MAX_BYTES + 1) as usize]).unwrap();
     let l = Settings::load(dir.path(), &Kv::default());
     assert!(
         l.problems[0].text.contains("over 1 MiB"),
@@ -548,36 +548,38 @@ fn a_bad_profile_has_a_path() {
     assert_eq!(l.values.profile_names().len(), 8);
 }
 
-#[tokio::test]
-async fn refresh_reads_again_only_when_the_stamp_changed() {
-    let dir = config(" (drgnx-agents-mcp (bogus))\n");
-    let db_dir = tempfile::tempdir().unwrap();
-    let (_store, db) = crate::runtime_db::open(db_dir.path()).unwrap();
-    let s = Settings::new();
-    assert!(s.refresh().await.is_empty(), "nothing before open");
-    s.open(dir.path().to_path_buf(), db.clone());
-    let told = s.refresh().await;
-    assert_eq!(told.len(), 1);
-    assert_eq!(told[0]["id"], "settings-drgnx-agents-mcp");
-    assert!(runstav::events::event("notice").is_some_and(|e| (e.check)(&told[0]).is_ok()));
-    assert!(
-        s.refresh().await.is_empty(),
-        "the same stamp: not read again"
-    );
-    // a good providers entry is kept in kv as the last good value
-    write(
-        dir.path(),
-        " (drgnx-agents-mcp (bogus))\n (drgnx-ai-providers ((m :kind openai :url \"https://m.example\")))\n",
-    );
-    assert!(
-        s.refresh().await.is_empty(),
-        "the same problem is not told again"
-    );
-    assert_eq!(s.current().status().presets, 17);
-    let kept = crate::gateway::kv_get(&db, load::KV_LAST_GOOD)
-        .await
-        .unwrap();
-    assert!(kept.contains("m.example"), "{kept}");
+#[test]
+fn refresh_reads_again_only_when_the_stamp_changed() {
+    saman::block_on_current(async move {
+        let dir = config(" (drgnx-agents-mcp (bogus))\n");
+        let db_dir = tempfile::tempdir().unwrap();
+        let (_store, db) = crate::runtime_db::open(db_dir.path()).unwrap();
+        let s = Settings::new();
+        assert!(s.refresh().await.is_empty(), "nothing before open");
+        s.open(dir.path().to_path_buf(), db.clone());
+        let told = s.refresh().await;
+        assert_eq!(told.len(), 1);
+        assert_eq!(told[0]["id"], "settings-drgnx-agents-mcp");
+        assert!(runstav::events::event("notice").is_some_and(|e| (e.check)(&told[0]).is_ok()));
+        assert!(
+            s.refresh().await.is_empty(),
+            "the same stamp: not read again"
+        );
+        // a good providers entry is kept in kv as the last good value
+        write(
+            dir.path(),
+            " (drgnx-agents-mcp (bogus))\n (drgnx-ai-providers ((m :kind openai :url \"https://m.example\")))\n",
+        );
+        assert!(
+            s.refresh().await.is_empty(),
+            "the same problem is not told again"
+        );
+        assert_eq!(s.current().status().presets, 17);
+        let kept = crate::gateway::kv_get(&db, load::KV_LAST_GOOD)
+            .await
+            .unwrap();
+        assert!(kept.contains("m.example"), "{kept}");
+    })
 }
 
 // ACP v2 is a draft: only the `claude` and `codex` profiles ask for it unless a profile says so, and `off` never does.

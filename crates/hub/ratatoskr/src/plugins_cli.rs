@@ -32,15 +32,19 @@ pub enum PluginsCommand {
 }
 
 /// The arguments after `plugins`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<PluginsCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<PluginsCommand> {
     use lexopt::Arg::{Long, Value as Word};
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let sub = match p.next().map_err(e)? {
         Some(Word(v)) => v.string().map_err(e)?,
-        Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err("plugins needs a subcommand (install, list, remove)".into()),
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
+        None => {
+            return Err(villa::Error::invalid(
+                "plugins needs a subcommand (install, list, remove)",
+            ));
+        }
     };
     let mut words: Vec<OsString> = Vec::new();
     let (mut replace, mut json_out) = (false, false);
@@ -49,29 +53,39 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<PluginsCommand,
             (_, Word(v)) => words.push(v),
             ("install", Long("replace")) => replace = true,
             ("list", Long("json")) => json_out = true,
-            (s, Long(name)) => return Err(format!("plugins {s}: unknown option --{name}")),
-            (_, other) => return Err(other.unexpected().to_string()),
+            (s, Long(name)) => {
+                return Err(villa::Error::invalid(format!(
+                    "plugins {s}: unknown option --{name}"
+                )));
+            }
+            (_, other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
-    let one = |usage: &str| -> Result<OsString, String> {
+    let one = |usage: &str| -> villa::Result<OsString> {
         match words.as_slice() {
             [w] => Ok(w.clone()),
-            _ => Err(format!("usage: plugins {usage}")),
+            _ => Err(villa::Error::invalid(format!("usage: plugins {usage}"))),
         }
     };
     match sub.as_str() {
         "install" => Ok(PluginsCommand::Install {
-            path: PathBuf::from(one("install PATH [--replace]")?),
+            path: PathBuf::from(
+                one("install PATH [--replace]")
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?,
+            ),
             replace,
         }),
         "list" if words.is_empty() => Ok(PluginsCommand::List { json: json_out }),
-        "list" => Err("usage: plugins list [--json]".into()),
+        "list" => Err(villa::Error::invalid("usage: plugins list [--json]")),
         "remove" => Ok(PluginsCommand::Remove {
-            name: one("remove NAME")?
+            name: one("remove NAME")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?
                 .into_string()
-                .map_err(|_| "a plugin name is plain text".to_owned())?,
+                .map_err(|_| villa::Error::invalid("a plugin name is plain text"))?,
         }),
-        other => Err(format!("unknown plugins subcommand {other:?}")),
+        other => Err(villa::Error::invalid(format!(
+            "unknown plugins subcommand {other:?}"
+        ))),
     }
 }
 
@@ -110,27 +124,27 @@ pub fn run(env: &Env, cmd: PluginsCommand) -> i32 {
         PluginsCommand::Install { path, replace } => {
             match crate::plugins::install(&root, &path, replace) {
                 Ok(i) => {
-                    println!(
+                    crate::soft::out_line(&format!(
                         "installed {} {}\nhash {}\napprove it in drgnx (Extensions or Settings → Plugins)",
                         i.name, i.version, i.hash
-                    );
+                    ));
                     tell_hub(env);
                     0
                 }
                 Err(e) => {
-                    eprintln!("ratatoskr plugins: {e}");
+                    crate::soft::err_line(&format!("ratatoskr plugins: {e}"));
                     1
                 }
             }
         }
         PluginsCommand::Remove { name } => match crate::plugins::remove(&root, &name) {
             Ok(()) => {
-                println!("removed {name}");
+                crate::soft::out_line(&format!("removed {name}"));
                 tell_hub(env);
                 0
             }
             Err(e) => {
-                eprintln!("ratatoskr plugins: {e}");
+                crate::soft::err_line(&format!("ratatoskr plugins: {e}"));
                 1
             }
         },
@@ -143,15 +157,15 @@ pub fn run(env: &Env, cmd: PluginsCommand) -> i32 {
                 .and_then(|mut c| c.call("plugins/list", json!({}), CALL))
             {
                 Ok(a) if json_out => {
-                    println!("{a}");
+                    crate::soft::out_line(&a.to_string());
                     0
                 }
                 Ok(a) => {
-                    print!("{}", format_list(&a));
+                    crate::soft::out_text(&format_list(&a));
                     0
                 }
                 Err(e) => {
-                    eprintln!("ratatoskr plugins: {e}");
+                    crate::soft::err_line(&format!("ratatoskr plugins: {e}"));
                     1
                 }
             }
@@ -162,7 +176,7 @@ pub fn run(env: &Env, cmd: PluginsCommand) -> i32 {
 /// A hub that runs looks at the folder now (its cards, its events). One that does not has nothing to be told.
 fn tell_hub(env: &Env) {
     if let Ok(mut c) = Client::user(env, Duration::from_secs(2)) {
-        let _ = c.call("plugins/list", json!({}), CALL);
+        crate::soft::done(c.call("plugins/list", json!({}), CALL), "plugins_cli");
     }
 }
 
@@ -170,7 +184,7 @@ fn tell_hub(env: &Env) {
 mod tests {
     use super::*;
 
-    fn p(args: &[&str]) -> Result<PluginsCommand, String> {
+    fn p(args: &[&str]) -> villa::Result<PluginsCommand> {
         parse(args.iter().map(OsString::from))
     }
 

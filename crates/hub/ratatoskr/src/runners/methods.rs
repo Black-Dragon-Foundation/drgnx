@@ -14,10 +14,10 @@ use runstav::wire::{Error, ErrorCode};
 #[cfg(all(unix, not(target_os = "android")))]
 use serde_json::json;
 
-fn error(code: ErrorCode, message: impl Into<String>) -> Error {
+fn error(code: ErrorCode, message: impl ToString) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
@@ -57,7 +57,7 @@ mod on {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            crate::fsio::read_to_string("/proc/sys/kernel/random/boot_id")
                 .map(|s| s.trim().to_string())
                 .unwrap_or_default()
         }
@@ -82,7 +82,8 @@ mod on {
                 return Ok(r.clone());
             }
             let queue = crate::exec::queue(f)?;
-            let runtime_dir = link_dir(std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))?;
+            let runtime_dir =
+                link_dir(std::env::var_os(stig::SYSTEM_RUNTIME_VAR).map(PathBuf::from))?;
             let boot_id = hub_boot_id();
             let settings = f.settings.clone();
             let pins = f.settings.clone();

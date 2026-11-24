@@ -5,14 +5,13 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, QueueHandle};
 
 struct Recorder {
-    child: Child,
+    child: raun::proc::TestChild,
     dir: PathBuf,
     socket: String,
 }
@@ -25,21 +24,22 @@ impl Recorder {
         let dir = std::env::temp_dir().join(&socket);
         std::fs::create_dir_all(&dir).unwrap();
         let profile_path = dir.join("profile.json");
-        std::fs::write(&profile_path, profile.to_string()).unwrap();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_nh-recorder"))
-            .args(["--socket", &socket, "--control"])
-            .arg(dir.join("control"))
-            .arg("--profile")
-            .arg(&profile_path)
-            .env("XDG_RUNTIME_DIR", &dir)
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("spawn nh-recorder");
-        let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
-        assert_eq!(line, "READY\n");
+        eitri::replace_file(&profile_path, profile.to_string().as_bytes()).unwrap();
+        let control = dir.join("control");
+        let mut child = raun::proc::TestChild::start(
+            std::path::Path::new(env!("CARGO_BIN_EXE_nh-recorder")),
+            &[
+                "--socket".as_ref(),
+                socket.as_ref(),
+                "--control".as_ref(),
+                control.as_ref(),
+                "--profile".as_ref(),
+                profile_path.as_ref(),
+            ],
+            &[(stig::SYSTEM_RUNTIME_VAR, dir.as_os_str())],
+        )
+        .expect("spawn nh-recorder");
+        assert_eq!(child.read_line().unwrap(), "READY\n");
         Recorder { child, dir, socket }
     }
 
@@ -58,9 +58,8 @@ impl Recorder {
 
 impl Drop for Recorder {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.dir);
+        self.child.kill();
+        let _scratch_dir_may_be_gone = std::fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -150,7 +149,8 @@ fn core_profiles_serve_a_data_device_manager() {
     // GTK 3 adds no seat until a wl_data_device_manager is bound, and then dies on its first seat lookup
     for p in ["sway", "mutter", "kwin"] {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("profiles/{p}.json"));
-        let profile: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let profile: Value =
+            serde_json::from_str(&eitri::read_string(&path, 1 << 20).unwrap()).unwrap();
         let r = Recorder::start(&profile);
         let conn = r.connect();
         let mut queue = conn.new_event_queue::<Client>();
@@ -177,13 +177,7 @@ fn core_commit_is_logged() {
     let compositor: wl_compositor::WlCompositor =
         registry.bind(client.names["wl_compositor"], 5, &qh, ());
     let shm: wl_shm::WlShm = registry.bind(client.names["wl_shm"], 1, &qh, ());
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(r.dir.join("pool"))
-        .unwrap();
+    let file = tempfile::tempfile_in(&r.dir).unwrap();
     file.set_len(64 * 32 * 4).unwrap();
     let pool = shm.create_pool(file.as_fd(), 64 * 32 * 4, &qh, ());
     let buffer = pool.create_buffer(0, 64, 32, 256, wl_shm::Format::Argb8888, &qh, ());

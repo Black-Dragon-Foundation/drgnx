@@ -10,9 +10,8 @@
 //! not read is a Lisp hub between its `mkdir` and its pid write while it is younger than [`LISP_LOCK_GRACE`].
 //! Anything else (the pid gone, another program, an unreadable pid in an older directory) is taken over.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -51,7 +50,10 @@ impl Lock {
 /// open file releases it for all.
 impl Drop for Lock {
     fn drop(&mut self) {
-        let _ = rustix::fs::flock(&self._file, rustix::fs::FlockOperation::Unlock);
+        crate::soft::done(
+            rustix::fs::flock(&self._file, rustix::fs::FlockOperation::Unlock),
+            "rustix::fs::flock",
+        );
     }
 }
 
@@ -157,18 +159,11 @@ pub fn acquire(path: &Path, procs: &impl Procs) -> Result<Lock, LockError> {
             }
         }
     }
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|e| match e.raw_os_error() {
-            // a Lisp hub made its directory since the check above
-            Some(libc::EISDIR) => LockError::LispHub { pid: None },
-            _ => LockError::Io(e),
-        })?;
+    let mut file = eitri::open_lock(path, 0o600).map_err(|e| match e {
+        // a Lisp hub made its directory since the check above
+        eitri::FsError::NotRegular => LockError::LispHub { pid: None },
+        e => LockError::Io(e.into()),
+    })?;
     match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
         Ok(()) => {}
         Err(rustix::io::Errno::WOULDBLOCK) => return Err(LockError::Held),
@@ -244,14 +239,17 @@ pub fn holder(path: &Path, procs: &impl Procs) -> io::Result<Holder> {
     match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
         Ok(()) => {
             // released by name, not by the close: a child forked meanwhile shares this open file (see `Lock`'s drop)
-            let _ = rustix::fs::flock(&file, rustix::fs::FlockOperation::Unlock);
+            crate::soft::done(
+                rustix::fs::flock(&file, rustix::fs::FlockOperation::Unlock),
+                "rustix::fs::flock",
+            );
             return Ok(Holder::Nobody);
         }
         Err(rustix::io::Errno::WOULDBLOCK) => {}
         Err(e) => return Err(e.into()),
     }
     let mut text = String::new();
-    let _ = (&mut file).take(64).read_to_string(&mut text);
+    crate::soft::done((&mut file).take(64).read_to_string(&mut text), "lock");
     let mut fields = text.split_whitespace();
     let pid = fields
         .next()
@@ -275,27 +273,33 @@ pub fn signal_target(
     lock_start: Option<u64>,
     listener: &crate::peer::Listener,
     start_time_of: impl Fn(u32) -> Option<u64>,
-) -> Result<u32, String> {
+) -> villa::Result<u32> {
     let (Some(pid), Some(start)) = (lock_pid, lock_start) else {
-        return Err("the lock is held but does not name a process".into());
+        return Err(villa::Error::invalid(
+            "the lock is held but does not name a process",
+        ));
     };
     if listener.pid != pid {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "the process listening on its socket is pid {}, but the lock names pid {pid}: not signalling either",
             listener.pid
-        ));
+        )));
     }
     match start_time_of(pid) {
         Some(now) if now == start => {}
         Some(now) => {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "the lock names pid {pid} started at {start}, but that pid started at {now} (another process): not signalling it"
-            ));
+            )));
         }
-        None => return Err(format!("the lock names pid {pid}, which is gone")),
+        None => {
+            return Err(villa::Error::invalid(format!(
+                "the lock names pid {pid}, which is gone"
+            )));
+        }
     }
     if !listener.running() {
-        return Err(format!("pid {pid} ended meanwhile"));
+        return Err(villa::Error::invalid(format!("pid {pid} ended meanwhile")));
     }
     Ok(pid)
 }
@@ -452,7 +456,7 @@ mod tests {
         let path = dir.path().join("hub-x.sock.lock");
         assert_eq!(holder(&path, &Fake(vec![])).unwrap(), Holder::Nobody);
         // a file naming a live pid that nobody holds: no holder
-        std::fs::write(&path, "100 7\n").unwrap();
+        crate::fsio::write(&path, "100 7\n").unwrap();
         assert_eq!(
             holder(&path, &Fake(vec![(100, false)])).unwrap(),
             Holder::Nobody
@@ -484,7 +488,7 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         // a Lisp directory: respected while its hub lives, else nobody
         std::fs::create_dir(&path).unwrap();
-        std::fs::write(path.join("pid"), "100").unwrap();
+        crate::fsio::write(path.join("pid"), "100").unwrap();
         assert_eq!(
             holder(&path, &Fake(vec![(100, true)])).unwrap(),
             Holder::Lisp { pid: Some(100) }
@@ -497,7 +501,6 @@ mod tests {
         // A child forked by any thread of this process shares the lock's open file until its exec closes it (macOS
         // CI: another test's `pre_exec` child kept a dropped lock held, and `restore-pre7` saw a running hub). The
         // child here stops between its fork and its exec until the test lets it go.
-        use std::os::unix::process::CommandExt;
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let path = dir.path().join("hub-x.sock.lock");
@@ -508,18 +511,18 @@ mod tests {
         assert_eq!(unsafe { libc::pipe(ready.as_mut_ptr()) }, 0);
         assert_eq!(unsafe { libc::pipe(go.as_mut_ptr()) }, 0);
         let (ready_w, go_r) = (ready[1], go[0]);
-        let mut cmd = std::process::Command::new("true");
-        // SAFETY: only write(2) and read(2) on two descriptors, both async-signal-safe
-        unsafe {
-            cmd.pre_exec(move || {
+        // SAFETY: fork(2); the child calls only write(2), read(2) and _exit(2), all async-signal-safe, and never returns
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0);
+        if child == 0 {
+            // SAFETY: only write(2), read(2) and _exit(2) on descriptors this process holds
+            unsafe {
                 let mut b = [0u8; 1];
                 libc::write(ready_w, b.as_ptr().cast(), 1);
                 libc::read(go_r, b.as_mut_ptr().cast(), 1);
-                Ok(())
-            });
+                libc::_exit(0);
+            }
         }
-        // spawn returns only after the child's exec, so it runs beside the test
-        let child = std::thread::spawn(move || cmd.spawn().unwrap().wait().unwrap());
         let mut b = [0u8; 1];
         // SAFETY: a read of one byte into B from the pipe made above
         assert_eq!(unsafe { libc::read(ready[0], b.as_mut_ptr().cast(), 1) }, 1);
@@ -530,7 +533,10 @@ mod tests {
         unsafe {
             assert_eq!(libc::write(go[1], b.as_ptr().cast(), 1), 1);
         }
-        assert!(child.join().unwrap().success());
+        let mut status = 0;
+        // SAFETY: waitpid(2) on the child forked above, once
+        assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+        assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0);
         for fd in ready.into_iter().chain(go) {
             // SAFETY: each descriptor is one of the pipes' ends, closed once
             unsafe { libc::close(fd) };
@@ -559,7 +565,7 @@ mod tests {
         let one = start_of(1).unwrap_or(1);
         let e = signal_target(Some(1), Some(one), &listener, start_of).unwrap_err();
         assert!(
-            e.contains(&format!("is pid {me}")) && e.contains("names pid 1"),
+            e.message().contains(&format!("is pid {me}")) && e.message().contains("names pid 1"),
             "{e}"
         );
         assert!(alive(1));
@@ -571,7 +577,7 @@ mod tests {
         );
         // the listener's pid with another start time (a reused pid), or gone, or a lock that names nobody: refused
         let e = signal_target(Some(me), Some(mine + 1), &listener, start_of).unwrap_err();
-        assert!(e.contains("(another process)"), "{e}");
+        assert!(e.message().contains("(another process)"), "{e}");
         assert!(signal_target(Some(me), Some(mine), &listener, |_| None).is_err());
         assert!(signal_target(None, Some(mine), &listener, start_of).is_err());
         assert!(signal_target(Some(me), None, &listener, start_of).is_err());
@@ -591,7 +597,7 @@ mod tests {
             Holder::Ratatoskr { pid: Some(_), .. }
         ));
         // a held lock whose text names pid 0: no process
-        std::fs::write(&path, "0 5\n").unwrap();
+        crate::fsio::write_in_place(&path, "0 5\n").unwrap();
         assert_eq!(
             holder(&path, &Fake(vec![])).unwrap(),
             Holder::Ratatoskr {
@@ -610,7 +616,7 @@ mod tests {
         drop(held);
         std::fs::remove_file(&path).unwrap();
         let elsewhere = root.path().join("elsewhere");
-        std::fs::write(&elsewhere, "1 1\n").unwrap();
+        crate::fsio::write(&elsewhere, "1 1\n").unwrap();
         std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
         assert!(holder(&path, &Fake(vec![])).is_err());
         // no directory: nobody
@@ -670,12 +676,15 @@ mod tests {
 
         // a live Lisp hub's directory: respected and left as it is
         std::fs::create_dir(&path).unwrap();
-        std::fs::write(path.join("pid"), "100").unwrap();
+        crate::fsio::write(path.join("pid"), "100").unwrap();
         assert!(matches!(
             acquire(&path, &Fake(vec![(100, true)])),
             Err(LockError::LispHub { pid: Some(100) })
         ));
-        assert_eq!(std::fs::read_to_string(path.join("pid")).unwrap(), "100");
+        assert_eq!(
+            crate::fsio::read_to_string(path.join("pid")).unwrap(),
+            "100"
+        );
         // its pid gone: taken over, the directory replaced by the lock file
         let taken = acquire(&path, &Fake(vec![])).unwrap();
         assert!(path.is_file());

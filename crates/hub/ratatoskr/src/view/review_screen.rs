@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
 /// The lines of one hunk shown before "… N more".
@@ -261,7 +261,7 @@ fn doc_file(doc: &PathBuf, from: Option<&str>) -> Result<(ScreenFile, String), E
     };
     let old = git(&main, &["cat-file", "blob", &base])
         .ok_or_else(|| invalid("from", "no such blob in the document's repository"))?;
-    let new = std::fs::read_to_string(doc).unwrap_or_default();
+    let new = crate::fsio::read_to_string(doc).unwrap_or_default();
     let diff = similar::TextDiff::from_lines(&old, &new)
         .unified_diff()
         .context_radius(2)
@@ -276,7 +276,7 @@ fn doc_file(doc: &PathBuf, from: Option<&str>) -> Result<(ScreenFile, String), E
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("git")
+    let out = crate::proc::Command::new("git")
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")

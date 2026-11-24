@@ -298,7 +298,7 @@ fn build(
             Some(c) => b.push(&format!(" {} ", c.n), Some(FaceId::WorkStepNumber.name())),
             None => b.push("   ", None),
         };
-        b.stop((30.0 * env.scale) as u32);
+        b.stop(crate::render::len(30.0, &crate::render::scale_of(env.scale)) as u32);
         put_icon(&mut b, env, k, &mut images);
         b.push(" ", None);
         for (text, face) in segments(s) {
@@ -390,7 +390,10 @@ fn conclusion_rows(
                     .push(&format!(" {}", c.text), Some(FaceId::WorkTitle.name()));
                 if new {
                     // `new`, plain text at the card's right: a box of its own would break the ring
-                    b.stop(env.width_px.saturating_sub((64.0 * env.scale) as u32));
+                    b.stop(env.width_px.saturating_sub(crate::render::len(
+                        64.0,
+                        &crate::render::scale_of(env.scale),
+                    ) as u32));
                     b.push(" new ", Some(FaceId::WorkNew.name()));
                 }
             } else {
@@ -402,7 +405,12 @@ fn conclusion_rows(
                 .push(" light them · ↵ sources", Some(FaceId::TextMuted.name()));
             }
             // the card runs to the tile's right edge: a stop, in the card's face
-            b.stop(env.width_px.saturating_sub((8.0 * env.scale) as u32));
+            b.stop(
+                env.width_px
+                    .saturating_sub(
+                        crate::render::len(8.0, &crate::render::scale_of(env.scale)) as u32
+                    ),
+            );
             let end = b.pos();
             b.face(
                 0,

@@ -2,31 +2,30 @@
 //! git; `orch::gates` adds the evidence and the job's rule pack, the decision is `vordr::redfirst`'s.
 
 use std::path::Path;
-use std::process::Command;
 
 use serde_json::{Map, Value, json};
 use vordr::pack::Pack;
 use vordr::redfirst::{self, Inputs};
 
-fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+fn git(repo: &Path, args: &[&str]) -> villa::Result<String> {
+    let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(args)
         .output()
-        .map_err(|e| format!("git {}: {e}", args.join(" ")))?;
+        .map_err(|e| villa::Error::invalid(format!("git {}: {e}", args.join(" "))))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        Err(format!(
+        Err(villa::Error::invalid(format!(
             "git {}: {}",
             args.join(" "),
             String::from_utf8_lossy(&out.stderr).trim()
-        ))
+        )))
     }
 }
 
-fn diff(repo: &Path, from: &str, to: &str) -> Result<Vec<redfirst::FileDiff>, String> {
+fn diff(repo: &Path, from: &str, to: &str) -> villa::Result<Vec<redfirst::FileDiff>> {
     let text = git(
         repo,
         &[
@@ -49,7 +48,7 @@ pub fn inputs(
     tip: &str,
     pack: &Pack,
     body: &str,
-) -> Result<Inputs, String> {
+) -> villa::Result<Inputs> {
     let range = format!("{base}..{tip}");
     let commits: Vec<String> = git(repo, &["rev-list", "--reverse", &range])?
         .lines()
@@ -109,7 +108,7 @@ pub fn inputs(
 
 /// The commits BASE..TIP of REPO the merge gate checks, oldest first, as the Flow's detail shows them: each its `sha`,
 /// `subject` and `tests` (under PACK's red first, the first is the test commit) (blocking: git).
-pub fn commits(repo: &Path, base: &str, tip: &str, pack: &Pack) -> Result<Value, String> {
+pub fn commits(repo: &Path, base: &str, tip: &str, pack: &Pack) -> villa::Result<Value> {
     let log = git(
         repo,
         &[
@@ -149,7 +148,7 @@ mod tests {
     use super::*;
 
     fn sh(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -173,7 +172,7 @@ mod tests {
     fn commit(dir: &Path, file: &str, text: &str) -> String {
         let p = dir.join(file);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, text).unwrap();
+        crate::fsio::write(p, text).unwrap();
         sh(dir, &["add", "-A"]);
         sh(dir, &["commit", "-q", "-m", file]);
         sh(dir, &["rev-parse", "HEAD"])

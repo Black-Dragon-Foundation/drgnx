@@ -335,7 +335,7 @@ impl StagePlace {
     /// The late notice's text, or none when the open ended.
     fn late(&self) -> Option<String> {
         (!self.ended.load(Ordering::SeqCst)).then(|| {
-            let after = *self.after.lock().unwrap_or_else(|e| e.into_inner());
+            let after = *saman::lock(&self.after);
             format!(
                 "mcp/session has run over {} ms and waits after the stage {:?} (the next one: {})",
                 SLOW_OPEN.as_millis(),
@@ -367,7 +367,10 @@ impl Stages {
         let place = Arc::new(StagePlace::default());
         let p = place.clone();
         crate::clock::spawn("sessions:slow-open", async move {
-            let _ = crate::clock::real_timeout(SLOW_OPEN, std::future::pending::<()>()).await;
+            crate::soft::done(
+                crate::clock::real_timeout(SLOW_OPEN, std::future::pending::<()>()).await,
+                "crate::clock::real_timeout",
+            );
             if let Some(text) = p.late() {
                 let store = match db.as_ref().and_then(urdr::Handle::running) {
                     Some((at, age)) => format!(
@@ -393,7 +396,7 @@ impl Stages {
         let now = crate::clock::real_now();
         self.done.push((what, (now - self.last).as_millis()));
         self.last = now;
-        *self.place.after.lock().unwrap_or_else(|e| e.into_inner()) = what;
+        *saman::lock(&self.place.after) = what;
     }
 }
 
@@ -433,19 +436,19 @@ impl Drop for Counted {
     }
 }
 
-fn error(code: ErrorCode, message: impl Into<String>, path: Option<&str>) -> Error {
+fn error(code: ErrorCode, message: impl ToString, path: Option<&str>) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: path.map(str::to_owned),
     }
 }
 
-fn internal(message: impl Into<String>) -> Error {
+fn internal(message: impl ToString) -> Error {
     error(ErrorCode::Internal, message, None)
 }
 
-fn invalid(path: &str, message: impl Into<String>) -> Error {
+fn invalid(path: &str, message: impl ToString) -> Error {
     error(ErrorCode::InvalidParams, message, Some(path))
 }
 
@@ -703,16 +706,13 @@ impl Sessions {
 
     /// The columns session SID's abilities run as: said before the session opens, kept until it closes.
     pub fn note_who(&self, sid: &str, who: norn::matrix::Who) {
-        self.whos
-            .lock()
-            .expect("sessions")
-            .insert(sid.to_owned(), who);
+        saman::lock(&self.whos).insert(sid.to_owned(), who);
     }
 
     /// The key of the plugin set that runs for session SID now, when its columns are known and it has abilities.
     fn wants_plugins(&self, sid: &str) -> Option<String> {
         let front = self.front.get().and_then(std::sync::Weak::upgrade)?;
-        self.whos.lock().expect("sessions").get(sid)?;
+        saman::lock(&self.whos).get(sid)?;
         let set = front
             .core
             .plugins
@@ -722,9 +722,7 @@ impl Sessions {
 
     /// Session SID's `plugins.sock`, while it is bound.
     pub fn plugins_socket_of(&self, sid: &str) -> Option<PathBuf> {
-        self.live
-            .lock()
-            .expect("sessions")
+        saman::lock(&self.live)
             .get(sid)
             .and_then(|l| l.plugins.clone())
     }
@@ -736,9 +734,7 @@ impl Sessions {
 
     /// The flag [`Sessions::plugins_changed`] reads, for the session's snapshot (a fresh one for no such session).
     pub fn plugins_flag(&self, sid: &str) -> Arc<AtomicBool> {
-        self.live
-            .lock()
-            .expect("sessions")
+        saman::lock(&self.live)
             .get(sid)
             .map_or_else(|| Arc::new(AtomicBool::new(false)), |l| l.changed.clone())
     }
@@ -748,7 +744,7 @@ impl Sessions {
         let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade) else {
             return;
         };
-        for (sid, live) in self.live.lock().expect("sessions").iter() {
+        for (sid, live) in saman::lock(&self.live).iter() {
             let set = front
                 .core
                 .plugins
@@ -762,7 +758,7 @@ impl Sessions {
     /// The front, once it is in its `Arc`: a session gets a `search.sock` when `drgnx-agents-mcp` holds `search`, and
     /// the socket's questions go to the front's search.
     pub fn bind_search(&self, front: &Arc<Front>) {
-        let _ = self.front.set(Arc::downgrade(front));
+        crate::soft::done(self.front.set(Arc::downgrade(front)), "sessions");
     }
 
     /// Whether a session started now with working folder CWD gets a `search.sock`: the setting holds `search` and the
@@ -784,9 +780,7 @@ impl Sessions {
 
     /// Session SID's `search.sock`, while it is bound.
     pub fn search_socket_of(&self, sid: &str) -> Option<PathBuf> {
-        self.live
-            .lock()
-            .expect("sessions")
+        saman::lock(&self.live)
             .get(sid)
             .and_then(|l| l.search.clone())
     }
@@ -794,27 +788,18 @@ impl Sessions {
     /// Session SID is a manager: its next socket serves the manager tools too (an open socket is closed and opened
     /// again by the caller).
     pub fn mark_manager(&self, sid: &str) {
-        self.managers
-            .lock()
-            .expect("sessions")
-            .insert(sid.to_owned());
+        saman::lock(&self.managers).insert(sid.to_owned());
     }
 
     /// Session SID is a Codex session with hooks: its next socket serves `before_tool` too.  Never behind the hook
     /// wrapper of the other tools: it runs the hooks itself, and never hooks itself.
     pub fn mark_before_tool(&self, sid: &str) {
-        self.before_tool
-            .lock()
-            .expect("sessions")
-            .insert(sid.to_owned());
+        saman::lock(&self.before_tool).insert(sid.to_owned());
     }
 
     /// Session SID is a chat in a project: its next socket serves the pair tools too.
     pub fn mark_project_chat(&self, sid: &str) {
-        self.project_chats
-            .lock()
-            .expect("sessions")
-            .insert(sid.to_owned());
+        saman::lock(&self.project_chats).insert(sid.to_owned());
     }
 
     /// Sessions are kept in DB, their directories made for the hub's main SOCKET under ENV (once; at start).
@@ -833,7 +818,7 @@ impl Sessions {
     /// `status`'s `mcp`.
     pub fn status(&self) -> McpStatus {
         McpStatus {
-            sessions: self.live.lock().expect("sessions").len() as u64,
+            sessions: saman::lock(&self.live).len() as u64,
             outside: self.outside.load(Ordering::SeqCst) as u64,
         }
     }
@@ -874,7 +859,7 @@ impl Sessions {
                 [..SID_HEX]
                 .to_owned(),
         };
-        let taken = self.live.lock().expect("sessions").contains_key(&sid);
+        let taken = saman::lock(&self.live).contains_key(&sid);
         if taken {
             return Err(invalid(
                 "sid",
@@ -953,22 +938,20 @@ impl Sessions {
     /// debugger's tools get them, told to their agents at once (no restart). Tools are never taken back mid-session.
     pub async fn debug_seen(&self, roots: Vec<String>) {
         let _one = self.serial.lock().await;
-        let rows: Vec<Row> =
-            self.live
-                .lock()
-                .expect("sessions")
-                .values()
-                .filter(|l| {
-                    !l.debug
-                        && l.row.cwd.as_deref().is_some_and(|c| {
-                            roots.iter().any(|r| related(Path::new(c), Path::new(r)))
-                        })
-                })
-                .map(|l| l.row.clone())
-                .collect();
+        let rows: Vec<Row> = saman::lock(&self.live)
+            .values()
+            .filter(|l| {
+                !l.debug
+                    && l.row
+                        .cwd
+                        .as_deref()
+                        .is_some_and(|c| roots.iter().any(|r| related(Path::new(c), Path::new(r))))
+            })
+            .map(|l| l.row.clone())
+            .collect();
         for row in rows {
             let list = self.list_for(&row, true).await;
-            if let Some(l) = self.live.lock().expect("sessions").get_mut(&row.sid) {
+            if let Some(l) = saman::lock(&self.live).get_mut(&row.sid) {
                 l.debug = true;
                 l.tools = list.len();
                 l.tools_tx.send_replace(list);
@@ -991,17 +974,9 @@ impl Sessions {
             debug,
             ..crate::graph::tool_sets(task, row.tracker)
         };
-        let manager = self.managers.lock().expect("sessions").contains(&row.sid);
-        let hooked = self
-            .before_tool
-            .lock()
-            .expect("sessions")
-            .contains(&row.sid);
-        let chat = self
-            .project_chats
-            .lock()
-            .expect("sessions")
-            .contains(&row.sid);
+        let manager = saman::lock(&self.managers).contains(&row.sid);
+        let hooked = saman::lock(&self.before_tool).contains(&row.sid);
+        let chat = saman::lock(&self.project_chats).contains(&row.sid);
         if hooked && let Some(front) = self.front.get().cloned() {
             let mut all = if manager {
                 norn::tools::tools_for(norn::tools::ToolSets {
@@ -1067,15 +1042,18 @@ impl Sessions {
         let tools = list.len();
         let (tools_tx, tools_rx) = tokio::sync::watch::channel(list.clone());
         let ctx: Arc<Ctx> = Arc::new((self.tools.clone(), row.identity()));
-        tokio::spawn(accept(
-            listener,
-            row.sid.clone(),
-            ctx,
-            cancel.clone(),
-            self.uid,
-            fixed(list),
-            Some(tools_rx),
-        ));
+        crate::clock::spawn_untracked(
+            module_path!(),
+            accept(
+                listener,
+                row.sid.clone(),
+                ctx,
+                cancel.clone(),
+                self.uid,
+                fixed(list),
+                Some(tools_rx),
+            ),
+        );
         let search = self.listen_search(&row, &dir, &cancel);
         let plugins = self.listen_plugins(&row, &dir, &cancel);
         tracing::info!(
@@ -1085,7 +1063,7 @@ impl Sessions {
             "the coordination tools on {}",
             path.display()
         );
-        self.live.lock().expect("sessions").insert(
+        saman::lock(&self.live).insert(
             row.sid.clone(),
             Live {
                 started_set: row.plugins.clone().unwrap_or_default(),
@@ -1109,7 +1087,7 @@ impl Sessions {
     fn listen_plugins(&self, row: &Row, dir: &Path, cancel: &CancellationToken) -> Option<PathBuf> {
         row.plugins.as_ref()?;
         let front = self.front.get()?.upgrade()?;
-        let who = self.whos.lock().expect("sessions").get(&row.sid)?.clone();
+        let who = saman::lock(&self.whos).get(&row.sid)?.clone();
         let path = dir.join(paths::SESSION_PLUGINS_SOCKET);
         let listener = match bind_socket(&path) {
             Ok(l) => l,
@@ -1194,17 +1172,13 @@ impl Sessions {
 
     /// Session SID's `mcp.sock`, while it is bound.
     pub fn socket_of(&self, sid: &str) -> Option<PathBuf> {
-        self.live
-            .lock()
-            .expect("sessions")
-            .get(sid)
-            .map(|l| l.path.clone())
+        saman::lock(&self.live).get(sid).map(|l| l.path.clone())
     }
 
     /// The MCP servers the hub serves session SID, with each one's tool count where it is fixed (the plugins' abilities
     /// are offered per connection: no count), and the servers it should serve and does not (name, why).
     pub fn served(&self, sid: &str) -> Served {
-        let live = self.live.lock().expect("sessions");
+        let live = saman::lock(&self.live);
         let Some(l) = live.get(sid) else {
             return (
                 Vec::new(),
@@ -1230,7 +1204,7 @@ impl Sessions {
 
     /// Whether session SID's socket is bound now.
     pub fn is_live(&self, sid: &str) -> bool {
-        self.live.lock().expect("sessions").contains_key(sid)
+        saman::lock(&self.live).contains_key(sid)
     }
 
     /// Session SID's `gateway.sock`: bound (0600) and handed to SERVE with a token that ends with the session, the
@@ -1240,7 +1214,7 @@ impl Sessions {
         sid: &str,
         serve: impl FnOnce(UnixListener, CancellationToken),
     ) -> Result<PathBuf, Error> {
-        let mut live = self.live.lock().expect("sessions");
+        let mut live = saman::lock(&self.live);
         let Some(l) = live.get_mut(sid) else {
             return Err(invalid(
                 "sid",
@@ -1269,13 +1243,13 @@ impl Sessions {
     /// SID's socket, connections, directory and row gone (WHY logged); false when it was not live.  The caller holds
     /// `serial`.
     async fn end(&self, store: &Store, sid: &str, why: &str) -> bool {
-        let live = self.live.lock().expect("sessions").remove(sid);
-        self.before_tool.lock().expect("sessions").remove(sid);
-        self.project_chats.lock().expect("sessions").remove(sid);
+        let live = saman::lock(&self.live).remove(sid);
+        saman::lock(&self.before_tool).remove(sid);
+        saman::lock(&self.project_chats).remove(sid);
         let Some(live) = live else {
             return false;
         };
-        self.whos.lock().expect("sessions").remove(sid);
+        saman::lock(&self.whos).remove(sid);
         // its sockets and directory are removed off the hub's workers (a removal that waits on the disk holds none)
         let socks: Vec<PathBuf> = std::iter::once(live.path.clone())
             .chain(live.gateway.clone())
@@ -1283,11 +1257,14 @@ impl Sessions {
             .chain(live.plugins.clone())
             .collect();
         let dir = live.dir.clone();
-        let _ = crate::clock::blocking(move || {
-            socks.iter().for_each(|s| remove_socket(s));
-            remove_dir(&dir);
-        })
-        .await;
+        crate::soft::done(
+            crate::clock::blocking(move || {
+                socks.iter().for_each(|s| remove_socket(s));
+                remove_dir(&dir);
+            })
+            .await,
+            "crate::clock::blocking",
+        );
         delete(&store.db, sid).await;
         tracing::info!(
             sid,
@@ -1304,10 +1281,7 @@ impl Sessions {
     /// Close the sessions whose owner is gone (each tick).
     pub async fn prune(&self) {
         // the owners are looked up in /proc off the hub's workers, and outside the lock
-        let rows: Vec<(String, Row)> = self
-            .live
-            .lock()
-            .expect("sessions")
+        let rows: Vec<(String, Row)> = saman::lock(&self.live)
             .iter()
             .map(|(sid, l)| (sid.clone(), l.row.clone()))
             .collect();
@@ -1324,10 +1298,7 @@ impl Sessions {
 
     /// Close the sessions OWNER owns, as if it had died (`__test_owner_gone`): how many.
     pub async fn owner_gone(&self, owner: u32) -> usize {
-        let theirs: Vec<String> = self
-            .live
-            .lock()
-            .expect("sessions")
+        let theirs: Vec<String> = saman::lock(&self.live)
             .iter()
             .filter(|(_, l)| l.row.owner == owner)
             .map(|(sid, _)| sid.clone())
@@ -1393,7 +1364,7 @@ impl Sessions {
     /// At the stop, under the lock: every socket unbound and its connections ended.  Rows and directories stay: the
     /// next start binds them again.
     pub fn unbind_all(&self) {
-        for live in self.live.lock().expect("sessions").values() {
+        for live in saman::lock(&self.live).values() {
             live.cancel.cancel();
             remove_socket(&live.path);
             if let Some(g) = &live.gateway {
@@ -1473,7 +1444,8 @@ pub fn outside(s: &Session, kind: &str) -> Result<Identity, Error> {
             None,
         ));
     }
-    Identity::outside(kind, parent.pid, parent.start, s.cwd.clone()).map_err(|e| invalid("kind", e))
+    Identity::outside(kind, parent.pid, parent.start, s.cwd.clone())
+        .map_err(|e| invalid("kind", e.to_string()))
 }
 
 /// Close the sessions of gone owners each [`TICK`], for as long as the hub serves.
@@ -1548,125 +1520,129 @@ mod tests {
             .unwrap()
     }
 
-    #[tokio::test]
-    async fn the_row_is_written_before_the_bind() {
-        let h = hub();
-        let db = h.dir.path().join("runtime.db");
-        let at_bind = Arc::new(Mutex::new(None));
-        let (seen, file) = (at_bind.clone(), db.clone());
-        let a = h
-            .front
-            .mcp
-            .open_with(
-                params(json!({"agent": "s-0000000a", "job": "j1", "cwd": "/w", "owner": me()})),
-                move |path| {
-                    let n = count(
-                        &file,
-                        "select count(*) from msession where agent = 's-0000000a'",
-                    );
-                    *seen.lock().unwrap() = Some(n);
-                    bind_socket(path)
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            *at_bind.lock().unwrap(),
-            Some(1),
-            "the row is there when the socket is bound"
-        );
-        assert!(
-            a.sid.len() == SID_HEX
-                && a.sid
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-            "{}",
-            a.sid
-        );
-        let path = PathBuf::from(&a.socket);
-        assert_eq!(path.file_name().unwrap(), paths::SESSION_MCP_SOCKET);
-        assert_eq!(
-            path.parent().unwrap(),
-            paths::session_dir(&h.env, &h.socket, &a.sid).unwrap()
-        );
-        assert_eq!((mode(path.parent().unwrap()), mode(&path)), (0o700, 0o600));
-        assert_eq!(h.front.mcp.status().sessions, 1);
-        // a bind that fails takes its row (and the directory it made) back
-        let e = h
-            .front
-            .mcp
-            .open_with(params(json!({"agent": "s-b", "owner": me()})), |_| {
-                Err(io::Error::other("no"))
-            })
-            .await
-            .unwrap_err();
-        assert_eq!(e.code, ErrorCode::Internal);
-        assert_eq!(count(&db, "select count(*) from msession"), 1);
-        assert_eq!(h.front.mcp.status().sessions, 1);
-        // what the socket's tools act as is the row's
-        {
-            let live = h.front.mcp.live.lock().unwrap();
+    #[test]
+    fn the_row_is_written_before_the_bind() {
+        saman::block_on_current(async move {
+            let h = hub();
+            let db = h.dir.path().join("runtime.db");
+            let at_bind = Arc::new(Mutex::new(None));
+            let (seen, file) = (at_bind.clone(), db.clone());
+            let a = h
+                .front
+                .mcp
+                .open_with(
+                    params(json!({"agent": "s-0000000a", "job": "j1", "cwd": "/w", "owner": me()})),
+                    move |path| {
+                        let n = count(
+                            &file,
+                            "select count(*) from msession where agent = 's-0000000a'",
+                        );
+                        *saman::lock(&seen) = Some(n);
+                        bind_socket(path)
+                    },
+                )
+                .await
+                .unwrap();
             assert_eq!(
-                live[&a.sid].row.identity(),
-                Identity::Session {
-                    agent: "s-0000000a".into(),
-                    sid: a.sid.clone(),
-                    profile: None,
-                    job: Some("j1".into()),
-                    task: None,
-                    home: PathBuf::from("/w"),
-                }
+                *saman::lock(&at_bind),
+                Some(1),
+                "the row is there when the socket is bound"
             );
-        }
-        // a profile and its tool sets are kept with the row, and the profile is the identity's
-        let p = h
-            .front
-            .mcp
-            .open(params(
-                json!({"agent": "s-c", "owner": me(), "job": "j2", "task": "3",
+            assert!(
+                a.sid.len() == SID_HEX
+                    && a.sid
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                "{}",
+                a.sid
+            );
+            let path = PathBuf::from(&a.socket);
+            assert_eq!(path.file_name().unwrap(), paths::SESSION_MCP_SOCKET);
+            assert_eq!(
+                path.parent().unwrap(),
+                paths::session_dir(&h.env, &h.socket, &a.sid).unwrap()
+            );
+            assert_eq!((mode(path.parent().unwrap()), mode(&path)), (0o700, 0o600));
+            assert_eq!(h.front.mcp.status().sessions, 1);
+            // a bind that fails takes its row (and the directory it made) back
+            let e = h
+                .front
+                .mcp
+                .open_with(params(json!({"agent": "s-b", "owner": me()})), |_| {
+                    Err(io::Error::other("no"))
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::Internal);
+            assert_eq!(count(&db, "select count(*) from msession"), 1);
+            assert_eq!(h.front.mcp.status().sessions, 1);
+            // what the socket's tools act as is the row's
+            {
+                let live = saman::lock(&h.front.mcp.live);
+                assert_eq!(
+                    live[&a.sid].row.identity(),
+                    Identity::Session {
+                        agent: "s-0000000a".into(),
+                        sid: a.sid.clone(),
+                        profile: None,
+                        job: Some("j1".into()),
+                        task: None,
+                        home: PathBuf::from("/w"),
+                    }
+                );
+            }
+            // a profile and its tool sets are kept with the row, and the profile is the identity's
+            let p = h
+                .front
+                .mcp
+                .open(params(
+                    json!({"agent": "s-c", "owner": me(), "job": "j2", "task": "3",
                                 "profile": "p1", "tools": {"tracker": false}}),
-            ))
-            .await
-            .unwrap();
-        let kept = rows(&h.db).await.unwrap();
-        let row = kept.iter().find(|r| r.sid == p.sid).unwrap();
-        assert_eq!(
-            (row.profile.as_deref(), row.tracker),
-            (Some("p1"), Some(false))
-        );
-        assert_eq!(row.task_entity().as_deref(), Some("task:j2#3"));
-        assert!(matches!(
-            row.identity(),
-            Identity::Session { profile: Some(ref n), .. } if n == "p1"
-        ));
+                ))
+                .await
+                .unwrap();
+            let kept = rows(&h.db).await.unwrap();
+            let row = kept.iter().find(|r| r.sid == p.sid).unwrap();
+            assert_eq!(
+                (row.profile.as_deref(), row.tracker),
+                (Some("p1"), Some(false))
+            );
+            assert_eq!(row.task_entity().as_deref(), Some("task:j2#3"));
+            assert!(matches!(
+                row.identity(),
+                Identity::Session { profile: Some(ref n), .. } if n == "p1"
+            ));
+        })
     }
 
-    #[tokio::test]
-    async fn a_bad_agent_or_owner_is_refused_before_anything_is_made() {
-        let h = hub();
-        for (v, at) in [
-            (json!({"agent": "user", "owner": me()}), "agent"),
-            (json!({"agent": "a]b", "owner": me()}), "agent"),
-            (json!({"agent": "s-1", "owner": 0}), "owner"),
-            (
-                json!({"agent": "s-1", "owner": u64::from(u32::MAX) + 1}),
-                "owner",
-            ),
-        ] {
-            let e = h.front.mcp.open(params(v.clone())).await.unwrap_err();
+    #[test]
+    fn a_bad_agent_or_owner_is_refused_before_anything_is_made() {
+        saman::block_on_current(async move {
+            let h = hub();
+            for (v, at) in [
+                (json!({"agent": "user", "owner": me()}), "agent"),
+                (json!({"agent": "a]b", "owner": me()}), "agent"),
+                (json!({"agent": "s-1", "owner": 0}), "owner"),
+                (
+                    json!({"agent": "s-1", "owner": u64::from(u32::MAX) + 1}),
+                    "owner",
+                ),
+            ] {
+                let e = h.front.mcp.open(params(v.clone())).await.unwrap_err();
+                assert_eq!(
+                    (e.code, e.path.as_deref()),
+                    (ErrorCode::InvalidParams, Some(at)),
+                    "{v}"
+                );
+            }
             assert_eq!(
-                (e.code, e.path.as_deref()),
-                (ErrorCode::InvalidParams, Some(at)),
-                "{v}"
+                count(
+                    &h.dir.path().join("runtime.db"),
+                    "select count(*) from msession"
+                ),
+                0
             );
-        }
-        assert_eq!(
-            count(
-                &h.dir.path().join("runtime.db"),
-                "select count(*) from msession"
-            ),
-            0
-        );
+        })
     }
 
     #[test]
@@ -1693,9 +1669,13 @@ mod tests {
         );
         assert!(!owner_alive(&row(0, start)));
         // a process that ended: a zombie until it is reaped, then nothing; gone either way
-        let mut child = std::process::Command::new("sleep")
+        let mut child = crate::proc::Command::new("sleep")
             .arg("60")
-            .spawn()
+            .spawn(
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+            )
             .unwrap();
         let pid = child.id();
         let start = draugr::start_time(pid as i32).unwrap();
@@ -1719,131 +1699,138 @@ mod tests {
         assert!(!owner_alive(&row(pid, start)));
     }
 
-    #[tokio::test]
-    async fn mcp_sock_goes_beside_an_existing_hub_sock() {
-        let h = hub();
-        let dir = paths::make_session_dir(&h.env, &h.socket, "s1").unwrap();
-        let _agent =
-            std::os::unix::net::UnixListener::bind(dir.join(paths::SESSION_HUB_SOCKET)).unwrap();
-        let a = h
-            .front
-            .mcp
-            .open(params(json!({"agent": "s-1", "sid": "s1", "owner": me()})))
-            .await
-            .unwrap();
-        assert_eq!(
-            (a.sid.as_str(), PathBuf::from(&a.socket)),
-            ("s1", dir.join(paths::SESSION_MCP_SOCKET))
-        );
-        // one socket per session
-        let e = h
-            .front
-            .mcp
-            .open(params(json!({"agent": "s-1", "sid": "s1", "owner": me()})))
-            .await
-            .unwrap_err();
-        assert_eq!(e.path.as_deref(), Some("sid"));
-        assert!(h.front.mcp.close("s1").await.unwrap());
-        assert!(!dir.join(paths::SESSION_MCP_SOCKET).exists());
-        assert!(
-            dir.join(paths::SESSION_HUB_SOCKET).exists(),
-            "the agent socket's directory stays"
-        );
-        assert!(!h.front.mcp.close("s1").await.unwrap());
-        // a session of its own: its directory goes with it
-        let b = h
-            .front
-            .mcp
-            .open(params(json!({"agent": "s-2", "owner": me()})))
-            .await
-            .unwrap();
-        let bdir = PathBuf::from(&b.socket).parent().unwrap().to_path_buf();
-        assert!(h.front.mcp.close(&b.sid).await.unwrap());
-        assert!(!bdir.exists());
-        assert_eq!(
-            count(
-                &h.dir.path().join("runtime.db"),
-                "select count(*) from msession"
-            ),
-            0
-        );
+    #[test]
+    fn mcp_sock_goes_beside_an_existing_hub_sock() {
+        saman::block_on_current(async move {
+            let h = hub();
+            let dir = paths::make_session_dir(&h.env, &h.socket, "s1").unwrap();
+            let _agent =
+                std::os::unix::net::UnixListener::bind(dir.join(paths::SESSION_HUB_SOCKET))
+                    .unwrap();
+            let a = h
+                .front
+                .mcp
+                .open(params(json!({"agent": "s-1", "sid": "s1", "owner": me()})))
+                .await
+                .unwrap();
+            assert_eq!(
+                (a.sid.as_str(), PathBuf::from(&a.socket)),
+                ("s1", dir.join(paths::SESSION_MCP_SOCKET))
+            );
+            // one socket per session
+            let e = h
+                .front
+                .mcp
+                .open(params(json!({"agent": "s-1", "sid": "s1", "owner": me()})))
+                .await
+                .unwrap_err();
+            assert_eq!(e.path.as_deref(), Some("sid"));
+            assert!(h.front.mcp.close("s1").await.unwrap());
+            assert!(!dir.join(paths::SESSION_MCP_SOCKET).exists());
+            assert!(
+                dir.join(paths::SESSION_HUB_SOCKET).exists(),
+                "the agent socket's directory stays"
+            );
+            assert!(!h.front.mcp.close("s1").await.unwrap());
+            // a session of its own: its directory goes with it
+            let b = h
+                .front
+                .mcp
+                .open(params(json!({"agent": "s-2", "owner": me()})))
+                .await
+                .unwrap();
+            let bdir = PathBuf::from(&b.socket).parent().unwrap().to_path_buf();
+            assert!(h.front.mcp.close(&b.sid).await.unwrap());
+            assert!(!bdir.exists());
+            assert_eq!(
+                count(
+                    &h.dir.path().join("runtime.db"),
+                    "select count(*) from msession"
+                ),
+                0
+            );
+        })
     }
 
     // [D] LINE-P3-P9-INTERPLAY-1: a project chat's mark goes with its session, as the before-tool mark does
-    #[tokio::test]
-    async fn a_closed_sessions_marks_go_with_it() {
-        let h = hub();
-        let a = h
-            .front
-            .mcp
-            .open(params(json!({"agent": "s-1", "owner": me()})))
-            .await
-            .unwrap();
-        h.front.mcp.mark_project_chat(&a.sid);
-        h.front.mcp.mark_before_tool(&a.sid);
-        assert!(h.front.mcp.close(&a.sid).await.unwrap());
-        assert!(!h.front.mcp.project_chats.lock().unwrap().contains(&a.sid));
-        assert!(!h.front.mcp.before_tool.lock().unwrap().contains(&a.sid));
+    #[test]
+    fn a_closed_sessions_marks_go_with_it() {
+        saman::block_on_current(async move {
+            let h = hub();
+            let a = h
+                .front
+                .mcp
+                .open(params(json!({"agent": "s-1", "owner": me()})))
+                .await
+                .unwrap();
+            h.front.mcp.mark_project_chat(&a.sid);
+            h.front.mcp.mark_before_tool(&a.sid);
+            assert!(h.front.mcp.close(&a.sid).await.unwrap());
+            assert!(!saman::lock(&h.front.mcp.project_chats).contains(&a.sid));
+            assert!(!saman::lock(&h.front.mcp.before_tool).contains(&a.sid));
+        })
     }
 
-    #[tokio::test]
-    async fn a_restart_binds_live_owners_again_and_drops_the_rest() {
-        let h = hub();
-        let a = h
-            .front
-            .mcp
-            .open(params(json!({"agent": "s-1", "owner": me()})))
-            .await
-            .unwrap();
-        // a session whose owner was another process with this pid
-        let gone = Row {
-            sid: "0123456789ab".into(),
-            agent: "s-2".into(),
-            job: None,
-            task: None,
-            cwd: None,
-            owner: me(),
-            owner_start: draugr::start_time(me() as i32).unwrap() + 1,
-            at: 1.0,
-            profile: None,
-            tracker: None,
-            search: false,
-            plugins: None,
-        };
-        insert(&h.db, &gone).await.unwrap();
-        let gone_dir = paths::make_session_dir(&h.env, &h.socket, &gone.sid).unwrap();
-        // the stop
-        h.front.mcp.unbind_all();
-        assert!(!Path::new(&a.socket).exists());
-        // the next start
-        let next = front(h.dir.path(), &h.socket);
-        next.mcp
-            .open_store(h.env.clone(), h.socket.clone(), h.db.clone());
-        next.mcp.restore().await;
-        assert_eq!(next.mcp.status().sessions, 1);
-        assert!(Path::new(&a.socket).exists(), "bound again at its path");
-        assert!(!gone_dir.exists());
-        let sids: Vec<String> = rows(&h.db)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|r| r.sid)
-            .collect();
-        assert_eq!(sids, std::slice::from_ref(&a.sid));
-        // the socket answers MCP at once (no challenge)
-        let c = tokio::net::UnixStream::connect(&a.socket).await.unwrap();
-        let (r, mut w) = c.into_split();
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-        w.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")
-            .await
-            .unwrap();
-        let mut line = String::new();
-        tokio::io::BufReader::new(r)
-            .read_line(&mut line)
-            .await
-            .unwrap();
-        let v: Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(v, json!({"jsonrpc": "2.0", "id": 1, "result": {}}));
+    #[test]
+    fn a_restart_binds_live_owners_again_and_drops_the_rest() {
+        saman::block_on_current(async move {
+            let h = hub();
+            let a = h
+                .front
+                .mcp
+                .open(params(json!({"agent": "s-1", "owner": me()})))
+                .await
+                .unwrap();
+            // a session whose owner was another process with this pid
+            let gone = Row {
+                sid: "0123456789ab".into(),
+                agent: "s-2".into(),
+                job: None,
+                task: None,
+                cwd: None,
+                owner: me(),
+                owner_start: draugr::start_time(me() as i32).unwrap() + 1,
+                at: 1.0,
+                profile: None,
+                tracker: None,
+                search: false,
+                plugins: None,
+            };
+            insert(&h.db, &gone).await.unwrap();
+            let gone_dir = paths::make_session_dir(&h.env, &h.socket, &gone.sid).unwrap();
+            // the stop
+            h.front.mcp.unbind_all();
+            assert!(!Path::new(&a.socket).exists());
+            // the next start
+            let next = front(h.dir.path(), &h.socket);
+            next.mcp
+                .open_store(h.env.clone(), h.socket.clone(), h.db.clone());
+            next.mcp.restore().await;
+            assert_eq!(next.mcp.status().sessions, 1);
+            assert!(Path::new(&a.socket).exists(), "bound again at its path");
+            assert!(!gone_dir.exists());
+            let sids: Vec<String> = rows(&h.db)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.sid)
+                .collect();
+            assert_eq!(sids, std::slice::from_ref(&a.sid));
+            // the socket answers MCP at once (no challenge)
+            let c = tokio::net::UnixStream::connect(&a.socket).await.unwrap();
+            let (r, mut w) = c.into_split();
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+            w.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n")
+                .await
+                .unwrap();
+            let mut line = String::new();
+            tokio::io::BufReader::new(r)
+                .read_line(&mut line)
+                .await
+                .unwrap();
+            let v: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(v, json!({"jsonrpc": "2.0", "id": 1, "result": {}}));
+        })
     }
 }
 
@@ -1853,21 +1840,23 @@ mod stage_tests {
 
     /// An `mcp/session` that runs late says where it waits: after the last stage it finished, and which one is next;
     /// one that ended says nothing.
-    #[tokio::test]
-    async fn a_late_open_names_the_stage_it_waits_in() {
-        let mut st = Stages::new(None);
-        assert!(st.place.late().unwrap().contains("the owner's start time"));
-        st.mark("owner");
-        st.mark("serial lock");
-        st.mark("directory");
-        st.mark("runtime.db");
-        let text = st.place.late().unwrap();
-        assert!(
-            text.contains("\"runtime.db\"") && text.contains("the socket's bind"),
-            "{text}"
-        );
-        let place = st.place.clone();
-        drop(st);
-        assert!(place.late().is_none(), "an open that ended says nothing");
+    #[test]
+    fn a_late_open_names_the_stage_it_waits_in() {
+        saman::block_on_current(async move {
+            let mut st = Stages::new(None);
+            assert!(st.place.late().unwrap().contains("the owner's start time"));
+            st.mark("owner");
+            st.mark("serial lock");
+            st.mark("directory");
+            st.mark("runtime.db");
+            let text = st.place.late().unwrap();
+            assert!(
+                text.contains("\"runtime.db\"") && text.contains("the socket's bind"),
+                "{text}"
+            );
+            let place = st.place.clone();
+            drop(st);
+            assert!(place.late().is_none(), "an open that ended says nothing");
+        })
     }
 }

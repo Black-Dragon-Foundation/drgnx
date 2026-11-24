@@ -83,11 +83,11 @@ pub fn over_high(current: u64, cap: u64, high: u32) -> bool {
 pub async fn memory_watch(unit: String, cap: u64, high: u32, stop: impl Fn() -> bool) {
     let cg = crate::clock::timeout(
         std::time::Duration::from_secs(2),
-        tokio::process::Command::new("systemctl")
+        crate::proc::Command::new("systemctl")
             .args(["--user", "show", "-P", "ControlGroup", &unit])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .output(),
+            .output_async(),
     )
     .await;
     let cg = match cg {
@@ -145,8 +145,8 @@ pub fn host_main(args: Vec<OsString>) -> i32 {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = args;
-        eprintln!("ratatoskr browser-host: the browser host is Linux only");
+        let _only_when_used_elsewhere = &args;
+        crate::soft::err_line("ratatoskr browser-host: the browser host is Linux only");
         1
     }
 }
@@ -171,15 +171,19 @@ pub enum Sub {
 }
 
 /// The arguments after `browser`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<BrowserCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<BrowserCommand> {
     use lexopt::Arg::{Long, Value};
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let name = match p.next().map_err(e)? {
         Some(Value(v)) => v.string().map_err(e)?,
-        Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err("browser needs a subcommand: install or list".into()),
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
+        None => {
+            return Err(villa::Error::invalid(
+                "browser needs a subcommand: install or list",
+            ));
+        }
     };
     let (mut json, mut version) = (false, None);
     while let Some(arg) = p.next().map_err(e)? {
@@ -188,13 +192,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<BrowserCommand,
             Long("version") if name == "install" => {
                 version = Some(p.value().map_err(e)?.string().map_err(e)?);
             }
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let sub = match name.as_str() {
         "install" => Sub::Install { version },
         "list" => Sub::List,
-        other => return Err(format!("unknown browser subcommand {other:?}")),
+        other => {
+            return Err(villa::Error::invalid(format!(
+                "unknown browser subcommand {other:?}"
+            )));
+        }
     };
     Ok(BrowserCommand { sub, json })
 }
@@ -204,24 +212,21 @@ pub fn run(env: &Env, cmd: BrowserCommand) -> i32 {
     let data = data_dir(env);
     match cmd.sub {
         Sub::Install { version } => {
-            let runtime = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
+            let runtime = match saman::Executor::new(1) {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("drgnx browser install: no async runtime: {e}");
+                    crate::soft::err_line(&format!("drgnx browser install: no async runtime: {e}"));
                     return 1;
                 }
             };
             let log = |line: &str| {
                 if !cmd.json {
-                    eprintln!("{line}");
+                    crate::soft::err_line(line);
                 }
             };
             match runtime.block_on(install::install(&data, version.as_deref(), &log)) {
                 Ok(done) if cmd.json => {
-                    println!("{}", json!({"ok": true, "installed": done}));
+                    crate::soft::out_line(&(json!({"ok": true, "installed": done})).to_string());
                     0
                 }
                 Ok(done) => {
@@ -230,19 +235,21 @@ pub fn run(env: &Env, cmd: BrowserCommand) -> i32 {
                     } else {
                         "installed"
                     };
-                    println!(
+                    crate::soft::out_line(&format!(
                         "{how}: chrome-headless-shell {} (released {}) at {}",
                         done.version,
                         done.released,
                         done.binary.display()
-                    );
+                    ));
                     0
                 }
                 Err(e) => {
                     if cmd.json {
-                        println!("{}", json!({"ok": false, "error": e.to_string()}));
+                        crate::soft::out_line(
+                            &(json!({"ok": false, "error": e.to_string()})).to_string(),
+                        );
                     } else {
-                        eprintln!("drgnx browser install: {e}");
+                        crate::soft::err_line(&format!("drgnx browser install: {e}"));
                     }
                     1
                 }
@@ -272,33 +279,32 @@ pub fn run(env: &Env, cmd: BrowserCommand) -> i32 {
                     Ok(f) => (json!(f), json!(null)),
                     Err(n) => (json!(null), json!(n.fix)),
                 };
-                println!(
-                    "{}",
-                    json!({"browser": browser, "fix": fix, "installed": installed, "pinned": pinned})
-                );
+                crate::soft::out_line(&(json!({"browser": browser, "fix": fix, "installed": installed, "pinned": pinned})).to_string());
             } else {
                 match &found {
-                    Ok(f) => println!(
+                    Ok(f) => crate::soft::out_line(&format!(
                         "sessions get: {} ({:?}, {})",
                         f.path.display(),
                         f.kind,
                         f.version.as_deref().unwrap_or("version unknown")
-                    ),
-                    Err(n) => println!("sessions get: no browser; {}", n.fix),
+                    )),
+                    Err(n) => {
+                        crate::soft::out_line(&format!("sessions get: no browser; {}", n.fix))
+                    }
                 }
                 for (dir, f) in &downloads {
-                    println!(
+                    crate::soft::out_line(&format!(
                         "downloaded: {} (released {}) in {}",
                         f.version,
                         f.released,
                         dir.display()
-                    );
+                    ));
                 }
                 for p in &pins {
                     let ready = platform
                         .and_then(|k| p.platforms.get(k))
                         .is_some_and(|x| x.sha256.is_some());
-                    println!(
+                    crate::soft::out_line(&format!(
                         "pinned: {} (released {}){}",
                         p.version,
                         p.released,
@@ -307,7 +313,7 @@ pub fn run(env: &Env, cmd: BrowserCommand) -> i32 {
                         } else {
                             ", not installable on this platform yet"
                         }
-                    );
+                    ));
                 }
             }
             0
@@ -370,65 +376,67 @@ mod tests {
     }
 
     /// The watch stops the browser once per rise above the mark, and ends with its cgroup.
-    #[tokio::test]
-    async fn the_memory_watch_stops_once_per_rise_and_ends_with_its_cgroup() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::time::Duration;
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("memory.current");
-        // whole values only, as the kernel's file gives them
-        let set = |v: &str| {
-            let tmp = dir.path().join("memory.tmp");
-            std::fs::write(&tmp, v).unwrap();
-            std::fs::rename(&tmp, dir.path().join("memory.current")).unwrap();
-        };
-        set("10\n");
-        let stops = Arc::new(AtomicUsize::new(0));
-        let seen = stops.clone();
-        let watch = tokio::spawn({
-            let file = file.clone();
-            async move {
-                watch_memory_file(&file, 100, 75, Duration::from_millis(5), move || {
-                    seen.fetch_add(1, Ordering::SeqCst);
-                    true
-                })
-                .await;
-            }
-        });
-        // each wait ends once the watch did what it waits for (10 s bounds a failure only)
-        let until = |n: usize| {
-            let stops = stops.clone();
-            async move {
-                skuld::wait_until_async("the watch stopped the browser", 10, || {
-                    let stops = stops.clone();
-                    async move { (stops.load(Ordering::SeqCst) >= n).then_some(()) }
-                })
+    #[test]
+    fn the_memory_watch_stops_once_per_rise_and_ends_with_its_cgroup() {
+        saman::block_on_current(async move {
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use std::time::Duration;
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("memory.current");
+            // whole values only, as the kernel's file gives them
+            let set = |v: &str| {
+                let tmp = dir.path().join("memory.tmp");
+                crate::fsio::write(&tmp, v).unwrap();
+                crate::fsio::rename(&tmp, dir.path().join("memory.current")).unwrap();
+            };
+            set("10\n");
+            let stops = Arc::new(AtomicUsize::new(0));
+            let seen = stops.clone();
+            let watch = crate::clock::spawn_untracked(module_path!(), {
+                let file = file.clone();
+                async move {
+                    watch_memory_file(&file, 100, 75, Duration::from_millis(5), move || {
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        true
+                    })
+                    .await;
+                }
+            });
+            // each wait ends once the watch did what it waits for (10 s bounds a failure only)
+            let until = |n: usize| {
+                let stops = stops.clone();
+                async move {
+                    skuld::wait_until_async("the watch stopped the browser", 10, || {
+                        let stops = stops.clone();
+                        async move { (stops.load(Ordering::SeqCst) >= n).then_some(()) }
+                    })
+                    .await
+                }
+            };
+            // a window in which the watch (on this runtime's thread) keeps reading and must not stop the browser again
+            let window = |nothing: &'static str| async move {
+                crate::clock::blocking(move || skuld::window(Duration::from_millis(200), nothing))
+                    .await
+                    .unwrap();
+            };
+            set("80\n");
+            until(1).await;
+            // still above: no second stop; below, then above again: the second
+            window("no second stop while it stays above").await;
+            assert_eq!(stops.load(Ordering::SeqCst), 1);
+            set("20\n");
+            window("no stop below the mark").await;
+            assert_eq!(stops.load(Ordering::SeqCst), 1);
+            set("90\n");
+            until(2).await;
+            // the cgroup goes: the watch ends
+            std::fs::remove_file(&file).unwrap();
+            tokio::time::timeout(Duration::from_secs(10), watch)
                 .await
-            }
-        };
-        // a window in which the watch (on this runtime's thread) keeps reading and must not stop the browser again
-        let window = |nothing: &'static str| async move {
-            tokio::task::spawn_blocking(move || skuld::window(Duration::from_millis(200), nothing))
-                .await
+                .expect("the watch ended")
                 .unwrap();
-        };
-        set("80\n");
-        until(1).await;
-        // still above: no second stop; below, then above again: the second
-        window("no second stop while it stays above").await;
-        assert_eq!(stops.load(Ordering::SeqCst), 1);
-        set("20\n");
-        window("no stop below the mark").await;
-        assert_eq!(stops.load(Ordering::SeqCst), 1);
-        set("90\n");
-        until(2).await;
-        // the cgroup goes: the watch ends
-        std::fs::remove_file(&file).unwrap();
-        tokio::time::timeout(Duration::from_secs(10), watch)
-            .await
-            .expect("the watch ended")
-            .unwrap();
-        assert_eq!(stops.load(Ordering::SeqCst), 2);
+            assert_eq!(stops.load(Ordering::SeqCst), 2);
+        })
     }
 }

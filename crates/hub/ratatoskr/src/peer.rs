@@ -45,22 +45,24 @@ impl Listener {
 }
 
 /// The process listening on SOCKET, for `stop` (above).
-pub fn listener_of(socket: &Path) -> Result<Listener, String> {
+pub fn listener_of(socket: &Path) -> villa::Result<Listener> {
     let dir = socket.parent().unwrap_or(Path::new("/"));
     let name = Path::new(socket.file_name().unwrap_or_default());
-    let fd = runstav::paths::trusted_dir(dir).map_err(|e| e.to_string())?;
-    runstav::paths::owned_in_trusted(&fd, name).map_err(|e| match e.kind() {
-        io::ErrorKind::NotFound => format!("{} is gone", socket.display()),
-        _ => e.to_string(),
-    })?;
-    let l = listen::listener(socket)?;
+    let fd = runstav::paths::trusted_dir(dir)?;
+    runstav::paths::owned_in_trusted(&fd, name)
+        .map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => format!("{} is gone", socket.display()),
+            _ => e.to_string(),
+        })
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let l = listen::listener(socket).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let me = rustix::process::geteuid().as_raw();
     if l.uid != me {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "the process listening on {} (pid {}) is another user's",
             socket.display(),
             l.pid
-        ));
+        )));
     }
     Ok(l)
 }
@@ -157,7 +159,7 @@ mod listen {
 
     /// The pid FD names: the `Pid:` line of `/proc/self/fdinfo/FD` (-1 or 0: the process is gone).
     fn pid_of(fd: &OwnedFd) -> Result<u32, String> {
-        let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()))
+        let info = crate::fsio::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()))
             .map_err(|e| format!("the pidfd's process does not read: {e}"))?;
         info.lines()
             .find_map(|l| l.strip_prefix("Pid:"))
@@ -300,7 +302,7 @@ mod os {
     /// The fields of `/proc/PID/stat` from field 3 (the state) on: comm, field 2, may hold spaces and parens, so they
     /// are counted from after the last `)`.
     fn fields(pid: i32) -> io::Result<Vec<String>> {
-        let line = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+        let line = crate::fsio::read_to_string(format!("/proc/{pid}/stat"))?;
         Ok(after_comm(&line)?.map(str::to_owned).collect())
     }
 
@@ -340,7 +342,7 @@ mod os {
     /// since boot: the same every time it is read, so the identity's hash never moves.
     pub(super) fn start_secs(pid: i32) -> io::Result<f64> {
         let ticks: u64 = number(field(&fields(pid)?, 22)?)?;
-        let stat = std::fs::read_to_string("/proc/stat")?;
+        let stat = crate::fsio::read_to_string("/proc/stat")?;
         let btime: u64 = stat
             .lines()
             .find_map(|l| l.strip_prefix("btime "))
@@ -488,10 +490,14 @@ mod tests {
     #[test]
     fn cwd_of_a_child_is_the_folder_it_started_in() {
         let dir = tempfile::tempdir().unwrap();
-        let mut kid = std::process::Command::new("sleep")
+        let mut kid = crate::proc::Command::new("sleep")
             .arg("60")
             .current_dir(dir.path())
-            .spawn()
+            .spawn(
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+            )
             .unwrap();
         let got = cwd_of(kid.id() as i32);
         kid.kill().unwrap();
@@ -517,10 +523,10 @@ mod tests {
         assert!(l.running(), "signal 0 reaches this process");
         // nothing listening, and a directory open to others: refused, with why
         let gone = listener_of(&dir.path().join("none.sock")).err().unwrap();
-        assert!(gone.contains("is gone"), "{gone}");
+        assert!(gone.message().contains("is gone"), "{gone}");
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
         let open = listener_of(&path).err().unwrap();
-        assert!(open.contains("open to other users"), "{open}");
+        assert!(open.message().contains("open to other users"), "{open}");
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]

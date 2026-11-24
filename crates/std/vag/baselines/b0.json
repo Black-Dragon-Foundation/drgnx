@@ -1,0 +1,19 @@
+{
+  "name": "s-mem-b0",
+  "commit": "8dad68015",
+  "machine": "model name\t: AMD Ryzen 9 7900X 12-Core Processor",
+  "metrics": {
+    "agents_pss_kib": 3143.0,
+    "cold_start_ms_max": 282.612422,
+    "cold_start_ms_median": 18.017454,
+    "cold_start_runs": 10.0,
+    "editor_pss_kib": 64630.0,
+    "extra_window_first_frame_pss_kib": 2127.0,
+    "extra_window_pss_kib": 6152.0,
+    "gpu_kib": 0.0,
+    "hub_connected_pss_kib": 50231.0,
+    "hub_idle_pss_kib": 48399.0,
+    "lsp_pss_kib": 4574528.0,
+    "total_pss_kib": 114861.0
+  }
+}

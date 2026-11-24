@@ -1,0 +1,23 @@
+[package]
+name = "annall"
+description = "Logging and the one way to print: tracing to a JSON file under the state directory, cli_out and cli_err (the logging standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+villa.workspace = true
+stig.workspace = true
+hulda.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+
+[dev-dependencies]
+raun.workspace = true
+libc.workspace = true   # the stderr sink test points descriptor 2 at a pipe
+
+[lints]
+workspace = true

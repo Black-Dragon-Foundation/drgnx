@@ -330,11 +330,9 @@ mod tests {
         m.commit(100 * MS);
         let t = 100 * MS + 37 * MS;
         let once = m.sample(t);
-        let mut last = once;
         for i in 0..1000u64 {
-            last = m.sample(100 * MS + i * 120 * MS / 1000);
+            m.sample(100 * MS + i * 120 * MS / 1000);
         }
-        let _ = last;
         assert_eq!(m.sample(t), once);
     }
 

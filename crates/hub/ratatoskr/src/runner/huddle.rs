@@ -17,7 +17,7 @@ use crate::runner::clash::{self, Clash, Rule};
 use runstav::methods::agents::{Huddle, HuddleReply, HuddleState};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// The most replies each agent gives in one huddle.
 pub const REPLIES_MAX: usize = 2;
@@ -81,7 +81,7 @@ fn agreement(h: &Huddle) -> Option<String> {
 }
 
 /// EV on H: what to do, or why the event is refused (H unchanged).
-pub fn step(h: &mut Huddle, ev: Ev) -> Result<Vec<Out>, String> {
+pub fn step(h: &mut Huddle, ev: Ev) -> villa::Result<Vec<Out>> {
     match ev {
         Ev::Reply {
             from,
@@ -89,20 +89,23 @@ pub fn step(h: &mut Huddle, ev: Ev) -> Result<Vec<Out>, String> {
             proposal,
         } => {
             if !h.participants.contains(&from) {
-                return Err(format!("you are not in huddle {}", h.id));
+                return Err(villa::Error::invalid(format!(
+                    "you are not in huddle {}",
+                    h.id
+                )));
             }
             if h.state != HuddleState::Open {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "huddle {} is {}: it takes no more replies",
                     h.id,
                     state_name(h.state)
-                ));
+                )));
             }
             if replies_of(h, &from) >= REPLIES_MAX {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "you have replied {REPLIES_MAX} times in huddle {}, the most it takes",
                     h.id
-                ));
+                )));
             }
             let proposal = proposal.filter(|p| !p.trim().is_empty());
             h.replies.push(HuddleReply {
@@ -132,7 +135,7 @@ pub fn step(h: &mut Huddle, ev: Ev) -> Result<Vec<Out>, String> {
         }
         Ev::Decide { outcome } => {
             if matches!(h.state, HuddleState::Decided | HuddleState::Closed) {
-                return Err(format!("huddle {} is over", h.id));
+                return Err(villa::Error::invalid(format!("huddle {} is over", h.id)));
             }
             let text = match &outcome {
                 Some(o) => format!(
@@ -273,7 +276,7 @@ pub struct Huddles {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }
 
 fn rule_name(r: Rule) -> String {
@@ -286,18 +289,18 @@ fn rule_name(r: Rule) -> String {
 impl Huddles {
     /// Open O (by the user, or by the hub on a clash): the huddle, or why not.  An open one about the same clash (or
     /// the same two sessions) is answered as it is.
-    pub async fn open(&self, front: &Front, o: Opening, by: By) -> Result<Huddle, String> {
+    pub async fn open(&self, front: &Front, o: Opening, by: By) -> villa::Result<Huddle> {
         use runstav::methods::agents::SessionStatus;
         if o.rule == Some(Rule::AgainstDecision) {
-            return Err(
-                "a clash against a decision opens no huddle: the decision stands until you change it".into(),
-            );
+            return Err(villa::Error::invalid(
+                "a clash against a decision opens no huddle: the decision stands until you change it",
+            ));
         }
         let [a, b] = o.participants.as_slice() else {
-            return Err("a huddle is between two sessions".into());
+            return Err(villa::Error::invalid("a huddle is between two sessions"));
         };
         if a == b {
-            return Err("a huddle is between two sessions".into());
+            return Err(villa::Error::invalid("a huddle is between two sessions"));
         }
         let snaps = front.core.agents.snapshots();
         let mut who = BTreeMap::new();
@@ -305,7 +308,7 @@ impl Huddles {
             let s = snaps
                 .iter()
                 .find(|s| &s.id == p && s.status != Some(SessionStatus::Exited))
-                .ok_or_else(|| format!("no live session {p}"))?;
+                .ok_or_else(|| villa::Error::invalid(format!("no live session {p}")))?;
             who.insert(
                 p.clone(),
                 (s.name.clone().unwrap_or_default(), s.task.clone()),
@@ -337,7 +340,7 @@ impl Huddles {
             }
         };
         if verdict == runstav::methods::matrix::Verdict::Never {
-            return Err("huddles are never allowed here".into());
+            return Err(villa::Error::invalid("huddles are never allowed here"));
         }
         let id = {
             let mut g = lock(&self.inner);
@@ -369,7 +372,9 @@ impl Huddles {
             let title = format!("Open a huddle between sessions {a} and {b}? {}", o.title);
             let data = json!({"huddle": id, "ask": true, "sessions": [a, b], "clash": o.clash,
                               "choices": ["open", "dismiss"]});
-            let card = card(front, &title, data).await?;
+            let card = card(front, &title, data)
+                .await
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             h.card = Some(card);
             lock(&self.inner).cards.insert(card, id.clone());
         }
@@ -388,7 +393,7 @@ impl Huddles {
     }
 
     /// Huddle ID as it is now (this hub run's, else its record).
-    pub async fn get(&self, front: &Front, id: &str) -> Result<Huddle, String> {
+    pub async fn get(&self, front: &Front, id: &str) -> villa::Result<Huddle> {
         if let Some(h) = lock(&self.inner).all.get(id) {
             return Ok(h.clone());
         }
@@ -401,7 +406,7 @@ impl Huddles {
             .ok()
             .flatten()
             .and_then(|v| serde_json::from_value(v).ok())
-            .ok_or_else(|| format!("no huddle {id}"))
+            .ok_or_else(|| villa::Error::invalid(format!("no huddle {id}")))
     }
 
     /// Session SID's reply in huddle ID (the `huddle_reply` tool): the tool's answer, or the refusal's.
@@ -412,10 +417,13 @@ impl Huddles {
         id: &str,
         text: String,
         proposal: Option<String>,
-    ) -> Result<String, String> {
+    ) -> villa::Result<String> {
         let (h, outs) = {
             let mut g = lock(&self.inner);
-            let h = g.all.get_mut(id).ok_or_else(|| format!("no huddle {id}"))?;
+            let h = g
+                .all
+                .get_mut(id)
+                .ok_or_else(|| villa::Error::invalid(format!("no huddle {id}")))?;
             let outs = step(
                 h,
                 Ev::Reply {
@@ -431,7 +439,9 @@ impl Huddles {
             match o {
                 Out::Tell { to, text } => tell(front, id, &to, text),
                 Out::Card => {
-                    let card = result_card(front, &h).await?;
+                    let card = result_card(front, &h)
+                        .await
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?;
                     h.card = Some(card);
                     let mut g = lock(&self.inner);
                     g.cards.insert(card, id.to_owned());
@@ -553,7 +563,7 @@ impl Huddles {
         for o in opens {
             let (me, f) = (self.clone(), front.clone());
             crate::clock::spawn("huddle:open", async move {
-                let _ = me.open(&f, o, By::Hub).await;
+                crate::soft::done(me.open(&f, o, By::Hub).await, "huddle");
             });
         }
     }
@@ -582,7 +592,7 @@ impl Huddles {
         };
         let (me, f) = (self.clone(), front.clone());
         crate::clock::spawn("huddle:escalated", async move {
-            let _ = me.open(&f, o, By::Hub).await;
+            crate::soft::done(me.open(&f, o, By::Hub).await, "huddle");
         });
     }
 }
@@ -705,10 +715,13 @@ async fn verdict(front: &Front, sid: &str) -> runstav::methods::matrix::Verdict 
 /// TEXT to session TO, queued under the huddle's key (it never cancels a turn).
 fn tell(front: &Front, id: &str, to: &str, text: String) {
     if let Ok(s) = front.core.agents.find(to) {
-        let _ = s.prompt_keyed(
-            text,
-            crate::agents::queue::Origin::Hub,
-            Some(format!("huddle:{id}")),
+        crate::soft::done(
+            s.prompt_keyed(
+                text,
+                crate::agents::queue::Origin::Hub,
+                Some(format!("huddle:{id}")),
+            ),
+            "huddle",
         );
     }
 }
@@ -720,13 +733,16 @@ async fn save(front: &Front, h: &Huddle) {
     };
     let (id, d) = (h.id.clone(), data.clone());
     let meta = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "agents/huddle");
-    let _ = front
-        .writer
-        .db
-        .write(meta, move |tx| {
-            norn::write::huddles::put(tx, &id, d).map(|_| ())
-        })
-        .await;
+    crate::soft::done(
+        front
+            .writer
+            .db
+            .write(meta, move |tx| {
+                norn::write::huddles::put(tx, &id, d).map(|_| ())
+            })
+            .await,
+        "huddle",
+    );
     front.broadcast("huddle", data);
     // the Work map's strip and needs-you list carry it while it waits for the user or goes on
     let open = !matches!(h.state, HuddleState::Decided | HuddleState::Closed);
@@ -737,7 +753,7 @@ async fn save(front: &Front, h: &Huddle) {
 }
 
 /// The card of an agreed or split huddle H.
-async fn result_card(front: &Front, h: &Huddle) -> Result<i64, String> {
+async fn result_card(front: &Front, h: &Huddle) -> villa::Result<i64> {
     let (a, b) = (&h.participants[0], &h.participants[1]);
     let positions: Vec<Value> = h
         .replies
@@ -760,7 +776,7 @@ async fn result_card(front: &Front, h: &Huddle) -> Result<i64, String> {
 }
 
 /// A huddle card (no job), announced as `card`.
-async fn card(front: &Front, title: &str, data: Value) -> Result<i64, String> {
+async fn card(front: &Front, title: &str, data: Value) -> villa::Result<i64> {
     use norn::write::cards::{NewCard, card_create};
     let new = NewCard {
         job: None,
@@ -775,7 +791,7 @@ async fn card(front: &Front, title: &str, data: Value) -> Result<i64, String> {
             card_create(tx, new, crate::clock::wall_secs())
         })
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     front.broadcast(
         "card",
         json!({"id": id, "job": null, "task": null, "kind": "huddle", "title": title}),

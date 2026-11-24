@@ -7,7 +7,8 @@
 //! kept sorted.  Empty matches are not hits (`how-many` counts them).
 
 use regex_lite::{Regex, RegexBuilder};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 /// The most hits kept (the count goes on past it).
 pub const HITS_MAX: usize = 1 << 20;

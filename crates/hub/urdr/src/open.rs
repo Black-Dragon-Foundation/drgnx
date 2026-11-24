@@ -2,9 +2,6 @@
 
 use crate::{Error, Result, migrate};
 use rusqlite::{Connection, OpenFlags};
-use std::fs::OpenOptions;
-use std::io::ErrorKind;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -75,16 +72,8 @@ pub fn open_store(spec: &StoreSpec) -> Result<Connection> {
             return Err(Error::NewerSchema { found, known });
         }
     } else {
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(file_mode)
-            .open(&spec.path)
-        {
-            Ok(f) => f.set_permissions(std::fs::Permissions::from_mode(file_mode))?,
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e.into()),
-        }
+        // a taken name is fine: another opener made it first
+        eitri::create_new(&spec.path, file_mode)?;
     }
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = Connection::open_with_flags(&spec.path, flags)?;

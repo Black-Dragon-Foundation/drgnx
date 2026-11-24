@@ -410,9 +410,9 @@ fn card_granted(conn: &urdr::Connection, a: Action, ctx: &ActionCtx, card: i64, 
 
 impl MatrixGate {
     /// Take the `agents-matrix` setting V (what `Settings::effective` gives).
-    pub fn apply_setting(&self, v: &Value) -> Result<(), String> {
+    pub fn apply_setting(&self, v: &Value) -> villa::Result<()> {
         let d = decode::decode(v)?;
-        let mut st = self.st.lock().expect("matrix gate");
+        let mut st = saman::lock(&self.st);
         st.base = d.preset;
         st.time = d.time_presets;
         st.user = d.overrides;
@@ -421,25 +421,23 @@ impl MatrixGate {
 
     /// `presence/set`: from the next action the time presets follow.
     pub fn set_away(&self, away: bool) {
-        self.st.lock().expect("matrix gate").away = away;
+        saman::lock(&self.st).away = away;
     }
 
     /// Whether the setting has time presets, so the preset in force may change at a minute's turn with no write.
     pub fn has_time_presets(&self) -> bool {
-        !self.st.lock().expect("matrix gate").time.is_empty()
+        !saman::lock(&self.st).time.is_empty()
     }
 
     /// How long a browser card's "once" lasts, in seconds (`agents-browser-once-window` as last read).
     pub fn once_window(&self) -> u64 {
-        self.st
-            .lock()
-            .expect("matrix gate")
+        saman::lock(&self.st)
             .once_window
             .unwrap_or(DEFAULT_ONCE_WINDOW)
     }
 
     fn preset_now(&self, now: f64) -> (Preset, Preset, bool) {
-        let st = self.st.lock().expect("matrix gate");
+        let st = saman::lock(&self.st);
         let base = st.base.unwrap_or(Preset::Balanced);
         (base, active(base, &st.time, st.away, minute(now)), st.away)
     }
@@ -447,7 +445,7 @@ impl MatrixGate {
     /// The layers for CTX: the active preset, the user's cells, the project's and the plan's overrides.
     fn layers(&self, conn: &urdr::Connection, ctx: &ActionCtx, now: f64) -> Vec<Matrix> {
         let (_, act, _) = self.preset_now(now);
-        let user = self.st.lock().expect("matrix gate").user.clone();
+        let user = saman::lock(&self.st).user.clone();
         let mut layers = vec![preset(act), user];
         layers.extend(ctx.project.as_deref().and_then(|p| user_override(conn, p)));
         layers.extend(ctx.plan.as_deref().and_then(|p| user_override(conn, p)));
@@ -715,26 +713,17 @@ impl MatrixGate {
 
     /// What a manager delegated to worker SID, if it did.
     pub fn delegated_to(&self, sid: &str) -> Option<Delegation> {
-        self.st
-            .lock()
-            .expect("matrix gate")
-            .delegated
-            .get(sid)
-            .cloned()
+        saman::lock(&self.st).delegated.get(sid).cloned()
     }
 
     /// Worker SID's delegation as a restart or a move read it back (an empty one is Never everywhere).
     pub fn set_delegated(&self, sid: &str, d: Delegation) {
-        self.st
-            .lock()
-            .expect("matrix gate")
-            .delegated
-            .insert(sid.to_string(), d);
+        saman::lock(&self.st).delegated.insert(sid.to_string(), d);
     }
 
     /// Worker SID ended (or never started): its delegation goes.
     pub fn drop_delegation(&self, sid: &str) {
-        self.st.lock().expect("matrix gate").delegated.remove(sid);
+        saman::lock(&self.st).delegated.remove(sid);
     }
 
     fn view(&self, conn: &urdr::Connection, p: &GetParams, now: f64) -> MatrixView {
@@ -744,7 +733,7 @@ impl MatrixGate {
             plan: p.plan.as_ref().map(|x| x.0.clone()),
             ..ActionCtx::default()
         };
-        let time = self.st.lock().expect("matrix gate").time.clone();
+        let time = saman::lock(&self.st).time.clone();
         let owned = self.layers(conn, &ctx, now);
         let layers: Vec<&Matrix> = owned.iter().collect();
         let mut merged: BTreeMap<(Action, Column), Cell> = BTreeMap::new();
@@ -793,10 +782,10 @@ impl MatrixGate {
     /// [`Self::refresh`] from the settings alone (a session holds those, not the front).
     pub fn refresh_from(&self, settings: &crate::settings::Settings) {
         if let Some((v, _)) = settings.effective("drgnx-agents-matrix", None) {
-            let _ = self.apply_setting(&v);
+            crate::soft::done(self.apply_setting(&v), "matrix_gate");
         }
         let once = settings.current().loaded.values.agents_browser_once_window;
-        self.st.lock().expect("matrix gate").once_window = Some(once);
+        saman::lock(&self.st).once_window = Some(once);
     }
 
     /// The preset in force now (the time presets and the away flag applied).
@@ -853,7 +842,7 @@ impl MatrixGate {
             .await
             .unwrap_or(Gate::Ask(0));
         // the card is announced as every card is (the cockpit and the mirror wait on the event)
-        let editors = self.st.lock().expect("matrix gate").editors.clone();
+        let editors = saman::lock(&self.st).editors.clone();
         if let Gate::Ask(id) = gate
             && id > 0
             && let Some(e) = editors
@@ -866,7 +855,7 @@ impl MatrixGate {
 
     /// The `card` event of a matrix card goes to EDITORS' subscribers.
     pub fn announce_to(&self, editors: Arc<crate::settings::agents::Editors>) {
-        self.st.lock().expect("matrix gate").editors = Some(editors);
+        saman::lock(&self.st).editors = Some(editors);
     }
 }
 

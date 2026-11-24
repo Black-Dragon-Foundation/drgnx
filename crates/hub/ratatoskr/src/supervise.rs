@@ -29,10 +29,9 @@ use runstav::paths::{self, Env};
 use serde_json::json;
 use std::ffi::OsString;
 use std::io::{self, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::os::unix::process::CommandExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 /// The names a supervisor passes on, each only when set (review I11): the directories (a long path would resolve
@@ -41,12 +40,12 @@ use std::time::Duration;
 pub const SUPERVISOR_ENV: &[&str] = &[
     "DRGNX_DATA_DIR",
     "DRGNX_CONFIG_DIR",
-    "XDG_RUNTIME_DIR",
-    "XDG_STATE_HOME",
-    "XDG_DATA_HOME",
-    "XDG_CONFIG_HOME",
-    "XDG_CACHE_HOME",
-    "HOME",
+    stig::SYSTEM_RUNTIME_VAR,
+    stig::Xdg::State.var(),
+    stig::Xdg::Data.var(),
+    stig::Xdg::Config.var(),
+    stig::Xdg::Cache.var(),
+    stig::HOME_VAR,
     "TMPDIR",
     "TMP",
     "TEMP",
@@ -178,20 +177,15 @@ pub fn write_private(file: &Path, text: &str) -> io::Result<()> {
     let mut name = file.as_os_str().to_owned();
     name.push(format!(".tmp-{}", std::process::id()));
     let tmp = PathBuf::from(name);
-    let _ = std::fs::remove_file(&tmp);
+    crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     let written = (|| {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)?;
+        let mut f = eitri::create_exclusive(&tmp, 0o600).map_err(std::io::Error::from)?;
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
-        std::fs::rename(&tmp, file)
+        crate::fsio::rename(&tmp, file)
     })();
     if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     }
     written
 }
@@ -206,7 +200,7 @@ pub struct RealLaunchctl(pub PathBuf);
 
 impl Launchctl for RealLaunchctl {
     fn ok(&self, args: &[&str]) -> bool {
-        Command::new(&self.0)
+        crate::proc::Command::new(&self.0)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -234,7 +228,7 @@ pub fn launchd_start(
     label: &str,
     plist: &Path,
     changed: bool,
-) -> Result<Launched, String> {
+) -> villa::Result<Launched> {
     let domain = format!("gui/{uid}");
     if !ctl.ok(&["print", &domain]) {
         return Ok(Launched::NoDomain);
@@ -258,7 +252,7 @@ pub fn launchd_start(
     if ctl.ok(&first) {
         Ok(Launched::Started)
     } else {
-        Err(format!("launchctl {verb} failed"))
+        Err(villa::Error::invalid(format!("launchctl {verb} failed")))
     }
 }
 
@@ -302,7 +296,7 @@ pub fn choose(env: &Env) -> Mode {
     }
     let manager = env
         .vars
-        .get("XDG_RUNTIME_DIR")
+        .get(stig::SYSTEM_RUNTIME_VAR)
         .filter(|r| r.starts_with('/'))
         .is_some_and(|r| Path::new(r).join("systemd").is_dir());
     if !manager {
@@ -318,41 +312,43 @@ pub fn choose(env: &Env) -> Mode {
 /// --supervisor self`.  Nothing above stderr is inherited, a descriptor a caller left inheritable included
 /// ([`isolate`]).  The child is handed back so the caller can see it end early.
 pub fn detach(exe: &Path) -> io::Result<std::process::Child> {
-    let mut cmd = Command::new(exe);
-    cmd.args(["serve", "--supervisor", "self"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    isolate(&mut cmd);
-    cmd.spawn()
+    draugr::spawn_std(&detached(exe, ["serve", "--supervisor", "self"]), &quiet())
 }
 
-/// CMD's child is a session of its own (`setsid`).  What it inherits stops at stderr: every descriptor from 3 up is
-/// close-on-exec in the child, whatever the caller left inheritable.
-fn isolate(cmd: &mut Command) {
-    // SAFETY: `close_range(2)` or `fcntl(2)` and `setsid(2)`, all async-signal-safe and allocation-free, run between
-    // fork and exec.
-    unsafe {
-        cmd.pre_exec(|| {
-            draugr::spawn::cloexec_from(3);
-            rustix::process::setsid()
-                .map(|_| ())
-                .map_err(io::Error::from)
-        });
+/// The spec of EXE with ARGS as a session of its own (`setsid`), our environment. What it inherits stops at stderr:
+/// every descriptor from 3 up is close-on-exec in the child, whatever the caller left inheritable (draugr's start).
+fn detached<const N: usize>(exe: &Path, args: [&str; N]) -> draugr::Spec {
+    draugr::Spec {
+        program: exe.to_path_buf(),
+        args: args.iter().map(OsString::from).collect(),
+        env: std::env::vars_os().collect(),
+        cwd: None,
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: true,
+    }
+}
+
+/// A child whose stdout and stderr are `/dev/null`.
+fn quiet() -> draugr::Opts {
+    draugr::Opts {
+        stdout: draugr::Redirect::Null,
+        stderr: draugr::Redirect::Null,
+        ..draugr::Opts::default()
     }
 }
 
 /// What `ensure` runs once nothing answers.  Err is the reason it could not start one.
-fn start(env: &Env, socket: &Path, exe: &Path) -> Result<Option<std::process::Child>, String> {
+fn start(env: &Env, socket: &Path, exe: &Path) -> villa::Result<Option<std::process::Child>> {
     let h = hash(socket);
     match choose(env) {
         Mode::Systemd(prog) => {
             let args = systemd_args(&unit_name(&h), exe, &present(env));
-            let out = Command::new(prog)
+            let out = crate::proc::Command::new(prog)
                 .args(args)
                 .stdin(Stdio::null())
                 .output()
-                .map_err(|e| format!("systemd-run: {e}"))?;
+                .map_err(|e| villa::Error::invalid(format!("systemd-run: {e}")))?;
             let said = String::from_utf8_lossy(&out.stderr);
             // a racing `ensure` already made the unit: both then ping
             if out.status.success()
@@ -361,38 +357,47 @@ fn start(env: &Env, socket: &Path, exe: &Path) -> Result<Option<std::process::Ch
             {
                 Ok(None)
             } else {
-                Err(format!("systemd-run failed: {}", said.trim()))
+                Err(villa::Error::invalid(format!(
+                    "systemd-run failed: {}",
+                    said.trim()
+                )))
             }
         }
         Mode::Launchd(prog) => {
             let state = paths::state_dir(env).join("hub");
-            paths::private_dir(&state).map_err(|e| e.to_string())?;
+            paths::private_dir(&state)?;
             let plist = state.join("launchd.plist");
             let vars: Vec<(String, String)> = present(env)
                 .into_iter()
                 .filter_map(|n| env.vars.get(n).map(|v| (n.to_string(), v.clone())))
                 .collect();
             let text = launchd_plist(&label(&h), exe, &vars, &state.join("launchd.log"));
-            let changed = std::fs::read_to_string(&plist).ok().as_deref() != Some(text.as_str());
-            write_private(&plist, &text).map_err(|e| format!("{}: {e}", plist.display()))?;
+            let changed =
+                crate::fsio::read_to_string(&plist).ok().as_deref() != Some(text.as_str());
+            write_private(&plist, &text)
+                .map_err(|e| villa::Error::io(format!("{}: {e}", plist.display())))?;
             match launchd_start(&RealLaunchctl(prog), env.uid, &label(&h), &plist, changed)? {
                 Launched::Started => Ok(None),
                 Launched::NoDomain => {
-                    eprintln!(
+                    crate::soft::err_line(&format!(
                         "ratatoskr ensure: no gui/{} launchd domain (an SSH session?): the hub detaches itself and is not restarted on a crash",
                         env.uid
-                    );
-                    detach(exe).map(Some).map_err(|e| e.to_string())
+                    ));
+                    detach(exe)
+                        .map(Some)
+                        .map_err(|e| villa::Error::invalid(e.to_string()))
                 }
             }
         }
         Mode::SelfDetach(why) => {
             if let Some(why) = why {
-                eprintln!(
+                crate::soft::err_line(&format!(
                     "ratatoskr ensure: {why}: the hub detaches itself and is not restarted on a crash"
-                );
+                ));
             }
-            detach(exe).map(Some).map_err(|e| e.to_string())
+            detach(exe)
+                .map(Some)
+                .map_err(|e| villa::Error::invalid(e.to_string()))
         }
     }
 }
@@ -433,22 +438,22 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
     let socket = paths::socket_path(env);
     // a socket directory that is not this user's private one: nothing there is trusted, and no hub could start there
     if let Some(why) = client::refused(&socket) {
-        eprintln!("ratatoskr ensure: {why}");
+        crate::soft::err_line(&format!("ratatoskr ensure: {why}"));
         return 1;
     }
     // a Lisp hub from before Ratatoskr serves here, answering a ping or not: said as `serve` says it (review M1)
     let lock_path = paths::lock_path(&socket);
     if let Some((pid, lock::LispLock::Respect)) = lock::lisp_dir(&lock_path, &lock::System) {
-        eprintln!(
+        crate::soft::err_line(&format!(
             "ratatoskr ensure: {} (pid {})",
             lock::LISP_HUB_SERVES,
             pid.map_or_else(|| "unknown".to_string(), |p| p.to_string())
-        );
+        ));
         return 3;
     }
     if client::ping(&socket, Duration::from_secs(1)).is_some() {
         if say {
-            println!("{}", socket.display());
+            crate::soft::out_line(&(socket.display()).to_string());
         }
         return 0;
     }
@@ -456,23 +461,23 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
     // a hub that has stopped serving still writes its store's queue under the lock: no second hub starts on that store
     // until it has ended (a killed one releases the lock at once)
     if let Some(pid) = ending(&lock_path, deadline) {
-        eprintln!(
+        crate::soft::err_line(&format!(
             "ratatoskr ensure: a hub is ending here (pid {}): it still writes its store; try again once it has ended",
             pid.map_or_else(|| "unknown".to_string(), |p| p.to_string())
-        );
+        ));
         return 1;
     }
     let exe = match crate::idle::resolve_exe() {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("ratatoskr ensure: cannot find its own path: {e}");
+            crate::soft::err_line(&format!("ratatoskr ensure: cannot find its own path: {e}"));
             return 1;
         }
     };
     let mut child = match start(env, &socket, exe) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("ratatoskr ensure: cannot start a hub: {e}");
+            crate::soft::err_line(&format!("ratatoskr ensure: cannot start a hub: {e}"));
             return 1;
         }
     };
@@ -480,7 +485,7 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
     loop {
         if client::ping(&socket, Duration::from_secs(1)).is_some() {
             if say {
-                println!("{}", socket.display());
+                crate::soft::out_line(&(socket.display()).to_string());
             }
             return 0;
         }
@@ -494,7 +499,7 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
         if crate::clock::real_now() >= deadline {
             break;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        stund::real::sleep_blocking(Duration::from_millis(50));
     }
     let why = match (log_reason(env), ended) {
         (Some((r, file)), _) => format!("{r} (log: {})", file.display()),
@@ -508,10 +513,10 @@ fn ensure_say(env: &Env, timeout: Duration, say: bool) -> i32 {
             paths::state_dir(env).display()
         ),
     };
-    eprintln!(
+    crate::soft::err_line(&format!(
         "ratatoskr ensure: the hub did not answer within {} s: {why}",
         timeout.as_secs()
-    );
+    ));
     1
 }
 
@@ -529,7 +534,7 @@ fn wait_stopped(path: &Path, within: Duration) -> bool {
         if crate::clock::real_now() >= deadline {
             return false;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        stund::real::sleep_blocking(Duration::from_millis(50));
     }
 }
 
@@ -546,7 +551,7 @@ fn ending(path: &Path, deadline: std::time::Instant) -> Option<Option<u32>> {
             Ok(Holder::Ratatoskr { stopping: true, .. }) => {}
             _ => return None,
         }
-        std::thread::sleep(Duration::from_millis(50));
+        stund::real::sleep_blocking(Duration::from_millis(50));
     }
 }
 
@@ -557,7 +562,7 @@ fn wait_gone(path: &Path, within: Duration) -> bool {
         if crate::clock::real_now() >= deadline {
             return false;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        stund::real::sleep_blocking(Duration::from_millis(50));
     }
     true
 }
@@ -584,19 +589,19 @@ pub fn stop(env: &Env, timeout: Duration) -> i32 {
     match lock::holder(&lock_path, &lock::System) {
         // a refused directory says why itself
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-            eprintln!("ratatoskr stop: {e}");
+            crate::soft::err_line(&format!("ratatoskr stop: {e}"));
             1
         }
         Err(e) => {
-            eprintln!(
+            crate::soft::err_line(&format!(
                 "ratatoskr stop: cannot look at {}: {e}",
                 lock_path.display()
-            );
+            ));
             1
         }
         // nothing holds it: no signal at all, whatever pid a stale file names
         Ok(Holder::Nobody) => {
-            println!("not running");
+            crate::soft::out_line("not running");
             0
         }
         Ok(Holder::Lisp { pid }) => stop_lisp(&socket, &lock_path, pid, timeout),
@@ -620,10 +625,12 @@ fn stop_ratatoskr(
     let asked = Client::user_at(socket, Duration::from_secs(5))
         .and_then(|mut c| c.call("shutdown", json!({}), Duration::from_secs(5)));
     if let Err(e) = asked {
-        eprintln!("ratatoskr stop: the hub did not take a shutdown ({e})");
+        crate::soft::err_line(&format!(
+            "ratatoskr stop: the hub did not take a shutdown ({e})"
+        ));
     }
     if wait_stopped(lock_path, timeout) {
-        println!("stopped Ratatoskr{}", named(pid));
+        crate::soft::out_line(&format!("stopped Ratatoskr{}", named(pid)));
         return 0;
     }
     // the target is the process listening on the socket, never what the lock's text or a command line names
@@ -632,26 +639,26 @@ fn stop_ratatoskr(
         listener
             .terminate()
             .map(|()| p)
-            .map_err(|e| format!("SIGTERM to pid {p} failed ({e})"))
+            .map_err(|e| villa::Error::unavailable(format!("SIGTERM to pid {p} failed ({e})")))
     });
     match signalled {
         Ok(p) => {
             if wait_stopped(lock_path, timeout) {
-                println!("stopped Ratatoskr (pid {p}, by SIGTERM)");
+                crate::soft::out_line(&format!("stopped Ratatoskr (pid {p}, by SIGTERM)"));
                 0
             } else {
-                eprintln!(
+                crate::soft::err_line(&format!(
                     "ratatoskr stop: pid {p} did not stop within {} s",
                     timeout.as_secs()
-                );
+                ));
                 1
             }
         }
         Err(why) => {
-            eprintln!(
+            crate::soft::err_line(&format!(
                 "ratatoskr stop: the hub did not stop and {why}; signal it yourself{}",
                 pid.map_or_else(String::new, |p| format!(": pid {p}"))
-            );
+            ));
             1
         }
     }
@@ -661,7 +668,7 @@ fn stop_lisp(socket: &Path, lock_dir: &Path, pid: Option<u32>, timeout: Duration
     // a Lisp hub serves a v0 `shutdown` without a hello
     client::v0_call(socket, "shutdown");
     if wait_gone(lock_dir, timeout) {
-        println!("stopped the Lisp hub{}", named(pid));
+        crate::soft::out_line(&format!("stopped the Lisp hub{}", named(pid)));
         return 0;
     }
     // it stays: SIGTERM only a live process whose command line names the hub
@@ -672,13 +679,13 @@ fn stop_lisp(socket: &Path, lock_dir: &Path, pid: Option<u32>, timeout: Duration
         Some(p) if lock::alive(p) && lock::System.is_lisp_hub(p) => {
             term(p);
             if wait_gone(lock_dir, timeout) {
-                println!("stopped the Lisp hub (pid {p}, by SIGTERM)");
+                crate::soft::out_line(&format!("stopped the Lisp hub (pid {p}, by SIGTERM)"));
                 0
             } else {
-                eprintln!(
+                crate::soft::err_line(&format!(
                     "ratatoskr stop: the Lisp hub (pid {p}) did not stop within {} s",
                     timeout.as_secs()
-                );
+                ));
                 1
             }
         }
@@ -688,17 +695,17 @@ fn stop_lisp(socket: &Path, lock_dir: &Path, pid: Option<u32>, timeout: Duration
             } else {
                 "is gone"
             };
-            eprintln!(
+            crate::soft::err_line(&format!(
                 "ratatoskr stop: the lock names pid {p}, which {what}: remove {}",
                 lock_dir.display()
-            );
+            ));
             1
         }
         None => {
-            eprintln!(
+            crate::soft::err_line(&format!(
                 "ratatoskr stop: the lock names no process: remove {}",
                 lock_dir.display()
-            );
+            ));
             1
         }
     }
@@ -723,13 +730,15 @@ mod tests {
             high
         };
         assert!(leaked >= 200);
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", "ls /proc/self/fd"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        isolate(&mut cmd);
-        let out = cmd.output().unwrap();
+        let spec = detached(Path::new("/bin/sh"), ["-c", "ls /proc/self/fd"]);
+        let opts = draugr::Opts {
+            stdout: draugr::Redirect::Pipe,
+            ..quiet()
+        };
+        let out = draugr::spawn_std(&spec, &opts)
+            .unwrap()
+            .wait_with_output()
+            .unwrap();
         // SAFETY: closing the descriptor made above.
         unsafe { libc::close(leaked) };
         let seen: Vec<i32> = String::from_utf8_lossy(&out.stdout)
@@ -759,7 +768,7 @@ mod tests {
         // a data dir with `$HOME` and a space in it: A-42's class
         let e = env(&[
             ("DRGNX_DATA_DIR", "/srv/u/my data/$HOME/x"),
-            ("HOME", "/srv/u"),
+            (stig::HOME_VAR, "/srv/u"),
             ("TMPDIR", "/tmp/a b"),
             ("SSH_AUTH_SOCK", "/run/user/1000/ssh-agent.socket"),
         ]);
@@ -790,14 +799,14 @@ mod tests {
 
     #[test]
     fn systemd_run_argv_passes_tmpdir_and_home() {
-        let e = env(&[("HOME", "/srv/u"), ("TMPDIR", "/tmp/x")]);
+        let e = env(&[(stig::HOME_VAR, "/srv/u"), ("TMPDIR", "/tmp/x")]);
         let names = after_setenv(&systemd_args("u", Path::new("/r"), &present(&e)));
-        assert_eq!(names, vec!["HOME", "TMPDIR"]);
+        assert_eq!(names, vec![stig::HOME_VAR, "TMPDIR"]);
         // a name that is not set is not passed
         let none = after_setenv(&systemd_args("u", Path::new("/r"), &present(&env(&[]))));
         assert!(none.is_empty());
         // an empty value is not set either
-        assert!(present(&env(&[("HOME", "")])).is_empty());
+        assert!(present(&env(&[(stig::HOME_VAR, "")])).is_empty());
     }
 
     #[test]
@@ -805,12 +814,12 @@ mod tests {
         for n in [
             "DRGNX_DATA_DIR",
             "DRGNX_CONFIG_DIR",
-            "XDG_RUNTIME_DIR",
-            "XDG_STATE_HOME",
-            "XDG_DATA_HOME",
-            "XDG_CONFIG_HOME",
-            "XDG_CACHE_HOME",
-            "HOME",
+            stig::SYSTEM_RUNTIME_VAR,
+            stig::Xdg::State.var(),
+            stig::Xdg::Data.var(),
+            stig::Xdg::Config.var(),
+            stig::Xdg::Cache.var(),
+            stig::HOME_VAR,
             "TMPDIR",
             "TMP",
             "TEMP",
@@ -825,8 +834,6 @@ mod tests {
         ] {
             assert!(SUPERVISOR_ENV.contains(&n), "{n}");
         }
-        // no child Emacs: the hub has no use for the editor's Emacs
-        assert!(!SUPERVISOR_ENV.contains(&"DRGNX_EMACS"));
         // no provider key is ever passed on
         assert!(SUPERVISOR_ENV.iter().all(|n| !n.contains("KEY")));
     }
@@ -859,7 +866,7 @@ mod tests {
         let text = launchd_plist(
             &label,
             Path::new("/opt/r/ratatoskr"),
-            &[("HOME".into(), "/srv/u & <x>".into())],
+            &[(stig::HOME_VAR.into(), "/srv/u & <x>".into())],
             Path::new("/s/launchd.log"),
         );
         write_private(&file, &text).unwrap();
@@ -867,7 +874,7 @@ mod tests {
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        let got = std::fs::read_to_string(&file).unwrap();
+        let got = crate::fsio::read_to_string(&file).unwrap();
         assert!(
             got.contains(&format!("<key>Label</key><string>{label}</string>")),
             "{got}"

@@ -45,7 +45,7 @@ impl Runs {
         selector: &str,
         ended: impl Fn(&str) -> bool,
     ) -> Option<String> {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = saman::lock(&self.jobs);
         if jobs
             .iter()
             .any(|(id, r)| r.task == task && r.key.0 == key && r.key.1 == selector && !ended(id))
@@ -64,33 +64,31 @@ impl Runs {
 
     /// The claim CLAIM started as job ID.
     fn started(&self, claim: &str, id: String, run: Run) {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = saman::lock(&self.jobs);
         jobs.remove(claim);
         jobs.insert(id, run);
     }
 
     /// The claim CLAIM started nothing (or started already: then nothing changes).
     fn release(&self, claim: &str) {
-        self.jobs.lock().unwrap().remove(claim);
+        saman::lock(&self.jobs).remove(claim);
     }
 
     /// Whether TASK waits on a gate's run (`gate-wait`): one is in flight (one whose job ENDED isn't).
     pub fn waiting(&self, task: &str, ended: impl Fn(&str) -> bool) -> bool {
-        self.jobs
-            .lock()
-            .unwrap()
+        saman::lock(&self.jobs)
             .iter()
             .any(|(id, r)| r.task == task && !ended(id))
     }
 
     /// Job ID's run, once it ended (taken out).
     pub fn take(&self, id: &str) -> Option<Run> {
-        self.jobs.lock().unwrap().remove(id)
+        saman::lock(&self.jobs).remove(id)
     }
 
     /// The runs whose jobs ENDED (never a claim), taken out: what a watcher that lagged behind the job events missed.
     pub fn take_ended(&self, ended: impl Fn(&str) -> bool) -> Vec<(String, Run)> {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = saman::lock(&self.jobs);
         let ids: Vec<String> = jobs
             .keys()
             .filter(|id| !id.starts_with("claim:") && ended(id))
@@ -145,26 +143,26 @@ pub fn rerun_of(
         .or_else(|| evidence.iter().rev().find_map(of))
 }
 
-pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("git")
+pub(crate) fn git(dir: &Path, args: &[&str]) -> villa::Result<String> {
+    let out = crate::proc::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
         .output()
-        .map_err(|e| format!("git {}: {e}", args.join(" ")))?;
+        .map_err(|e| villa::Error::invalid(format!("git {}: {e}", args.join(" "))))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        Err(format!(
+        Err(villa::Error::invalid(format!(
             "git {}: {}",
             args.join(" "),
             String::from_utf8_lossy(&out.stderr).trim()
-        ))
+        )))
     }
 }
 
 /// The attribution trailers of the commits BASE..TIP in DIR, as `SHORT: line`.
-fn trailers_in(dir: &Path, base: &str, tip: &str) -> Result<Vec<String>, String> {
+fn trailers_in(dir: &Path, base: &str, tip: &str) -> villa::Result<Vec<String>> {
     let log = git(
         dir,
         &["log", "--format=%h%x00%B%x1e", &format!("{base}..{tip}")],
@@ -207,7 +205,7 @@ pub(crate) async fn start(
     commit: &str,
     key: &str,
     rerun: &Rerun,
-) -> Result<Option<String>, String> {
+) -> villa::Result<Option<String>> {
     let ended = |id: &str| front.core.exec.done(id).is_some();
     let Some(claim) = front.orch.claim(task, key, &rerun.selector, ended) else {
         return Ok(None);
@@ -226,14 +224,14 @@ async fn start_claimed(
     key: &str,
     rerun: &Rerun,
     claim: &str,
-) -> Result<Option<String>, String> {
+) -> villa::Result<Option<String>> {
     let t = task.to_owned();
     let evidence = front
         .writer
         .db
         .read(move |c| norn::read::evidence::of_task(c, &t))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if let Some((class, job)) = vordr::evidence::no_rerun(&evidence, key, &rerun.selector) {
         // a gate's own words on the run (its tree moved) before what the job said
         let said = evidence
@@ -255,7 +253,7 @@ async fn start_claimed(
     let (from, c, sel) = (top.to_owned(), commit.to_owned(), rerun.selector.clone());
     let dir = crate::clock::blocking(move || detached(&from, &c, &sel))
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| villa::Error::invalid(e.to_string()))??;
     let worktree = Some((top.to_owned(), dir.clone()));
     let cwd = if rerun.rel.is_empty() {
         dir.clone()
@@ -274,7 +272,7 @@ async fn start_claimed(
             .collect();
         p["env"] = json!(env);
     }
-    let params = serde_json::from_value(p).map_err(|e| e.to_string())?;
+    let params = serde_json::from_value(p).map_err(|e| villa::Error::invalid(e.to_string()))?;
     // the agent's command (or the pack's, over the agent's tree): in an agent's sandbox, the detached tree its only
     // writable folder
     let gate = crate::exec::Sealed {
@@ -296,8 +294,11 @@ async fn start_claimed(
                 key: (key.to_owned(), rerun.selector.clone()),
                 worktree,
             };
-            let _ = crate::clock::blocking(move || cleanup(&run)).await;
-            return Err(e.message);
+            crate::soft::done(
+                crate::clock::blocking(move || cleanup(&run)).await,
+                "crate::clock::blocking",
+            );
+            return Err(villa::Error::unavailable(e.message));
         }
     };
     let id = started.id;
@@ -343,7 +344,7 @@ pub(crate) fn gate_sid(task: &str, dir: &Path) -> String {
 
 /// A detached worktree of the tree TOP at COMMIT, beside it, for the run with SELECTOR (one per run: each goes when
 /// its job ends).
-fn detached(top: &Path, commit: &str, selector: &str) -> Result<PathBuf, String> {
+fn detached(top: &Path, commit: &str, selector: &str) -> villa::Result<PathBuf> {
     let name = top
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -400,7 +401,7 @@ pub async fn before_merge(
     tree: &TaskTree,
     judged: Option<&str>,
     data: &Map<String, Value>,
-) -> Result<Decision, String> {
+) -> villa::Result<Decision> {
     let (j, t) = (job.to_owned(), tid.to_owned());
     let (busy, (pack, evidence)) =
         busy_then_read(front.core.exec.busy_in_tree(&tree.path), async {
@@ -414,7 +415,7 @@ pub async fn before_merge(
                     ))
                 })
                 .await
-                .map_err(|e| e.to_string())
+                .map_err(|e| villa::Error::invalid(e.to_string()))
         })
         .await?;
     let Some(pack) = pack else {
@@ -438,17 +439,17 @@ pub async fn before_merge(
         };
         let inputs = crate::orch::red_first::inputs(&top, &base, &tip, &p, &body)?;
         let commits = crate::orch::red_first::commits(&top, &base, &tip, &p)?;
-        Ok::<_, String>((tip_commit, found, unnoted, inputs, commits))
+        Ok::<_, villa::Error>((tip_commit, found, unnoted, inputs, commits))
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| villa::Error::internal(e.to_string()))??;
     // what the gate checked, for the Flow's detail (base .. tip and each commit)
     let key = tid.to_owned();
     crate::runner::update_data(front, &crate::runner::service(), job, move |d| {
         crate::runner::put_in(d, "commits", &key, Some(commits));
     })
     .await
-    .map_err(|e| e.message)?;
+    .map_err(|e| villa::Error::unavailable(e.message))?;
     if !found.is_empty() {
         return Ok(Decision::Hold(format!(
             "attribution trailers: {}",
@@ -495,7 +496,10 @@ pub async fn before_merge(
                      or say **Red:** none (reason) in the plan"
                 )));
             };
-            if let Some(why) = start(front, tid, top, commit, key, &r).await? {
+            if let Some(why) = start(front, tid, top, commit, key, &r)
+                .await
+                .map_err(|e| villa::Error::invalid(e.to_string()))?
+            {
                 return Ok(Decision::Hold(why));
             }
             return Ok(Decision::Wait(format!(
@@ -523,7 +527,10 @@ pub async fn before_merge(
             }
             State::Missing => {
                 let r = run_of(&c);
-                if let Some(why) = start(front, tid, top, &tip_commit, &inputs.tip_key, &r).await? {
+                if let Some(why) = start(front, tid, top, &tip_commit, &inputs.tip_key, &r)
+                    .await
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?
+                {
                     return Ok(Decision::Hold(format!(
                         "the author check {}: {why}",
                         c.name
@@ -658,29 +665,31 @@ mod tests {
     /// A run that ends, and has its evidence recorded, right after the gate read the task's evidence is still busy in
     /// the gate's answer: it waits for it, never holds on "no run to repeat" over evidence read before the run's end
     /// (PR 5, macOS: the run's evidence landed between the gate's read and its busy check).
-    #[tokio::test]
-    async fn a_run_that_ends_after_the_evidence_read_is_busy_in_the_answer() {
-        // the run is busy and has no evidence yet; the read is the moment it ends and its evidence is recorded
-        let state = std::sync::Mutex::new((true, Vec::<&str>::new()));
-        let (busy, evidence) = busy_then_read(async { state.lock().unwrap().0 }, async {
-            let mut s = state.lock().unwrap();
-            let read = s.1.clone();
-            *s = (false, vec!["the run's red"]);
-            Ok::<_, ()>(read)
+    #[test]
+    fn a_run_that_ends_after_the_evidence_read_is_busy_in_the_answer() {
+        saman::block_on_current(async move {
+            // the run is busy and has no evidence yet; the read is the moment it ends and its evidence is recorded
+            let state = std::sync::Mutex::new((true, Vec::<&str>::new()));
+            let (busy, evidence) = busy_then_read(async { saman::lock(&state).0 }, async {
+                let mut s = saman::lock(&state);
+                let read = s.1.clone();
+                *s = (false, vec!["the run's red"]);
+                Ok::<_, ()>(read)
+            })
+            .await
+            .unwrap();
+            assert!(
+                busy || !evidence.is_empty(),
+                "the run is in neither: busy {busy}, evidence {evidence:?}"
+            );
+            // a run that ended before: its evidence is read, and nothing is busy
+            let state = std::sync::Mutex::new((false, vec!["the run's red"]));
+            let (busy, evidence) = busy_then_read(async { saman::lock(&state).0 }, async {
+                Ok::<_, ()>(saman::lock(&state).1.clone())
+            })
+            .await
+            .unwrap();
+            assert_eq!((busy, evidence), (false, vec!["the run's red"]));
         })
-        .await
-        .unwrap();
-        assert!(
-            busy || !evidence.is_empty(),
-            "the run is in neither: busy {busy}, evidence {evidence:?}"
-        );
-        // a run that ended before: its evidence is read, and nothing is busy
-        let state = std::sync::Mutex::new((false, vec!["the run's red"]));
-        let (busy, evidence) = busy_then_read(async { state.lock().unwrap().0 }, async {
-            Ok::<_, ()>(state.lock().unwrap().1.clone())
-        })
-        .await
-        .unwrap();
-        assert_eq!((busy, evidence), (false, vec!["the run's red"]));
     }
 }

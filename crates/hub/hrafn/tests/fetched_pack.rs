@@ -23,10 +23,11 @@ impl Launch for InProcess {
         let (req_r, req_w) = io::pipe().map_err(|e| e.to_string())?;
         let (rep_r, rep_w) = io::pipe().map_err(|e| e.to_string())?;
         let (lib, grammar, sha) = (s.lib.clone(), s.grammar.clone(), s.sha256.clone());
-        std::thread::spawn(move || {
+        saman::spawn_thread("hrafn-test-serve", move || {
             let (mut r, mut w) = (req_r, rep_w);
             serve(&lib, &grammar, &sha, &mut r, &mut w);
-        });
+        })
+        .map_err(|e| e.to_string())?;
         Ok(Started {
             stdin: Box::new(req_w),
             stdout: Box::new(rep_r),
@@ -69,8 +70,8 @@ fn fetched() -> Fetched {
         },
         init: Init::from_manifest(
             m,
-            std::fs::read_to_string(pack.join("queries/chunks.scm")).unwrap(),
-            Some(std::fs::read_to_string(pack.join("queries/tags.scm")).unwrap()),
+            eitri::read_string(&pack.join("queries/chunks.scm"), 4 << 20).unwrap(),
+            Some(eitri::read_string(&pack.join("queries/tags.scm"), 4 << 20).unwrap()),
         ),
         // no built-in language has it: the file is `Text` until a fetched pack claims it
         extensions: vec!["xcs".into()],
@@ -80,7 +81,7 @@ fn fetched() -> Fetched {
 static SAID: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
 fn said(pack: &str, why: &str) {
-    SAID.lock().unwrap().push((pack.into(), why.into()));
+    saman::lock(&SAID).push((pack.into(), why.into()));
 }
 
 #[test]
@@ -106,7 +107,7 @@ fn a_fetched_packs_files_are_chunked_by_its_worker_and_read_as_text_when_it_cann
     assert_eq!(names(&symbols), names(&s2));
     assert!(names(&symbols).contains(&("Put".into(), "method".into())));
     assert_eq!(chunks.len(), c2.len());
-    assert!(SAID.lock().unwrap().is_empty());
+    assert!(saman::lock(&SAID).is_empty());
     // structural search and inline values go to the same worker and agree with the built-in C# path
     let probe = "class G { void M() { Foo(2); Foo(3); } }";
     let found = worker::find("csharpx", "Foo($A)", probe).unwrap();
@@ -148,8 +149,8 @@ fn a_fetched_packs_files_are_chunked_by_its_worker_and_read_as_text_when_it_cann
     let (chunks, symbols, _) = chunk_file_refs(path, Lang::Text, false, text, BUDGET);
     assert!(symbols.is_empty());
     assert!(!chunks.is_empty(), "the file is still indexed, as text");
-    let _ = chunk_file_refs(path, Lang::Text, false, text, BUDGET);
-    let said_now = SAID.lock().unwrap().clone();
+    drop(chunk_file_refs(path, Lang::Text, false, text, BUDGET));
+    let said_now = saman::lock(&SAID).clone();
     assert_eq!(said_now.len(), 1, "{said_now:?}");
     assert_eq!(said_now[0].0, "csharpx");
     assert!(said_now[0].1.contains("reduced tier"), "{said_now:?}");

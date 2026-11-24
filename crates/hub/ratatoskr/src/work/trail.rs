@@ -29,7 +29,7 @@ use runstav::registry::Class;
 use runstav::wire::Error;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use vegvisir::schedule::{self, SchedRow};
 use vegvisir::trail::{self, NowLine, TrailFilter, Window, Zone};
 
@@ -153,7 +153,7 @@ pub struct Trails {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }
 
 impl Trails {
@@ -1045,7 +1045,7 @@ fn window_step(s: norn::read::steps::WindowStep) -> trail::Step {
 
 /// The trails' background: every view read again after each write (coalesced) and each closed step.
 pub async fn run(front: Arc<Front>) {
-    let _ = front.core.trails.front.set(Arc::downgrade(&front));
+    crate::soft::done(front.core.trails.front.set(Arc::downgrade(&front)), "trail");
     let signals = front.writer.signals.clone();
     loop {
         // a trail with a step still open counts its seconds: drawn again each second, between the writes

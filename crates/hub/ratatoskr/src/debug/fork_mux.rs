@@ -92,18 +92,18 @@ impl Mux {
                     }
                 };
                 let id = head.get("drgnx-conn").cloned().unwrap_or_default();
-                let mut routes = routes.lock().unwrap_or_else(|e| e.into_inner());
+                let mut routes = saman::lock(&routes);
                 if head.contains_key("drgnx-close") {
                     if let Some(tx) = routes.remove(&id) {
-                        let _ = tx.send(None);
+                        crate::soft::done(tx.send(None), "tx send");
                     }
                 } else if let Some(tx) = routes.get(&id) {
-                    let _ = tx.send(Some(body));
+                    crate::soft::done(tx.send(Some(body)), "tx send");
                 }
             }
             // the shim is gone: every connection ends
-            for (_, tx) in routes.lock().unwrap_or_else(|e| e.into_inner()).drain() {
-                let _ = tx.send(None);
+            for (_, tx) in saman::lock(&routes).drain() {
+                crate::soft::done(tx.send(None), "tx send");
             }
         });
         m
@@ -115,10 +115,7 @@ impl Mux {
         let (client, mine) = tokio::io::duplex(1 << 20);
         let (mut mr, mut mw) = tokio::io::split(mine);
         let (tx, mut rx) = mpsc::unbounded_channel::<Option<Vec<u8>>>();
-        self.routes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id.clone(), tx);
+        saman::lock(&self.routes).insert(id.clone(), tx);
         // the adapter's messages to the client
         crate::clock::spawn("debug:fork-mux-in", async move {
             while let Some(Some(body)) = rx.recv().await {
@@ -129,7 +126,7 @@ impl Mux {
                     return;
                 }
             }
-            let _ = mw.shutdown().await;
+            crate::soft::done(mw.shutdown().await, "fork_mux");
         });
         // the client's messages to the adapter, with the connection's id
         let write = self.write.clone();
@@ -161,40 +158,42 @@ mod tests {
 
     /// Two connections on one pipe: each message goes out with its id, each answer back to its connection, and a
     /// close ends only that one.
-    #[tokio::test]
-    async fn connections_are_told_apart_by_their_id() {
-        let (hub_out, shim_in) = tokio::io::duplex(1 << 16);
-        let (shim_out, hub_in) = tokio::io::duplex(1 << 16);
-        let m = Mux::new(hub_in, hub_out);
-        let (mut r0, mut w0) = m.open();
-        let (mut r1, mut w1) = m.open();
-        w1.write_all(b"Content-Length: 3\r\n\r\none").await.unwrap();
-        let mut shim_r = BufReader::new(shim_in);
-        let (h, b) = frame_of(&mut shim_r).await;
-        assert_eq!((h["drgnx-conn"].as_str(), b.as_str()), ("1", "one"));
-        w0.write_all(b"Content-Length: 4\r\n\r\nzero")
-            .await
-            .unwrap();
-        let (h, b) = frame_of(&mut shim_r).await;
-        assert_eq!((h["drgnx-conn"].as_str(), b.as_str()), ("0", "zero"));
-        let mut shim_w = shim_out;
-        shim_w
-            .write_all(b"Drgnx-Conn: 0\r\nContent-Length: 2\r\n\r\nhi")
-            .await
-            .unwrap();
-        shim_w
-            .write_all(b"Drgnx-Conn: 1\r\nDrgnx-Close: 1\r\nContent-Length: 0\r\n\r\n")
-            .await
-            .unwrap();
-        let mut got = String::new();
-        let mut buf = [0u8; 64];
-        let n = r0.read(&mut buf).await.unwrap();
-        got.push_str(std::str::from_utf8(&buf[..n]).unwrap());
-        assert_eq!(got, "Content-Length: 2\r\n\r\nhi");
-        // connection 1 is closed: its reader ends
-        assert_eq!(r1.read(&mut buf).await.unwrap(), 0);
-        // the shim going ends connection 0 too
-        drop(shim_w);
-        assert_eq!(r0.read(&mut buf).await.unwrap(), 0);
+    #[test]
+    fn connections_are_told_apart_by_their_id() {
+        saman::block_on_current(async move {
+            let (hub_out, shim_in) = tokio::io::duplex(1 << 16);
+            let (shim_out, hub_in) = tokio::io::duplex(1 << 16);
+            let m = Mux::new(hub_in, hub_out);
+            let (mut r0, mut w0) = m.open();
+            let (mut r1, mut w1) = m.open();
+            w1.write_all(b"Content-Length: 3\r\n\r\none").await.unwrap();
+            let mut shim_r = BufReader::new(shim_in);
+            let (h, b) = frame_of(&mut shim_r).await;
+            assert_eq!((h["drgnx-conn"].as_str(), b.as_str()), ("1", "one"));
+            w0.write_all(b"Content-Length: 4\r\n\r\nzero")
+                .await
+                .unwrap();
+            let (h, b) = frame_of(&mut shim_r).await;
+            assert_eq!((h["drgnx-conn"].as_str(), b.as_str()), ("0", "zero"));
+            let mut shim_w = shim_out;
+            shim_w
+                .write_all(b"Drgnx-Conn: 0\r\nContent-Length: 2\r\n\r\nhi")
+                .await
+                .unwrap();
+            shim_w
+                .write_all(b"Drgnx-Conn: 1\r\nDrgnx-Close: 1\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            let mut got = String::new();
+            let mut buf = [0u8; 64];
+            let n = r0.read(&mut buf).await.unwrap();
+            got.push_str(std::str::from_utf8(&buf[..n]).unwrap());
+            assert_eq!(got, "Content-Length: 2\r\n\r\nhi");
+            // connection 1 is closed: its reader ends
+            assert_eq!(r1.read(&mut buf).await.unwrap(), 0);
+            // the shim going ends connection 0 too
+            drop(shim_w);
+            assert_eq!(r0.read(&mut buf).await.unwrap(), 0);
+        })
     }
 }

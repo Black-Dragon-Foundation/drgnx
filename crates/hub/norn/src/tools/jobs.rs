@@ -191,10 +191,7 @@ mod tests {
             method: &'static str,
             params: Value,
         ) -> BoxFuture<'_, Result<Value, String>> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((format!("{sid} {method}"), params.clone()));
+            saman::lock(&self.calls).push((format!("{sid} {method}"), params.clone()));
             // an empty owner: the user's job (no session)
             let owner = (!self.owner.is_empty()).then_some(self.owner);
             let row = json!({"id": "x1", "session": owner, "status": self.status});
@@ -207,7 +204,7 @@ mod tests {
             })
         }
         fn wait_refused(&self, _sid: &str) {
-            *self.refused.lock().unwrap() += 1;
+            *saman::lock(&self.refused) += 1;
         }
     }
 
@@ -239,68 +236,78 @@ mod tests {
         })
     }
 
-    #[tokio::test]
-    async fn job_start_runs_in_the_sessions_folder_and_says_end_your_turn() {
-        let h = hub("running", "s1");
-        let (err, text) = call(h.clone(), "job_start", json!({"argv": ["make"]})).await;
-        assert!(!err, "{text}");
-        let v: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["id"], "x1");
-        // the hub's own text (it says "queued" for a job that waits for a slot) is passed on
-        assert_eq!(v["text"], "runs");
-        let calls = h.calls.lock().unwrap();
-        assert_eq!(calls[0].0, "s1 exec/start");
-        assert_eq!(calls[0].1["cwd"], "/work/tree");
-    }
-
-    #[tokio::test]
-    async fn a_running_job_of_its_own_starter_is_not_waited_on() {
-        for (tool, args) in [
-            ("job_result", json!({"id": "x1"})),
-            ("job_log", json!({"id": "x1"})),
-        ] {
+    #[test]
+    fn job_start_runs_in_the_sessions_folder_and_says_end_your_turn() {
+        saman::block_on_current(async {
             let h = hub("running", "s1");
-            let (err, text) = call(h.clone(), tool, args).await;
-            assert!(err && text.contains("you are woken"), "{tool}: {text}");
-            assert_eq!(*h.refused.lock().unwrap(), 1, "{tool} is counted");
-        }
+            let (err, text) = call(h.clone(), "job_start", json!({"argv": ["make"]})).await;
+            assert!(!err, "{text}");
+            let v: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(v["id"], "x1");
+            // the hub's own text (it says "queued" for a job that waits for a slot) is passed on
+            assert_eq!(v["text"], "runs");
+            let calls = saman::lock(&h.calls);
+            assert_eq!(calls[0].0, "s1 exec/start");
+            assert_eq!(calls[0].1["cwd"], "/work/tree");
+        })
     }
 
-    #[tokio::test]
-    async fn a_finished_job_of_its_own_is_read() {
-        let h = hub("done", "s1");
-        let (err, text) = call(h.clone(), "job_result", json!({"id": "x1"})).await;
-        assert!(!err, "{text}");
-        assert_eq!(*h.refused.lock().unwrap(), 0);
-    }
-
-    /// Another session's job, or the user's (no session), is not the agent's to read: its argv, folder and log stay
-    /// its starter's.  Not a wait, so not counted.
-    #[tokio::test]
-    async fn anothers_job_is_not_read() {
-        for (status, owner) in [("running", "s2"), ("done", "s2"), ("done", "")] {
+    #[test]
+    fn a_running_job_of_its_own_starter_is_not_waited_on() {
+        saman::block_on_current(async {
             for (tool, args) in [
                 ("job_result", json!({"id": "x1"})),
                 ("job_log", json!({"id": "x1"})),
             ] {
-                let h = hub(status, owner);
+                let h = hub("running", "s1");
                 let (err, text) = call(h.clone(), tool, args).await;
-                assert!(err && text.contains("not yours"), "{tool} {owner}: {text}");
-                assert_eq!(*h.refused.lock().unwrap(), 0);
-                let calls = h.calls.lock().unwrap();
-                assert!(
-                    !calls.iter().any(|(c, _)| c.ends_with("exec/log")),
-                    "{tool}: the log was read"
-                );
+                assert!(err && text.contains("you are woken"), "{tool}: {text}");
+                assert_eq!(*saman::lock(&h.refused), 1, "{tool} is counted");
             }
-        }
+        })
     }
 
-    #[tokio::test]
-    async fn job_stop_is_for_the_starter_only() {
-        let (err, text) = call(hub("running", "s2"), "job_stop", json!({"id": "x1"})).await;
-        assert!(err && text.contains("not yours"), "{text}");
-        let (err, text) = call(hub("running", "s1"), "job_stop", json!({"id": "x1"})).await;
-        assert!(!err, "{text}");
+    #[test]
+    fn a_finished_job_of_its_own_is_read() {
+        saman::block_on_current(async {
+            let h = hub("done", "s1");
+            let (err, text) = call(h.clone(), "job_result", json!({"id": "x1"})).await;
+            assert!(!err, "{text}");
+            assert_eq!(*saman::lock(&h.refused), 0);
+        })
+    }
+
+    /// Another session's job, or the user's (no session), is not the agent's to read: its argv, folder and log stay
+    /// its starter's.  Not a wait, so not counted.
+    #[test]
+    fn anothers_job_is_not_read() {
+        saman::block_on_current(async {
+            for (status, owner) in [("running", "s2"), ("done", "s2"), ("done", "")] {
+                for (tool, args) in [
+                    ("job_result", json!({"id": "x1"})),
+                    ("job_log", json!({"id": "x1"})),
+                ] {
+                    let h = hub(status, owner);
+                    let (err, text) = call(h.clone(), tool, args).await;
+                    assert!(err && text.contains("not yours"), "{tool} {owner}: {text}");
+                    assert_eq!(*saman::lock(&h.refused), 0);
+                    let calls = saman::lock(&h.calls);
+                    assert!(
+                        !calls.iter().any(|(c, _)| c.ends_with("exec/log")),
+                        "{tool}: the log was read"
+                    );
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn job_stop_is_for_the_starter_only() {
+        saman::block_on_current(async {
+            let (err, text) = call(hub("running", "s2"), "job_stop", json!({"id": "x1"})).await;
+            assert!(err && text.contains("not yours"), "{text}");
+            let (err, text) = call(hub("running", "s1"), "job_stop", json!({"id": "x1"})).await;
+            assert!(!err, "{text}");
+        })
     }
 }

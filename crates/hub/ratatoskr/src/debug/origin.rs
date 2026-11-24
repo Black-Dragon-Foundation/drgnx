@@ -62,9 +62,11 @@ pub fn parse(text: &str) -> Vec<Rec> {
 
 /// The records file TEXT as a replay's answer: the Python that ran is older than 3.12 (its first line names it), or
 /// the records; an empty file means the tracer never started (not a Python program, or its start failed).
-pub fn traced(text: &str) -> Result<Traced, String> {
+pub fn traced(text: &str) -> villa::Result<Traced> {
     let Some(first) = text.lines().next() else {
-        return Err("the tracer did not start: is the program Python?".into());
+        return Err(villa::Error::invalid(
+            "the tracer did not start: is the program Python?",
+        ));
     };
     if let Ok(v) = serde_json::from_str::<Value>(first)
         && let Some(py) = v["python"].as_str()
@@ -162,7 +164,7 @@ pub trait Replay: Send + Sync {
         run: &str,
         stop: u64,
         watch: Vec<String>,
-    ) -> BoxFut<'static, Result<Traced, String>>;
+    ) -> BoxFut<'static, villa::Result<Traced>>;
 
     /// RUN replayed to its stop STOP with PROBES (paths in the project) set: their hits, in order.
     fn probe(
@@ -170,14 +172,14 @@ pub trait Replay: Send + Sync {
         run: &str,
         stop: u64,
         probes: Vec<RunProbe>,
-    ) -> BoxFut<'static, Result<Vec<RunHit>, String>>;
+    ) -> BoxFut<'static, villa::Result<Vec<RunHit>>>;
 }
 
 /// The tracer's files written into DIR (`<tree>/.drgnx-origin`): the folder to put first on `PYTHONPATH`.
 pub fn write_tracer(dir: &Path) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
-    std::fs::write(dir.join("drgnx_origin.py"), TRACER)?;
-    std::fs::write(dir.join("sitecustomize.py"), SITECUSTOMIZE)?;
+    crate::fsio::write(dir.join("drgnx_origin.py"), TRACER)?;
+    crate::fsio::write(dir.join("sitecustomize.py"), SITECUSTOMIZE)?;
     Ok(dir.to_owned())
 }
 
@@ -198,8 +200,8 @@ pub fn trace_env(tree: &Path, watch: &[String]) -> Vec<(String, String)> {
 }
 
 /// A replay's answer from its TREE: the tracer's records, their files named under ROOT (the project).
-pub fn read_trace(tree: &Path, root: &Path) -> Result<Traced, String> {
-    let text = std::fs::read_to_string(tree.join(DIR).join(OUT)).unwrap_or_default();
+pub fn read_trace(tree: &Path, root: &Path) -> villa::Result<Traced> {
+    let text = crate::fsio::read_to_string(tree.join(DIR).join(OUT)).unwrap_or_default();
     Ok(match traced(&text)? {
         Traced::Records(mut r) => {
             rebase(&mut r, tree, root);
@@ -248,7 +250,7 @@ pub async fn trail(
     depth: u32,
     sources: impl Fn() -> Vec<(String, String)>,
     mut on_level: impl FnMut(&[Link]),
-) -> Result<Trail, String> {
+) -> villa::Result<Trail> {
     let files = sources();
     if let Some(lang) = files.first().and_then(|(p, _)| lang_of(p))
         && lang != hrafn::Lang::Python
@@ -260,7 +262,10 @@ pub async fn trail(
     let mut questions = vec![question.to_owned()];
     for level in 1..=depth.clamp(1, DEPTH_MAX) {
         asked.extend(questions.iter().cloned());
-        let got = replay.trace(run, stop, questions.clone()).await?;
+        let got = replay
+            .trace(run, stop, questions.clone())
+            .await
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let recs = match got {
             Traced::Records(r) => r,
             Traced::Old(version) => {
@@ -309,7 +314,7 @@ async fn probed_trail(
     lang: hrafn::Lang,
     files: &[(String, String)],
     mut on_level: impl FnMut(&[Link]),
-) -> Result<Trail, String> {
+) -> villa::Result<Trail> {
     // the stores are found with the language's grammar: without it (its pack not built) there is nothing to put
     // logpoints on, and an empty trail would read as a program that never stored the value
     if hrafn::structural::Grammar::of(lang).is_none() {
@@ -348,7 +353,8 @@ async fn probed_trail(
         }
         let hits = replay
             .probe(run, stop, probes.iter().map(|(p, _)| p.clone()).collect())
-            .await?;
+            .await
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let mut found: Vec<Link> = Vec::new();
         for (q, of_q) in &lines {
             let last = hits
@@ -856,33 +862,30 @@ mod pack_tests {
     /// A replay that must not run: a trail with nothing to put logpoints on never asks for one.
     struct Never;
     impl Replay for Never {
-        fn trace(
-            &self,
-            _: &str,
-            _: u64,
-            _: Vec<String>,
-        ) -> BoxFut<'static, Result<Traced, String>> {
-            Box::pin(async { Err("the replay ran".to_owned()) })
+        fn trace(&self, _: &str, _: u64, _: Vec<String>) -> BoxFut<'static, villa::Result<Traced>> {
+            Box::pin(async { Err(villa::Error::internal("the replay ran")) })
         }
         fn probe(
             &self,
             _: &str,
             _: u64,
             _: Vec<RunProbe>,
-        ) -> BoxFut<'static, Result<Vec<RunHit>, String>> {
-            Box::pin(async { Err("the replay ran".to_owned()) })
+        ) -> BoxFut<'static, villa::Result<Vec<RunHit>>> {
+            Box::pin(async { Err(villa::Error::internal("the replay ran")) })
         }
     }
 
-    #[tokio::test]
-    async fn a_language_with_no_grammar_says_so_on_its_trail() {
-        // text has no grammar in any build: the stores cannot be looked for, and the card must not look like a
-        // program that never stored the value
-        let files = vec![("/p/a.txt".to_owned(), "x = 1\n".to_owned())];
-        let t = probed_trail(&Never, "r1", 1, "x", 3, Lang::Text, &files, |_| {})
-            .await
-            .unwrap();
-        assert!(t.links.is_empty());
-        assert_eq!(t.note.as_deref(), Some("no grammar for text"));
+    #[test]
+    fn a_language_with_no_grammar_says_so_on_its_trail() {
+        saman::block_on_current(async move {
+            // text has no grammar in any build: the stores cannot be looked for, and the card must not look like a
+            // program that never stored the value
+            let files = vec![("/p/a.txt".to_owned(), "x = 1\n".to_owned())];
+            let t = probed_trail(&Never, "r1", 1, "x", 3, Lang::Text, &files, |_| {})
+                .await
+                .unwrap();
+            assert!(t.links.is_empty());
+            assert_eq!(t.note.as_deref(), Some("no grammar for text"));
+        })
     }
 }

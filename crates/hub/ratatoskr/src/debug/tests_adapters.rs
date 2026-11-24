@@ -6,7 +6,7 @@ use std::path::Path;
 
 fn exe(p: &Path) {
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-    std::fs::write(p, "#!/bin/sh\n").unwrap();
+    crate::fsio::write(p, "#!/bin/sh\n").unwrap();
     std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
@@ -47,12 +47,14 @@ fn a_type_names_its_adapter_and_an_unknown_one_says_what_is_known() {
     assert_eq!(t.for_type("go").unwrap().id, "delve");
     let e = t.for_type("cobol").unwrap_err();
     assert!(
-        e.contains("cobol") && e.contains("debugpy") && e.contains("debug.adapters"),
+        e.message().contains("cobol")
+            && e.message().contains("debugpy")
+            && e.message().contains("debug.adapters"),
         "{e}"
     );
     let e = t.for_type("cppdbg").unwrap_err();
     assert!(
-        e.contains("not built in") && e.contains("debug.adapters"),
+        e.message().contains("not built in") && e.message().contains("debug.adapters"),
         "{e}"
     );
 }
@@ -73,6 +75,7 @@ fn the_table_is_data_and_nothing_in_it_is_evaluated() {
     assert!(
         Table::read(b"((:id \"x\" :name \"X\" :types (\"x\") :typo 1))")
             .unwrap_err()
+            .message()
             .contains("typo")
     );
 }
@@ -94,7 +97,7 @@ fn an_adapter_is_found_on_path_in_the_tools_folder_or_as_a_python_module() {
     let tools = d.path().join("tools");
     exe(&bin.join("dlv"));
     std::fs::create_dir_all(tools.join("js-debug/src")).unwrap();
-    std::fs::write(tools.join("js-debug/src/dapDebugServer.js"), "").unwrap();
+    crate::fsio::write(tools.join("js-debug/src/dapDebugServer.js"), "").unwrap();
     exe(&tools.join("venv/bin/python3"));
     std::fs::create_dir_all(tools.join("venv/lib/python3.15/site-packages/debugpy")).unwrap();
     let env = Env {
@@ -120,7 +123,7 @@ fn an_adapter_is_found_on_path_in_the_tools_folder_or_as_a_python_module() {
 #[test]
 fn a_file_on_path_that_is_not_executable_is_not_found() {
     let d = tempfile::tempdir().unwrap();
-    std::fs::write(d.path().join("dlv"), "").unwrap();
+    crate::fsio::write(d.path().join("dlv"), "").unwrap();
     let env = Env {
         path: vec![d.path().to_path_buf()],
         tools: d.path().join("tools"),
@@ -163,7 +166,7 @@ fn the_command_line_fills_in_program_python_tools_and_port() {
         None,
     )
     .unwrap_err();
-    assert!(e.contains("port"), "{e}");
+    assert!(e.message().contains("port"), "{e}");
 }
 
 /// The picker gives a port the kernel handed out (never freed and bound again here: another test could take it in
@@ -177,37 +180,39 @@ fn a_free_port_is_an_ephemeral_one() {
 /// The hub frees the port it picked so the TCP adapter can bind it, and another process can take it first: the hub
 /// connects only once the listener is the adapter's (its process group), and a stranger's is an error at once, never
 /// connected to (it would be sent the launch's arguments).
-#[tokio::test]
-async fn a_tcp_adapters_port_taken_by_a_stranger_is_never_connected_to() {
-    let stranger = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    stranger.set_nonblocking(true).unwrap();
-    let port = stranger.local_addr().unwrap().port();
-    let dir = tempfile::tempdir().unwrap();
-    let l = super::wire::Spawned {
-        argv: vec!["/bin/sh".into(), "-c".into(), "exec sleep 30".into()],
-        env: vec![("PATH".into(), "/usr/bin:/bin".into())],
-        cwd: dir.path().to_path_buf(),
-        port: Some(port),
-    };
-    let e = match crate::clock::timeout(
-        std::time::Duration::from_secs(20),
-        super::Launcher::connect(&l),
-    )
-    .await
-    .expect("the stranger is an error at once, not after the wait")
-    {
-        Ok(_) => panic!("connected to the stranger's listener"),
-        Err(e) => e,
-    };
-    assert!(
-        e.contains(&port.to_string()) && e.contains("not the session's"),
-        "{e}"
-    );
-    assert!(
-        stranger
-            .accept()
-            .is_err_and(|e| e.kind() == std::io::ErrorKind::WouldBlock),
-        "the hub connected to the stranger"
-    );
-    let _ = json!(null);
+#[test]
+fn a_tcp_adapters_port_taken_by_a_stranger_is_never_connected_to() {
+    saman::block_on_current(async move {
+        let stranger = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        stranger.set_nonblocking(true).unwrap();
+        let port = stranger.local_addr().unwrap().port();
+        let dir = tempfile::tempdir().unwrap();
+        let l = super::wire::Spawned {
+            argv: vec!["/bin/sh".into(), "-c".into(), "exec sleep 30".into()],
+            env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+            cwd: dir.path().to_path_buf(),
+            port: Some(port),
+        };
+        let e = match crate::clock::timeout(
+            std::time::Duration::from_secs(20),
+            super::Launcher::connect(&l),
+        )
+        .await
+        .expect("the stranger is an error at once, not after the wait")
+        {
+            Ok(_) => panic!("connected to the stranger's listener"),
+            Err(e) => e,
+        };
+        assert!(
+            e.message().contains(&port.to_string()) && e.message().contains("not the session's"),
+            "{e}"
+        );
+        assert!(
+            stranger
+                .accept()
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::WouldBlock),
+            "the hub connected to the stranger"
+        );
+        json!(null);
+    })
 }

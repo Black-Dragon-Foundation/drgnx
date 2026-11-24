@@ -31,8 +31,7 @@ struct Fake {
 }
 
 impl Platform for Fake {
-    fn machine(&self, now: u64, limits: &Limits) -> io::Result<forseti::MachineState> {
-        let _ = limits;
+    fn machine(&self, now: u64, _limits: &Limits) -> io::Result<forseti::MachineState> {
         Ok(forseti::MachineState {
             name: "fake".into(),
             profile: Profile::Dedicated,
@@ -80,7 +79,7 @@ impl Platform for Fake {
     fn current_mib(&self, _job: &str) -> Option<u64> {
         Some(10)
     }
-    fn launch(&self, req: &LaunchReq) -> Result<(String, u32), String> {
+    fn launch(&self, req: &LaunchReq) -> villa::Result<(String, u32)> {
         let unit = format!("fake-{}", req.meta.r.job);
         self.calls
             .borrow_mut()
@@ -88,7 +87,7 @@ impl Platform for Fake {
             .push((req.meta.r.job.clone(), req.src.to_path_buf()));
         self.calls.borrow_mut().envs.push(req.env.to_vec());
         // what job-exec would leave: its log and its result
-        fs::write(req.dir.join(LOG), b"hello from the fake\n").unwrap();
+        crate::fsio::write(req.dir.join(LOG), b"hello from the fake\n").unwrap();
         ResultJson {
             verdict: Verdict::Pass,
             infra: None,
@@ -112,35 +111,35 @@ impl Platform for Fake {
     fn active(&self, unit: &str) -> bool {
         self.up.borrow().contains(unit)
     }
-    fn kill(&self, id: &str) -> Result<(), String> {
+    fn kill(&self, id: &str) -> villa::Result<()> {
         self.calls.borrow_mut().killed.push(id.to_string());
         Ok(())
     }
-    fn pause(&self, _id: &str) -> Result<(), String> {
+    fn pause(&self, _id: &str) -> villa::Result<()> {
         Ok(())
     }
-    fn unpause(&self, _id: &str) -> Result<(), String> {
+    fn unpause(&self, _id: &str) -> villa::Result<()> {
         Ok(())
     }
     fn grow_candidate(&self, _id: &str, _cap_mib: u64, _max_mib: u64) -> Option<resize::Sized> {
         None
     }
-    fn resize(&self, _r: &resize::Resize) -> Result<(), String> {
+    fn resize(&self, _r: &resize::Resize) -> villa::Result<()> {
         Ok(())
     }
     fn weight_unit(&self, _id: &str) -> Option<String> {
         None
     }
-    fn set_weight(&self, _unit: &str, _w: u32) -> Result<(), String> {
+    fn set_weight(&self, _unit: &str, _w: u32) -> villa::Result<()> {
         Ok(())
     }
     fn hand_key(&self, _dir: &Path, _name: &str, _value: &[u8]) -> io::Result<()> {
         Err(io::ErrorKind::NotFound.into())
     }
-    fn island_check(&self, _island: &str) -> Result<(), String> {
+    fn island_check(&self, _island: &str) -> villa::Result<()> {
         Ok(())
     }
-    fn island(&self, on: Option<&str>) -> Result<(), String> {
+    fn island(&self, on: Option<&str>) -> villa::Result<()> {
         self.calls.borrow_mut().islands.push(on.map(str::to_string));
         Ok(())
     }
@@ -390,6 +389,10 @@ fn an_attempt_runs_through_the_platform() {
 /// an orphan container never outlives ten minutes plus its sweep (the clock: the last cleanup's time, backdated).
 #[test]
 fn the_cleanup_runs_every_ten_minutes() {
+    // time is the test's: the loop's clock reads this one, an hour past its origin, so a reading can be backdated
+    let clock = stund::Manual::default();
+    clock.advance(Duration::from_secs(3600));
+    let _clock = clock.on_this_thread();
     let d = tempfile::tempdir().unwrap();
     let (mut s, out, calls, _) = serve(d.path());
     s.handle(Frame::Hello {
@@ -400,7 +403,7 @@ fn the_cleanup_runs_every_ten_minutes() {
     let before = calls.borrow().cleanups;
     assert!(s.tick() == Next::Go);
     assert_eq!(calls.borrow().cleanups, before, "not before ten minutes");
-    // backdated from the loop's own last-cleanup reading (taken at its start), so no clock is read here
+    // backdated from the loop's own last-cleanup reading, on the test's clock
     let base = s.last_cleanup;
     s.last_cleanup = base - CLEANUP_EVERY + Duration::from_secs(5);
     assert!(s.tick() == Next::Go);

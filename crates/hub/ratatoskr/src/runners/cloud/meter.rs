@@ -268,25 +268,25 @@ impl Meter {
         idle_s: u64,
         running: &[RunningCost],
         needs_login: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> villa::Result<()> {
         if let Some(cmd) = needs_login {
-            return Err(needs_login_text(cmd));
+            return Err(villa::Error::unavailable(needs_login_text(cmd)));
         }
         let spent = self.spent(now);
         if spent >= cap {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "cloud cap: {} of {} used; no new cloud work",
                 usd(spent),
                 usd(cap)
-            ));
+            )));
         }
         if projection(spent, price_h, busy_s, idle_s, running) > cap {
             let min = (busy_s + idle_s).div_ceil(60);
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "cloud cap: {} of {} used; a {size} for ~{min} min would pass it",
                 usd(spent),
                 usd(cap)
-            ));
+            )));
         }
         Ok(())
     }
@@ -307,15 +307,15 @@ impl Meter {
 }
 
 /// Writes REC as `cloud_spend:<machine>.<from>`, as `("hub", Class::System)`.
-pub async fn write(db: &norn::store::CoordDb, rec: &CloudSpend) -> Result<(), String> {
+pub async fn write(db: &norn::store::CoordDb, rec: &CloudSpend) -> villa::Result<()> {
     let name = format!("{}.{}", rec.machine, rec.from);
-    let data = serde_json::to_value(rec).map_err(|e| e.to_string())?;
+    let data = serde_json::to_value(rec).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let meta = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "runners/cloud");
     db.write(meta, move |tx| {
         norn::write::runners::put(tx, "cloud_spend", &name, data).map(|_| ())
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| villa::Error::invalid(e.to_string()))
 }
 
 #[cfg(test)]
@@ -350,7 +350,9 @@ mod tests {
         // $15/h for 25 min busy and 15 min idle is $10 more: past $50
         assert_eq!(
             m.gate(0, 50.0, "c7a.4xlarge", 15.0, 1500, 900, &[], None),
-            Err("cloud cap: $41 of $50 used; a c7a.4xlarge for ~40 min would pass it".into())
+            Err(villa::Error::invalid(
+                "cloud cap: $41 of $50 used; a c7a.4xlarge for ~40 min would pass it"
+            ))
         );
         assert_eq!(
             m.gate(0, 50.0, "c7a.4xlarge", 1.2, 1500, 900, &[], None),
@@ -369,13 +371,17 @@ mod tests {
         let at = Meter::new(NO_EXTRAS, 50.0);
         assert_eq!(
             at.gate(0, 50.0, "m7g.large", 0.01, 60, 900, &[], None),
-            Err("cloud cap: $50 of $50 used; no new cloud work".into())
+            Err(villa::Error::invalid(
+                "cloud cap: $50 of $50 used; no new cloud work"
+            ))
         );
         // small sums in cents
         let low = Meter::new(NO_EXTRAS, 3.1);
         assert_eq!(
             low.gate(0, 3.5, "m7g.large", 1.0, 1500, 900, &[], None),
-            Err("cloud cap: $3.10 of $3.50 used; a m7g.large for ~40 min would pass it".into())
+            Err(villa::Error::invalid(
+                "cloud cap: $3.10 of $3.50 used; a m7g.large for ~40 min would pass it"
+            ))
         );
         // expired credentials: nothing new starts, and the card names the command
         assert_eq!(
@@ -389,7 +395,9 @@ mod tests {
                 &[],
                 Some("aws sso login")
             ),
-            Err("Run `aws sso login`, then Runners: Retry Cloud".into())
+            Err(villa::Error::unavailable(
+                "Run `aws sso login`, then Runners: Retry Cloud"
+            ))
         );
     }
 
@@ -470,57 +478,59 @@ mod tests {
 
     // [D] a graph of its own in a temporary folder: the hub's records go in through `write` and come back as the
     // hub's readers see them
-    #[tokio::test]
-    async fn write_records_the_spend_in_the_graph_and_it_reads_back() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = norn::store::CoordDb::spawn(dir.path().join("work.db"));
-        let mut m = Meter::new(NO_EXTRAS, 0.0);
-        m.start(started("i-a", 0.36, 0));
-        let hour = m.tick(3600);
-        let last = m.end("i-a", 5400).expect("the last part-hour");
-        for rec in hour.iter().chain([&last]) {
-            write(&db, rec).await.unwrap();
-        }
-        // a write tried again (a retry after a lost answer) replaces its record: no second one
-        write(&db, &hour[0]).await.unwrap();
-        let rows = db
-            .read(|c| norn::read::runners::list(c, "cloud_spend"))
-            .await
-            .unwrap();
-        let names: Vec<&str> = rows.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, ["i-a.0", "i-a.3600"], "{rows:?}");
-        let (_, first) = &rows[0];
-        assert_eq!(first["machine"], "i-a");
-        assert_eq!(first["provider"], "aws");
-        assert_eq!(first["region"], "eu-west-1");
-        assert_eq!(first["type"], "c7a.4xlarge");
-        assert_eq!(first["market"], "spot");
-        assert_eq!(
-            (first["from"].as_u64(), first["to"].as_u64()),
-            (Some(0), Some(3600))
-        );
-        assert!(
-            (first["amount"].as_f64().unwrap() - 0.36).abs() < 1e-9,
-            "{first}"
-        );
-        let (_, second) = &rows[1];
-        assert_eq!(
-            (second["from"].as_u64(), second["to"].as_u64()),
-            (Some(3600), Some(5400))
-        );
-        assert!(
-            (second["amount"].as_f64().unwrap() - 0.18).abs() < 1e-9,
-            "{second}"
-        );
-        // the month's spend read back from the graph is what the meter counted
-        let total: f64 = rows
-            .iter()
-            .map(|(_, d)| d["amount"].as_f64().unwrap())
-            .sum();
-        assert!(
-            (total - m.spent(5400)).abs() < 1e-9,
-            "{total} vs {}",
-            m.spent(5400)
-        );
+    #[test]
+    fn write_records_the_spend_in_the_graph_and_it_reads_back() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = norn::store::CoordDb::spawn(dir.path().join("work.db"));
+            let mut m = Meter::new(NO_EXTRAS, 0.0);
+            m.start(started("i-a", 0.36, 0));
+            let hour = m.tick(3600);
+            let last = m.end("i-a", 5400).expect("the last part-hour");
+            for rec in hour.iter().chain([&last]) {
+                write(&db, rec).await.unwrap();
+            }
+            // a write tried again (a retry after a lost answer) replaces its record: no second one
+            write(&db, &hour[0]).await.unwrap();
+            let rows = db
+                .read(|c| norn::read::runners::list(c, "cloud_spend"))
+                .await
+                .unwrap();
+            let names: Vec<&str> = rows.iter().map(|(n, _)| n.as_str()).collect();
+            assert_eq!(names, ["i-a.0", "i-a.3600"], "{rows:?}");
+            let (_, first) = &rows[0];
+            assert_eq!(first["machine"], "i-a");
+            assert_eq!(first["provider"], "aws");
+            assert_eq!(first["region"], "eu-west-1");
+            assert_eq!(first["type"], "c7a.4xlarge");
+            assert_eq!(first["market"], "spot");
+            assert_eq!(
+                (first["from"].as_u64(), first["to"].as_u64()),
+                (Some(0), Some(3600))
+            );
+            assert!(
+                (first["amount"].as_f64().unwrap() - 0.36).abs() < 1e-9,
+                "{first}"
+            );
+            let (_, second) = &rows[1];
+            assert_eq!(
+                (second["from"].as_u64(), second["to"].as_u64()),
+                (Some(3600), Some(5400))
+            );
+            assert!(
+                (second["amount"].as_f64().unwrap() - 0.18).abs() < 1e-9,
+                "{second}"
+            );
+            // the month's spend read back from the graph is what the meter counted
+            let total: f64 = rows
+                .iter()
+                .map(|(_, d)| d["amount"].as_f64().unwrap())
+                .sum();
+            assert!(
+                (total - m.spent(5400)).abs() < 1e-9,
+                "{total} vs {}",
+                m.spent(5400)
+            );
+        })
     }
 }

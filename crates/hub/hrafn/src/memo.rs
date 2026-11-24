@@ -7,7 +7,7 @@
 use crate::tree::View;
 use rusqlite::Connection;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// The counts of a view's lag that need a pass over the store.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -95,5 +95,5 @@ fn attached(c: &Connection) -> rusqlite::Result<Option<(String, i64)>> {
 pub(crate) type Shared = Arc<Mutex<Memo>>;
 
 pub(crate) fn lock(m: &Shared) -> MutexGuard<'_, Memo> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }

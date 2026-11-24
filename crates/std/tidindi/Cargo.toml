@@ -1,0 +1,16 @@
+[package]
+name = "tidindi"
+description = "Notices: one list of what wants attention, the same key updates a notice in place, and the list is a view of rows (the attention standard)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+villa.workspace = true
+saman.workspace = true
+rodd = { path = "../../core/rodd", version = "0.1.0" }
+
+[lints]
+workspace = true

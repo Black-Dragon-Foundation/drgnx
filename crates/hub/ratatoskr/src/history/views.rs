@@ -209,7 +209,10 @@ impl Hub {
             }
             h.finalize().to_vec()
         };
-        let cached = self.blame_cache.lock().ok().and_then(|c| c.get(&key));
+        let cached = {
+            let c = saman::lock(&self.blame_cache);
+            c.get(&key)
+        };
         if let Some(b) = cached {
             return Ok(b);
         }
@@ -220,10 +223,13 @@ impl Hub {
                     verdandi::Error::Refused("git blame gave output it could not read".into())
                 })?,
                 // git holds no such file (new, untracked): every line is the user's, not committed
-                Err(e) if e.contains("no such path") || e.contains("does not exist") => {
+                Err(e)
+                    if e.message().contains("no such path")
+                        || e.message().contains("does not exist") =>
+                {
                     let n = match &mirror {
                         Some(t) => line_count(t),
-                        None => std::fs::read_to_string(tree.root.join(rel))
+                        None => crate::fsio::read_to_string(tree.root.join(rel))
                             .map_or(0, |t| line_count(&t)),
                     };
                     (
@@ -248,7 +254,8 @@ impl Hub {
             lines: blamed.1,
             agents,
         };
-        if let Ok(mut c) = self.blame_cache.lock() {
+        {
+            let mut c = saman::lock(&self.blame_cache);
             c.put(key, out.clone());
         }
         Ok(out)
@@ -921,7 +928,7 @@ mod tests {
     use verdandi::Cause;
 
     fn git(dir: &Path, args: &[&str]) -> String {
-        let out = std::process::Command::new("git")
+        let out = crate::proc::Command::new("git")
             .args(["-c", "user.name=t", "-c", "user.email=t@t"])
             .args(["-c", "commit.gpgsign=false"])
             .args(args)
@@ -943,7 +950,7 @@ mod tests {
     fn fx(text: &str) -> Fx {
         let repo = tempfile::tempdir().unwrap();
         git(repo.path(), &["init", "-q", "-b", "main"]);
-        std::fs::write(repo.path().join("a.txt"), text).unwrap();
+        crate::fsio::write(repo.path().join("a.txt"), text).unwrap();
         git(repo.path(), &["add", "."]);
         git(repo.path(), &["commit", "-q", "-m", "base"]);
         let head = git(repo.path(), &["rev-parse", "HEAD"]);
@@ -1016,8 +1023,8 @@ mod tests {
     /// `@@ -a,b +c,d @@` headers of `git diff --unified=0`, the counts defaulting to 1.
     fn git_hunks(old: &str, new: &str) -> Vec<(i64, i64, i64, i64)> {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("old"), old).unwrap();
-        std::fs::write(dir.path().join("new"), new).unwrap();
+        crate::fsio::write(dir.path().join("old"), old).unwrap();
+        crate::fsio::write(dir.path().join("new"), new).unwrap();
         let out = git(
             dir.path(),
             &["diff", "--no-index", "--unified=0", "old", "new"],
@@ -1079,7 +1086,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let deny = norn::deny::DenyList::load(home.path(), home.path());
         f.hub.register(&f.tree, rel, "b1", &deny, 1.0).unwrap();
-        let old = std::fs::read_to_string(f.tree.root.join(rel)).unwrap_or_default();
+        let old = crate::fsio::read_to_string(f.tree.root.join(rel)).unwrap_or_default();
         let (start, old_len) = (0, old.chars().count());
         let hash = crate::history::methods::hash(now);
         let change = crate::history::methods::BatchChange {
@@ -1093,7 +1100,7 @@ mod tests {
     }
 
     fn commit_file(f: &Fx, rel: &str, text: &str, msg: &str) {
-        std::fs::write(f.tree.root.join(rel), text).unwrap();
+        crate::fsio::write(f.tree.root.join(rel), text).unwrap();
         git(&f.tree.root, &["add", "."]);
         git(&f.tree.root, &["commit", "-q", "-m", msg]);
     }
@@ -1137,7 +1144,7 @@ mod tests {
     #[test]
     fn git_blame_of_a_file_git_does_not_hold_is_all_uncommitted() {
         let f = fx("one\n");
-        std::fs::write(f.tree.root.join("new.txt"), "x\ny\n").unwrap();
+        crate::fsio::write(f.tree.root.join("new.txt"), "x\ny\n").unwrap();
         let b = f.hub.git_blame(&f.tree, "new.txt").unwrap();
         assert_eq!(b.lines, vec![0, 0]);
         assert_eq!(b.commits[0].summary, "Uncommitted changes");
@@ -1371,7 +1378,7 @@ mod tests {
         assert_eq!(git(&f.tree.root, &["show", ":a.txt"]), "a\nB\nc\nd\ne");
         // the work tree was not touched, and a hunk that is not there is no change
         assert_eq!(
-            std::fs::read_to_string(f.tree.root.join("a.txt")).unwrap(),
+            crate::fsio::read_to_string(f.tree.root.join("a.txt")).unwrap(),
             "a\nb\nc\nd\n"
         );
         assert!(!f.hub.stage_hunk(&f.tree, "a.txt", 3).unwrap());
@@ -1386,7 +1393,7 @@ mod tests {
         assert_eq!((h[0].old_start, h[0].old_count, h[0].new_count), (2, 1, 0));
         assert!(f.hub.stage_hunk(&f.tree, "a.txt", h[0].new_start).unwrap());
         assert_eq!(git(&f.tree.root, &["show", ":a.txt"]), "a\nc");
-        std::fs::write(f.tree.root.join("new.txt"), "").unwrap();
+        crate::fsio::write(f.tree.root.join("new.txt"), "").unwrap();
         let home = tempfile::tempdir().unwrap();
         let deny = norn::deny::DenyList::load(home.path(), home.path());
         f.hub
@@ -1415,7 +1422,7 @@ mod tests {
     #[test]
     fn hunks_against_head_of_a_new_file_are_all_its_lines() {
         let f = fx("one\n");
-        std::fs::write(f.tree.root.join("new.txt"), "").unwrap();
+        crate::fsio::write(f.tree.root.join("new.txt"), "").unwrap();
         tracked(&f, "new.txt", "x\ny\nz\n", "user");
         let got = f
             .hub
@@ -1440,7 +1447,6 @@ mod tests {
     #[test]
     #[ignore = "timing: measures blame's ways on a large file"]
     fn large_file_blame_times() {
-        use std::time::Instant;
         let f = fx("x\n");
         let lines = 50_000;
         let mut text: Vec<String> = (0..lines).map(|i| format!("line {i}")).collect();
@@ -1457,19 +1463,19 @@ mod tests {
                 &format!("change {c}"),
             );
         }
-        let t0 = Instant::now();
+        let t0 = crate::clock::real_now();
         let n = 8;
         for k in 0..n {
             let line = 1 + (k * 6151) % lines;
             let out =
                 super::super::blob::blame_porcelain(&f.tree.git_dir, &f.tree.root, "a.txt", None);
-            let _ = (out, line);
+            let _only_when_used_elsewhere = (&out, &line);
         }
         let whole_git = t0.elapsed() / n as u32;
-        let t1 = Instant::now();
+        let t1 = crate::clock::real_now();
         for k in 0..n {
             let line = 1 + (k * 6151) % lines;
-            let mut c = std::process::Command::new("git");
+            let mut c = crate::proc::Command::new("git");
             c.args([
                 "blame",
                 "--porcelain",
@@ -1482,15 +1488,15 @@ mod tests {
             assert!(c.output().unwrap().status.success());
         }
         let per_line = t1.elapsed() / n as u32;
-        let t2 = Instant::now();
+        let t2 = crate::clock::real_now();
         let b = f.hub.git_blame(&f.tree, "a.txt").unwrap();
         let cold = t2.elapsed();
-        let t3 = Instant::now();
-        let _ = f.hub.git_blame(&f.tree, "a.txt").unwrap();
+        let t3 = crate::clock::real_now();
+        f.hub.git_blame(&f.tree, "a.txt").unwrap();
         let cached = t3.elapsed();
         assert_eq!(b.lines.len(), lines);
-        println!(
+        crate::soft::out_line(&format!(
             "BLAME-TIMES per-line child (old, each uncached line): {per_line:?}; whole file raw git: {whole_git:?}; hub cold: {cold:?}; hub cached: {cached:?}"
-        );
+        ));
     }
 }

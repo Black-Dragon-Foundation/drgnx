@@ -54,7 +54,7 @@ pub struct Graph {
 #[derive(Clone, Debug)]
 pub struct RepoState {
     pub found: Found,
-    pub status: Option<Result<status::Status, GitError>>,
+    pub status: Option<Result<status::Status, Arc<GitError>>>,
     pub graph: Option<Graph>,
     /// How many commits the graph reads.
     pub graph_limit: usize,
@@ -134,7 +134,7 @@ impl Scms {
         let key = (conn, view.to_owned());
         lock(&self.views).remove(&key);
         if let Some(tx) = lock(&self.watches).remove(&key) {
-            let _ = tx.send(Heard::Stop);
+            crate::soft::done(tx.send(Heard::Stop), "tx send");
         }
     }
 
@@ -142,7 +142,7 @@ impl Scms {
         lock(&self.views).retain(|(c, _), _| *c != conn);
         lock(&self.watches).retain(|(c, _), tx| {
             if *c == conn {
-                let _ = tx.send(Heard::Stop);
+                crate::soft::done(tx.send(Heard::Stop), "tx send");
             }
             *c != conn
         });
@@ -166,7 +166,7 @@ fn invalid(path: &str, message: &str) -> Error {
     }
 }
 
-fn failed(message: GitError) -> Error {
+fn failed(message: String) -> Error {
     Error {
         code: ErrorCode::Internal,
         message,
@@ -208,7 +208,7 @@ pub fn read_repo(
     root: &Path,
     graph: bool,
     limit: usize,
-) -> (Result<status::Status, GitError>, Option<Graph>) {
+) -> (Result<status::Status, Arc<GitError>>, Option<Graph>) {
     let args = [
         "status",
         "--porcelain=v2",
@@ -216,7 +216,9 @@ pub fn read_repo(
         "-z",
         "--untracked-files=all",
     ];
-    let st = run::git(root, As::Reader, &args, None, Some(LOCAL), None).map(|o| status::parse(&o));
+    let st = run::git(root, As::Reader, &args, None, Some(LOCAL), None)
+        .map(|o| status::parse(&o))
+        .map_err(Arc::new);
     let g = match (&st, graph) {
         (Ok(st), true) => Some(read_graph(root, st, limit)),
         _ => None,
@@ -312,12 +314,13 @@ fn reread_everywhere(f: &Front, root: &Path) {
         return;
     };
     let root = root.to_path_buf();
-    std::thread::spawn(move || {
+    saman::spawn_thread("ratatoskr:scm", move || {
         let Some(f) = front.upgrade() else { return };
         for (conn, view) in f.core.views.scms.showing(&root) {
             reread(&f, conn, &view, Some(std::slice::from_ref(&root)));
         }
-    });
+    })
+    .unwrap();
 }
 
 /// Scan CONN's VIEW's folders (generation GENERATION), read every repository, then watch them, on this thread.
@@ -375,7 +378,7 @@ fn watch(front: Weak<Front>, conn: u64, view: String, roots: &[PathBuf]) {
         let Some(f) = front.upgrade() else { return };
         if let Some(old) = lock(&f.core.views.scms.watches).insert((conn, view.clone()), tx.clone())
         {
-            let _ = old.send(Heard::Stop);
+            crate::soft::done(old.send(Heard::Stop), "old send");
         }
     }
     // each git dir's events name the repository they belong to
@@ -398,19 +401,19 @@ fn watch(front: Weak<Front>, conn: u64, view: String, roots: &[PathBuf]) {
                 continue;
             }
             if let Some((_, root)) = owners.iter().find(|(d, _)| p.starts_with(d)) {
-                let _ = htx.send(root.clone());
-                let _ = poke.send(Heard::Changed);
+                crate::soft::done(htx.send(root.clone()), "htx send");
+                crate::soft::done(poke.send(Heard::Changed), "poke send");
             }
         }
     })
     .ok();
     if let Some(w) = watcher.as_mut() {
         for (_, g, c) in &dirs {
-            let _ = w.watch(g, RecursiveMode::NonRecursive);
+            crate::soft::done(w.watch(g, RecursiveMode::NonRecursive), "scm");
             if c != g {
-                let _ = w.watch(c, RecursiveMode::NonRecursive);
+                crate::soft::done(w.watch(c, RecursiveMode::NonRecursive), "scm");
             }
-            let _ = w.watch(&c.join("refs"), RecursiveMode::Recursive);
+            crate::soft::done(w.watch(&c.join("refs"), RecursiveMode::Recursive), "scm");
         }
     }
     loop {
@@ -419,7 +422,7 @@ fn watch(front: Weak<Front>, conn: u64, view: String, roots: &[PathBuf]) {
             return;
         }
         // a burst settles before it is read
-        std::thread::sleep(Duration::from_millis(80));
+        stund::real::sleep_blocking(Duration::from_millis(80));
         let mut changed: BTreeSet<PathBuf> = hrx.try_iter().collect();
         for h in rx.try_iter() {
             if matches!(h, Heard::Stop) {
@@ -462,10 +465,8 @@ pub fn subscribe(f: &Front, c: &Caller, p: Subscribe) -> Result<bool, Error> {
     };
     f.core.views.scm_publish(f, c.conn_id, &p.view);
     let (conn, view) = (c.conn_id, p.view);
-    std::thread::Builder::new()
-        .name("scm-scan".into())
-        .spawn(move || scan(front, conn, view, generation))
-        .map_err(|e| invalid("view", &e.to_string()))?;
+    saman::spawn_thread("scm-scan", move || scan(front, conn, view, generation))
+        .map_err(|e| invalid("view", e.message()))?;
     Ok(true)
 }
 
@@ -517,12 +518,13 @@ pub fn set(f: &Front, c: &Caller, p: Set) -> Result<bool, Error> {
     if all || !again.is_empty() {
         let front = f.core.views.front_weak();
         let (conn, view) = (c.conn_id, p.view);
-        std::thread::spawn(move || {
+        saman::spawn_thread("ratatoskr:scm", move || {
             let Some(f) = front.and_then(|w| w.upgrade()) else {
                 return;
             };
             reread(&f, conn, &view, (!all).then_some(again.as_slice()));
-        });
+        })
+        .unwrap();
     }
     Ok(true)
 }
@@ -557,7 +559,7 @@ async fn git_quiet(
     })
     .await
     .map_err(|e| failed(e.to_string()))?
-    .map_err(failed)
+    .map_err(|e| failed(e.message().to_owned()))
 }
 
 /// Run the user's git ARGS in ROOT on a blocking thread (STDIN, DEADLINE), then have the views showing it read it.
@@ -714,44 +716,42 @@ pub fn remote(f: &Front, c: &Caller, p: Remote) -> Result<RemoteId, Error> {
         };
         f.send_to(conn, "scm-remote", json!(e));
     };
-    std::thread::Builder::new()
-        .name("scm-remote".into())
-        .spawn(move || {
-            if let Some(f) = front.upgrade() {
-                event(&f, "running", None);
+    saman::spawn_thread("scm-remote", move || {
+        if let Some(f) = front.upgrade() {
+            event(&f, "running", None);
+        }
+        let steps: Vec<Vec<String>> = match op {
+            RemoteOp::Push => vec![vec!["push".into()]],
+            RemoteOp::Pull => vec![vec!["pull".into()]],
+            RemoteOp::Fetch => vec![vec!["fetch".into()]],
+            RemoteOp::Sync => vec![vec!["pull".into()], vec!["push".into()]],
+            RemoteOp::Publish => {
+                vec![vec![
+                    "push".into(),
+                    "-u".into(),
+                    publish_remote(&root2),
+                    "HEAD".into(),
+                ]]
             }
-            let steps: Vec<Vec<String>> = match op {
-                RemoteOp::Push => vec![vec!["push".into()]],
-                RemoteOp::Pull => vec![vec!["pull".into()]],
-                RemoteOp::Fetch => vec![vec!["fetch".into()]],
-                RemoteOp::Sync => vec![vec!["pull".into()], vec!["push".into()]],
-                RemoteOp::Publish => {
-                    vec![vec![
-                        "push".into(),
-                        "-u".into(),
-                        publish_remote(&root2),
-                        "HEAD".into(),
-                    ]]
-                }
-            };
-            let mut result = Ok(Vec::new());
-            for s in steps {
-                let args: Vec<&str> = s.iter().map(String::as_str).collect();
-                result = run::git(&root2, As::User, &args, None, None, Some(&cancel));
-                if result.is_err() {
-                    break;
-                }
+        };
+        let mut result = Ok(Vec::new());
+        for s in steps {
+            let args: Vec<&str> = s.iter().map(String::as_str).collect();
+            result = run::git(&root2, As::User, &args, None, None, Some(&cancel));
+            if result.is_err() {
+                break;
             }
-            let Some(f) = front.upgrade() else { return };
-            lock(&f.core.views.scms.remotes).remove(&id);
-            match result {
-                Ok(_) => event(&f, "done", None),
-                Err(e) if e == run::STOPPED => event(&f, "stopped", None),
-                Err(e) => event(&f, "failed", Some(e)),
-            }
-            reread_everywhere(&f, &root2);
-        })
-        .map_err(|e| invalid("root", &e.to_string()))?;
+        }
+        let Some(f) = front.upgrade() else { return };
+        lock(&f.core.views.scms.remotes).remove(&id);
+        match result {
+            Ok(_) => event(&f, "done", None),
+            Err(e) if e.kind() == villa::Kind::Cancelled => event(&f, "stopped", None),
+            Err(e) => event(&f, "failed", Some(e.message().to_owned())),
+        }
+        reread_everywhere(&f, &root2);
+    })
+    .map_err(|e| invalid("root", &e.to_string()))?;
     Ok(RemoteId { id })
 }
 
@@ -819,7 +819,7 @@ pub async fn branches(p: Root) -> Result<Branches, Error> {
     })
     .await
     .map_err(|e| failed(e.to_string()))?
-    .map_err(failed)?;
+    .map_err(|e| failed(e.message().to_owned()))?;
     Ok(Branches {
         branches: parse_branches(&out),
     })

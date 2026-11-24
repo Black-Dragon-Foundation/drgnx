@@ -4,9 +4,11 @@
 //!
 //! - `open`: `open_path` and `open_beneath`, which refuse a link in any component and return the fd they checked;
 //!   `stat_beneath` and `stat_in`, the status of a file resolved the same way.
-//! - `read`: bounded reads of regular files only (a FIFO is never read).
-//! - `write`: writes by a temporary file and a rename, never through a link; a leaf removed or made a link at the
-//!   parent's held fd.
+//! - `read`: bounded reads of regular files only (a FIFO is never read): `read_regular` beneath a directory fd,
+//!   `read_file` and `read_string` at an absolute path.
+//! - `write`: writes by a temporary file and a rename, never through a link (`write_regular` beneath a directory fd,
+//!   `replace_file` at an absolute path: the files standard's way to replace a file, docs/develop/standards/files.md);
+//!   a leaf removed or made a link at the parent's held fd.
 //! - `trusted`: a program that only root can change, found by fixed candidates and never through `PATH`; and
 //!   `root_only_file`, the same checks for a data file without the execute bit.
 
@@ -20,11 +22,15 @@ mod trusted;
 mod write;
 
 pub use open::{Kind, Meta, Pinned, open_beneath, open_path, stat_beneath, stat_in};
-pub use read::read_regular;
+pub use read::{read_file, read_regular, read_string};
 pub use trusted::{
     TrustedProgram, pin_system_owned_file, root_only_file, system_owned_file, trusted_program,
 };
-pub use write::{remove_beneath, symlink_beneath, write_regular};
+pub use write::{
+    create_exclusive, create_new, open_append, open_existing, open_following, open_lock, open_read,
+    remove_beneath, rename_dir, rename_file, rename_socket, replace_file, replace_file_mode,
+    replace_via, symlink_beneath, write_in_place, write_regular,
+};
 
 /// Why an eitri call refused or failed. Nothing here is ever retried by resolving the path another way.
 #[derive(Debug)]
@@ -96,5 +102,33 @@ impl From<io::Error> for FsError {
 impl From<rustix::io::Errno> for FsError {
     fn from(e: rustix::io::Errno) -> Self {
         FsError::Io(e.into())
+    }
+}
+
+impl From<FsError> for villa::Error {
+    /// A link, an escape and an untrusted program are `refused`; a file that is not the kind wanted or is too large
+    /// is `invalid`; no way to open without links is `unavailable`; an io error is villa's own conversion of it.
+    /// The user's sentence names the file's trouble, the error underneath is the source.
+    fn from(e: FsError) -> villa::Error {
+        match e {
+            FsError::Io(e) => villa::Error::from(e),
+            FsError::Link { .. } | FsError::Escapes | FsError::Untrusted { .. } => {
+                villa::Error::refused(e.to_string()).with_source(e)
+            }
+            FsError::NotRegular | FsError::NotDir | FsError::TooLarge { .. } => {
+                villa::Error::invalid(e.to_string()).with_source(e)
+            }
+            FsError::Unsupported(_) => villa::Error::unavailable(e.to_string()).with_source(e),
+        }
+    }
+}
+
+impl From<FsError> for io::Error {
+    /// An `Io` error as it was; any other refusal as an `other` error carrying it.
+    fn from(e: FsError) -> io::Error {
+        match e {
+            FsError::Io(e) => e,
+            other => io::Error::other(other),
+        }
     }
 }

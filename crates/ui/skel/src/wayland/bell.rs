@@ -3,7 +3,8 @@
 
 use crate::api::*;
 use crate::wayland::{MainState, WaylandShell};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 use wayland_client::delegate_noop;
 use wayland_protocols::xdg::system_bell::v1::client::xdg_system_bell_v1::XdgSystemBellV1;
 

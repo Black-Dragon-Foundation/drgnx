@@ -66,9 +66,7 @@ pub enum Dir {
 /// the stderr tail that [`Event::Exit`] carries.
 pub trait LineTap: Send + Sync {
     fn line(&self, dir: Dir, line: &str, at: Instant);
-    fn exit(&self, code: Option<i32>, signal: Option<i32>, stderr: &str) {
-        let _ = (code, signal, stderr);
-    }
+    fn exit(&self, _code: Option<i32>, _signal: Option<i32>, _stderr: &str) {}
 }
 
 /// What `initialize` answered.

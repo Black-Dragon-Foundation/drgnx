@@ -274,10 +274,10 @@ fn global_config_files() -> Vec<PathBuf> {
     if let Some(p) = std::env::var_os("GIT_CONFIG_GLOBAL") {
         return vec![p.into()];
     }
-    let home = std::env::var_os("HOME")
+    let home = std::env::var_os(stig::HOME_VAR)
         .filter(|h| !h.is_empty())
         .map(PathBuf::from);
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+    let xdg = std::env::var_os(stig::Xdg::Config.var())
         .filter(|x| !x.is_empty())
         .map(PathBuf::from)
         .or_else(|| home.as_ref().map(|h| h.join(".config")));
@@ -300,7 +300,7 @@ mod tests {
     use std::fs;
 
     use super::super::SyncError;
-    use super::super::slot::{self, Overlay, SlotKey};
+    use super::super::slot::{self, Overlay, SlotId};
     use super::super::testutil::{self, DirBlobs, user_git, write};
     use super::*;
 
@@ -370,7 +370,7 @@ mod tests {
         fs::remove_file(repo.join("b")).unwrap();
         user_git(&repo, &["rm", "-q", "c"]);
         // touched, not changed: not in the overlay
-        fs::write(repo.join("same"), b"same\n").unwrap();
+        crate::fsio::write(repo.join("same"), b"same\n").unwrap();
         let i = capture(&repo, &[]).unwrap();
         assert_eq!(i.commit, commit);
         assert_eq!(
@@ -402,16 +402,16 @@ mod tests {
         let one = input_key(&capture(&repo, &[]).unwrap());
         assert_eq!(one, input_key(&capture(&repo, &[]).unwrap()));
         assert_eq!(one.len(), 64);
-        fs::write(repo.join("new"), b"new\n").unwrap();
+        crate::fsio::write(repo.join("new"), b"new\n").unwrap();
         assert_eq!(
             one,
             input_key(&capture(&repo, &[]).unwrap()),
             "a rewrite with the same bytes keeps the key"
         );
-        fs::write(repo.join("new"), b"other\n").unwrap();
+        crate::fsio::write(repo.join("new"), b"other\n").unwrap();
         assert_ne!(one, input_key(&capture(&repo, &[]).unwrap()));
         use std::os::unix::fs::PermissionsExt;
-        fs::write(repo.join("new"), b"new\n").unwrap();
+        crate::fsio::write(repo.join("new"), b"new\n").unwrap();
         fs::set_permissions(repo.join("new"), fs::Permissions::from_mode(0o755)).unwrap();
         assert_ne!(
             one,
@@ -493,9 +493,9 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let (repo, _) = testutil::repo(t.path(), &[(b"a", b"a\n")]);
         let ignore = t.path().join("global-ignore");
-        fs::write(&ignore, "*.secret\n").unwrap();
+        crate::fsio::write(&ignore, "*.secret\n").unwrap();
         let global = t.path().join("gitconfig");
-        fs::write(
+        crate::fsio::write(
             &global,
             format!("[core]\n\texcludesFile = {}\n", ignore.display()),
         )
@@ -506,8 +506,8 @@ mod tests {
         assert_eq!(paths(&i.manifest), vec![(&b"kept"[..], false)]);
     }
 
-    fn key() -> SlotKey {
-        SlotKey {
+    fn key() -> SlotId {
+        SlotId {
             project: "p".into(),
             worktree: "w".into(),
             trust: forseti::JobTrust::Private,

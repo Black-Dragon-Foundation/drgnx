@@ -274,104 +274,108 @@ mod tests {
             .unwrap()
     }
 
-    #[tokio::test]
-    async fn compact_never_touches_authored() {
-        let dir = tempfile::tempdir().unwrap();
-        let (_w, h, pool, _) = spawn(&dir);
-        let days = [0.1, 0.2, 0.3, 1.1, 1.2];
-        let parsed = with_versions(&h, "plan", "plan:a", Origin::Parsed, &days).await;
-        let task = with_versions(&h, "task", "task:a-00001", Origin::Recorded, &days).await;
-        let note = with_versions(&h, "note", "note:1", Origin::Inferred, &days).await;
-        let hist = |n: i64| format!("select count(*) from entity_hist where n = {n}");
-        assert_eq!(count(&pool, hist(parsed)).await, 5);
-        let seen = dry_run(&pool).await.unwrap();
-        assert_eq!(
-            seen,
-            Report {
-                versions: 2,
-                link_stats: 0
-            }
-        );
-        assert_eq!(
-            count(&pool, hist(parsed)).await,
-            5,
-            "a dry run changes nothing"
-        );
-        let done = run(&h, &pool, user()).await.unwrap();
-        assert_eq!(done, seen);
-        // the parsed entity keeps the last old version of each day, the authored ones every version
-        assert_eq!(count(&pool, hist(parsed)).await, 3);
-        assert_eq!(count(&pool, hist(task)).await, 5);
-        assert_eq!(count(&pool, hist(note)).await, 5);
-        // the span of a dropped version went to the kept one: no gap
-        let gaps = count(
-            &pool,
-            "select count(*) from entity_hist a join entity_hist b on b.n = a.n
-               and b.ver = (select min(ver) from entity_hist where n = a.n and ver > a.ver)
-             where a.n = (select n from entity where id = 'plan:a') and a.tx_to < b.tx_from",
-        )
-        .await;
-        assert_eq!(gaps, 0);
-        assert_eq!(run(&h, &pool, user()).await.unwrap(), Report::default());
+    #[test]
+    fn compact_never_touches_authored() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (_w, h, pool, _) = spawn(&dir);
+            let days = [0.1, 0.2, 0.3, 1.1, 1.2];
+            let parsed = with_versions(&h, "plan", "plan:a", Origin::Parsed, &days).await;
+            let task = with_versions(&h, "task", "task:a-00001", Origin::Recorded, &days).await;
+            let note = with_versions(&h, "note", "note:1", Origin::Inferred, &days).await;
+            let hist = |n: i64| format!("select count(*) from entity_hist where n = {n}");
+            assert_eq!(count(&pool, hist(parsed)).await, 5);
+            let seen = dry_run(&pool).await.unwrap();
+            assert_eq!(
+                seen,
+                Report {
+                    versions: 2,
+                    link_stats: 0
+                }
+            );
+            assert_eq!(
+                count(&pool, hist(parsed)).await,
+                5,
+                "a dry run changes nothing"
+            );
+            let done = run(&h, &pool, user()).await.unwrap();
+            assert_eq!(done, seen);
+            // the parsed entity keeps the last old version of each day, the authored ones every version
+            assert_eq!(count(&pool, hist(parsed)).await, 3);
+            assert_eq!(count(&pool, hist(task)).await, 5);
+            assert_eq!(count(&pool, hist(note)).await, 5);
+            // the span of a dropped version went to the kept one: no gap
+            let gaps = count(
+                &pool,
+                "select count(*) from entity_hist a join entity_hist b on b.n = a.n
+                   and b.ver = (select min(ver) from entity_hist where n = a.n and ver > a.ver)
+                 where a.n = (select n from entity where id = 'plan:a') and a.tx_to < b.tx_from",
+            )
+            .await;
+            assert_eq!(gaps, 0);
+            assert_eq!(run(&h, &pool, user()).await.unwrap(), Report::default());
+        })
     }
 
-    #[tokio::test]
-    async fn retired_sessions_stats_fold_into_file_totals() {
-        let dir = tempfile::tempdir().unwrap();
-        let (_w, h, pool, _) = spawn(&dir);
-        let file = h
-            .write(user(), |tx: &mut Tx<'_>| {
-                Ok(entity::create(tx, new("file", "file:/a", Origin::Inferred))?.n)
-            })
-            .await
-            .unwrap()
-            .value;
-        let mut sessions = Vec::new();
-        for id in ["session:1", "session:2", "session:3"] {
-            let n = h
-                .write(user(), move |tx: &mut Tx<'_>| {
-                    Ok(entity::create(tx, new("session", id, Origin::Recorded))?.n)
+    #[test]
+    fn retired_sessions_stats_fold_into_file_totals() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (_w, h, pool, _) = spawn(&dir);
+            let file = h
+                .write(user(), |tx: &mut Tx<'_>| {
+                    Ok(entity::create(tx, new("file", "file:/a", Origin::Inferred))?.n)
                 })
                 .await
                 .unwrap()
                 .value;
-            sessions.push(n);
-            h.write(user(), move |tx: &mut Tx<'_>| {
-                link::stat_bump(tx, n, "touched", file)?;
-                link::stat_bump(tx, n, "touched", file)
-            })
-            .await
-            .unwrap();
-        }
-        // sessions 1 and 2 end; 3 is still live
-        for n in &sessions[..2] {
-            let n = *n;
-            h.write(user(), move |tx: &mut Tx<'_>| entity::retire(tx, n))
+            let mut sessions = Vec::new();
+            for id in ["session:1", "session:2", "session:3"] {
+                let n = h
+                    .write(user(), move |tx: &mut Tx<'_>| {
+                        Ok(entity::create(tx, new("session", id, Origin::Recorded))?.n)
+                    })
+                    .await
+                    .unwrap()
+                    .value;
+                sessions.push(n);
+                h.write(user(), move |tx: &mut Tx<'_>| {
+                    link::stat_bump(tx, n, "touched", file)?;
+                    link::stat_bump(tx, n, "touched", file)
+                })
                 .await
                 .unwrap();
-        }
-        assert_eq!(
-            dry_run(&pool).await.unwrap(),
-            Report {
-                versions: 0,
-                link_stats: 2
             }
-        );
-        assert_eq!(run(&h, &pool, user()).await.unwrap().link_stats, 2);
-        let total = count(
-            &pool,
-            "select count from link_stat where kind = 'touched_total' and src = dst",
-        )
-        .await;
-        assert_eq!(total, 4);
-        assert_eq!(
-            count(
+            // sessions 1 and 2 end; 3 is still live
+            for n in &sessions[..2] {
+                let n = *n;
+                h.write(user(), move |tx: &mut Tx<'_>| entity::retire(tx, n))
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(
+                dry_run(&pool).await.unwrap(),
+                Report {
+                    versions: 0,
+                    link_stats: 2
+                }
+            );
+            assert_eq!(run(&h, &pool, user()).await.unwrap().link_stats, 2);
+            let total = count(
                 &pool,
-                "select count(*) from link_stat where kind = 'touched'"
+                "select count from link_stat where kind = 'touched_total' and src = dst",
             )
-            .await,
-            1
-        );
-        assert_eq!(run(&h, &pool, user()).await.unwrap(), Report::default());
+            .await;
+            assert_eq!(total, 4);
+            assert_eq!(
+                count(
+                    &pool,
+                    "select count(*) from link_stat where kind = 'touched'"
+                )
+                .await,
+                1
+            );
+            assert_eq!(run(&h, &pool, user()).await.unwrap(), Report::default());
+        })
     }
 }

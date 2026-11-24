@@ -342,7 +342,7 @@ impl hooks::HookHost for NoPlugins {
         _: Value,
         _: Duration,
     ) -> Result<Verdict, String> {
-        Err("no plugin host".to_string())
+        Err("no plugin host".to_owned())
     }
 
     fn refresh(&self, _: &mut HookInput) {}
@@ -411,6 +411,7 @@ pub async fn run(
             (host, io) => {
                 let why = host
                     .err()
+                    .map(|e| e.message().to_owned())
                     .or(io.err().map(|e| e.message))
                     .unwrap_or_default();
                 let by_name = |n: &str| {
@@ -495,14 +496,15 @@ pub async fn at_hub_server(
     server: &'static str,
     tool: &str,
     args: Value,
-) -> Result<Value, String> {
+) -> villa::Result<Value> {
     let session = front.core.agents.find(sid).ok();
     let mut call = ToolCallInfo::hub_tool(server, tool, args.clone());
     let site = match &session {
         Some(s) => s
             .hook_site(At::HubServer)
             .await
-            .map_err(|e| s.hooks_unread(call.step_name(), &e))?,
+            .map_err(|e| s.hooks_unread(call.step_name(), &e))
+            .map_err(villa::Error::invalid)?,
         None => Site {
             at: At::HubServer,
             session: sid.to_owned(),
@@ -515,7 +517,9 @@ pub async fn at_hub_server(
     };
     let out = run(front, &site, &call, prepared, None).await;
     match out.decision {
-        Decision::Deny(_) => Err(refusal(call.step_name(), &out).unwrap_or_default()),
+        Decision::Deny(_) => Err(villa::Error::refused(
+            refusal(call.step_name(), &out).unwrap_or_default(),
+        )),
         Decision::Proceed { changed } | Decision::Ask { changed } => Ok(changed
             .and_then(|c| c.get("arguments").cloned())
             .unwrap_or(args)),
@@ -1107,7 +1111,11 @@ pub(crate) async fn ask_job_point(
             hooks::run(&input, budget, accepts, &rules, &loaded, &h).await
         }
         (host, io) => {
-            let why = host.err().or(io.err()).unwrap_or_default();
+            let why = host
+                .err()
+                .map(|e| e.message().to_owned())
+                .or(io.err())
+                .unwrap_or_default();
             if !why.is_empty() {
                 for l in &loaded {
                     if let Some(p) = installed

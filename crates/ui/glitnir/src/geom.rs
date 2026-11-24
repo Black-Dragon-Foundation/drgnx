@@ -1,4 +1,7 @@
-//! Geometry: device-pixel rectangles and the logical/device unit types.
+//! Geometry: device-pixel rectangles. Lengths are physical pixels ([`kvardi::Px`]); a logical length reaches Glitnir
+//! only through `kvardi::Lp::to_px` (the scale-zoom standard).
+
+pub use kvardi::Px;
 
 /// A rectangle in device pixels; empty when `w <= 0` or `h <= 0`.  Layout equals `GlitnirRect`.
 #[repr(C)]
@@ -11,8 +14,20 @@ pub struct Rect {
 }
 
 impl Rect {
-    pub const fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
-        Self { x, y, w, h }
+    /// A rectangle from device pixels: the one way in, which a logical length cannot take (`Lp::to_px` makes the
+    /// `Px`). The fields are the stored pixel counts; reading them is plain `i32`.
+    pub const fn new(x: Px, y: Px, w: Px, h: Px) -> Self {
+        Self {
+            x: x.0,
+            y: y.0,
+            w: w.0,
+            h: h.0,
+        }
+    }
+
+    /// [`Rect::new`] (the name Wave 7 gave the typed way in).
+    pub const fn at(x: Px, y: Px, w: Px, h: Px) -> Self {
+        Self::new(x, y, w, h)
     }
 
     pub const fn is_empty(&self) -> bool {
@@ -37,7 +52,12 @@ impl Rect {
         if x1 <= x0 as i64 || y1 <= y0 as i64 {
             return Rect::default();
         }
-        Rect::new(x0, y0, (x1 - x0 as i64) as i32, (y1 - y0 as i64) as i32)
+        Rect::new(
+            Px(x0),
+            Px(y0),
+            Px((x1 - x0 as i64) as i32),
+            Px((y1 - y0 as i64) as i32),
+        )
     }
 
     /// The smallest rectangle holding both; an empty operand is ignored.
@@ -52,14 +72,20 @@ impl Rect {
         let y0 = self.y.min(o.y);
         let x1 = (self.x as i64 + self.w as i64).max(o.x as i64 + o.w as i64);
         let y1 = (self.y as i64 + self.h as i64).max(o.y as i64 + o.h as i64);
-        Rect::new(x0, y0, (x1 - x0 as i64) as i32, (y1 - y0 as i64) as i32)
+        Rect::new(
+            Px(x0),
+            Px(y0),
+            Px((x1 - x0 as i64) as i32),
+            Px((y1 - y0 as i64) as i32),
+        )
     }
 
-    pub fn translate(&self, dx: i32, dy: i32) -> Rect {
-        Rect::new(self.x + dx, self.y + dy, self.w, self.h)
+    pub fn translate(&self, dx: Px, dy: Px) -> Rect {
+        Rect::new(Px(self.x + dx.0), Px(self.y + dy.0), Px(self.w), Px(self.h))
     }
 
-    pub fn contains(&self, px: i32, py: i32) -> bool {
+    pub fn contains(&self, px: Px, py: Px) -> bool {
+        let (px, py) = (px.0, py.0);
         !self.is_empty()
             && px >= self.x
             && py >= self.y
@@ -68,29 +94,13 @@ impl Rect {
     }
 }
 
-/// A length in logical (scale-independent) units.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub struct Logical(pub f64);
-
-/// A length in device pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Device(pub i32);
-
-impl Logical {
-    /// Device pixels at `scale`, rounded to the nearest pixel (ties away from zero).
-    pub fn to_device(self, scale: f64) -> Device {
-        Device((self.0 * scale).round() as i32)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn logical_to_device_rounds() {
-        assert_eq!(Logical(10.0).to_device(1.5), Device(15));
-        assert_eq!(Logical(3.0).to_device(1.25), Device(4));
-        assert_eq!(Logical(0.4).to_device(1.0), Device(0));
+    fn a_rect_from_pixels() {
+        let r = Rect::at(Px(1), Px(2), Px(3), Px(4));
+        assert_eq!((r.x, r.y, r.w, r.h), (1, 2, 3, 4));
     }
 }

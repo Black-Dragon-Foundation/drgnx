@@ -8,7 +8,6 @@
 //! - [`client`]: the blocking client those commands use (a raw ping, a proven user connection).
 //! - [`idle`]: restart-when-idle: the binary on disk changed, restart between turns.
 //! - [`doctor`]: `status`, `doctor --json` and `restart`.
-//! - [`legacy`]: what the Lisp runtime left, moved aside at the first start (never deleted), and the doctor's `legacy` section.
 //! - [`lock`]: one hub per data dir (an exclusive `flock`; a Lisp hub's lock directory respected).
 //! - [`server`]: the start order (the store opened, or made, or migrated, before anything is served), the accept loops, signals, the parent watch, the schema tick and the stop.
 //! - [`clock`]: the hub's timers and time readings; with `test-hooks`, the virtual clock `__test_advance` moves.
@@ -77,6 +76,7 @@ pub mod bridge;
 pub mod brief;
 pub mod browser;
 pub mod budget;
+pub mod chain;
 pub mod cli;
 pub mod client;
 pub mod clock;
@@ -86,14 +86,17 @@ pub mod debug;
 pub(crate) mod disk;
 pub mod dispatch;
 pub mod doctor;
+pub mod door_cli;
 pub mod editor;
 pub mod embed;
 pub mod embed_direct;
+pub mod embed_serve;
 pub mod eval_cli;
 pub mod exec;
 pub mod extensions;
 pub mod forecast;
 pub mod front;
+pub mod fsio;
 pub mod gateway;
 pub mod graph;
 pub mod graph_cli;
@@ -102,7 +105,6 @@ pub mod history;
 pub mod hook_points;
 pub mod idle;
 pub mod job_cli;
-pub mod legacy;
 pub mod lock;
 pub mod log;
 pub mod machines_cli;
@@ -118,6 +120,7 @@ pub mod parse_worker;
 pub mod peer;
 pub mod plugins;
 pub mod plugins_cli;
+pub mod proc;
 pub mod recording;
 pub mod recording_cli;
 pub mod records;
@@ -137,6 +140,7 @@ pub mod sessions;
 pub mod settings;
 pub mod shape;
 pub mod shell_env;
+pub mod soft;
 pub mod stages;
 pub mod stall;
 pub mod store;

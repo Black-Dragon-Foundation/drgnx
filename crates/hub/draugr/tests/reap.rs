@@ -34,7 +34,7 @@ impl Spy {
         }
     }
     fn calls(&self) -> Vec<(i32, i32)> {
-        self.calls.lock().unwrap().clone()
+        saman::lock(&self.calls).clone()
     }
     /// The calls that were not probes.
     fn sent(&self) -> Vec<(i32, i32)> {
@@ -44,7 +44,7 @@ impl Spy {
 
 impl Signaller for Spy {
     fn kill(&self, target: i32, sig: i32) -> std::io::Result<()> {
-        self.calls.lock().unwrap().push((target, sig));
+        saman::lock(&self.calls).push((target, sig));
         if sig == 0 || self.real {
             RealSignaller.kill(target, sig)
         } else {
@@ -116,266 +116,295 @@ struct Sentinel(std::process::Child);
 
 impl Drop for Sentinel {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        if let Err(e) = self.0.kill() {
+            tracing::debug!(error = %e, "the sentinel was already gone");
+        }
+        if let Err(e) = self.0.wait() {
+            tracing::debug!(error = %e, "the sentinel was not waited for");
+        }
     }
 }
 
-#[tokio::test]
-async fn recorded_live_group_is_killed() {
-    let mut g = Group::start("sleep 60 & sleep 60 & echo ready; wait").await;
-    g.ready().await;
-    let recs = [g.record()];
-    let spy = Spy::real();
-    let (out, status) = tokio::join!(timeout(LIMIT, reap(&recs, &spy)), g.child.wait());
-    assert_eq!(out.unwrap(), vec![ReapOutcome::Killed]);
-    assert!(!status.unwrap().unwrap().success());
-    assert!(!g.exists(), "both sleeps are gone");
-    assert_eq!(spy.sent(), vec![(-g.pgid, libc::SIGTERM)]);
+#[test]
+fn recorded_live_group_is_killed() {
+    saman::block_on_current(async {
+        let mut g = Group::start("sleep 60 & sleep 60 & echo ready; wait").await;
+        g.ready().await;
+        let recs = [g.record()];
+        let spy = Spy::real();
+        let (out, status) = tokio::join!(timeout(LIMIT, reap(&recs, &spy)), g.child.wait());
+        assert_eq!(out.unwrap(), vec![ReapOutcome::Killed]);
+        assert!(!status.unwrap().unwrap().success());
+        assert!(!g.exists(), "both sleeps are gone");
+        assert_eq!(spy.sent(), vec![(-g.pgid, libc::SIGTERM)]);
+    })
 }
 
-#[tokio::test]
-async fn a_reused_pid_is_left_alone() {
-    let g = Group::start("exec sleep 60").await;
-    let mut rec = g.record();
-    rec.start_time = rec.start_time.map(|t| t - 1);
-    let spy = Spy::probes_only();
-    assert_eq!(
-        timeout(LIMIT, reap(&[rec], &spy)).await.unwrap(),
-        vec![ReapOutcome::Reused]
-    );
-    assert_eq!(spy.sent(), vec![]);
-    assert!(g.leader_alive());
+#[test]
+fn a_reused_pid_is_left_alone() {
+    saman::block_on_current(async {
+        let g = Group::start("exec sleep 60").await;
+        let mut rec = g.record();
+        rec.start_time = rec.start_time.map(|t| t - 1);
+        let spy = Spy::probes_only();
+        assert_eq!(
+            timeout(LIMIT, reap(&[rec], &spy)).await.unwrap(),
+            vec![ReapOutcome::Reused]
+        );
+        assert_eq!(spy.sent(), vec![]);
+        assert!(g.leader_alive());
+    })
 }
 
-#[tokio::test]
-async fn a_term_ignoring_group_gets_kill_after_2s() {
-    let mut g = Group::start("trap '' TERM; sleep 60 & echo ready; wait").await;
-    g.ready().await;
-    let recs = [g.record()];
-    let spy = Spy::real();
-    let (out, _) = tokio::join!(timeout(LIMIT, reap(&recs, &spy)), g.child.wait());
-    assert_eq!(out.unwrap(), vec![ReapOutcome::Killed]);
-    assert!(!g.exists());
-    assert_eq!(
-        spy.sent(),
-        vec![(-g.pgid, libc::SIGTERM), (-g.pgid, libc::SIGKILL)]
-    );
+#[test]
+fn a_term_ignoring_group_gets_kill_after_2s() {
+    saman::block_on_current(async {
+        let mut g = Group::start("trap '' TERM; sleep 60 & echo ready; wait").await;
+        g.ready().await;
+        let recs = [g.record()];
+        let spy = Spy::real();
+        let (out, _) = tokio::join!(timeout(LIMIT, reap(&recs, &spy)), g.child.wait());
+        assert_eq!(out.unwrap(), vec![ReapOutcome::Killed]);
+        assert!(!g.exists());
+        assert_eq!(
+            spy.sent(),
+            vec![(-g.pgid, libc::SIGTERM), (-g.pgid, libc::SIGKILL)]
+        );
+    })
 }
 
 /// The kill comes after the grace, not before: on a virtual clock the test moves time one probe at a time and checks, at
 /// each, that no SIGKILL has gone out before the grace is spent; the reaper's probes are the only thing it waits for.
-#[tokio::test]
-async fn a_term_ignoring_group_is_killed_only_after_the_grace() {
-    let mut g = Group::start("trap '' TERM; sleep 60 & echo ready; wait").await;
-    g.ready().await;
-    let pgid = g.pgid;
-    let recs = vec![g.record()];
-    let spy = std::sync::Arc::new(Spy::real());
-    let clock = stund::Manual::default();
-    let reaping = tokio::spawn(clock.scope({
-        let spy = spy.clone();
-        async move { reap(&recs, &*spy).await }
-    }));
-    let step = Duration::from_millis(20);
-    let mut advanced = Duration::ZERO;
-    let (_, out) = tokio::join!(g.child.wait(), async {
-        while !reaping.is_finished() {
-            skuld::wait_until_async(
-                "the reaper waits for its next probe, or ends",
-                20,
-                || async { (clock.sleepers() == 1 || reaping.is_finished()).then_some(()) },
-            )
-            .await;
-            if reaping.is_finished() {
-                break;
+#[test]
+fn a_term_ignoring_group_is_killed_only_after_the_grace() {
+    saman::block_on_current(async {
+        let mut g = Group::start("trap '' TERM; sleep 60 & echo ready; wait").await;
+        g.ready().await;
+        let pgid = g.pgid;
+        let recs = vec![g.record()];
+        let spy = std::sync::Arc::new(Spy::real());
+        let clock = stund::Manual::default();
+        let reaping = saman::spawn(
+            "reaping",
+            clock.scope({
+                let spy = spy.clone();
+                async move { reap(&recs, &*spy).await }
+            }),
+        );
+        let step = Duration::from_millis(20);
+        let mut advanced = Duration::ZERO;
+        let (_, out) = tokio::join!(g.child.wait(), async {
+            while !reaping.is_finished() {
+                skuld::wait_until_async(
+                    "the reaper waits for its next probe, or ends",
+                    20,
+                    || async { (clock.sleepers() == 1 || reaping.is_finished()).then_some(()) },
+                )
+                .await;
+                if reaping.is_finished() {
+                    break;
+                }
+                if advanced < GRACE {
+                    assert!(
+                        !spy.sent().contains(&(-pgid, libc::SIGKILL)),
+                        "SIGKILL after {advanced:?} of a {GRACE:?} grace"
+                    );
+                }
+                clock.advance(step);
+                advanced += step;
             }
-            if advanced < GRACE {
-                assert!(
-                    !spy.sent().contains(&(-pgid, libc::SIGKILL)),
-                    "SIGKILL after {advanced:?} of a {GRACE:?} grace"
-                );
-            }
-            clock.advance(step);
-            advanced += step;
-        }
-        reaping.await.unwrap()
-    });
-    assert_eq!(out, vec![ReapOutcome::Killed]);
-    assert!(advanced >= GRACE, "{advanced:?}");
-    assert_eq!(
-        spy.sent(),
-        vec![(-pgid, libc::SIGTERM), (-pgid, libc::SIGKILL)]
-    );
+            reaping.await.unwrap()
+        });
+        assert_eq!(out, vec![ReapOutcome::Killed]);
+        assert!(advanced >= GRACE, "{advanced:?}");
+        assert_eq!(
+            spy.sent(),
+            vec![(-pgid, libc::SIGTERM), (-pgid, libc::SIGKILL)]
+        );
+    })
 }
 
-#[tokio::test]
-async fn a_row_without_a_pid_kills_nothing() {
-    let g = Group::start("exec sleep 60").await;
-    let full = g.record();
-    let mut sentinel = Sentinel(
-        std::process::Command::new("sleep")
-            .arg("60")
-            .spawn()
-            .unwrap(),
-    );
-    let rows = [
-        Record {
-            pid: None,
-            ..full.clone()
-        },
-        Record {
-            pgid: None,
-            ..full.clone()
-        },
-        Record {
-            pgid: Some(0),
-            ..full.clone()
-        },
-        Record {
-            start_time: None,
-            ..full.clone()
-        },
-        Record {
-            boot_id: None,
-            ..full.clone()
-        },
-        Record::default(),
-    ];
-    let spy = Spy::probes_only();
-    let out = timeout(LIMIT, reap(&rows, &spy)).await.unwrap();
-    use ReapOutcome::Skipped;
-    assert_eq!(
-        out,
-        vec![
-            Skipped(Skip::NoPid),
-            Skipped(Skip::NoPid),
-            Skipped(Skip::Refused),
-            Skipped(Skip::NoPid),
-            Skipped(Skip::NoPid),
-            Skipped(Skip::NoPid)
-        ]
-    );
-    assert_eq!(spy.calls(), vec![]);
-    assert!(
-        sentinel.0.try_wait().unwrap().is_none(),
-        "the sentinel in our own group is alive"
-    );
-    assert!(g.leader_alive());
+#[test]
+fn a_row_without_a_pid_kills_nothing() {
+    saman::block_on_current(async {
+        let g = Group::start("exec sleep 60").await;
+        let full = g.record();
+        let mut sentinel = Sentinel(
+            std::process::Command::new("sleep")
+                .arg("60")
+                .spawn()
+                .unwrap(),
+        );
+        let rows = [
+            Record {
+                pid: None,
+                ..full.clone()
+            },
+            Record {
+                pgid: None,
+                ..full.clone()
+            },
+            Record {
+                pgid: Some(0),
+                ..full.clone()
+            },
+            Record {
+                start_time: None,
+                ..full.clone()
+            },
+            Record {
+                boot_id: None,
+                ..full.clone()
+            },
+            Record::default(),
+        ];
+        let spy = Spy::probes_only();
+        let out = timeout(LIMIT, reap(&rows, &spy)).await.unwrap();
+        use ReapOutcome::Skipped;
+        assert_eq!(
+            out,
+            vec![
+                Skipped(Skip::NoPid),
+                Skipped(Skip::NoPid),
+                Skipped(Skip::Refused),
+                Skipped(Skip::NoPid),
+                Skipped(Skip::NoPid),
+                Skipped(Skip::NoPid)
+            ]
+        );
+        assert_eq!(spy.calls(), vec![]);
+        assert!(
+            sentinel.0.try_wait().unwrap().is_none(),
+            "the sentinel in our own group is alive"
+        );
+        assert!(g.leader_alive());
+    })
 }
 
-#[tokio::test]
-async fn pgid_one_and_own_group_are_refused() {
-    let g = Group::start("exec sleep 60").await;
-    let full = g.record();
-    let me = std::process::id() as i32;
-    let rows = [
-        Record {
-            pgid: Some(1),
-            ..full.clone()
-        },
-        Record {
-            pgid: Some(unsafe { libc::getpgrp() }),
-            ..full.clone()
-        },
-        Record {
-            pgid: Some(unsafe { libc::getsid(0) }),
-            ..full.clone()
-        },
-        Record {
-            pid: Some(me),
-            start_time: Some(start_time(me).unwrap()),
-            ..full.clone()
-        },
-    ];
-    let spy = Spy::probes_only();
-    let out = timeout(LIMIT, reap(&rows, &spy)).await.unwrap();
-    assert_eq!(out, vec![ReapOutcome::Skipped(Skip::Refused); 4]);
-    assert_eq!(spy.calls(), vec![]);
-    assert!(g.leader_alive());
+#[test]
+fn pgid_one_and_own_group_are_refused() {
+    saman::block_on_current(async {
+        let g = Group::start("exec sleep 60").await;
+        let full = g.record();
+        let me = std::process::id() as i32;
+        let rows = [
+            Record {
+                pgid: Some(1),
+                ..full.clone()
+            },
+            Record {
+                pgid: Some(unsafe { libc::getpgrp() }),
+                ..full.clone()
+            },
+            Record {
+                pgid: Some(unsafe { libc::getsid(0) }),
+                ..full.clone()
+            },
+            Record {
+                pid: Some(me),
+                start_time: Some(start_time(me).unwrap()),
+                ..full.clone()
+            },
+        ];
+        let spy = Spy::probes_only();
+        let out = timeout(LIMIT, reap(&rows, &spy)).await.unwrap();
+        assert_eq!(out, vec![ReapOutcome::Skipped(Skip::Refused); 4]);
+        assert_eq!(spy.calls(), vec![]);
+        assert!(g.leader_alive());
+    })
 }
 
 /// GL-T12-5: a group whose only member left is its leader, unreaped (a zombie), is gone: `kill(-pgid, 0)` still
 /// succeeds for it, and waiting for the group to vanish would wait out the grace and the kill period for nothing.
 #[cfg(target_os = "linux")]
-#[tokio::test]
-async fn a_group_with_only_an_unreaped_zombie_leader_is_gone() {
-    let mut g = Group::start("exit 0").await;
-    let stat = format!("/proc/{}/stat", g.pgid);
-    skuld::wait_until("the leader is a zombie", 10, || {
-        std::fs::read_to_string(&stat).ok().filter(|s| {
-            s.rsplit(')')
-                .next()
-                .is_some_and(|r| r.trim_start().starts_with('Z'))
-        })
-    });
-    assert!(g.exists(), "the zombie still answers kill(-pgid, 0)");
-    let out = timeout(
-        LIMIT,
-        kill_group(g.pgid, Duration::from_millis(100), &Spy::real()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(out, ReapOutcome::Killed);
-    assert!(g.child.wait().await.unwrap().is_some());
+#[test]
+fn a_group_with_only_an_unreaped_zombie_leader_is_gone() {
+    saman::block_on_current(async {
+        let mut g = Group::start("exit 0").await;
+        let stat = format!("/proc/{}/stat", g.pgid);
+        skuld::wait_until("the leader is a zombie", 10, || {
+            eitri::read_string(std::path::Path::new(&stat), 1 << 16)
+                .ok()
+                .filter(|s| {
+                    s.rsplit(')')
+                        .next()
+                        .is_some_and(|r| r.trim_start().starts_with('Z'))
+                })
+        });
+        assert!(g.exists(), "the zombie still answers kill(-pgid, 0)");
+        let out = timeout(
+            LIMIT,
+            kill_group(g.pgid, Duration::from_millis(100), &Spy::real()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, ReapOutcome::Killed);
+        assert!(g.child.wait().await.unwrap().is_some());
+    })
 }
 
-#[tokio::test]
-async fn a_dead_leaders_live_group_is_killed() {
-    let mut g = Group::start("sleep 60 & read x; exit").await;
-    let rec = g.record();
-    drop(g.child.take_stdin());
-    assert!(
-        g.child.wait().await.unwrap().is_some(),
-        "the leader is reaped"
-    );
-    assert!(!g.leader_alive());
-    assert!(g.exists(), "its sleep still holds the group");
-    let spy = Spy::real();
-    assert_eq!(
-        timeout(LIMIT, reap(&[rec], &spy)).await.unwrap(),
-        vec![ReapOutcome::Killed]
-    );
-    assert!(!g.exists());
-}
-
-#[tokio::test]
-async fn another_boots_row_is_left_alone() {
-    let g = Group::start("exec sleep 60").await;
-    let rec = Record {
-        boot_id: Some("other".into()),
-        ..g.record()
-    };
-    let spy = Spy::probes_only();
-    assert_eq!(
-        timeout(LIMIT, reap(&[rec], &spy)).await.unwrap(),
-        vec![ReapOutcome::Skipped(Skip::OtherBoot)]
-    );
-    assert_eq!(spy.calls(), vec![]);
-    assert!(g.exists() && g.leader_alive());
-}
-
-#[tokio::test]
-async fn kill_group_refuses_like_reap_and_kills_our_group() {
-    let mut g = Group::start("exec sleep 60").await;
-    let spy = Spy::probes_only();
-    for pgid in [0, 1, -5, unsafe { libc::getpgrp() }, unsafe {
-        libc::getsid(0)
-    }] {
-        assert_eq!(
-            timeout(LIMIT, kill_group(pgid, GRACE, &spy)).await.unwrap(),
-            ReapOutcome::Skipped(Skip::Refused),
-            "pgid {pgid}"
+#[test]
+fn a_dead_leaders_live_group_is_killed() {
+    saman::block_on_current(async {
+        let mut g = Group::start("sleep 60 & read x; exit").await;
+        let rec = g.record();
+        drop(g.child.take_stdin());
+        assert!(
+            g.child.wait().await.unwrap().is_some(),
+            "the leader is reaped"
         );
-    }
-    assert_eq!(spy.calls(), vec![]);
-    let spy = Spy::real();
-    let (out, _) = tokio::join!(
-        timeout(LIMIT, kill_group(g.pgid, GRACE, &spy)),
-        g.child.wait()
-    );
-    assert_eq!(out.unwrap(), ReapOutcome::Killed);
-    assert!(!g.exists());
+        assert!(!g.leader_alive());
+        assert!(g.exists(), "its sleep still holds the group");
+        let spy = Spy::real();
+        assert_eq!(
+            timeout(LIMIT, reap(&[rec], &spy)).await.unwrap(),
+            vec![ReapOutcome::Killed]
+        );
+        assert!(!g.exists());
+    })
+}
+
+#[test]
+fn another_boots_row_is_left_alone() {
+    saman::block_on_current(async {
+        let g = Group::start("exec sleep 60").await;
+        let rec = Record {
+            boot_id: Some("other".into()),
+            ..g.record()
+        };
+        let spy = Spy::probes_only();
+        assert_eq!(
+            timeout(LIMIT, reap(&[rec], &spy)).await.unwrap(),
+            vec![ReapOutcome::Skipped(Skip::OtherBoot)]
+        );
+        assert_eq!(spy.calls(), vec![]);
+        assert!(g.exists() && g.leader_alive());
+    })
+}
+
+#[test]
+fn kill_group_refuses_like_reap_and_kills_our_group() {
+    saman::block_on_current(async {
+        let mut g = Group::start("exec sleep 60").await;
+        let spy = Spy::probes_only();
+        for pgid in [0, 1, -5, unsafe { libc::getpgrp() }, unsafe {
+            libc::getsid(0)
+        }] {
+            assert_eq!(
+                timeout(LIMIT, kill_group(pgid, GRACE, &spy)).await.unwrap(),
+                ReapOutcome::Skipped(Skip::Refused),
+                "pgid {pgid}"
+            );
+        }
+        assert_eq!(spy.calls(), vec![]);
+        let spy = Spy::real();
+        let (out, _) = tokio::join!(
+            timeout(LIMIT, kill_group(g.pgid, GRACE, &spy)),
+            g.child.wait()
+        );
+        assert_eq!(out.unwrap(), ReapOutcome::Killed);
+        assert!(!g.exists());
+    })
 }
 
 #[test]

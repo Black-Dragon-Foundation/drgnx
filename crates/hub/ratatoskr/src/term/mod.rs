@@ -128,12 +128,12 @@ pub struct Terms {
 }
 
 fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
-    m.lock().unwrap_or_else(|p| p.into_inner())
+    saman::lock(m)
 }
 
 fn new_id() -> String {
     let mut b = [0u8; 6];
-    let _ = getrandom::fill(&mut b);
+    crate::soft::done(getrandom::fill(&mut b), "getrandom::fill");
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
@@ -162,8 +162,8 @@ impl Terms {
         if self.inner.dir.set(dir).is_err() {
             return;
         }
-        let _ = self.inner.sink.set(sink);
-        let _ = self.inner.hub.set(hub);
+        crate::soft::done(self.inner.sink.set(sink), "mod");
+        crate::soft::done(self.inner.hub.set(hub), "mod");
         match private {
             Ok(()) => self.adopt().await,
             Err(e) => tracing::warn!(error = %e, "terminals: their folder is not private"),
@@ -189,7 +189,7 @@ impl Terms {
         conn: u64,
         session: Option<String>,
         s: Spawn,
-    ) -> Result<Record, String> {
+    ) -> villa::Result<Record> {
         self.spawn_as(conn, session, s, crate::exec::unit::systemd_user())
             .await
     }
@@ -201,13 +201,14 @@ impl Terms {
         session: Option<String>,
         s: Spawn,
         systemd: bool,
-    ) -> Result<Record, String> {
+    ) -> villa::Result<Record> {
         let dir = self
             .dir()
-            .ok_or("terminals: the store is not open yet")?
+            .ok_or_else(|| villa::Error::invalid("terminals: the store is not open yet"))?
             .to_path_buf();
         // 0700, made so, or refused when another user's: the workers' sockets and records are in it
-        runstav::paths::private_dir(&dir).map_err(|e| format!("terminals: {e}"))?;
+        runstav::paths::private_dir(&dir)
+            .map_err(|e| villa::Error::invalid(format!("terminals: {e}")))?;
         let id = new_id();
         let socket = dir.join(format!("{id}.sock"));
         let mut command = s.command.clone();
@@ -238,18 +239,18 @@ impl Terms {
         ];
         worker.extend(command.iter().cloned());
         let (program, args) = scope::command(&id, &worker, systemd, &s.limits);
-        let log =
-            std::fs::File::create(dir.join(format!("{id}.log"))).map_err(|e| e.to_string())?;
-        let mut cmd = std::process::Command::new(&program);
+        let log = eitri::create_exclusive(&dir.join(format!("{id}.log")), 0o666)
+            .map_err(std::io::Error::from)
+            .map_err(|e| villa::Error::io(e.to_string()))?;
+        let mut cmd = crate::proc::Command::new(&program);
         cmd.args(&args)
             .env_clear()
             .envs(s.env.iter().map(|(k, v)| (k, v)))
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(log);
+            // its own session: the hub's signals and its process group never reach it
+            .new_session();
         if systemd {
             // systemd-run reaches the user manager through these
-            for k in ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] {
+            for k in [stig::SYSTEM_RUNTIME_VAR, "DBUS_SESSION_BUS_ADDRESS"] {
                 if !s.env.iter().any(|(n, _)| n == k)
                     && let Some(v) = std::env::var_os(k)
                 {
@@ -257,17 +258,19 @@ impl Terms {
                 }
             }
         }
-        {
-            use std::os::unix::process::CommandExt;
-            // its own session: the hub's signals and its process group never reach it
-            cmd.process_group(0);
-        }
-        let mut child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+        let mut child = cmd
+            .spawn(
+                crate::proc::Io::Null,
+                crate::proc::Io::Null,
+                crate::proc::Io::file(log),
+            )
+            .map_err(|e| villa::Error::invalid(format!("{program}: {e}")))?;
         let pid = child.id() as i32;
         // reaped by a thread of its own while this hub lives; after a restart, by init
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
+        saman::spawn_thread("ratatoskr:mod", move || {
+            crate::soft::done(child.wait(), "mod");
+        })
+        .unwrap();
         let start_time = draugr::start_time(pid).unwrap_or(0);
         let mut rec = Record {
             id: id.clone(),
@@ -285,7 +288,7 @@ impl Terms {
             place: s.place.clone(),
             remote: s.remote.clone(),
         };
-        rec.write(&dir).map_err(|e| e.to_string())?;
+        rec.write(&dir)?;
         // the worker binds its socket once it runs
         let (r, w, hello) =
             match adopt::connect_started(&socket, Duration::from_secs(5), Duration::from_secs(5))
@@ -294,11 +297,13 @@ impl Terms {
                 Ok(c) => c,
                 Err(e) => {
                     Record::remove(&dir, &id);
-                    return Err(format!("the terminal worker did not answer: {e}"));
+                    return Err(villa::Error::invalid(format!(
+                        "the terminal worker did not answer: {e}"
+                    )));
                 }
             };
         rec.shell_pid = Some(hello.shell_pid);
-        let _ = rec.write(&dir);
+        crate::soft::done(rec.write(&dir), "mod");
         if let Some(sess) = &session {
             lock(&self.inner.state).sessions.insert(conn, sess.clone());
         }
@@ -429,7 +434,7 @@ impl Terms {
             }
             Out::Status { req, .. } | Out::Answer { req, .. } => {
                 if let Some((_, w)) = lock(&self.inner.state).waiting.remove(&req) {
-                    let _ = w.send(out);
+                    crate::soft::done(w.send(out), "w send");
                 }
             }
             Out::Hello { proto, .. } => {
@@ -460,7 +465,7 @@ impl Terms {
         self.send_event(t.owner, "term/exit", data);
         if let Some(dir) = self.dir() {
             Record::remove(dir, id);
-            let _ = std::fs::remove_file(&t.rec.socket);
+            crate::soft::done(std::fs::remove_file(&t.rec.socket), "std::fs::remove_file");
         }
     }
 
@@ -518,7 +523,7 @@ impl Terms {
             if !adopt::alive(&rec) {
                 tracing::info!(id = %rec.id, "terminal gone while no hub ran: its record goes");
                 Record::remove(&dir, &rec.id);
-                let _ = std::fs::remove_file(&rec.socket);
+                crate::soft::done(std::fs::remove_file(&rec.socket), "std::fs::remove_file");
                 continue;
             }
             match adopt::connect(&rec.socket, Duration::from_secs(5)).await {
@@ -575,7 +580,7 @@ impl Terms {
         };
         if let Some(dir) = self.dir() {
             for rec in back {
-                let _ = rec.write(dir);
+                crate::soft::done(rec.write(dir), "mod");
             }
         }
         for id in ids {
@@ -593,30 +598,31 @@ impl Terms {
         rows: u16,
         cell_px: (u32, u32),
         rows_in_sja: bool,
-    ) -> Result<Record, String> {
+    ) -> villa::Result<Record> {
         let rec = {
             let mut st = lock(&self.inner.state);
-            let session = st
-                .sessions
-                .get(&conn)
-                .cloned()
-                .ok_or("this connection named no editor session")?;
+            let session =
+                st.sessions.get(&conn).cloned().ok_or_else(|| {
+                    villa::Error::invalid("this connection named no editor session")
+                })?;
             let live = |s: &str| st.sessions.values().any(|o| o == s);
             let t = st
                 .terms
                 .get(id)
-                .ok_or_else(|| format!("no terminal {id}"))?;
+                .ok_or_else(|| villa::Error::invalid(format!("no terminal {id}")))?;
             if t.old {
-                return Err(format!(
+                return Err(villa::Error::invalid(format!(
                     "terminal {id} is from before an update: it can only be closed"
-                ));
+                )));
             }
             if let Some(s) = t.rec.session.as_deref()
                 && t.rec.detached_at.is_none()
                 && s != session
                 && live(s)
             {
-                return Err(format!("terminal {id} is open in another Emacs"));
+                return Err(villa::Error::invalid(format!(
+                    "terminal {id} is open in another Emacs"
+                )));
             }
             let t = st.terms.get_mut(id).expect("just found");
             t.rec.session = Some(session);
@@ -626,7 +632,7 @@ impl Terms {
             t.rec.clone()
         };
         if let Some(dir) = self.dir() {
-            let _ = rec.write(dir);
+            crate::soft::done(rec.write(dir), "mod");
         }
         self.send(
             id,
@@ -657,8 +663,10 @@ impl Terms {
             if let Some(t) = st.terms.get(id)
                 && !t.old
             {
-                let _ =
-                    t.tx.send(serde_json::to_string(&In::Detach).unwrap_or_default() + "\n");
+                crate::soft::done(
+                    t.tx.send(serde_json::to_string(&In::Detach).unwrap_or_default() + "\n"),
+                    "tx send",
+                );
             }
         }
         if let Some(s) = session
@@ -724,7 +732,7 @@ impl Terms {
         };
         if let Some(dir) = self.dir() {
             for rec in &recs {
-                let _ = rec.write(dir);
+                crate::soft::done(rec.write(dir), "mod");
             }
         }
         for id in &ids {
@@ -842,11 +850,11 @@ impl Terms {
         id: &str,
         make: impl FnOnce(u64) -> In,
         deadline: Duration,
-    ) -> Result<Out, String> {
+    ) -> villa::Result<Out> {
         let (req, rx) = {
             let mut st = lock(&self.inner.state);
             if !st.terms.contains_key(id) {
-                return Err(format!("no terminal {id}"));
+                return Err(villa::Error::invalid(format!("no terminal {id}")));
             }
             st.next_req += 1;
             let req = st.next_req;
@@ -856,15 +864,17 @@ impl Terms {
         };
         if !self.send(id, &make(req)) {
             lock(&self.inner.state).waiting.remove(&req);
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "terminal {id} takes nothing but close (from before an update)"
-            ));
+            )));
         }
         match crate::clock::timeout(deadline, rx).await {
             Ok(Ok(out)) => Ok(out),
             _ => {
                 lock(&self.inner.state).waiting.remove(&req);
-                Err(format!("terminal {id} did not answer"))
+                Err(villa::Error::invalid(format!(
+                    "terminal {id} did not answer"
+                )))
             }
         }
     }
@@ -898,7 +908,7 @@ impl Terms {
     fn exited(&self, id: &str, status: Option<i32>) {
         let waiting = lock(&self.inner.state).exits.remove(id);
         for w in waiting.unwrap_or_default() {
-            let _ = w.send(status);
+            crate::soft::done(w.send(status), "w send");
         }
     }
 

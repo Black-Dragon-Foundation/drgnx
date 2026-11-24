@@ -15,7 +15,7 @@ struct Fix {
 async fn fix() -> Fix {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("s.md");
-    std::fs::write(&file, SPEC).unwrap();
+    crate::fsio::write(&file, SPEC).unwrap();
     let db = CoordDb::spawn(dir.path().join("work.db"));
     let f = file.to_string_lossy().into_owned();
     db.write(hub_meta("test"), move |tx| {
@@ -81,123 +81,131 @@ fn a_comment_steers_the_records_writer() {
     );
 }
 
-#[tokio::test]
-async fn a_reply_from_another_session_is_refused() {
-    let f = fix().await;
-    let (id, _) = add_thread(
-        &f.db,
-        "spec:s",
-        &by_quote("every one reaches the agent"),
-        "why links?",
-        1.0,
-    )
-    .await
-    .unwrap();
-    // not sent anywhere yet: no session may answer
-    assert!(agent_reply(&f.db, "s1", &id, "x", 2.0).await.is_err());
-    let i = id.clone();
-    f.db.write(hub_meta("test"), move |tx| {
-        w::comment_patch(tx, &i, json!({"sent_to": "s1"}))
-    })
-    .await
-    .unwrap();
-    let refused = agent_reply(&f.db, "s2", &id, "not mine", 2.0).await;
-    assert!(refused.unwrap_err().contains("not sent to you"));
-    let r = agent_reply(&f.db, "s1", &id, "they version", 3.0)
+#[test]
+fn a_reply_from_another_session_is_refused() {
+    saman::block_on_current(async move {
+        let f = fix().await;
+        let (id, _) = add_thread(
+            &f.db,
+            "spec:s",
+            &by_quote("every one reaches the agent"),
+            "why links?",
+            1.0,
+        )
         .await
         .unwrap();
-    // a reply to the reply joins the same thread, and is still s1's alone
-    assert!(agent_reply(&f.db, "s2", &r, "x", 4.0).await.is_err());
-    let ts = threads(&f.db, "spec:s").await.unwrap();
-    assert_eq!(ts.len(), 1);
-    assert_eq!(ts[0].sent_to.as_deref(), Some("s1"));
-    let replies: Vec<(&str, &str)> = ts[0]
-        .replies
-        .iter()
-        .map(|c| (c.author.as_str(), c.text.as_str()))
-        .collect();
-    assert_eq!(replies, [("s1", "they version")]);
-}
-
-#[tokio::test]
-async fn a_comment_survives_its_paragraph_being_rewritten() {
-    let f = fix().await;
-    let (_, a) = add_thread(
-        &f.db,
-        "spec:s",
-        &by_quote("every one reaches"),
-        "tighten",
-        1.0,
-    )
-    .await
-    .unwrap();
-    assert_eq!(a.state, "here");
-    // nothing changed: nothing moves
-    assert_eq!(reanchor(&f.db, &f.file).await.unwrap(), 0);
-    let rewritten = SPEC.replace(
-        "Comments are stored as record links and every one reaches the agent as a steer.",
-        "Comments are stored as record links; each one reaches the writing agent as a steer.",
-    );
-    std::fs::write(&f.file, &rewritten).unwrap();
-    assert_eq!(reanchor(&f.db, &f.file).await.unwrap(), 1);
-    let t = &threads(&f.db, "spec:s").await.unwrap()[0];
-    assert_eq!(t.anchor.state, "moved");
-    assert!(
-        t.anchor.quote.contains("the writing agent"),
-        "{:?}",
-        t.anchor
-    );
-    assert_eq!(t.anchor.heading, ["Comments", "Anchors"]);
-    assert_eq!(t.anchor.key, key_of(&paragraphs(&rewritten)[0].text));
-    // found by its new key from now on
-    assert_eq!(reanchor(&f.db, &f.file).await.unwrap(), 0);
-}
-
-#[tokio::test]
-async fn a_comment_survives_its_paragraph_being_deleted() {
-    let f = fix().await;
-    let (_, a) = add_thread(
-        &f.db,
-        "spec:s",
-        &by_quote("every one reaches"),
-        "drop this?",
-        1.0,
-    )
-    .await
-    .unwrap();
-    let deleted = SPEC.replace(
-        "Comments are stored as record links and every one reaches the agent as a steer.\n\n",
-        "",
-    );
-    std::fs::write(&f.file, deleted).unwrap();
-    assert_eq!(reanchor(&f.db, &f.file).await.unwrap(), 1);
-    let ts = threads(&f.db, "spec:s").await.unwrap();
-    assert_eq!(ts.len(), 1, "never dropped");
-    assert_eq!(ts[0].anchor.state, "removed");
-    assert_eq!((&ts[0].anchor.quote, &ts[0].anchor.key), (&a.quote, &a.key));
-    assert_eq!(ts[0].root.text, "drop this?");
-    // the paragraph comes back: the thread is here again
-    std::fs::write(&f.file, SPEC).unwrap();
-    reanchor(&f.db, &f.file).await.unwrap();
-    assert_eq!(
-        threads(&f.db, "spec:s").await.unwrap()[0].anchor.state,
-        "here"
-    );
-}
-
-#[tokio::test]
-async fn a_comment_on_no_paragraph_is_refused() {
-    let f = fix().await;
-    assert!(
-        add_thread(&f.db, "spec:s", &by_quote("not in the text"), "x", 1.0)
+        // not sent anywhere yet: no session may answer
+        assert!(agent_reply(&f.db, "s1", &id, "x", 2.0).await.is_err());
+        let i = id.clone();
+        f.db.write(hub_meta("test"), move |tx| {
+            w::comment_patch(tx, &i, json!({"sent_to": "s1"}))
+        })
+        .await
+        .unwrap();
+        let refused = agent_reply(&f.db, "s2", &id, "not mine", 2.0).await;
+        assert!(refused.unwrap_err().message().contains("not sent to you"));
+        let r = agent_reply(&f.db, "s1", &id, "they version", 3.0)
             .await
-            .is_err()
-    );
-    assert!(
-        add_thread(&f.db, "spec:none", &by_quote("every"), "x", 1.0)
-            .await
-            .is_err()
-    );
+            .unwrap();
+        // a reply to the reply joins the same thread, and is still s1's alone
+        assert!(agent_reply(&f.db, "s2", &r, "x", 4.0).await.is_err());
+        let ts = threads(&f.db, "spec:s").await.unwrap();
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].sent_to.as_deref(), Some("s1"));
+        let replies: Vec<(&str, &str)> = ts[0]
+            .replies
+            .iter()
+            .map(|c| (c.author.as_str(), c.text.as_str()))
+            .collect();
+        assert_eq!(replies, [("s1", "they version")]);
+    })
+}
+
+#[test]
+fn a_comment_survives_its_paragraph_being_rewritten() {
+    saman::block_on_current(async move {
+        let f = fix().await;
+        let (_, a) = add_thread(
+            &f.db,
+            "spec:s",
+            &by_quote("every one reaches"),
+            "tighten",
+            1.0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(a.state, "here");
+        // nothing changed: nothing moves
+        assert_eq!(reanchor(&f.db, &f.file).await.unwrap(), 0);
+        let rewritten = SPEC.replace(
+            "Comments are stored as record links and every one reaches the agent as a steer.",
+            "Comments are stored as record links; each one reaches the writing agent as a steer.",
+        );
+        crate::fsio::write(&f.file, &rewritten).unwrap();
+        assert_eq!(reanchor(&f.db, &f.file).await.unwrap(), 1);
+        let t = &threads(&f.db, "spec:s").await.unwrap()[0];
+        assert_eq!(t.anchor.state, "moved");
+        assert!(
+            t.anchor.quote.contains("the writing agent"),
+            "{:?}",
+            t.anchor
+        );
+        assert_eq!(t.anchor.heading, ["Comments", "Anchors"]);
+        assert_eq!(t.anchor.key, key_of(&paragraphs(&rewritten)[0].text));
+        // found by its new key from now on
+        assert_eq!(reanchor(&f.db, &f.file).await.unwrap(), 0);
+    })
+}
+
+#[test]
+fn a_comment_survives_its_paragraph_being_deleted() {
+    saman::block_on_current(async move {
+        let f = fix().await;
+        let (_, a) = add_thread(
+            &f.db,
+            "spec:s",
+            &by_quote("every one reaches"),
+            "drop this?",
+            1.0,
+        )
+        .await
+        .unwrap();
+        let deleted = SPEC.replace(
+            "Comments are stored as record links and every one reaches the agent as a steer.\n\n",
+            "",
+        );
+        crate::fsio::write(&f.file, deleted).unwrap();
+        assert_eq!(reanchor(&f.db, &f.file).await.unwrap(), 1);
+        let ts = threads(&f.db, "spec:s").await.unwrap();
+        assert_eq!(ts.len(), 1, "never dropped");
+        assert_eq!(ts[0].anchor.state, "removed");
+        assert_eq!((&ts[0].anchor.quote, &ts[0].anchor.key), (&a.quote, &a.key));
+        assert_eq!(ts[0].root.text, "drop this?");
+        // the paragraph comes back: the thread is here again
+        crate::fsio::write(&f.file, SPEC).unwrap();
+        reanchor(&f.db, &f.file).await.unwrap();
+        assert_eq!(
+            threads(&f.db, "spec:s").await.unwrap()[0].anchor.state,
+            "here"
+        );
+    })
+}
+
+#[test]
+fn a_comment_on_no_paragraph_is_refused() {
+    saman::block_on_current(async move {
+        let f = fix().await;
+        assert!(
+            add_thread(&f.db, "spec:s", &by_quote("not in the text"), "x", 1.0)
+                .await
+                .is_err()
+        );
+        assert!(
+            add_thread(&f.db, "spec:none", &by_quote("every"), "x", 1.0)
+                .await
+                .is_err()
+        );
+    })
 }
 
 /// A comment's steer, given while a turn runs, queues ahead of the user's prompts: the turn is neither cancelled nor

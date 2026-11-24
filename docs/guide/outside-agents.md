@@ -41,14 +41,62 @@ proposals. It works in its own project only, and it follows the matrix like drgn
   another change and asks again; so does the same call after the window or after it went through once. Your no
   refuses that call for the same window, so a no given by mistake is undone by waiting: after the window the
   agent's retry makes a new card you can answer again.
-- It never marks a task done, approves a record, pushes, merges, starts or steers agents, spends, or changes
-  settings, whatever the matrix says for its role.
+- It never marks a task done (unless you gave it a `status.done` write grant, below), approves a record, pushes,
+  merges, starts or steers agents, spends, or changes settings, whatever the matrix says for its role.
 - It never runs drgnx jobs: you start those, and drgnx's own agents run them.
 - Its decisions are always proposals, and each names where it comes from.
 - Every change it makes is its own entry in the history, so `ratatoskr graph revert --tx N` undoes it.
 
+An agent can ask what the grants you made let it do: its tool `my_grants` lists the active grants that apply to it (its
+kind's, any outside agent's, its project's) and no one else's; `ratatoskr graph grants show WHO` shows you the same set for
+an agent (`--project P` and `--profile NAME` add the project and profile it works under).
+
+Lists the agent reads (`task_read` find, ready and mine, `graph_read`) come back as a one-line header ("3 tasks (rows
+in the structured result)") and the rows in the tool's structured result, so each row costs the agent's context once.
+Resource links to the entities are sent only when the agent asks for them with `links: true`.
+
 When a bound tool is refused, the answer says why and what to do instead; an unbound agent is told the
 `ratatoskr outside bind` command to ask you for.
+
+## Answering and closing from a terminal
+
+What an agent asks, and the closing of work, is yours; these commands do it without the editor. Each one calls the
+hub's own method, so the checks are the hub's. `--json` prints the answer as JSON; exit 0 means it did what you asked.
+
+```sh
+ratatoskr card list --open                 # what waits for you: questions, access requests, changes
+ratatoskr card settle 12 yes               # answer card 12 (the choices are the card's own)
+ratatoskr message send agent:s-3 "go on"   # write to an agent as yourself
+ratatoskr message reply 41 "use the new API"   # answer a question message: it goes to the asker
+ratatoskr task status task:aa-00001 done   # set a task's status (a status the tracker knows)
+ratatoskr plan status plan:aa-00002 3 done # set a task of a plan; done also ticks its steps in the file
+ratatoskr records status                   # the record view files and their conflicts
+ratatoskr records conflict spec:aa-00004   # a conflicted record: the file's text and the graph's
+ratatoskr records resolve spec:aa-00004 --keep file   # keep the file's text (or `graph`: write the graph's back)
+ratatoskr graph settings only-user-closes on          # "only I close my tasks" (no argument shows it)
+```
+
+- Write grants: with none, an outside agent has exactly the rights above. You can give one more, as narrow as you like:
+  who (`agent:ID`, `kind:claude`, `any-outside`), where (a project, `plan:ID` or `task:ID` and everything under it), what
+  (`create`, `update.title|body|acceptance|priority|labels`, `status.<status>` with `status.done` its own right,
+  `note`, `link`, `split`, `claim`) and until when. `parked` is yours alone and cannot be granted. Every change is a
+  user entry in the history, and an outside agent can never make or edit one.
+
+  ```sh
+  ratatoskr graph grants grant --who kind:claude --where plan:aa-00002 --what note --what status.done --until 7d
+  ratatoskr graph grants edit grant:xxxxxxxx --what note,claim --until none   # new operations; `none` removes the expiry
+  ratatoskr graph grants list [--who W] [--json]      ratatoskr graph grants revoke grant:xxxxxxxx
+  ratatoskr graph grants show ext:claude:4242-ab      # the active grants that apply to one agent
+  ```
+
+  A revoke or an expiry takes effect on the agent's next write. While "only I close my tasks" is on, `status.done`
+  grants do nothing (the agent proposes the close, as before). Outside agents read their own grants.
+- A card settles once; settling one that is not open says so and exits 1. An agent's change card (it wants to write a
+  record that is not its own) is answered here too.
+- A task that comes from a plan file (imported or scanned) changes only through `plan status`, which writes the file's
+  ticks as well; `task status` tells you which file it comes from.
+- A task changed by someone since `task status` read it is refused with a conflict: run it again.
+- `graph forget` retires what files that moved or were deleted still hold in the store (see `docs/develop/records.md`).
 
 ## Known limits
 

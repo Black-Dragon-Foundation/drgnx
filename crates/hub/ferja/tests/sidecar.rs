@@ -5,16 +5,17 @@
 //! Linux container anyway.
 #![cfg(target_os = "linux")]
 
+use std::ffi::OsString;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::os::fd::AsRawFd;
-use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ferja::frame::{Decoder, Frame, Kind, MAX_STREAMS, Ready, encode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
-use tokio::process::{Child, ChildStdin, Command};
+use tokio::process::ChildStdin;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
@@ -30,15 +31,52 @@ enum Got {
     Bad(String),
 }
 
-/// The sidecar and the test's end of its channel.
+/// The sidecar's spec: `--listen 127.0.0.2:0 --job-ip 127.0.0.3` and `extra`, an empty environment, and its stderr
+/// at `stderr_to` (a pipe nobody reads) when given, else the pipe `draugr` drains.
+fn spec(extra: &[&str], stderr_to: Option<Arc<std::os::fd::OwnedFd>>) -> draugr::Spec {
+    let mut args: Vec<OsString> = ["--listen", "127.0.0.2:0", "--job-ip", "127.0.0.3"]
+        .into_iter()
+        .chain(extra.iter().copied())
+        .map(OsString::from)
+        .collect();
+    let Some(fd) = stderr_to else {
+        return draugr::Spec {
+            program: PX.into(),
+            args,
+            env: Vec::new(),
+            cwd: None,
+            stdin_null: false,
+            pass_fds: Vec::new(),
+            new_session: false,
+        };
+    };
+    // the sidecar's own stderr is the passed pipe: a shell moves it there before it execs the sidecar
+    let mut all: Vec<OsString> = vec!["-c".into(), "exec \"$0\" \"$@\" 2>&3".into(), PX.into()];
+    all.append(&mut args);
+    draugr::Spec {
+        program: "/bin/sh".into(),
+        args: all,
+        env: Vec::new(),
+        cwd: None,
+        stdin_null: false,
+        pass_fds: vec![draugr::PassFd { fd, target: 3 }],
+        new_session: false,
+    }
+}
+
+/// The sidecar and the test's end of its channel. Dropped, its process group is killed.
 struct Px {
-    child: Child,
+    child: draugr::Child,
     stdin: Option<ChildStdin>,
     got: mpsc::UnboundedReceiver<Got>,
-    /// what the sidecar wrote to a piped stderr (read by the test-hooks tests)
-    #[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
-    stderr: Option<tokio::task::JoinHandle<Vec<u8>>>,
     listen: SocketAddr,
+}
+
+impl Drop for Px {
+    fn drop(&mut self) {
+        // SAFETY: kill(2) on the group the child leads; ESRCH (already gone and reaped) is the answer to ignore.
+        unsafe { libc::kill(-self.child.id(), libc::SIGKILL) };
+    }
 }
 
 fn ip(s: &str) -> IpAddr {
@@ -48,59 +86,48 @@ fn ip(s: &str) -> IpAddr {
 impl Px {
     /// Starts the sidecar with `--listen 127.0.0.2:0 --job-ip 127.0.0.3` and `extra`, and reads its `READY`.
     async fn start(extra: &[&str]) -> Px {
-        Px::start_with(extra, Stdio::piped()).await
+        Px::start_with(spec(extra, None)).await
     }
 
-    async fn start_with(extra: &[&str], stderr: Stdio) -> Px {
-        let mut child = Command::new(PX)
-            .args(["--listen", "127.0.0.2:0", "--job-ip", "127.0.0.3"])
-            .args(extra)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(stderr)
-            .kill_on_drop(true)
-            .spawn()
-            .expect("drgnx-px starts");
-        let mut stdout = child.stdout.take().expect("stdout");
+    async fn start_with(spec: draugr::Spec) -> Px {
+        let mut child = draugr::spawn(spec).await.expect("drgnx-px starts");
+        let mut stdout = child.take_stdout().expect("stdout");
         let (tx, got) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
+        // the reader ends at stdout's end, with the sidecar
+        saman::spawn("px-stdout", async move {
             let mut dec = Decoder::new();
             let mut buf = vec![0u8; 64 * 1024];
             loop {
                 match stdout.read(&mut buf).await {
                     Ok(0) | Err(_) => {
-                        let _ = tx.send(Got::Eof {
-                            buffered: dec.buffered(),
-                        });
+                        saman::delivered(
+                            tx.send(Got::Eof {
+                                buffered: dec.buffered(),
+                            }),
+                            "the sidecar's stdout end",
+                        );
                         return;
                     }
                     Ok(n) => match dec.push(&buf[..n]) {
                         Ok(frames) => {
                             for f in frames {
-                                let _ = tx.send(Got::Frame(f));
+                                saman::delivered(tx.send(Got::Frame(f)), "a sidecar frame");
                             }
                         }
                         Err(v) => {
-                            let _ = tx.send(Got::Bad(v.to_string()));
+                            saman::delivered(tx.send(Got::Bad(v.to_string())), "a bad frame");
                             return;
                         }
                     },
                 }
             }
-        });
-        let stderr = child.stderr.take().map(|mut e| {
-            tokio::spawn(async move {
-                let mut all = Vec::new();
-                let _ = e.read_to_end(&mut all).await;
-                all
-            })
-        });
-        let stdin = child.stdin.take();
+        })
+        .detach("the reader ends with the sidecar's stdout");
+        let stdin = child.take_stdin();
         let mut px = Px {
             child,
             stdin,
             got,
-            stderr,
             listen: "0.0.0.0:0".parse().unwrap(),
         };
         let ready = px.next().await;
@@ -154,6 +181,7 @@ impl Px {
             .await
             .expect("the sidecar exits")
             .expect("its status")
+            .expect("its first wait")
             .code()
     }
 
@@ -172,15 +200,8 @@ impl Px {
     }
 
     #[cfg(feature = "test-hooks")]
-    async fn stderr(&mut self) -> String {
-        let h = self.stderr.take().expect("stderr piped");
-        String::from_utf8_lossy(
-            &timeout(BOUND, h)
-                .await
-                .expect("stderr ends")
-                .expect("the reader"),
-        )
-        .into_owned()
+    fn stderr(&self) -> String {
+        self.child.stderr_tail()
     }
 }
 
@@ -208,69 +229,77 @@ async fn read_err(s: &mut TcpStream) -> io::Result<usize> {
 
 /// [C] The job's connection becomes `OPEN` and its bytes `DATA`; a connection from another source becomes an
 /// `EVENT` naming it, and is closed.
-#[tokio::test]
-async fn the_sidecar_relays_and_checks_the_source() {
-    let mut px = Px::start(&[]).await;
-    assert_eq!(px.listen.ip(), ip("127.0.0.2"));
-    assert_ne!(px.listen.port(), 0, "READY names the bound port");
-    let mut job = connect_from("127.0.0.3", px.listen).await;
-    job.write_all(b"hello").await.unwrap();
-    assert_eq!(px.next().await, Frame::empty(1, Kind::Open));
-    assert_eq!(px.next().await, Frame::data(1, b"hello".to_vec()));
-    let mut foreign = connect_from("127.0.0.4", px.listen).await;
-    assert_eq!(px.next().await, Frame::event(ip("127.0.0.4")));
-    // closed: an end or a reset, never bytes
-    let _ = read_err(&mut foreign).await;
-    px.close_stdin();
-    assert_eq!(px.exit().await, Some(0));
+#[test]
+fn the_sidecar_relays_and_checks_the_source() {
+    saman::block_on_current(async {
+        let mut px = Px::start(&[]).await;
+        assert_eq!(px.listen.ip(), ip("127.0.0.2"));
+        assert_ne!(px.listen.port(), 0, "READY names the bound port");
+        let mut job = connect_from("127.0.0.3", px.listen).await;
+        job.write_all(b"hello").await.unwrap();
+        assert_eq!(px.next().await, Frame::empty(1, Kind::Open));
+        assert_eq!(px.next().await, Frame::data(1, b"hello".to_vec()));
+        let mut foreign = connect_from("127.0.0.4", px.listen).await;
+        assert_eq!(px.next().await, Frame::event(ip("127.0.0.4")));
+        // closed: an end or a reset, never bytes
+        if let Ok(n) = read_err(&mut foreign).await {
+            assert_eq!(n, 0, "an end, no bytes");
+        }
+        px.close_stdin();
+        assert_eq!(px.exit().await, Some(0));
+    })
 }
 
 /// [C] With 64 streams open the 65th connection is taken by the backlog but yields no `OPEN`; once the owner resets
 /// one stream, it opens.
-#[tokio::test]
-async fn the_65th_connection_waits_for_a_free_stream() {
-    let mut px = Px::start(&[]).await;
-    let mut jobs = Vec::new();
-    for i in 0..MAX_STREAMS as u32 {
-        jobs.push(connect_from("127.0.0.3", px.listen).await);
-        assert_eq!(px.next().await, Frame::empty(2 * i + 1, Kind::Open));
-    }
-    let _waiting = connect_from("127.0.0.3", px.listen).await;
-    tokio::task::spawn_blocking(|| {
-        skuld::window(Duration::from_millis(300), "no OPEN for the 65th")
-    })
-    .await
-    .unwrap();
-    // the handshake: DATA to stream 1 comes back as its CREDIT, behind anything the sidecar sent before it
-    px.send(Frame::data(1, b"ping".to_vec())).await;
-    let mut b = [0u8; 4];
-    timeout(BOUND, jobs[0].read_exact(&mut b))
-        .await
-        .unwrap()
-        .unwrap();
-    loop {
-        let f = px.next().await;
-        assert_ne!(f.kind, Kind::Open, "the 65th opened at 64 counted: {f:?}");
-        if f == Frame::credit(1, 4) {
-            break;
+#[test]
+fn the_65th_connection_waits_for_a_free_stream() {
+    saman::block_on_current(async {
+        let mut px = Px::start(&[]).await;
+        let mut jobs = Vec::new();
+        for i in 0..MAX_STREAMS as u32 {
+            jobs.push(connect_from("127.0.0.3", px.listen).await);
+            assert_eq!(px.next().await, Frame::empty(2 * i + 1, Kind::Open));
         }
-    }
-    px.send(Frame::empty(1, Kind::Rst)).await;
-    assert_eq!(px.next_not_credit().await, Frame::empty(129, Kind::Open));
+        let _waiting = connect_from("127.0.0.3", px.listen).await;
+        saman::spawn_blocking("window-65th", || {
+            skuld::window(Duration::from_millis(300), "no OPEN for the 65th")
+        })
+        .await
+        .unwrap();
+        // the handshake: DATA to stream 1 comes back as its CREDIT, behind anything the sidecar sent before it
+        px.send(Frame::data(1, b"ping".to_vec())).await;
+        let mut b = [0u8; 4];
+        timeout(BOUND, jobs[0].read_exact(&mut b))
+            .await
+            .unwrap()
+            .unwrap();
+        loop {
+            let f = px.next().await;
+            assert_ne!(f.kind, Kind::Open, "the 65th opened at 64 counted: {f:?}");
+            if f == Frame::credit(1, 4) {
+                break;
+            }
+        }
+        px.send(Frame::empty(1, Kind::Rst)).await;
+        assert_eq!(px.next_not_credit().await, Frame::empty(129, Kind::Open));
+    })
 }
 
 /// [C] The relay's port can't be bound a second time, with `SO_REUSEPORT` or without: the sidecar never sets it.
-#[tokio::test]
-async fn a_second_bind_on_the_relay_port_fails() {
-    let px = Px::start(&[]).await;
-    let plain = std::net::TcpListener::bind(px.listen).expect_err("a second plain bind");
-    assert_eq!(plain.kind(), io::ErrorKind::AddrInUse);
-    let s = TcpSocket::new_v4().unwrap();
-    s.set_reuseport(true).unwrap();
-    let shared = s
-        .bind(px.listen)
-        .expect_err("a second bind with SO_REUSEPORT");
-    assert_eq!(shared.kind(), io::ErrorKind::AddrInUse);
+#[test]
+fn a_second_bind_on_the_relay_port_fails() {
+    saman::block_on_current(async {
+        let px = Px::start(&[]).await;
+        let plain = std::net::TcpListener::bind(px.listen).expect_err("a second plain bind");
+        assert_eq!(plain.kind(), io::ErrorKind::AddrInUse);
+        let s = TcpSocket::new_v4().unwrap();
+        s.set_reuseport(true).unwrap();
+        let shared = s
+            .bind(px.listen)
+            .expect_err("a second bind with SO_REUSEPORT");
+        assert_eq!(shared.kind(), io::ErrorKind::AddrInUse);
+    })
 }
 
 fn sockopt(fd: i32, opt: libc::c_int) -> libc::c_int {
@@ -283,80 +312,92 @@ fn sockopt(fd: i32, opt: libc::c_int) -> libc::c_int {
 }
 
 /// [C] An accepted socket has 64 KiB send and receive buffers (Linux reports them doubled).
-#[tokio::test]
-async fn accepted_sockets_have_64k_buffers() {
-    let l = ferja::sidecar::listen("127.0.0.1:0".parse().unwrap()).unwrap();
-    let addr = l.local_addr().unwrap();
-    let _client = TcpStream::connect(addr).await.unwrap();
-    let (s, _) = ferja::sidecar::accept(&l).await.unwrap();
-    assert_eq!(sockopt(s.as_raw_fd(), libc::SO_RCVBUF), 2 * 65_536);
-    assert_eq!(sockopt(s.as_raw_fd(), libc::SO_SNDBUF), 2 * 65_536);
+#[test]
+fn accepted_sockets_have_64k_buffers() {
+    saman::block_on_current(async {
+        let l = ferja::sidecar::listen("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = l.local_addr().unwrap();
+        let _client = TcpStream::connect(addr).await.unwrap();
+        let (s, _) = ferja::sidecar::accept(&l).await.unwrap();
+        assert_eq!(sockopt(s.as_raw_fd(), libc::SO_RCVBUF), 2 * 65_536);
+        assert_eq!(sockopt(s.as_raw_fd(), libc::SO_SNDBUF), 2 * 65_536);
+    })
 }
 
 /// [C] Stdin's end ends the sidecar with 0.
-#[tokio::test]
-async fn stdin_eof_ends_the_sidecar_with_0() {
-    let mut px = Px::start(&[]).await;
-    px.close_stdin();
-    assert_eq!(px.exit().await, Some(0));
+#[test]
+fn stdin_eof_ends_the_sidecar_with_0() {
+    saman::block_on_current(async {
+        let mut px = Px::start(&[]).await;
+        px.close_stdin();
+        assert_eq!(px.exit().await, Some(0));
+    })
 }
 
 /// [C] A frame of an unknown kind ends it with 4.
-#[tokio::test]
-async fn a_malformed_frame_ends_it_with_4() {
-    let mut px = Px::start(&[]).await;
-    px.send_raw(&[0, 0, 0, 1, 9, 0, 0, 0, 0]).await;
-    assert_eq!(px.exit().await, Some(4));
+#[test]
+fn a_malformed_frame_ends_it_with_4() {
+    saman::block_on_current(async {
+        let mut px = Px::start(&[]).await;
+        px.send_raw(&[0, 0, 0, 1, 9, 0, 0, 0, 0]).await;
+        assert_eq!(px.exit().await, Some(4));
+    })
 }
 
 /// [C] A panic (forced by a test-only flag at the first `BEAT`) lands on stderr; stdout decodes cleanly to its end.
 #[cfg(feature = "test-hooks")]
-#[tokio::test]
-async fn nothing_but_frames_on_stdout() {
-    let mut px = Px::start(&["--test-panic-on-beat"]).await;
-    px.send(Frame::empty(0, Kind::Beat)).await;
-    assert_eq!(px.exit().await, Some(101));
-    let (frames, buffered) = px.rest().await;
-    assert_eq!(
-        (frames, buffered),
-        (vec![], 0),
-        "nothing after READY, no partial frame"
-    );
-    let err = px.stderr().await;
-    assert!(
-        err.contains("panicked") && err.contains("test hook"),
-        "stderr: {err}"
-    );
+#[test]
+fn nothing_but_frames_on_stdout() {
+    saman::block_on_current(async {
+        let mut px = Px::start(&["--test-panic-on-beat"]).await;
+        px.send(Frame::empty(0, Kind::Beat)).await;
+        assert_eq!(px.exit().await, Some(101));
+        let (frames, buffered) = px.rest().await;
+        assert_eq!(
+            (frames, buffered),
+            (vec![], 0),
+            "nothing after READY, no partial frame"
+        );
+        let err = px.stderr();
+        assert!(
+            err.contains("panicked") && err.contains("test hook"),
+            "stderr: {err}"
+        );
+    })
 }
 
 /// [C] The owner's `RST` resets the job's socket: its read gets `ECONNRESET`, not an end.
-#[tokio::test]
-async fn an_owner_rst_resets_the_job_socket() {
-    let mut px = Px::start(&[]).await;
-    let mut job = connect_from("127.0.0.3", px.listen).await;
-    job.write_all(b"x").await.unwrap();
-    assert_eq!(px.next().await, Frame::empty(1, Kind::Open));
-    assert_eq!(px.next().await, Frame::data(1, b"x".to_vec()));
-    px.send(Frame::empty(1, Kind::Rst)).await;
-    let e = read_err(&mut job).await.expect_err("a reset, not an end");
-    assert_eq!(e.kind(), io::ErrorKind::ConnectionReset);
+#[test]
+fn an_owner_rst_resets_the_job_socket() {
+    saman::block_on_current(async {
+        let mut px = Px::start(&[]).await;
+        let mut job = connect_from("127.0.0.3", px.listen).await;
+        job.write_all(b"x").await.unwrap();
+        assert_eq!(px.next().await, Frame::empty(1, Kind::Open));
+        assert_eq!(px.next().await, Frame::data(1, b"x".to_vec()));
+        px.send(Frame::empty(1, Kind::Rst)).await;
+        let e = read_err(&mut job).await.expect_err("a reset, not an end");
+        assert_eq!(e.kind(), io::ErrorKind::ConnectionReset);
+    })
 }
 
 /// [C] Stdin's end with streams open resets every job socket, then the exit is 0.
-#[tokio::test]
-async fn stdin_eof_with_streams_open_resets_them() {
-    let mut px = Px::start(&[]).await;
-    let mut jobs = Vec::new();
-    for i in 0..3u32 {
-        jobs.push(connect_from("127.0.0.3", px.listen).await);
-        assert_eq!(px.next().await, Frame::empty(2 * i + 1, Kind::Open));
-    }
-    px.close_stdin();
-    for job in &mut jobs {
-        let e = read_err(job).await.expect_err("a reset, not an end");
-        assert_eq!(e.kind(), io::ErrorKind::ConnectionReset);
-    }
-    assert_eq!(px.exit().await, Some(0));
+#[test]
+fn stdin_eof_with_streams_open_resets_them() {
+    saman::block_on_current(async {
+        let mut px = Px::start(&[]).await;
+        let mut jobs = Vec::new();
+        for i in 0..3u32 {
+            jobs.push(connect_from("127.0.0.3", px.listen).await);
+            assert_eq!(px.next().await, Frame::empty(2 * i + 1, Kind::Open));
+        }
+        px.close_stdin();
+        for job in &mut jobs {
+            let e = read_err(job).await.expect_err("a reset, not an end");
+            assert_eq!(e.kind(), io::ErrorKind::ConnectionReset);
+        }
+        assert_eq!(px.exit().await, Some(0));
+    })
 }
 
 /// A pipe whose buffer is 4096 bytes: (read end, write end).
@@ -381,79 +422,91 @@ fn small_pipe() -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
 /// [C] The sidecar's stderr is a 4096-byte pipe that nobody reads, and a test-only flag logs every frame: a stream's
 /// 4 MiB round trip still finishes, and the exit at stdin's end is 0.
 #[cfg(feature = "test-hooks")]
-#[tokio::test]
-async fn a_full_stderr_never_stalls_the_relay() {
-    const TOTAL: usize = 4 << 20;
-    let (_unread, w) = small_pipe();
-    let mut px = Px::start_with(&["--test-log-frames"], Stdio::from(w)).await;
-    let job = connect_from("127.0.0.3", px.listen).await;
-    let (mut jr, mut jw) = job.into_split();
-    let pattern: Vec<u8> = (0..TOTAL).map(|i| (i % 251) as u8).collect();
-    let sent = pattern.clone();
-    let writer = tokio::spawn(async move {
-        jw.write_all(&sent).await.unwrap();
-        jw.shutdown().await.unwrap();
-        jw
-    });
-    let reader = tokio::spawn(async move {
-        let mut back = Vec::new();
-        jr.read_to_end(&mut back).await.unwrap();
-        back
-    });
-    // the owner: echo every byte, credit what it took at once, send within the sidecar's credit
-    let mut echo: Vec<u8> = Vec::new();
-    let mut credit = ferja::frame::WINDOW as usize;
-    let (mut fin_seen, mut fin_sent) = (false, false);
-    while !fin_sent {
-        let f = px.next().await;
-        match f.kind {
-            Kind::Open => assert_eq!(f.stream, 1),
-            Kind::Data => {
-                px.send(Frame::credit(1, f.payload.len() as u32)).await;
-                echo.extend_from_slice(&f.payload);
+#[test]
+fn a_full_stderr_never_stalls_the_relay() {
+    saman::block_on_current(async {
+        const TOTAL: usize = 4 << 20;
+        let (_unread, w) = small_pipe();
+        let mut px = Px::start_with(spec(&["--test-log-frames"], Some(Arc::new(w)))).await;
+        let job = connect_from("127.0.0.3", px.listen).await;
+        let (mut jr, mut jw) = job.into_split();
+        let pattern: Vec<u8> = (0..TOTAL).map(|i| (i % 251) as u8).collect();
+        let sent = pattern.clone();
+        let writer = saman::spawn("job-writer", async move {
+            jw.write_all(&sent).await.unwrap();
+            jw.shutdown().await.unwrap();
+            jw
+        });
+        let reader = saman::spawn("job-reader", async move {
+            let mut back = Vec::new();
+            jr.read_to_end(&mut back).await.unwrap();
+            back
+        });
+        // the owner: echo every byte, credit what it took at once, send within the sidecar's credit
+        let mut echo: Vec<u8> = Vec::new();
+        let mut credit = ferja::frame::WINDOW as usize;
+        let (mut fin_seen, mut fin_sent) = (false, false);
+        while !fin_sent {
+            let f = px.next().await;
+            match f.kind {
+                Kind::Open => assert_eq!(f.stream, 1),
+                Kind::Data => {
+                    px.send(Frame::credit(1, f.payload.len() as u32)).await;
+                    echo.extend_from_slice(&f.payload);
+                }
+                Kind::Credit => credit += f.credit_value().unwrap() as usize,
+                Kind::Fin => fin_seen = true,
+                other => panic!("unexpected {other:?}"),
             }
-            Kind::Credit => credit += f.credit_value().unwrap() as usize,
-            Kind::Fin => fin_seen = true,
-            other => panic!("unexpected {other:?}"),
+            while credit > 0 && !echo.is_empty() {
+                let n = echo.len().min(credit).min(ferja::frame::MAX_DATA);
+                let chunk: Vec<u8> = echo.drain(..n).collect();
+                credit -= n;
+                px.send(Frame::data(1, chunk)).await;
+            }
+            if fin_seen && echo.is_empty() {
+                px.send(Frame::empty(1, Kind::Fin)).await;
+                fin_sent = true;
+            }
         }
-        while credit > 0 && !echo.is_empty() {
-            let n = echo.len().min(credit).min(ferja::frame::MAX_DATA);
-            let chunk: Vec<u8> = echo.drain(..n).collect();
-            credit -= n;
-            px.send(Frame::data(1, chunk)).await;
-        }
-        if fin_seen && echo.is_empty() {
-            px.send(Frame::empty(1, Kind::Fin)).await;
-            fin_sent = true;
-        }
-    }
-    let back = timeout(BOUND, reader).await.unwrap().unwrap();
-    assert!(
-        back == pattern,
-        "the round trip came back whole ({} of {TOTAL} bytes)",
-        back.len()
-    );
-    drop(timeout(BOUND, writer).await.unwrap().unwrap());
-    px.close_stdin();
-    assert_eq!(px.exit().await, Some(0));
+        let back = timeout(BOUND, reader).await.unwrap().unwrap();
+        assert!(
+            back == pattern,
+            "the round trip came back whole ({} of {TOTAL} bytes)",
+            back.len()
+        );
+        drop(timeout(BOUND, writer).await.unwrap().unwrap());
+        px.close_stdin();
+        assert_eq!(px.exit().await, Some(0));
+    })
 }
 
 /// `drgnx-px --version` names itself and the crate's version, and starts no relay.
 #[test]
 fn it_prints_its_version() {
-    let out = std::process::Command::new(PX)
-        .arg("--version")
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let out = run_px(&["--version"]);
+    assert!(out.status.success(), "{}", out.stderr);
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
         concat!("drgnx-px ", env!("CARGO_PKG_VERSION"), "\n")
     );
+}
+
+/// `drgnx-px ARGS` to its end, for the tests that only look at what it printed and how it ended.
+fn run_px(args: &[&str]) -> draugr::Output {
+    draugr::run(
+        draugr::Spec {
+            program: PX.into(),
+            args: args.iter().map(OsString::from).collect(),
+            env: Vec::new(),
+            cwd: None,
+            stdin_null: true,
+            pass_fds: Vec::new(),
+            new_session: false,
+        },
+        BOUND,
+    )
+    .expect("drgnx-px runs")
 }
 
 /// A name of the keys' listener this test alone uses (the tests share the host's network namespace).
@@ -469,105 +522,104 @@ fn abstract_addr(name: &str) -> std::os::unix::net::SocketAddr {
 /// [C] A keyed sidecar has its keys' name bound by its `READY`; a connection there opens a key stream (the `OPEN`
 /// carries the key mark), and its bytes and the owner's answer cross it; a connection to the relay port still opens
 /// a plain stream.
-#[tokio::test]
-async fn a_keyed_sidecar_opens_a_key_stream_per_key_connection() {
-    let name = key_name("open");
-    let mut px = Px::start(&["--keys", &name]).await;
-    // READY has come: the name is bound
-    let mut k = std::os::unix::net::UnixStream::connect_addr(&abstract_addr(&name))
-        .expect("the keys' name is bound by READY");
-    let open = px.next_not_credit().await;
-    assert!(open.is_key_open(), "{open:?}");
-    assert_eq!(open.stream, 1);
-    use std::io::{Read, Write};
-    k.write_all(b"get A\n").unwrap();
-    let data = px.next_not_credit().await;
-    assert_eq!((data.stream, data.kind), (1, Kind::Data));
-    assert_eq!(data.payload, b"get A\n");
-    px.send(Frame::data(1, b"ok 1\nx".to_vec())).await;
-    px.send(Frame::empty(1, Kind::Fin)).await;
-    let mut got = Vec::new();
-    k.read_to_end(&mut got).unwrap();
-    assert_eq!(got, b"ok 1\nx");
-    let _plain = connect_from("127.0.0.3", px.listen).await;
-    let open = loop {
-        let f = px.next_not_credit().await;
-        if f.kind == Kind::Open {
-            break f;
-        }
-    };
-    assert!(!open.is_key_open(), "{open:?}");
-    px.close_stdin();
-    assert_eq!(px.exit().await, Some(0));
+#[test]
+fn a_keyed_sidecar_opens_a_key_stream_per_key_connection() {
+    saman::block_on_current(async {
+        let name = key_name("open");
+        let mut px = Px::start(&["--keys", &name]).await;
+        // READY has come: the name is bound
+        let mut k = std::os::unix::net::UnixStream::connect_addr(&abstract_addr(&name))
+            .expect("the keys' name is bound by READY");
+        let open = px.next_not_credit().await;
+        assert!(open.is_key_open(), "{open:?}");
+        assert_eq!(open.stream, 1);
+        use std::io::{Read, Write};
+        k.write_all(b"get A\n").unwrap();
+        let data = px.next_not_credit().await;
+        assert_eq!((data.stream, data.kind), (1, Kind::Data));
+        assert_eq!(data.payload, b"get A\n");
+        px.send(Frame::data(1, b"ok 1\nx".to_vec())).await;
+        px.send(Frame::empty(1, Kind::Fin)).await;
+        let mut got = Vec::new();
+        k.read_to_end(&mut got).unwrap();
+        assert_eq!(got, b"ok 1\nx");
+        let _plain = connect_from("127.0.0.3", px.listen).await;
+        let open = loop {
+            let f = px.next_not_credit().await;
+            if f.kind == Kind::Open {
+                break f;
+            }
+        };
+        assert!(!open.is_key_open(), "{open:?}");
+        px.close_stdin();
+        assert_eq!(px.exit().await, Some(0));
+    })
 }
 
 /// [C] A name taken before the sidecar starts (a squat) is never served: the sidecar exits 2 without a `READY`. An
 /// unkeyed sidecar binds no name at all.
-#[tokio::test]
-async fn a_squatted_keys_name_exits_2_before_ready() {
-    let name = key_name("squat");
-    let _squat = std::os::unix::net::UnixListener::bind_addr(&abstract_addr(&name)).unwrap();
-    let mut child = Command::new(PX)
-        .args([
-            "--listen",
-            "127.0.0.2:0",
-            "--job-ip",
-            "127.0.0.3",
-            "--keys",
-            &name,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let mut out = Vec::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_end(&mut out)
-        .await
-        .unwrap();
-    let st = timeout(BOUND, child.wait()).await.unwrap().unwrap();
-    assert_eq!(st.code(), Some(2));
-    assert!(out.is_empty(), "the sidecar wrote {} bytes", out.len());
+#[test]
+fn a_squatted_keys_name_exits_2_before_ready() {
+    saman::block_on_current(async {
+        let name = key_name("squat");
+        let _squat = std::os::unix::net::UnixListener::bind_addr(&abstract_addr(&name)).unwrap();
+        let mut child = draugr::spawn(spec(&["--keys", &name], None)).await.unwrap();
+        let mut out = Vec::new();
+        child
+            .take_stdout()
+            .unwrap()
+            .read_to_end(&mut out)
+            .await
+            .unwrap();
+        let st = timeout(BOUND, child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("its first wait");
+        assert_eq!(st.code(), Some(2));
+        assert!(out.is_empty(), "the sidecar wrote {} bytes", out.len());
 
-    let other = key_name("unkeyed");
-    let mut px = Px::start(&[]).await;
-    let e = std::os::unix::net::UnixStream::connect_addr(&abstract_addr(&other)).unwrap_err();
-    assert_eq!(e.kind(), io::ErrorKind::ConnectionRefused);
-    px.close_stdin();
-    assert_eq!(px.exit().await, Some(0));
+        let other = key_name("unkeyed");
+        let mut px = Px::start(&[]).await;
+        let e = std::os::unix::net::UnixStream::connect_addr(&abstract_addr(&other)).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::ConnectionRefused);
+        px.close_stdin();
+        assert_eq!(px.exit().await, Some(0));
+    })
 }
 
 /// [C] The sidecar can't dump core: its `RLIMIT_CORE` is 1, and it isn't dumpable (its /proc files are root's; seen
 /// when the test isn't root itself).
-#[tokio::test]
-async fn the_sidecar_has_no_core_dump() {
-    let mut px = Px::start(&[]).await;
-    let pid = px.child.id().unwrap();
-    let limits = std::fs::read_to_string(format!("/proc/{pid}/limits")).unwrap_or_default();
-    let core = limits
-        .lines()
-        .find(|l| l.starts_with("Max core file size"))
-        .expect("the core limit");
-    assert!(core.split_whitespace().nth(4) == Some("1"), "{core}");
-    use std::os::unix::fs::MetadataExt;
-    let me = std::fs::metadata("/proc/self").unwrap().uid();
-    if me != 0 {
-        // a process that isn't dumpable has its /proc files owned by root
-        assert_eq!(
-            std::fs::metadata(format!("/proc/{pid}/environ"))
-                .unwrap()
-                .uid(),
-            0,
-            "not dumpable"
-        );
-    }
-    px.close_stdin();
-    assert_eq!(px.exit().await, Some(0));
+#[test]
+fn the_sidecar_has_no_core_dump() {
+    saman::block_on_current(async {
+        let mut px = Px::start(&[]).await;
+        let pid = px.child.id();
+        let limits = eitri::read_string(
+            std::path::Path::new(&format!("/proc/{pid}/limits")),
+            1 << 20,
+        )
+        .unwrap_or_default();
+        let core = limits
+            .lines()
+            .find(|l| l.starts_with("Max core file size"))
+            .expect("the core limit");
+        assert!(core.split_whitespace().nth(4) == Some("1"), "{core}");
+        use std::os::unix::fs::MetadataExt;
+        let me = std::fs::metadata("/proc/self").unwrap().uid();
+        if me != 0 {
+            // a process that isn't dumpable has its /proc files owned by root
+            assert_eq!(
+                std::fs::metadata(format!("/proc/{pid}/environ"))
+                    .unwrap()
+                    .uid(),
+                0,
+                "not dumpable"
+            );
+        }
+        px.close_stdin();
+        assert_eq!(px.exit().await, Some(0));
+    })
 }
 
 /// [C] The binary built without the test hooks (the one an image ships) refuses their flags.
@@ -575,14 +627,8 @@ async fn the_sidecar_has_no_core_dump() {
 #[test]
 fn without_test_hooks_their_flags_are_refused() {
     for flag in ["--test-log-frames", "--test-panic-on-beat"] {
-        let out = std::process::Command::new(PX)
-            .args(["--listen", "127.0.0.2:0", "--job-ip", "127.0.0.3", flag])
-            .output()
-            .unwrap();
+        let out = run_px(&["--listen", "127.0.0.2:0", "--job-ip", "127.0.0.3", flag]);
         assert_eq!(out.status.code(), Some(1), "{flag}");
-        assert!(
-            String::from_utf8_lossy(&out.stderr).contains("unknown argument"),
-            "{flag}"
-        );
+        assert!(out.stderr.contains("unknown argument"), "{flag}");
     }
 }

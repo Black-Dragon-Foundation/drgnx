@@ -7,7 +7,8 @@ use common::*;
 use skel::api::{NHSHELL_CURSOR_POINTER, NHSHELL_CURSOR_TEXT, ShellBackend, WindowDesc};
 use skel::event::*;
 use skel::wayland::WaylandShell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 /// A shell on a fresh recorder with one window that has its first configure and the keyboard focus.
 fn setup(profile: &str) -> (Recorder, WaylandShell, u64) {
@@ -98,7 +99,7 @@ mod pointer {
                 break;
             }
             assert!(Instant::now() < deadline, "no set_shape in {log}");
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         }
     }
 
@@ -121,7 +122,7 @@ mod pointer {
                 break log;
             }
             assert!(Instant::now() < deadline, "no pointer shape in {log}");
-            std::thread::sleep(Duration::from_millis(10));
+            stund::sleep_blocking(Duration::from_millis(10));
         };
         assert_eq!(log.matches(r#""shape":"text""#).count(), 1, "{log}");
     }
@@ -150,7 +151,7 @@ mod pointer {
                     break s;
                 }
                 assert!(Instant::now() < deadline, "no move with serial {press}");
-                std::thread::sleep(Duration::from_millis(10));
+                stund::sleep_blocking(Duration::from_millis(10));
             };
             seen.push(moved);
             rec.control(r#"{"cmd":"button","button":272,"state":"release"}"#);

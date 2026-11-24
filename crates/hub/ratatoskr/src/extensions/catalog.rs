@@ -34,8 +34,6 @@ pub struct Archive {
 pub struct Version {
     pub archive: String,
     pub version: String,
-    #[serde(default)]
-    pub reqs: Vec<(String, String)>,
 }
 
 /// What `package.el` would install.
@@ -79,19 +77,7 @@ pub struct Pkg {
     #[serde(default)]
     pub held: bool,
     #[serde(default)]
-    pub incompat: bool,
-    #[serde(default)]
     pub downloads: Option<u64>,
-}
-
-/// A package Emacs ships.
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct Builtin {
-    pub name: String,
-    #[serde(default)]
-    pub version: String,
-    #[serde(default)]
-    pub summary: String,
 }
 
 /// An entry the refresh job could not use.
@@ -114,29 +100,28 @@ pub struct CatalogFile {
     #[serde(default)]
     pub packages: Vec<Pkg>,
     #[serde(default)]
-    pub builtins: Vec<Builtin>,
-    #[serde(default)]
     pub skipped: Vec<Skipped>,
 }
 
 /// The catalog file as bytes, or why not.
-pub fn parse_catalog(bytes: &[u8]) -> Result<CatalogFile, String> {
-    let file: CatalogFile = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+pub fn parse_catalog(bytes: &[u8]) -> villa::Result<CatalogFile> {
+    let file: CatalogFile =
+        serde_json::from_slice(bytes).map_err(|e| villa::Error::invalid(e.to_string()))?;
     if file.version != 1 {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "its version is {}, this hub reads version 1",
             file.version
-        ));
+        )));
     }
     Ok(file)
 }
 
-fn read_forms(bytes: &[u8], src: Src) -> Result<Vec<Node>, String> {
+fn read_forms(bytes: &[u8], src: Src) -> villa::Result<Vec<Node>> {
     let limits = Limits {
         max_bytes: src.max(),
         ..Limits::default()
     };
-    read_all(bytes, limits).map_err(|r| r.to_string())
+    read_all(bytes, limits).map_err(|r| villa::Error::invalid(r.to_string()))
 }
 
 /// A symbol or string's text.
@@ -184,19 +169,22 @@ pub struct LockEntry {
 }
 
 /// The lock's entries.
-pub fn parse_lock(bytes: &[u8]) -> Result<Vec<LockEntry>, String> {
-    let forms = read_forms(bytes, Src::Lock)?;
-    let root = forms.first().and_then(items).ok_or("it holds no plist")?;
+pub fn parse_lock(bytes: &[u8]) -> villa::Result<Vec<LockEntry>> {
+    let forms = read_forms(bytes, Src::Lock).map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let root = forms
+        .first()
+        .and_then(items)
+        .ok_or_else(|| villa::Error::invalid("it holds no plist"))?;
     let list = plist_get(root, ":packages")
         .and_then(items)
-        .ok_or("it has no :packages list")?;
+        .ok_or_else(|| villa::Error::invalid("it has no :packages list"))?;
     let mut out = Vec::new();
     for e in list {
-        let parts = items(e).ok_or("an entry is not a list")?;
+        let parts = items(e).ok_or_else(|| villa::Error::invalid("an entry is not a list"))?;
         let name = parts
             .first()
             .and_then(text)
-            .ok_or("an entry has no name")?
+            .ok_or_else(|| villa::Error::invalid("an entry has no name"))?
             .to_owned();
         let rest = &parts[1..];
         let get = |k: &str| plist_get(rest, k);
@@ -231,18 +219,19 @@ pub fn parse_lock(bytes: &[u8]) -> Result<Vec<LockEntry>, String> {
 }
 
 /// The wanted file: a list of package names.
-pub fn parse_names(bytes: &[u8]) -> Result<Vec<String>, String> {
-    let forms = read_forms(bytes, Src::Wanted)?;
+pub fn parse_names(bytes: &[u8]) -> villa::Result<Vec<String>> {
+    let forms = read_forms(bytes, Src::Wanted).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let Some(first) = forms.first() else {
         return Ok(Vec::new());
     };
-    let list = items(first).ok_or("it is not a list of names")?;
+    let list = items(first).ok_or_else(|| villa::Error::invalid("it is not a list of names"))?;
     Ok(list.iter().filter_map(text).map(str::to_owned).collect())
 }
 
 /// `packages.eld`'s `:packages` and the names of its `:git` entries.
-pub fn parse_packages(bytes: &[u8]) -> Result<Vec<String>, String> {
-    let forms = read_forms(bytes, Src::Packages)?;
+pub fn parse_packages(bytes: &[u8]) -> villa::Result<Vec<String>> {
+    let forms =
+        read_forms(bytes, Src::Packages).map_err(|e| villa::Error::invalid(e.to_string()))?;
     let Some(root) = forms.first().and_then(items) else {
         return Ok(Vec::new());
     };
@@ -272,19 +261,22 @@ pub struct PackLock {
 }
 
 /// The lock's installed language packs (`:packs`); none when the lock has no such key.
-pub fn parse_pack_locks(bytes: &[u8]) -> Result<Vec<PackLock>, String> {
-    let forms = read_forms(bytes, Src::Lock)?;
-    let root = forms.first().and_then(items).ok_or("it holds no plist")?;
+pub fn parse_pack_locks(bytes: &[u8]) -> villa::Result<Vec<PackLock>> {
+    let forms = read_forms(bytes, Src::Lock).map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let root = forms
+        .first()
+        .and_then(items)
+        .ok_or_else(|| villa::Error::invalid("it holds no plist"))?;
     let Some(list) = plist_get(root, ":packs").and_then(items) else {
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
     for e in list {
-        let parts = items(e).ok_or("a pack entry is not a list")?;
+        let parts = items(e).ok_or_else(|| villa::Error::invalid("a pack entry is not a list"))?;
         let name = parts
             .first()
             .and_then(text)
-            .ok_or("a pack entry has no name")?
+            .ok_or_else(|| villa::Error::invalid("a pack entry has no name"))?
             .to_owned();
         let rest = &parts[1..];
         out.push(PackLock {
@@ -345,11 +337,7 @@ impl Entry {
             || self.row.kind == w::Kind::Package
                 && matches!(
                     self.row.state,
-                    w::State::Installed
-                        | w::State::Update
-                        | w::State::Dependency
-                        | w::State::Held
-                        | w::State::Incompat
+                    w::State::Installed | w::State::Update | w::State::Dependency | w::State::Held
                 )
     }
 }
@@ -469,7 +457,6 @@ pub fn build(inputs: Inputs) -> Index {
         }
 
         let state = match (l, c) {
-            (Some(_), Some(c)) if c.incompat => w::State::Incompat,
             (Some(_), Some(c)) if c.update.is_some() => w::State::Update,
             (Some(_), Some(c)) if c.held => w::State::Held,
             (Some(_), _) if matches!(why.as_slice(), [w::Why::NeededBy(_)]) => w::State::Dependency,
@@ -527,24 +514,7 @@ pub fn build(inputs: Inputs) -> Index {
                     version: v.clone(),
                 })
                 .collect(),
-            (None, Some(c)) => c
-                .versions
-                .iter()
-                .find(|v| {
-                    candidate.is_some_and(|k| k.archive == v.archive && k.version == v.version)
-                })
-                .or(c.versions.first())
-                .map(|v| {
-                    v.reqs
-                        .iter()
-                        .map(|(n, ver)| w::Requirement {
-                            name: n.clone(),
-                            version: Some(ver.clone()),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            (None, None) => Vec::new(),
+            (None, _) => Vec::new(),
         };
         let row = w::Row {
             id: format!("pkg:{name}"),
@@ -576,24 +546,6 @@ pub fn build(inputs: Inputs) -> Index {
             c.map(|c| c.keywords.clone()).unwrap_or_default(),
             detail,
         ));
-    }
-
-    for b in &catalog.builtins {
-        let row = w::Row {
-            id: format!("emacs:{}", b.name),
-            kind: w::Kind::Emacs,
-            name: b.name.clone(),
-            summary: b.summary.clone(),
-            state: w::State::BuiltIn,
-            source: "emacs".into(),
-            signed: w::Signed::None,
-            version: Some(b.version.clone()).filter(|v| !v.is_empty()),
-            latest: None,
-            downloads: None,
-            why: Vec::new(),
-            layers: Vec::new(),
-        };
-        entries.push(Entry::new(row, Vec::new(), Detail::default()));
     }
 
     for m in inputs.modules {
@@ -817,7 +769,7 @@ impl Cache {
             self.reads += 1;
             let loaded = files
                 .read(src)
-                .map_err(|e| e.to_string())
+                .map_err(|e| villa::Error::io(e.to_string()))
                 .and_then(|b| match src {
                     Src::Catalog => parse_catalog(&b).map(|c| self.catalog = Some(c)),
                     Src::Lock => parse_lock(&b).and_then(|l| {
@@ -837,8 +789,9 @@ impl Cache {
                     self.notes.insert(
                         src,
                         format!(
-                            "{} was not read ({e}); the last good copy is kept",
-                            src.label()
+                            "{} was not read ({}); the last good copy is kept",
+                            src.label(),
+                            e.message()
                         ),
                     );
                 }
@@ -1044,14 +997,12 @@ mod tests {
         assert_eq!(magit.version.as_deref(), Some("4.1"));
         assert_eq!(magit.latest.as_deref(), Some("20261104.815"));
         assert_eq!(row(&i, "pkg:dash").state, w::State::Held);
-        assert_eq!(row(&i, "pkg:newer-emacs-only").state, w::State::Incompat);
         // available: the version an install would take
         assert_eq!(
             row(&i, "pkg:magit-todos").latest.as_deref(),
             Some("20260901.100")
         );
         assert_eq!(row(&i, "pkg:magit").downloads, Some(4212345));
-        assert_eq!(row(&i, "emacs:eglot").state, w::State::BuiltIn);
         assert_eq!(row(&i, "module:git").state, w::State::On);
         assert_eq!(row(&i, "module:git").summary, "The git module.");
     }

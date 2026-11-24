@@ -34,7 +34,7 @@ pub struct DarwinPlatform {
 }
 
 impl DarwinPlatform {
-    pub fn new(cfg: &Config, exe: &Path) -> Result<DarwinPlatform, String> {
+    pub fn new(cfg: &Config, exe: &Path) -> villa::Result<DarwinPlatform> {
         pressure::start();
         Ok(DarwinPlatform {
             root: cfg.root.clone(),
@@ -95,11 +95,14 @@ impl Platform for DarwinPlatform {
         let boot_id = raw.boot_session.clone();
         let disk = rustix::fs::statvfs(&self.root).map_err(io::Error::from)?;
         let gb = |blocks: u64| blocks * disk.f_frsize / 1_000_000_000;
-        let batt = std::process::Command::new("/usr/bin/pmset")
-            .args(["-g", "batt"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-            .unwrap_or_default();
+        let batt = crate::linux::run::limited(
+            Path::new("/usr/bin/pmset"),
+            &["-g", "batt"],
+            &[],
+            crate::linux::run::SYSTEMCTL_LIMIT,
+        )
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
         let others = self
             .reservations()
             .read_others(&self.scheduler())
@@ -171,17 +174,21 @@ impl Platform for DarwinPlatform {
         None
     }
 
-    fn launch(&self, req: &LaunchReq) -> Result<(String, u32), String> {
+    fn launch(&self, req: &LaunchReq) -> villa::Result<(String, u32)> {
         let (dir, meta) = (req.dir, req.meta);
         let id = &meta.r.job;
         if req.image.is_some() {
-            return Err("a Mac runner runs host jobs: no container image".into());
+            return Err(villa::Error::unavailable(
+                "a Mac runner runs host jobs: no container image",
+            ));
         }
         if !meta.spec.keys.is_empty() {
-            return Err("a Mac runner never gets keys".into());
+            return Err(villa::Error::unavailable("a Mac runner never gets keys"));
         }
         if !req.env.is_empty() {
-            return Err("a Mac job has no extra variables".into());
+            return Err(villa::Error::unavailable(
+                "a Mac job has no extra variables",
+            ));
         }
         // a networked job's proxy port, bound here on both loopbacks so the profile names it and job-exec inherits it
         // (darwin::proxy)
@@ -190,9 +197,12 @@ impl Platform for DarwinPlatform {
         } else {
             let text = req.net_hosts.join("\n") + "\n";
             crate::net::allow_list(&text)?;
-            fs::write(dir.join(proxy::ALLOW), text)
-                .map_err(|e| format!("{}: {e}", proxy::ALLOW))?;
-            Some(proxy::bind().map_err(|e| format!("the job's proxy port: {e}"))?)
+            crate::fsio::write(dir.join(proxy::ALLOW), text)
+                .map_err(|e| villa::Error::unavailable(format!("{}: {e}", proxy::ALLOW)))?;
+            Some(
+                proxy::bind()
+                    .map_err(|e| villa::Error::unavailable(format!("the job's proxy port: {e}")))?,
+            )
         };
         let parser: Parser =
             serde_json::from_value(serde_json::Value::String(if req.parser.is_empty() {
@@ -200,17 +210,18 @@ impl Platform for DarwinPlatform {
             } else {
                 req.parser.to_string()
             }))
-            .map_err(|_| format!("no row parser {:?}", req.parser))?;
+            .map_err(|_| villa::Error::unavailable(format!("no row parser {:?}", req.parser)))?;
         let (home, tmp) = sandbox::home_tmp(dir);
         for d in [&home, &tmp] {
-            fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+            fs::create_dir_all(d)
+                .map_err(|e| villa::Error::unavailable(format!("{}: {e}", d.display())))?;
         }
         let marker = format!("{}/{id}/{}", self.hub_id, meta.r.attempt);
         let records = tools::records_for(&self.root, &meta.spec.features)?;
         let tools_dir = self.root.join("tools");
         let bin = self.root.join("bin");
         let shim = crate::darwin::brew::ensure_shim(&self.root, &self.exe)
-            .map_err(|e| format!("the brew shim: {e}"))?;
+            .map_err(|e| villa::Error::unavailable(format!("the brew shim: {e}")))?;
         let spec = sandbox::spec(&sandbox::Job {
             dir,
             src: req.src,
@@ -224,7 +235,7 @@ impl Platform for DarwinPlatform {
         });
         let env = spec.env.clone();
         let ctx = gleipnir::Context {
-            home: std::env::var_os("HOME")
+            home: std::env::var_os(stig::HOME_VAR)
                 .map(PathBuf::from)
                 .unwrap_or_default(),
             closed: vec![],
@@ -244,16 +255,17 @@ impl Platform for DarwinPlatform {
             env_deny: vec![],
         };
         let valid = gleipnir::validate(spec, &ctx, gleipnir::spec::Target::Macos)
-            .map_err(|r| format!("the job's sandbox: {}", r.message))?;
+            .map_err(|r| villa::Error::unavailable(format!("the job's sandbox: {}", r.message)))?;
         let mac = {
             let raw = self.raw.borrow();
             sandbox::mac_context(&raw.developer_dir, &raw.darwin_user_dir)
-                .map_err(|e| format!("the job's profile: {e}"))?
+                .map_err(|e| villa::Error::unavailable(format!("the job's profile: {e}")))?
         };
         let profile = gleipnir::sbpl::profile(&valid, &mac)
-            .map_err(|r| format!("the job's profile: {}", r.message))?;
+            .map_err(|r| villa::Error::unavailable(format!("the job's profile: {}", r.message)))?;
         let sb = dir.join("job.sb");
-        fs::write(&sb, profile).map_err(|e| format!("job.sb: {e}"))?;
+        crate::fsio::write(&sb, profile)
+            .map_err(|e| villa::Error::unavailable(format!("job.sb: {e}")))?;
         let mut argv = vec![
             jobexec::SANDBOX_EXEC.to_string(),
             "-f".into(),
@@ -286,7 +298,7 @@ impl Platform for DarwinPlatform {
             }),
         }
         .write(dir)
-        .map_err(|e| format!("job.json: {e}"))?;
+        .map_err(|e| villa::Error::unavailable(format!("job.json: {e}")))?;
         let pid = attempt::launch(
             dir,
             &self.exe,
@@ -301,7 +313,7 @@ impl Platform for DarwinPlatform {
                 .flat_map(|n| std::iter::once(n.v4.as_fd()).chain(n.v6.as_ref().map(|l| l.as_fd())))
                 .collect::<Vec<_>>(),
         )
-        .map_err(|e| format!("job-exec: {e}"))?;
+        .map_err(|e| villa::Error::unavailable(format!("job-exec: {e}")))?;
         Ok((dir.display().to_string(), pid))
     }
 
@@ -309,35 +321,38 @@ impl Platform for DarwinPlatform {
         attempt::active(Path::new(unit))
     }
 
-    fn kill(&self, id: &str) -> Result<(), String> {
+    fn kill(&self, id: &str) -> villa::Result<()> {
         for d in self.dirs_of(id) {
-            attempt::kill(&d).map_err(|e| format!("{}: {e}", d.display()))?;
+            attempt::kill(&d)
+                .map_err(|e| villa::Error::unavailable(format!("{}: {e}", d.display())))?;
         }
         Ok(())
     }
 
-    fn pause(&self, _id: &str) -> Result<(), String> {
-        Err("a Mac runner doesn't pause jobs".into())
+    fn pause(&self, _id: &str) -> villa::Result<()> {
+        Err(villa::Error::unavailable("a Mac runner doesn't pause jobs"))
     }
 
-    fn unpause(&self, _id: &str) -> Result<(), String> {
-        Err("a Mac runner doesn't pause jobs".into())
+    fn unpause(&self, _id: &str) -> villa::Result<()> {
+        Err(villa::Error::unavailable("a Mac runner doesn't pause jobs"))
     }
 
     fn grow_candidate(&self, _id: &str, _cap_mib: u64, _max_mib: u64) -> Option<Sized> {
         None
     }
 
-    fn resize(&self, _r: &Resize) -> Result<(), String> {
-        Err("a Mac runner doesn't resize jobs".into())
+    fn resize(&self, _r: &Resize) -> villa::Result<()> {
+        Err(villa::Error::unavailable(
+            "a Mac runner doesn't resize jobs",
+        ))
     }
 
     fn weight_unit(&self, _id: &str) -> Option<String> {
         None
     }
 
-    fn set_weight(&self, _unit: &str, _w: u32) -> Result<(), String> {
-        Err("a Mac runner has no CPU weights".into())
+    fn set_weight(&self, _unit: &str, _w: u32) -> villa::Result<()> {
+        Err(villa::Error::unavailable("a Mac runner has no CPU weights"))
     }
 
     fn hand_key(&self, _dir: &Path, _name: &str, _value: &[u8]) -> io::Result<()> {

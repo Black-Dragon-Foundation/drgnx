@@ -854,7 +854,7 @@ async fn fixed_of(
         .map(|w| {
             let done = matches!(
                 status.get(&w.n).cloned().flatten().as_deref(),
-                Some("done" | "dropped")
+                Some("done" | "dropped" | "accepted" | "parked" | "superseded")
             );
             (format!("{job}#{}", w.n), done)
         })
@@ -924,9 +924,7 @@ pub(crate) async fn remaining_forecast(
     let (fixed, last) = fixed_of(front, id, &wants, &l.tasks, now).await?;
     let key = (id.to_owned(), last);
     let at = crate::clock::now();
-    let kept = REMAINING_CACHE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    let kept = saman::lock(&REMAINING_CACHE)
         .as_ref()
         .and_then(|c| c.get(&key).cloned())
         .filter(|(t, _)| at.duration_since(*t).as_secs() < REMAINING_CACHE_SECS);
@@ -938,9 +936,7 @@ pub(crate) async fn remaining_forecast(
     if l.job.status.as_deref() != Some("proposed") {
         forecast.baseline = baseline_of(front, id).await?;
     }
-    let mut cache = REMAINING_CACHE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut cache = saman::lock(&REMAINING_CACHE);
     let cache = cache.get_or_insert_with(HashMap::new);
     if cache.len() >= REMAINING_CACHE_MAX {
         cache.clear();
@@ -1086,9 +1082,7 @@ pub(crate) async fn plan_forecast(
     let (running, open): (Vec<&PlanIn>, Vec<&PlanIn>) =
         plans.iter().partition(|p| p.running.is_some());
     let now = crate::clock::now();
-    let cached = PLAN_CACHE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    let cached = saman::lock(&PLAN_CACHE)
         .as_ref()
         .and_then(|c| c.get(&open, now));
     let forecast = match cached {
@@ -1101,9 +1095,7 @@ pub(crate) async fn plan_forecast(
             } else {
                 for_job(front, "forecast/plan", wants).await?
             };
-            PLAN_CACHE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+            saman::lock(&PLAN_CACHE)
                 .get_or_insert_with(PlanCache::default)
                 .put(&open, now, f.clone());
             f
@@ -1592,75 +1584,79 @@ mod tests {
 
     /// Pure (D): a store in a temp folder, a fixed seed.  A session's forecast is one task of its role and
     /// profile, from the prior on a fresh store, and records nothing.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_sessions_forecast_is_one_task_of_its_role_and_profile() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        session_entity(
-            &f,
-            "s1",
-            serde_json::json!({"profile": "sonnet", "role": "worker", "job": null}),
-        )
-        .await;
-        let got = session(
-            &f,
-            SessionForecastParams {
-                session: Id::new("s1").unwrap(),
-                profile: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(got.tasks.len(), 1);
-        let t = &got.tasks[0];
-        assert_eq!(
-            (t.role.as_str(), t.profile.as_str()),
-            ("implement", "sonnet")
-        );
-        assert_eq!(t.basis.level, BasisLevel::Prior);
-        assert!(t.tokens.p90 > t.tokens.p50);
-        // no price for a profile that is not configured: unpriced, never zero
-        assert!(t.cost.is_empty());
-        assert_eq!(got.unpriced, ["sonnet"]);
-        let made = f
-            .writer
-            .db
-            .read(|c| {
-                Ok(c.query_row("select count(*) from forecast_made", [], |r| {
-                    r.get::<_, i64>(0)
-                })?)
-            })
+    #[test]
+    fn a_sessions_forecast_is_one_task_of_its_role_and_profile() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            session_entity(
+                &f,
+                "s1",
+                serde_json::json!({"profile": "sonnet", "role": "worker", "job": null}),
+            )
+            .await;
+            let got = session(
+                &f,
+                SessionForecastParams {
+                    session: Id::new("s1").unwrap(),
+                    profile: None,
+                },
+            )
             .await
             .unwrap();
-        assert_eq!(made, 0);
+            assert_eq!(got.tasks.len(), 1);
+            let t = &got.tasks[0];
+            assert_eq!(
+                (t.role.as_str(), t.profile.as_str()),
+                ("implement", "sonnet")
+            );
+            assert_eq!(t.basis.level, BasisLevel::Prior);
+            assert!(t.tokens.p90 > t.tokens.p50);
+            // no price for a profile that is not configured: unpriced, never zero
+            assert!(t.cost.is_empty());
+            assert_eq!(got.unpriced, ["sonnet"]);
+            let made = f
+                .writer
+                .db
+                .read(|c| {
+                    Ok(c.query_row("select count(*) from forecast_made", [], |r| {
+                        r.get::<_, i64>(0)
+                    })?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(made, 0);
+        })
     }
 
     /// Pure (D): a thin class never prints a tight range, and a priced profile has one unit.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_priced_session_forecast_has_its_unit() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        session_entity(
-            &f,
-            "s2",
-            serde_json::json!({"profile": "claude", "role": "worker", "job": null}),
-        )
-        .await;
-        let got = session(
-            &f,
-            SessionForecastParams {
-                session: Id::new("s2").unwrap(),
-                profile: None,
-            },
-        )
-        .await
-        .unwrap();
-        let t = &got.tasks[0];
-        assert_eq!(t.cost.len(), 1);
-        assert_eq!(t.cost[0].unit, Unit::UsdEst);
-        assert!(t.cost[0].estimate && t.cost[0].p50 > 0.0);
-        assert!(got.unpriced.is_empty());
-        assert_eq!(got.prices_as_of, "2026-11-01");
+    #[test]
+    fn a_priced_session_forecast_has_its_unit() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            session_entity(
+                &f,
+                "s2",
+                serde_json::json!({"profile": "claude", "role": "worker", "job": null}),
+            )
+            .await;
+            let got = session(
+                &f,
+                SessionForecastParams {
+                    session: Id::new("s2").unwrap(),
+                    profile: None,
+                },
+            )
+            .await
+            .unwrap();
+            let t = &got.tasks[0];
+            assert_eq!(t.cost.len(), 1);
+            assert_eq!(t.cost[0].unit, Unit::UsdEst);
+            assert!(t.cost[0].estimate && t.cost[0].p50 > 0.0);
+            assert!(got.unpriced.is_empty());
+            assert_eq!(got.prices_as_of, "2026-11-01");
+        })
     }
 
     fn meter(used: f64, rate: f64, resets_at: Option<f64>) -> runstav::methods::timeline::Pace {
@@ -1687,80 +1683,82 @@ mod tests {
 
     /// Pure (D): a store in a temp folder.  `share_per_usd` reads the `usd-est` the provider's steps booked since the
     /// meter's first reading: not another provider's, not another unit, not a step from before the readings.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn share_per_usd_reads_the_estimated_spend_of_real_steps() {
-        use norn::write::steps::{StepClass, StepEnd, StepNew, close, open};
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        session_entity(
-            &f,
-            "s1",
-            serde_json::json!({"profile": "claude", "role": "worker", "job": null}),
-        )
-        .await;
-        let scope: runstav::methods::timeline::BudgetScope =
-            serde_json::from_value(serde_json::json!({"worker": "w1"})).unwrap();
-        f.core
-            .budgets
-            .reading(&scope, "claude", "5h", 0.10, None, 1000.0);
-        f.core
-            .budgets
-            .reading(&scope, "claude", "5h", 0.20, None, 1900.0);
-        f.writer
-            .write(&crate::runner::service(), "test/steps", |tx| {
-                // (provider, start, cost, unit)
-                for (provider, start, cost, unit) in [
-                    ("claude", 500.0, 50.0, "usd-est"), // before the first reading
-                    ("claude", 1100.0, 4.0, "usd-est"),
-                    ("claude", 1200.0, 6.0, "usd-est"),
-                    ("claude", 1300.0, 9.0, "tokens"), // another unit
-                    ("codex", 1400.0, 30.0, "usd-est"), // another provider
-                ] {
-                    let id = open(
-                        tx,
-                        StepNew {
-                            session: "session:s1".into(),
-                            task: None,
-                            plan: None,
-                            project: None,
-                            agent: None,
-                            provider: Some(provider.into()),
-                            class: StepClass::Think,
-                            start,
-                            tool: None,
-                            tool_kind: None,
-                            message_id: None,
-                            turn_id: None,
-                            snapshot: None,
-                            log_version: None,
-                            acp: None,
-                            machine: None,
-                            slots: None,
-                        },
-                    )?;
-                    close(
-                        tx,
-                        id,
-                        StepEnd {
-                            end: start + 1.0,
-                            cost: Some(cost),
-                            cost_unit: Some(unit.into()),
-                            ..StepEnd::default()
-                        },
-                    )?;
-                }
-                Ok(())
-            })
-            .await
-            .unwrap();
-        // the meter rose 0.10 while 4 + 6 estimated dollars were booked
-        let got = share_per_usd(&f, "claude", "5h", 2000.0).await.unwrap();
-        assert!((got - 0.01).abs() < 1e-12, "{got}");
-        assert_eq!(
-            share_per_usd(&f, "codex", "5h", 2000.0).await,
-            None,
-            "no meter readings"
-        );
+    #[test]
+    fn share_per_usd_reads_the_estimated_spend_of_real_steps() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            use norn::write::steps::{StepClass, StepEnd, StepNew, close, open};
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            session_entity(
+                &f,
+                "s1",
+                serde_json::json!({"profile": "claude", "role": "worker", "job": null}),
+            )
+            .await;
+            let scope: runstav::methods::timeline::BudgetScope =
+                serde_json::from_value(serde_json::json!({"worker": "w1"})).unwrap();
+            f.core
+                .budgets
+                .reading(&scope, "claude", "5h", 0.10, None, 1000.0);
+            f.core
+                .budgets
+                .reading(&scope, "claude", "5h", 0.20, None, 1900.0);
+            f.writer
+                .write(&crate::runner::service(), "test/steps", |tx| {
+                    // (provider, start, cost, unit)
+                    for (provider, start, cost, unit) in [
+                        ("claude", 500.0, 50.0, "usd-est"), // before the first reading
+                        ("claude", 1100.0, 4.0, "usd-est"),
+                        ("claude", 1200.0, 6.0, "usd-est"),
+                        ("claude", 1300.0, 9.0, "tokens"), // another unit
+                        ("codex", 1400.0, 30.0, "usd-est"), // another provider
+                    ] {
+                        let id = open(
+                            tx,
+                            StepNew {
+                                session: "session:s1".into(),
+                                task: None,
+                                plan: None,
+                                project: None,
+                                agent: None,
+                                provider: Some(provider.into()),
+                                class: StepClass::Think,
+                                start,
+                                tool: None,
+                                tool_kind: None,
+                                message_id: None,
+                                turn_id: None,
+                                snapshot: None,
+                                log_version: None,
+                                acp: None,
+                                machine: None,
+                                slots: None,
+                            },
+                        )?;
+                        close(
+                            tx,
+                            id,
+                            StepEnd {
+                                end: start + 1.0,
+                                cost: Some(cost),
+                                cost_unit: Some(unit.into()),
+                                ..StepEnd::default()
+                            },
+                        )?;
+                    }
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            // the meter rose 0.10 while 4 + 6 estimated dollars were booked
+            let got = share_per_usd(&f, "claude", "5h", 2000.0).await.unwrap();
+            assert!((got - 0.01).abs() < 1e-12, "{got}");
+            assert_eq!(
+                share_per_usd(&f, "codex", "5h", 2000.0).await,
+                None,
+                "no meter readings"
+            );
+        })
     }
 
     /// Pure (D): use outside drgnx raises the share per dollar, and the effect says it is an estimate.
@@ -1908,44 +1906,46 @@ mod tests {
     /// Pure (D): a store in a temp folder, a fixed seed.  Nine finished plans each used 3× the tokens their total's
     /// p90 said.  The next plan's total p90, of tokens and of cost (what the Autonomous rule reads), is scaled by that
     /// factor and p50 is not; the row kept for later calibration holds the p90 before it.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_plan_total_is_calibrated_by_past_plans() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        f.writer
-            .write(&crate::runner::service(), "test/history", |tx| {
-                for k in 1..=9 {
-                    finished_plan(tx, &format!("P{k}"), 100.0, 300)?;
-                }
-                Ok(())
-            })
-            .await
-            .unwrap();
-        let want = |n: i64| Want {
-            n,
-            role: "implement".into(),
-            profile: "claude".into(),
-            model: None,
-            project: None,
-            brief_bytes: 1000,
-            deps: Vec::new(),
-        };
-        let (fc, made) = for_job(&f, "J", vec![want(1), want(2)]).await.unwrap();
-        let plan = made.iter().find(|m| m.task == "J").unwrap();
-        assert!(
-            (fc.tokens.p90 - 3.0 * plan.tokens_p90).abs() < 1e-6,
-            "{} against {}",
-            fc.tokens.p90,
-            plan.tokens_p90
-        );
-        assert_eq!(fc.tokens.p50, plan.tokens_p50);
-        let (cost, kept) = (&fc.cost[0], plan.cost_p90.unwrap());
-        assert!(
-            (cost.p90 - 3.0 * kept).abs() < 1e-6,
-            "{} against {kept}",
-            cost.p90
-        );
-        assert_eq!(cost.p50, plan.cost_p50.unwrap());
+    #[test]
+    fn the_plan_total_is_calibrated_by_past_plans() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            f.writer
+                .write(&crate::runner::service(), "test/history", |tx| {
+                    for k in 1..=9 {
+                        finished_plan(tx, &format!("P{k}"), 100.0, 300)?;
+                    }
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            let want = |n: i64| Want {
+                n,
+                role: "implement".into(),
+                profile: "claude".into(),
+                model: None,
+                project: None,
+                brief_bytes: 1000,
+                deps: Vec::new(),
+            };
+            let (fc, made) = for_job(&f, "J", vec![want(1), want(2)]).await.unwrap();
+            let plan = made.iter().find(|m| m.task == "J").unwrap();
+            assert!(
+                (fc.tokens.p90 - 3.0 * plan.tokens_p90).abs() < 1e-6,
+                "{} against {}",
+                fc.tokens.p90,
+                plan.tokens_p90
+            );
+            assert_eq!(fc.tokens.p50, plan.tokens_p50);
+            let (cost, kept) = (&fc.cost[0], plan.cost_p90.unwrap());
+            assert!(
+                (cost.p90 - 3.0 * kept).abs() < 1e-6,
+                "{} against {kept}",
+                cost.p90
+            );
+            assert_eq!(cost.p50, plan.cost_p50.unwrap());
+        })
     }
 
     fn want_of(n: i64, deps: &[i64]) -> Want {
@@ -1974,63 +1974,67 @@ mod tests {
     /// Pure (D): a store in a temp folder, a fixed seed.  Three plans of four tasks drawn together finish by a later
     /// time than one of them, but earlier than the plans one after another: the joint p90 is below the sum of the
     /// plans' own p90s (the slots run them side by side, and the sum of quantiles over-counts).
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_spec_total_is_a_joint_draw_not_a_sum_of_p90s() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let plans = [
-            plan_in("plan:j-a", "1", 4),
-            plan_in("plan:j-b", "1", 4),
-            plan_in("plan:j-c", "1", 4),
-        ];
-        let joint = plan_forecast(&f, plans.to_vec()).await.unwrap();
-        let mut sum_wall = 0.0;
-        let mut sum_tokens = 0.0;
-        for p in &plans {
-            let one = plan_forecast(&f, vec![p.clone()]).await.unwrap();
-            sum_wall += one.forecast.wall_secs.p90;
-            sum_tokens += one.forecast.tokens.p90;
-        }
-        assert!(
-            joint.forecast.wall_secs.p90 < sum_wall,
-            "{} against {sum_wall}",
-            joint.forecast.wall_secs.p90
-        );
-        assert!(
-            joint.forecast.tokens.p90 < sum_tokens,
-            "{} against {sum_tokens}",
-            joint.forecast.tokens.p90
-        );
-        assert_eq!(joint.forecast.tasks.len(), 12);
-        assert!(joint.running.is_empty());
+    #[test]
+    fn a_spec_total_is_a_joint_draw_not_a_sum_of_p90s() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let plans = [
+                plan_in("plan:j-a", "1", 4),
+                plan_in("plan:j-b", "1", 4),
+                plan_in("plan:j-c", "1", 4),
+            ];
+            let joint = plan_forecast(&f, plans.to_vec()).await.unwrap();
+            let mut sum_wall = 0.0;
+            let mut sum_tokens = 0.0;
+            for p in &plans {
+                let one = plan_forecast(&f, vec![p.clone()]).await.unwrap();
+                sum_wall += one.forecast.wall_secs.p90;
+                sum_tokens += one.forecast.tokens.p90;
+            }
+            assert!(
+                joint.forecast.wall_secs.p90 < sum_wall,
+                "{} against {sum_wall}",
+                joint.forecast.wall_secs.p90
+            );
+            assert!(
+                joint.forecast.tokens.p90 < sum_tokens,
+                "{} against {sum_tokens}",
+                joint.forecast.tokens.p90
+            );
+            assert_eq!(joint.forecast.tasks.len(), 12);
+            assert!(joint.running.is_empty());
+        })
     }
 
     /// Pure (D): a plan with a running job is answered with that job's own forecast and is not in the draw: adding it
     /// changes nothing of the joint forecast (Review Focus 5: a spec's total is never the sum of a running plan's too).
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_spec_with_a_running_plan_is_not_summed() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let alone = plan_forecast(&f, vec![plan_in("plan:r-a", "1", 3)])
-            .await
-            .unwrap();
-        let own = plan_forecast(&f, vec![plan_in("plan:r-run", "1", 6)])
-            .await
-            .unwrap()
-            .forecast;
-        let mut running = plan_in("plan:r-run", "1", 6);
-        running.running = Some(("job-1".into(), own.clone()));
-        let both = plan_forecast(&f, vec![plan_in("plan:r-a", "1", 3), running])
-            .await
-            .unwrap();
-        assert_eq!(both.forecast.tokens, alone.forecast.tokens);
-        assert_eq!(both.forecast.tasks.len(), 3);
-        assert_eq!(both.running.len(), 1);
-        assert_eq!(
-            (both.running[0].plan.as_str(), both.running[0].job.as_str()),
-            ("plan:r-run", "job-1")
-        );
-        assert_eq!(both.running[0].remaining, own);
+    #[test]
+    fn a_spec_with_a_running_plan_is_not_summed() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let alone = plan_forecast(&f, vec![plan_in("plan:r-a", "1", 3)])
+                .await
+                .unwrap();
+            let own = plan_forecast(&f, vec![plan_in("plan:r-run", "1", 6)])
+                .await
+                .unwrap()
+                .forecast;
+            let mut running = plan_in("plan:r-run", "1", 6);
+            running.running = Some(("job-1".into(), own.clone()));
+            let both = plan_forecast(&f, vec![plan_in("plan:r-a", "1", 3), running])
+                .await
+                .unwrap();
+            assert_eq!(both.forecast.tokens, alone.forecast.tokens);
+            assert_eq!(both.forecast.tasks.len(), 3);
+            assert_eq!(both.running.len(), 1);
+            assert_eq!(
+                (both.running[0].plan.as_str(), both.running[0].job.as_str()),
+                ("plan:r-run", "job-1")
+            );
+            assert_eq!(both.running[0].remaining, own);
+        })
     }
 
     /// Pure (D): an answer is kept for the plans' versions and not served for another one: a plan edit (its hash)
@@ -2067,31 +2071,33 @@ mod tests {
     /// together, the first call (a miss) and the repeats (hits).  Ignored in normal runs: release, pinned
     /// (`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p ratatoskr --lib -- --ignored
     /// --nocapture forecast_plan_perf`).
-    #[tokio::test(flavor = "multi_thread")]
+    #[test]
     #[ignore = "timing: perf lane, the plan forecast's miss and hit budgets"]
-    async fn forecast_plan_perf() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let plans: Vec<PlanIn> = (0..12)
-            .map(|i| plan_in(&format!("plan:perf-{i}"), "1", 20))
-            .collect();
-        let t = std::time::Instant::now();
-        plan_forecast(&f, plans.clone()).await.unwrap();
-        let miss = t.elapsed();
-        let mut hits = Vec::new();
-        for _ in 0..50 {
-            let t = std::time::Instant::now();
+    fn forecast_plan_perf() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let plans: Vec<PlanIn> = (0..12)
+                .map(|i| plan_in(&format!("plan:perf-{i}"), "1", 20))
+                .collect();
+            let t = crate::clock::real_now();
             plan_forecast(&f, plans.clone()).await.unwrap();
-            hits.push(t.elapsed());
-        }
-        hits.sort();
-        let hit = hits[(hits.len() * 95).div_ceil(100) - 1];
-        println!("forecast-plan: miss {miss:?}, hit p95 {hit:?}");
-        assert!(
-            miss < std::time::Duration::from_millis(300),
-            "miss {miss:?}"
-        );
-        assert!(hit < std::time::Duration::from_millis(5), "hit p95 {hit:?}");
+            let miss = t.elapsed();
+            let mut hits = Vec::new();
+            for _ in 0..50 {
+                let t = crate::clock::real_now();
+                plan_forecast(&f, plans.clone()).await.unwrap();
+                hits.push(t.elapsed());
+            }
+            hits.sort();
+            let hit = hits[(hits.len() * 95).div_ceil(100) - 1];
+            crate::soft::out_line(&format!("forecast-plan: miss {miss:?}, hit p95 {hit:?}"));
+            assert!(
+                miss < std::time::Duration::from_millis(300),
+                "miss {miss:?}"
+            );
+            assert!(hit < std::time::Duration::from_millis(5), "hit p95 {hit:?}");
+        })
     }
 
     /// A job J of TASKS tasks, each needing the one before, with its tasks' data as a proposal keeps it; tasks
@@ -2172,53 +2178,57 @@ mod tests {
     /// Pure (D): a store in a temp folder, a fixed seed.  With two of four chained tasks done, what remains of the job
     /// (the running plan `forecast/plan` shows) ends sooner than the whole job's forecast, and costs less; the done
     /// tasks are their actuals at the wall clock, the next one starts no earlier than now.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_half_done_plans_remaining_is_under_its_whole_forecast() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let now = 1_000_000.0;
-        half_done_job(&f, 4, &[1, 2], now).await;
-        let whole = job_forecast(&f, "J").await.unwrap();
-        let left = remaining_forecast(&f, "J", now).await.unwrap();
-        assert!(
-            left.wall_secs.p50 < whole.wall_secs.p50,
-            "{} against {}",
-            left.wall_secs.p50,
-            whole.wall_secs.p50
-        );
-        assert!(left.tokens.p50 < whole.tokens.p50);
-        let at: Vec<Option<wire::TaskAt>> = left.tasks.iter().map(|t| t.at).collect();
-        use wire::TaskAt::{Done, Waiting};
-        assert_eq!(at, [Some(Done), Some(Done), Some(Waiting), Some(Waiting)]);
-        assert_eq!(
-            left.tasks[0].start,
-            Range {
-                p50: now - 2000.0,
-                p90: now - 2000.0
-            }
-        );
-        assert_eq!(left.tasks[1].finish.p50, now - 400.0);
-        assert_eq!(left.tasks[1].finish.p90, now - 400.0);
-        assert!(left.tasks[2].start.p50 >= now, "{:?}", left.tasks[2].start);
-        // a proposal's forecast has no state on its tasks
-        assert!(whole.tasks.iter().all(|t| t.at.is_none()));
+    #[test]
+    fn a_half_done_plans_remaining_is_under_its_whole_forecast() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let now = 1_000_000.0;
+            half_done_job(&f, 4, &[1, 2], now).await;
+            let whole = job_forecast(&f, "J").await.unwrap();
+            let left = remaining_forecast(&f, "J", now).await.unwrap();
+            assert!(
+                left.wall_secs.p50 < whole.wall_secs.p50,
+                "{} against {}",
+                left.wall_secs.p50,
+                whole.wall_secs.p50
+            );
+            assert!(left.tokens.p50 < whole.tokens.p50);
+            let at: Vec<Option<wire::TaskAt>> = left.tasks.iter().map(|t| t.at).collect();
+            use wire::TaskAt::{Done, Waiting};
+            assert_eq!(at, [Some(Done), Some(Done), Some(Waiting), Some(Waiting)]);
+            assert_eq!(
+                left.tasks[0].start,
+                Range {
+                    p50: now - 2000.0,
+                    p90: now - 2000.0
+                }
+            );
+            assert_eq!(left.tasks[1].finish.p50, now - 400.0);
+            assert_eq!(left.tasks[1].finish.p90, now - 400.0);
+            assert!(left.tasks[2].start.p50 >= now, "{:?}", left.tasks[2].start);
+            // a proposal's forecast has no state on its tasks
+            assert!(whole.tasks.iter().all(|t| t.at.is_none()));
+        })
     }
 
     /// The perf lane's row `forecast-remaining` (300 ms): what remains of a 40-task job, half done, asked once (a
     /// miss of the cache).  Ignored in normal runs: release, pinned (`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo
     /// test --release -p ratatoskr --lib -- --ignored --nocapture forecast_remaining_perf`).
-    #[tokio::test(flavor = "multi_thread")]
+    #[test]
     #[ignore = "timing: perf lane, what remains of a 40-task job within 300 ms"]
-    async fn forecast_remaining_perf() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let now = 1_000_000.0;
-        half_done_job(&f, 40, &(1..=20).collect::<Vec<_>>(), now).await;
-        let t = std::time::Instant::now();
-        remaining_forecast(&f, "J", now).await.unwrap();
-        let took = t.elapsed();
-        println!("forecast-remaining: {took:?}");
-        assert!(took < std::time::Duration::from_millis(300), "{took:?}");
+    fn forecast_remaining_perf() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let now = 1_000_000.0;
+            half_done_job(&f, 40, &(1..=20).collect::<Vec<_>>(), now).await;
+            let t = crate::clock::real_now();
+            remaining_forecast(&f, "J", now).await.unwrap();
+            let took = t.elapsed();
+            crate::soft::out_line(&format!("forecast-remaining: {took:?}"));
+            assert!(took < std::time::Duration::from_millis(300), "{took:?}");
+        })
     }
 
     /// Pure (D): the runner's tick and the forecast count slots with one function.

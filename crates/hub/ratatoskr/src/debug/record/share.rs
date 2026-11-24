@@ -18,7 +18,6 @@ use super::{Frame, Imported, Records, RunMeta, RunSnapshot, lock, runkey};
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use zeroize::Zeroizing;
 
 const MAGIC: &[u8] = b"DRSHARE1\n";
@@ -41,32 +40,46 @@ pub struct Exported {
 
 impl Records {
     /// Run ID sealed into the file TO under a one-time key: its share code. Off the hub's workers.
-    pub async fn export_run(&self, id: &str, to: &Path) -> Result<Exported, String> {
+    pub async fn export_run(&self, id: &str, to: &Path) -> villa::Result<Exported> {
         self.written().await;
-        let meta = self.read_meta(id).ok_or_else(|| format!("no run {id}"))?;
+        let meta = self
+            .read_meta(id)
+            .ok_or_else(|| villa::Error::invalid(format!("no run {id}")))?;
         if meta.start.is_null() && lock(&self.key).is_none() {
-            return Err(format!("run {id} cannot be read until the keyring unlocks"));
+            return Err(villa::Error::invalid(format!(
+                "run {id} cannot be read until the keyring unlocks"
+            )));
         }
         if lock(&self.live).contains_key(id) {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "run {id} is still recording: send it once it has ended"
-            ));
+            )));
         }
-        let frames = self.reader(id)?.frames();
+        let frames = self
+            .reader(id)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?
+            .frames();
         let to = to.to_owned();
         crate::clock::blocking(move || export(&meta, &frames, &to))
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(|e| villa::Error::invalid(e.to_string()))?
     }
 
     /// The run in FROM, opened with CODE, added to ROOT's runs read-only: its new id. Off the hub's workers.
-    pub async fn import_run(&self, root: &str, from: &Path, code: &str) -> Result<String, String> {
-        let key = parse_code(code).ok_or("that is not a share code (52 letters and digits 2–7)")?;
-        let mine = self.key_to_record().await.map_err(|u| u.why())?;
+    pub async fn import_run(&self, root: &str, from: &Path, code: &str) -> villa::Result<String> {
+        let key = parse_code(code).ok_or_else(|| {
+            villa::Error::invalid("that is not a share code (52 letters and digits 2–7)")
+        })?;
+        let mine = self
+            .key_to_record()
+            .await
+            .map_err(|u| u.why())
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let from = from.to_owned();
         let (meta, frames, pack) = crate::clock::blocking(move || open(&from, &key))
             .await
-            .map_err(|e| e.to_string())??;
+            .map_err(|e| villa::Error::invalid(e.to_string()))?
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let ms = (crate::clock::wall_secs() * 1000.0) as u64;
         let id = format!(
             "r{ms}-{}",
@@ -89,7 +102,7 @@ impl Records {
                     unpack(&c, &src, &pack, &tree, &name)
                 })
                 .await
-                .map_err(|e| e.to_string())??;
+                .map_err(|e| villa::Error::invalid(e.to_string()))??;
                 Some(RunSnapshot {
                     checkpoints,
                     source,
@@ -132,19 +145,23 @@ impl Records {
         };
         let path = self.file(&id, "drun");
         let cap = self.opts.file_cap;
-        let written = crate::clock::blocking(move || -> Result<u64, String> {
-            let mut f = super::RunFile::create(&path, cap, &mine).map_err(|e| e.to_string())?;
+        let written = crate::clock::blocking(move || -> villa::Result<u64> {
+            let mut f = super::RunFile::create(&path, cap, &mine)
+                .map_err(|e| villa::Error::io(e.to_string()))?;
             for fr in frames {
-                let mut v = serde_json::to_value(&fr).map_err(|e| e.to_string())?;
+                let mut v =
+                    serde_json::to_value(&fr).map_err(|e| villa::Error::io(e.to_string()))?;
                 rebase(&mut v, &from_root, &to_root);
-                let fr: Frame = serde_json::from_value(v).map_err(|e| e.to_string())?;
+                let fr: Frame =
+                    serde_json::from_value(v).map_err(|e| villa::Error::invalid(e.to_string()))?;
                 f.append(fr);
             }
             f.flush();
             Ok(f.size())
         })
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let mut new = new;
         new.size = written;
         self.write_meta(&new);
@@ -154,20 +171,20 @@ impl Records {
 }
 
 /// META and FRAMES (and the snapshot's tree, as a pack) sealed into TO under a new key: the code.
-fn export(meta: &RunMeta, frames: &[Frame], to: &Path) -> Result<Exported, String> {
+fn export(meta: &RunMeta, frames: &[Frame], to: &Path) -> villa::Result<Exported> {
     let key = runkey::random_key();
     let mut raw: Vec<u8> = Vec::new();
-    let mut put = |kind: u8, bytes: &[u8]| -> Result<(), String> {
+    let mut put = |kind: u8, bytes: &[u8]| -> villa::Result<()> {
         if raw.len() as u64 + bytes.len() as u64 + 5 > SHARE_MAX {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "the run and the files that ran are over {} MB: too big to send",
                 SHARE_MAX / 1024 / 1024
-            ));
+            )));
         }
         raw.push(kind);
         raw.extend_from_slice(
             &u32::try_from(bytes.len())
-                .map_err(|e| e.to_string())?
+                .map_err(|e| villa::Error::invalid(e.to_string()))?
                 .to_le_bytes(),
         );
         raw.extend_from_slice(bytes);
@@ -178,19 +195,31 @@ fn export(meta: &RunMeta, frames: &[Frame], to: &Path) -> Result<Exported, Strin
     m.session = String::new();
     m.task = None;
     m.pinned = false;
-    put(META, &serde_json::to_vec(&m).map_err(|e| e.to_string())?)?;
+    put(
+        META,
+        &serde_json::to_vec(&m).map_err(|e| villa::Error::invalid(e.to_string()))?,
+    )
+    .map_err(|e| villa::Error::invalid(e.to_string()))?;
     for f in frames {
-        put(FRAME, &serde_json::to_vec(f).map_err(|e| e.to_string())?)?;
+        put(
+            FRAME,
+            &serde_json::to_vec(f).map_err(|e| villa::Error::invalid(e.to_string()))?,
+        )
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     }
     if let Some(s) = &meta.snapshot {
-        put(PACK, &pack(s)?)?;
+        put(PACK, &pack(s)?).map_err(|e| villa::Error::invalid(e.to_string()))?;
     }
-    let comp = Zeroizing::new(zstd::bulk::compress(&raw, LEVEL).map_err(|e| e.to_string())?);
+    let comp = Zeroizing::new(zstd::bulk::compress(&raw, LEVEL)?);
     drop(Zeroizing::new(raw));
     let salt = runkey::new_salt();
     let cipher = runkey::FileKey::new(&key, &salt);
     let tmp = to.with_extension("drgnx-tmp");
-    let mut out = std::fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    // one a failed run left is gone first: the new one is made exclusively
+    crate::soft::done(std::fs::remove_file(&tmp), "remove_file");
+    let mut out = eitri::create_exclusive(&tmp, 0o666)
+        .map_err(std::io::Error::from)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", tmp.display())))?;
     let mut write = || -> std::io::Result<u64> {
         out.write_all(MAGIC)?;
         out.write_all(&salt)?;
@@ -207,8 +236,9 @@ fn export(meta: &RunMeta, frames: &[Frame], to: &Path) -> Result<Exported, Strin
         out.sync_all()?;
         Ok(size)
     };
-    let bytes = write().map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, to).map_err(|e| format!("{}: {e}", to.display()))?;
+    let bytes = write().map_err(|e| villa::Error::io(format!("{}: {e}", tmp.display())))?;
+    crate::fsio::rename(&tmp, to)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", to.display())))?;
     Ok(Exported {
         code: code_of(&key),
         bytes,
@@ -217,14 +247,17 @@ fn export(meta: &RunMeta, frames: &[Frame], to: &Path) -> Result<Exported, Strin
 
 /// The run in FROM opened with KEY: its record, its frames, the pack of the files that ran.
 #[allow(clippy::type_complexity)]
-fn open(from: &Path, key: &runkey::Key) -> Result<(RunMeta, Vec<Frame>, Option<Vec<u8>>), String> {
-    let wrong = || "the share code does not open this file (or the file was changed)".to_owned();
-    let mut f = std::fs::File::open(from).map_err(|e| format!("{}: {e}", from.display()))?;
+fn open(from: &Path, key: &runkey::Key) -> villa::Result<(RunMeta, Vec<Frame>, Option<Vec<u8>>)> {
+    let wrong = || {
+        villa::Error::invalid("the share code does not open this file (or the file was changed)")
+    };
+    let mut f = std::fs::File::open(from)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", from.display())))?;
     let mut head = vec![0u8; MAGIC.len() + runkey::SALT_LEN];
     f.read_exact(&mut head)
-        .map_err(|_| "not a sent run".to_owned())?;
+        .map_err(|_| villa::Error::io("not a sent run"))?;
     if &head[..MAGIC.len()] != MAGIC {
-        return Err("not a sent run".into());
+        return Err(villa::Error::invalid("not a sent run"));
     }
     let salt: [u8; runkey::SALT_LEN] = head[MAGIC.len()..].try_into().map_err(|_| wrong())?;
     let cipher = runkey::FileKey::new(key, &salt);
@@ -251,12 +284,12 @@ fn open(from: &Path, key: &runkey::Key) -> Result<(RunMeta, Vec<Frame>, Option<V
     }
     let mut raw = Zeroizing::new(Vec::new());
     zstd::stream::read::Decoder::new(&comp[..])
-        .map_err(|e| e.to_string())?
+        .map_err(|e| villa::Error::invalid(e.to_string()))?
         .take(SHARE_MAX + 1)
         .read_to_end(&mut raw)
         .map_err(|_| wrong())?;
     if raw.len() as u64 > SHARE_MAX {
-        return Err("the sent run is too big".into());
+        return Err(villa::Error::invalid("the sent run is too big"));
     }
     let (mut meta, mut frames, mut pack) = (None, Vec::new(), None);
     let mut at = 0usize;
@@ -265,19 +298,34 @@ fn open(from: &Path, key: &runkey::Key) -> Result<(RunMeta, Vec<Frame>, Option<V
         let n = raw
             .get(at + 1..at + 5)
             .map(|b| u32::from_le_bytes(b.try_into().unwrap_or_default()) as usize)
-            .ok_or_else(wrong)?;
-        let body = raw.get(at + 5..at + 5 + n).ok_or_else(wrong)?;
+            .ok_or_else(wrong)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
+        let body = raw
+            .get(at + 5..at + 5 + n)
+            .ok_or_else(wrong)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         match kind {
             META => {
-                meta = Some(serde_json::from_slice::<RunMeta>(body).map_err(|e| e.to_string())?)
+                meta = Some(
+                    serde_json::from_slice::<RunMeta>(body)
+                        .map_err(|e| villa::Error::invalid(e.to_string()))?,
+                )
             }
-            FRAME => frames.push(serde_json::from_slice::<Frame>(body).map_err(|e| e.to_string())?),
+            FRAME => frames.push(
+                serde_json::from_slice::<Frame>(body)
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?,
+            ),
             PACK => pack = Some(body.to_vec()),
             _ => return Err(wrong()),
         }
         at += 5 + n;
     }
-    Ok((meta.ok_or_else(wrong)?, frames, pack))
+    Ok((
+        meta.ok_or_else(wrong)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?,
+        frames,
+        pack,
+    ))
 }
 
 fn aad(i: usize, last: bool) -> Vec<u8> {
@@ -285,7 +333,7 @@ fn aad(i: usize, last: bool) -> Vec<u8> {
 }
 
 /// The snapshot's tree as a git pack (its objects, from the shadow repository).
-fn pack(s: &RunSnapshot) -> Result<Vec<u8>, String> {
+fn pack(s: &RunSnapshot) -> villa::Result<Vec<u8>> {
     let repo = crate::timeline::snapshot::repo_of(&s.checkpoints, &s.source);
     let objects = git(&repo, &["rev-list", "--objects", &s.tree], None)?;
     git(&repo, &["pack-objects", "--stdout", "-q"], Some(&objects))
@@ -298,22 +346,24 @@ fn unpack(
     pack: &[u8],
     tree: &str,
     name: &str,
-) -> Result<(), String> {
+) -> villa::Result<()> {
     if tree.len() != 40 || !tree.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("the sent run names no tree".into());
+        return Err(villa::Error::invalid("the sent run names no tree"));
     }
     let repo = crate::timeline::snapshot::ensure_repo(checkpoints, source)?;
     git(&repo, &["index-pack", "--strict", "--stdin"], Some(pack))?;
     let kind = git(&repo, &["cat-file", "-t", tree], None)?;
     if String::from_utf8_lossy(&kind).trim() != "tree" {
-        return Err("the sent run's snapshot is not a tree".into());
+        return Err(villa::Error::invalid(
+            "the sent run's snapshot is not a tree",
+        ));
     }
     crate::timeline::snapshot::keep(checkpoints, source, name, tree)
 }
 
 /// GIT ARGS in REPO (the snapshots' environment: no user or system config), INPUT on its stdin: its output.
-fn git(repo: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, String> {
-    let mut c = Command::new("git");
+fn git(repo: &Path, args: &[&str], input: Option<&[u8]>) -> villa::Result<Vec<u8>> {
+    let mut c = crate::proc::Command::new("git");
     c.env("GIT_DIR", repo)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -321,30 +371,32 @@ fn git(repo: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, Stri
         .env_remove("GIT_INDEX_FILE")
         .env_remove("GIT_WORK_TREE")
         .current_dir(repo)
-        .args(args)
-        .stdin(if input.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = c.spawn().map_err(|e| format!("git: {e}"))?;
+        .args(args);
+    let stdin = if input.is_some() {
+        crate::proc::Io::Pipe
+    } else {
+        crate::proc::Io::Null
+    };
+    let mut child = c
+        .spawn(stdin, crate::proc::Io::Pipe, crate::proc::Io::Pipe)
+        .map_err(|e| villa::Error::invalid(format!("git: {e}")))?;
     let feed = input.map(<[u8]>::to_vec);
     let stdin = child.stdin.take();
-    let writer = std::thread::spawn(move || {
+    let writer = saman::spawn_thread("ratatoskr:share", move || {
         if let (Some(mut s), Some(b)) = (stdin, feed) {
-            let _ = s.write_all(&b);
+            crate::soft::done(s.write_all(&b), "share");
         }
-    });
-    let out = child.wait_with_output().map_err(|e| format!("git: {e}"))?;
-    let _ = writer.join();
+    })?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| villa::Error::io(format!("git: {e}")))?;
+    crate::soft::done(writer.join(), "share");
     if !out.status.success() {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "git {}: {}",
             args.first().unwrap_or(&""),
             String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        )));
     }
     Ok(out.stdout)
 }

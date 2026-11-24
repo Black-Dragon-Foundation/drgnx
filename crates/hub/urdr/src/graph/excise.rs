@@ -5,9 +5,8 @@
 //! them still hold an excised value (a byte search), and [`redact`] rewrites a file (a transcript) without them.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, OpenOptions};
-use std::io::{self, ErrorKind, Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::fs;
+use std::io::{self, ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -15,7 +14,6 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::backup::tmp_of;
 use super::search::{fts_optimize, fts_put};
 use super::tx::{Class, Tx, TxMeta};
 use super::writer::{Maintenance, ScrubReport, WriteError, WriterHandle};
@@ -46,8 +44,7 @@ pub trait Blanker: Send + Sync {
     /// The txs that wrote a row of this blanker's about one of ENTITIES (an event or a notice for it), read before
     /// [`Blanker::blank`]: their `tx.answer` and `tx.note` are blanked too, as a keyed answer may quote what the row
     /// was about. None by default.
-    fn txs_about(&self, tx: &Tx<'_>, entities: &[i64]) -> Result<Vec<i64>, WriteError> {
-        let _ = (tx, entities);
+    fn txs_about(&self, _tx: &Tx<'_>, _entities: &[i64]) -> Result<Vec<i64>, WriteError> {
         Ok(Vec::new())
     }
 }
@@ -565,24 +562,9 @@ pub fn redact(path: &Path, needles: &[Vec<u8>], marker: &str) -> io::Result<bool
     if !changed {
         return Ok(false);
     }
-    let mode = fs::metadata(path)?.permissions().mode() & 0o777;
-    let tmp = tmp_of(path);
-    let written = (|| {
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(mode)
-            .open(&tmp)?;
-        f.set_permissions(fs::Permissions::from_mode(mode))?;
-        f.write_all(&text)?;
-        f.sync_all()?;
-        fs::rename(&tmp, path)
-    })();
-    if written.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    written.map(|()| true)
+    // replace_file keeps the file's permission bits and swaps the bytes in whole (a reader sees the old text or the new)
+    eitri::replace_file(path, &text).map_err(|e| std::io::Error::other(e.to_string()))?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -590,10 +572,12 @@ mod tests {
     use std::hash::{BuildHasher, Hasher};
 
     use super::*;
+    use crate::graph::backup::tmp_of;
     use crate::graph::entity::{self, Changes, EntityNew, Origin};
     use crate::graph::search::{find_fts, vec_put};
     use crate::graph::writer::Writer;
     use crate::graph::writer::tests::{keyed, opts, rule, stop};
+    use std::os::unix::fs::PermissionsExt;
 
     fn spawn(dir: &tempfile::TempDir) -> (Writer, WriterHandle, PathBuf) {
         let path = dir.path().join("work.db");
@@ -690,150 +674,154 @@ mod tests {
             .collect()
     }
 
-    #[tokio::test]
-    async fn fields_blanked_in_every_version() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn(&dir);
-        let c = canary();
-        let (n, _) = create(
-            &h,
-            agent(),
-            task("task:a", &format!("t {c}"), "b1", json!({ "k": c })),
-        )
-        .await;
-        change(&h, agent(), n, body(format!("b2 {c}"))).await;
-        change(&h, agent(), n, body(format!("b3 {c}"))).await;
-        let report = excise(
-            &h,
-            user(),
-            Target::Entity("task:a".into()),
-            None,
-            "pasted by mistake".into(),
-            vec![],
-        )
-        .await
-        .unwrap();
-        let m = marker(report.tx);
-        let dm = json!({ "excised": report.tx }).to_string();
-        let rows = stored(&path, n);
-        assert_eq!(rows.len(), 3, "the versions stay");
-        for (ver, title, body, data) in rows {
-            assert_eq!(title.as_deref(), Some(m.as_str()), "title of ver {ver}");
-            assert_eq!(body.as_deref(), Some(m.as_str()), "body of ver {ver}");
-            assert_eq!(data, dm, "data of ver {ver}");
-        }
-        assert_eq!((report.entities, report.versions), (1, 3));
-        // Who changed what stays: the status was not named, and field_tx still names the writers.
-        let (status, ver, field_tx): (String, i64, String) = ro(&path)
-            .query_row(
-                "select status, ver, field_tx from entity where n = ?1",
-                [n],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    #[test]
+    fn fields_blanked_in_every_version() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn(&dir);
+            let c = canary();
+            let (n, _) = create(
+                &h,
+                agent(),
+                task("task:a", &format!("t {c}"), "b1", json!({ "k": c })),
             )
+            .await;
+            change(&h, agent(), n, body(format!("b2 {c}"))).await;
+            change(&h, agent(), n, body(format!("b3 {c}"))).await;
+            let report = excise(
+                &h,
+                user(),
+                Target::Entity("task:a".into()),
+                None,
+                "pasted by mistake".into(),
+                vec![],
+            )
+            .await
             .unwrap();
-        assert_eq!((status.as_str(), ver), ("open", 3));
-        let field_tx: BTreeMap<String, i64> = serde_json::from_str(&field_tx).unwrap();
-        assert!(field_tx.values().all(|t| *t != report.tx), "{field_tx:?}");
-        // Only named fields: a second excise of the status alone leaves the rest as they are.
-        let r2 = excise(
-            &h,
-            user(),
-            Target::Entity("task:a".into()),
-            Some(vec!["status".into()]),
-            "again".into(),
-            vec![],
-        )
-        .await
-        .unwrap();
-        let (status, title): (String, String) = ro(&path)
-            .query_row("select status, title from entity where n = ?1", [n], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            let m = marker(report.tx);
+            let dm = json!({ "excised": report.tx }).to_string();
+            let rows = stored(&path, n);
+            assert_eq!(rows.len(), 3, "the versions stay");
+            for (ver, title, body, data) in rows {
+                assert_eq!(title.as_deref(), Some(m.as_str()), "title of ver {ver}");
+                assert_eq!(body.as_deref(), Some(m.as_str()), "body of ver {ver}");
+                assert_eq!(data, dm, "data of ver {ver}");
+            }
+            assert_eq!((report.entities, report.versions), (1, 3));
+            // Who changed what stays: the status was not named, and field_tx still names the writers.
+            let (status, ver, field_tx): (String, i64, String) = ro(&path)
+                .query_row(
+                    "select status, ver, field_tx from entity where n = ?1",
+                    [n],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!((status.as_str(), ver), ("open", 3));
+            let field_tx: BTreeMap<String, i64> = serde_json::from_str(&field_tx).unwrap();
+            assert!(field_tx.values().all(|t| *t != report.tx), "{field_tx:?}");
+            // Only named fields: a second excise of the status alone leaves the rest as they are.
+            let r2 = excise(
+                &h,
+                user(),
+                Target::Entity("task:a".into()),
+                Some(vec!["status".into()]),
+                "again".into(),
+                vec![],
+            )
+            .await
             .unwrap();
-        assert_eq!((status, title), (marker(r2.tx), m));
-        // Unknown fields, an empty reason and an agent are refused before anything is written.
-        for (meta, fields, reason) in [
-            (user(), Some(vec!["id".to_string()]), "r"),
-            (user(), Some(vec![]), "r"),
-            (user(), None, "  "),
-            (agent(), None, "r"),
-        ] {
+            let (status, title): (String, String) = ro(&path)
+                .query_row("select status, title from entity where n = ?1", [n], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .unwrap();
+            assert_eq!((status, title), (marker(r2.tx), m));
+            // Unknown fields, an empty reason and an agent are refused before anything is written.
+            for (meta, fields, reason) in [
+                (user(), Some(vec!["id".to_string()]), "r"),
+                (user(), Some(vec![]), "r"),
+                (user(), None, "  "),
+                (agent(), None, "r"),
+            ] {
+                let e = excise(
+                    &h,
+                    meta,
+                    Target::Entity("task:a".into()),
+                    fields,
+                    reason.into(),
+                    vec![],
+                )
+                .await
+                .unwrap_err();
+                assert!(matches!(e, WriteError::Refused(_)), "{e:?}");
+            }
             let e = excise(
                 &h,
-                meta,
-                Target::Entity("task:a".into()),
-                fields,
-                reason.into(),
+                user(),
+                Target::Entity("task:none".into()),
+                None,
+                "r".into(),
                 vec![],
             )
             .await
             .unwrap_err();
-            assert!(matches!(e, WriteError::Refused(_)), "{e:?}");
-        }
-        let e = excise(
-            &h,
-            user(),
-            Target::Entity("task:none".into()),
-            None,
-            "r".into(),
-            vec![],
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(e, WriteError::Refused("no entity task:none".into()));
-        stop(w).await;
+            assert_eq!(e, WriteError::Refused("no entity task:none".into()));
+            stop(w).await;
+        })
     }
 
-    #[tokio::test]
-    async fn a_tx_target_blanks_only_what_it_wrote() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn(&dir);
-        let c = canary();
-        let (n, _) = create(
-            &h,
-            agent(),
-            task("task:a", "a plain title", "b1", json!({})),
-        )
-        .await;
-        let t = change(&h, agent(), n, body(format!("b2 {c}"))).await;
-        change(
-            &h,
-            agent(),
-            n,
-            Changes {
-                status: Some(Some("done".into())),
-                ..Default::default()
-            },
-        )
-        .await;
-        let report = excise(&h, user(), Target::Tx(t), None, "secret".into(), vec![])
-            .await
-            .unwrap();
-        let m = marker(report.tx);
-        let rows = stored(&path, n);
-        let bodies: Vec<Option<String>> = rows.iter().map(|r| r.2.clone()).collect();
-        // ver 1 (b1) stays; ver 2 (written by t) and ver 3 (the status change, body still t's) are blanked.
-        assert_eq!(
-            bodies,
-            [Some("b1".into()), Some(m.clone()), Some(m.clone())]
-        );
-        assert!(rows.iter().all(|r| r.1.as_deref() == Some("a plain title")));
-        let status: String = ro(&path)
-            .query_row("select status from entity where n = ?1", [n], |r| r.get(0))
-            .unwrap();
-        assert_eq!(status, "done", "a field the tx did not write stays");
-        assert_eq!((report.entities, report.versions), (1, 2));
-        assert!(
-            report
-                .needles
-                .iter()
-                .any(|x| x == format!("b2 {c}").as_bytes())
-        );
-        let e = excise(&h, user(), Target::Tx(9999), None, "r".into(), vec![])
-            .await
-            .unwrap_err();
-        assert_eq!(e, WriteError::Refused("no tx 9999".into()));
-        stop(w).await;
+    #[test]
+    fn a_tx_target_blanks_only_what_it_wrote() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn(&dir);
+            let c = canary();
+            let (n, _) = create(
+                &h,
+                agent(),
+                task("task:a", "a plain title", "b1", json!({})),
+            )
+            .await;
+            let t = change(&h, agent(), n, body(format!("b2 {c}"))).await;
+            change(
+                &h,
+                agent(),
+                n,
+                Changes {
+                    status: Some(Some("done".into())),
+                    ..Default::default()
+                },
+            )
+            .await;
+            let report = excise(&h, user(), Target::Tx(t), None, "secret".into(), vec![])
+                .await
+                .unwrap();
+            let m = marker(report.tx);
+            let rows = stored(&path, n);
+            let bodies: Vec<Option<String>> = rows.iter().map(|r| r.2.clone()).collect();
+            // ver 1 (b1) stays; ver 2 (written by t) and ver 3 (the status change, body still t's) are blanked.
+            assert_eq!(
+                bodies,
+                [Some("b1".into()), Some(m.clone()), Some(m.clone())]
+            );
+            assert!(rows.iter().all(|r| r.1.as_deref() == Some("a plain title")));
+            let status: String = ro(&path)
+                .query_row("select status from entity where n = ?1", [n], |r| r.get(0))
+                .unwrap();
+            assert_eq!(status, "done", "a field the tx did not write stays");
+            assert_eq!((report.entities, report.versions), (1, 2));
+            assert!(
+                report
+                    .needles
+                    .iter()
+                    .any(|x| x == format!("b2 {c}").as_bytes())
+            );
+            let e = excise(&h, user(), Target::Tx(9999), None, "r".into(), vec![])
+                .await
+                .unwrap_err();
+            assert_eq!(e, WriteError::Refused("no tx 9999".into()));
+            stop(w).await;
+        })
     }
 
     /// The FTS shadow tables' bytes (segments and their index).
@@ -859,87 +847,91 @@ mod tests {
         out
     }
 
-    #[tokio::test]
-    async fn fts_has_no_token() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn(&dir);
-        let c = canary();
-        let (n, _) = create(
-            &h,
-            agent(),
-            task("task:a", &c, &format!("x {c}"), json!({})),
-        )
-        .await;
-        change(&h, agent(), n, body(format!("y {c}"))).await;
-        create(
-            &h,
-            agent(),
-            task("task:b", "another one", "other words", json!({})),
-        )
-        .await;
-        assert!(
-            contains(&fts_bytes(&path), c.as_bytes()),
-            "the token is indexed"
-        );
-        assert_eq!(find_fts(&ro(&path), &c, 10).unwrap().len(), 1);
-        excise(
-            &h,
-            user(),
-            Target::Entity("task:a".into()),
-            None,
-            "r".into(),
-            vec![],
-        )
-        .await
-        .unwrap();
-        assert!(find_fts(&ro(&path), &c, 10).unwrap().is_empty());
-        assert!(
-            !contains(&fts_bytes(&path), c.as_bytes()),
-            "no token left in the index"
-        );
-        // The marker is indexed in its place, and the other entity is still found.
-        let hits = find_fts(&ro(&path), "excised", 10).unwrap();
-        assert_eq!(hits.iter().map(|h| h.n).collect::<Vec<_>>(), [n]);
-        assert_eq!(find_fts(&ro(&path), "another", 10).unwrap().len(), 1);
-        stop(w).await;
+    #[test]
+    fn fts_has_no_token() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn(&dir);
+            let c = canary();
+            let (n, _) = create(
+                &h,
+                agent(),
+                task("task:a", &c, &format!("x {c}"), json!({})),
+            )
+            .await;
+            change(&h, agent(), n, body(format!("y {c}"))).await;
+            create(
+                &h,
+                agent(),
+                task("task:b", "another one", "other words", json!({})),
+            )
+            .await;
+            assert!(
+                contains(&fts_bytes(&path), c.as_bytes()),
+                "the token is indexed"
+            );
+            assert_eq!(find_fts(&ro(&path), &c, 10).unwrap().len(), 1);
+            excise(
+                &h,
+                user(),
+                Target::Entity("task:a".into()),
+                None,
+                "r".into(),
+                vec![],
+            )
+            .await
+            .unwrap();
+            assert!(find_fts(&ro(&path), &c, 10).unwrap().is_empty());
+            assert!(
+                !contains(&fts_bytes(&path), c.as_bytes()),
+                "no token left in the index"
+            );
+            // The marker is indexed in its place, and the other entity is still found.
+            let hits = find_fts(&ro(&path), "excised", 10).unwrap();
+            assert_eq!(hits.iter().map(|h| h.n).collect::<Vec<_>>(), [n]);
+            assert_eq!(find_fts(&ro(&path), "another", 10).unwrap().len(), 1);
+            stop(w).await;
+        })
     }
 
-    #[tokio::test]
-    async fn vec_row_gone() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn(&dir);
-        let (n, _) = create(&h, agent(), task("task:a", "a title here", "b", json!({}))).await;
-        let (m, _) = create(&h, agent(), task("task:b", "b title here", "b", json!({}))).await;
-        h.write(user(), move |tx: &mut Tx<'_>| {
-            vec_put(tx, n, "m", &[0.5, -0.25])?;
-            vec_put(tx, m, "m", &[0.5, -0.25])
+    #[test]
+    fn vec_row_gone() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn(&dir);
+            let (n, _) = create(&h, agent(), task("task:a", "a title here", "b", json!({}))).await;
+            let (m, _) = create(&h, agent(), task("task:b", "b title here", "b", json!({}))).await;
+            h.write(user(), move |tx: &mut Tx<'_>| {
+                vec_put(tx, n, "m", &[0.5, -0.25])?;
+                vec_put(tx, m, "m", &[0.5, -0.25])
+            })
+            .await
+            .unwrap();
+            excise(
+                &h,
+                user(),
+                Target::Entity("task:a".into()),
+                None,
+                "r".into(),
+                vec![],
+            )
+            .await
+            .unwrap();
+            let left: Vec<i64> = {
+                let c = ro(&path);
+                let mut st = c.prepare("select n from entity_vec order by n").unwrap();
+                st.query_map([], |r| r.get(0))
+                    .unwrap()
+                    .map(|r| r.unwrap())
+                    .collect()
+            };
+            assert_eq!(
+                left,
+                [m],
+                "the excised entity's vector is gone; the embedder makes it again"
+            );
+            stop(w).await;
         })
-        .await
-        .unwrap();
-        excise(
-            &h,
-            user(),
-            Target::Entity("task:a".into()),
-            None,
-            "r".into(),
-            vec![],
-        )
-        .await
-        .unwrap();
-        let left: Vec<i64> = {
-            let c = ro(&path);
-            let mut st = c.prepare("select n from entity_vec order by n").unwrap();
-            st.query_map([], |r| r.get(0))
-                .unwrap()
-                .map(|r| r.unwrap())
-                .collect()
-        };
-        assert_eq!(
-            left,
-            [m],
-            "the excised entity's vector is gone; the embedder makes it again"
-        );
-        stop(w).await;
     }
 
     /// Records what it was told and writes one row into the tests' `t` table with the tx it ran in.
@@ -950,7 +942,7 @@ mod tests {
 
     impl Blanker for Probe {
         fn blank(&self, tx: &mut Tx<'_>, excised: &Excised) -> Result<u64, WriteError> {
-            self.seen.lock().unwrap().push(excised.clone());
+            saman::lock(&self.seen).push(excised.clone());
             tx.sql()
                 .execute("insert into t (v, tx) values (1, ?1)", [tx.id()])?;
             if self.fail {
@@ -960,368 +952,384 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn blankers_run_in_the_same_tx() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn(&dir);
-        let (n, t1) = create(&h, agent(), task("task:a", "a title here", "b", json!({}))).await;
-        let t2 = change(&h, agent(), n, body("b2".into())).await;
-        let probe = Arc::new(Probe {
-            seen: Default::default(),
-            fail: false,
-        });
-        let twice: Vec<Arc<dyn Blanker>> = vec![probe.clone(), probe.clone()];
-        let report = excise(
-            &h,
-            user(),
-            Target::Entity("task:a".into()),
-            None,
-            "r".into(),
-            twice,
-        )
-        .await
-        .unwrap();
-        assert_eq!(report.blanked, 4, "each blanker's count is summed");
-        let seen = probe.seen.lock().unwrap().clone();
-        assert_eq!(
-            seen[0],
-            Excised {
-                entities: vec![n],
-                txs: vec![t1, t2],
-                marker: marker(report.tx),
-            }
-        );
-        let txs: Vec<i64> = {
-            let c = ro(&path);
-            let mut st = c.prepare("select tx from t").unwrap();
-            st.query_map([], |r| r.get(0))
-                .unwrap()
-                .map(|r| r.unwrap())
-                .collect()
-        };
-        assert_eq!(txs, [report.tx, report.tx], "in the excise's own tx");
-        // A failing blanker fails the whole excise: nothing is blanked, nothing logged.
-        let (m, _) = create(
-            &h,
-            agent(),
-            task("task:b", "keep this title", "b", json!({})),
-        )
-        .await;
-        let failing: Arc<dyn Blanker> = Arc::new(Probe {
-            seen: Default::default(),
-            fail: true,
-        });
-        let e = excise(
-            &h,
-            user(),
-            Target::Entity("task:b".into()),
-            None,
-            "r".into(),
-            vec![failing],
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(e, WriteError::Refused("the probe failed".into()));
-        let c = ro(&path);
-        let title: String = c
-            .query_row("select title from entity where n = ?1", [m], |r| r.get(0))
-            .unwrap();
-        assert_eq!(title, "keep this title");
-        let logged: i64 = c
-            .query_row("select count(*) from excise_log", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(logged, 1, "only the first excise");
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn log_never_holds_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn(&dir);
-        let c = canary();
-        create(&h, agent(), task("task:a", &c, &c, json!({ "k": c }))).await;
-        let report = excise(
-            &h,
-            user(),
-            Target::Entity("task:a".into()),
-            None,
-            "a token was pasted".into(),
-            vec![],
-        )
-        .await
-        .unwrap();
-        let row: (i64, String, String, String) = ro(&path)
-            .query_row(
-                "select tx, target, fields, reason from excise_log",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    #[test]
+    fn blankers_run_in_the_same_tx() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn(&dir);
+            let (n, t1) = create(&h, agent(), task("task:a", "a title here", "b", json!({}))).await;
+            let t2 = change(&h, agent(), n, body("b2".into())).await;
+            let probe = Arc::new(Probe {
+                seen: Default::default(),
+                fail: false,
+            });
+            let twice: Vec<Arc<dyn Blanker>> = vec![probe.clone(), probe.clone()];
+            let report = excise(
+                &h,
+                user(),
+                Target::Entity("task:a".into()),
+                None,
+                "r".into(),
+                twice,
             )
-            .unwrap();
-        assert_eq!(
-            row,
-            (
-                report.tx,
-                "task:a".into(),
-                r#"["title","body","data"]"#.into(),
-                "a token was pasted".into()
-            )
-        );
-        // Neither the log nor the excise's own tx row nor its serialized report names the content.
-        let tx_row: String = ro(&path)
-            .query_row(
-                "select json_array(actor, class, tool, note, answer) from tx where id = ?1",
-                [report.tx],
-                |r| r.get(0),
-            )
-            .unwrap();
-        let shown = serde_json::to_string(&report).unwrap();
-        for text in [format!("{row:?}"), tx_row, shown] {
-            assert!(!text.contains(&c), "{text}");
-        }
-        assert!(
-            report.needles.iter().any(|x| x == c.as_bytes()),
-            "kept in memory only"
-        );
-        stop(w).await;
-    }
-
-    #[tokio::test]
-    async fn tx_answer_and_note_are_blanked() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn(&dir);
-        let c = canary();
-        let title = format!("t {c}");
-        let new = task("task:a", &title, "b", json!({}));
-        let first = h
-            .write(keyed("agent:s1", "r-1"), move |tx: &mut Tx<'_>| {
-                Ok(entity::create(tx, new)?.title)
-            })
             .await
             .unwrap();
-        let n: i64 = ro(&path)
-            .query_row("select n from entity where id = 'task:a'", [], |r| r.get(0))
-            .unwrap();
-        let mut noted = agent();
-        noted.note = Some(format!("because {c}"));
-        let t2 = change(&h, noted, n, body("b2".into())).await;
-        let mut other = agent();
-        other.note = Some("an unrelated note".into());
-        create(&h, other, task("task:b", "b title here", "b", json!({}))).await;
-        let report = excise(
-            &h,
-            user(),
-            Target::Entity("task:a".into()),
-            None,
-            "r".into(),
-            vec![],
-        )
-        .await
-        .unwrap();
-        let m = marker(report.tx);
-        assert_eq!(report.txs_blanked, 2);
-        let c2 = ro(&path);
-        let row = |id: i64| -> (Option<String>, Option<String>) {
-            c2.query_row("select answer, note from tx where id = ?1", [id], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
-            .unwrap()
-        };
-        assert_eq!(
-            row(first.tx),
-            (Some(m.clone()), None),
-            "an unset note stays unset"
-        );
-        assert_eq!(row(t2), (None, Some(m.clone())));
-        let unrelated: String = c2
-            .query_row(
-                "select note from tx where note like 'an unrelated%'",
-                [],
-                |r| r.get(0),
+            assert_eq!(report.blanked, 4, "each blanker's count is summed");
+            let seen = saman::lock(&probe.seen).clone();
+            assert_eq!(
+                seen[0],
+                Excised {
+                    entities: vec![n],
+                    txs: vec![t1, t2],
+                    marker: marker(report.tx),
+                }
+            );
+            let txs: Vec<i64> = {
+                let c = ro(&path);
+                let mut st = c.prepare("select tx from t").unwrap();
+                st.query_map([], |r| r.get(0))
+                    .unwrap()
+                    .map(|r| r.unwrap())
+                    .collect()
+            };
+            assert_eq!(txs, [report.tx, report.tx], "in the excise's own tx");
+            // A failing blanker fails the whole excise: nothing is blanked, nothing logged.
+            let (m, _) = create(
+                &h,
+                agent(),
+                task("task:b", "keep this title", "b", json!({})),
             )
-            .unwrap();
-        assert_eq!(unrelated, "an unrelated note");
-        assert!(
-            report
-                .needles
-                .iter()
-                .any(|x| x == format!("because {c}").as_bytes())
-        );
-        stop(w).await;
+            .await;
+            let failing: Arc<dyn Blanker> = Arc::new(Probe {
+                seen: Default::default(),
+                fail: true,
+            });
+            let e = excise(
+                &h,
+                user(),
+                Target::Entity("task:b".into()),
+                None,
+                "r".into(),
+                vec![failing],
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(e, WriteError::Refused("the probe failed".into()));
+            let c = ro(&path);
+            let title: String = c
+                .query_row("select title from entity where n = ?1", [m], |r| r.get(0))
+                .unwrap();
+            assert_eq!(title, "keep this title");
+            let logged: i64 = c
+                .query_row("select count(*) from excise_log", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(logged, 1, "only the first excise");
+            stop(w).await;
+        })
     }
 
-    #[tokio::test]
-    async fn a_replay_after_excise_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn(&dir);
-        let make = || {
-            let new = task("task:a", "a secret title", "b", json!({}));
-            move |tx: &mut Tx<'_>| Ok(entity::create(tx, new)?.title)
-        };
-        let first = h.write(keyed("agent:s1", "r-1"), make()).await.unwrap();
-        assert_eq!(first.value.as_deref(), Some("a secret title"));
-        excise(
-            &h,
-            user(),
-            Target::Entity("task:a".into()),
-            None,
-            "r".into(),
-            vec![],
-        )
-        .await
-        .unwrap();
-        let again = h.write(keyed("agent:s1", "r-1"), make()).await.unwrap_err();
-        assert_eq!(
-            again,
-            WriteError::Refused("this answer was excised; read the entity".into())
-        );
-        let entities: i64 = ro(&path)
-            .query_row("select count(*) from entity", [], |r| r.get(0))
+    #[test]
+    fn log_never_holds_content() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn(&dir);
+            let c = canary();
+            create(&h, agent(), task("task:a", &c, &c, json!({ "k": c }))).await;
+            let report = excise(
+                &h,
+                user(),
+                Target::Entity("task:a".into()),
+                None,
+                "a token was pasted".into(),
+                vec![],
+            )
+            .await
             .unwrap();
-        assert_eq!(entities, 1, "the repeat ran nothing");
-        stop(w).await;
+            let row: (i64, String, String, String) = ro(&path)
+                .query_row(
+                    "select tx, target, fields, reason from excise_log",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                row,
+                (
+                    report.tx,
+                    "task:a".into(),
+                    r#"["title","body","data"]"#.into(),
+                    "a token was pasted".into()
+                )
+            );
+            // Neither the log nor the excise's own tx row nor its serialized report names the content.
+            let tx_row: String = ro(&path)
+                .query_row(
+                    "select json_array(actor, class, tool, note, answer) from tx where id = ?1",
+                    [report.tx],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let shown = serde_json::to_string(&report).unwrap();
+            for text in [format!("{row:?}"), tx_row, shown] {
+                assert!(!text.contains(&c), "{text}");
+            }
+            assert!(
+                report.needles.iter().any(|x| x == c.as_bytes()),
+                "kept in memory only"
+            );
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn tx_answer_and_note_are_blanked() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn(&dir);
+            let c = canary();
+            let title = format!("t {c}");
+            let new = task("task:a", &title, "b", json!({}));
+            let first = h
+                .write(keyed("agent:s1", "r-1"), move |tx: &mut Tx<'_>| {
+                    Ok(entity::create(tx, new)?.title)
+                })
+                .await
+                .unwrap();
+            let n: i64 = ro(&path)
+                .query_row("select n from entity where id = 'task:a'", [], |r| r.get(0))
+                .unwrap();
+            let mut noted = agent();
+            noted.note = Some(format!("because {c}"));
+            let t2 = change(&h, noted, n, body("b2".into())).await;
+            let mut other = agent();
+            other.note = Some("an unrelated note".into());
+            create(&h, other, task("task:b", "b title here", "b", json!({}))).await;
+            let report = excise(
+                &h,
+                user(),
+                Target::Entity("task:a".into()),
+                None,
+                "r".into(),
+                vec![],
+            )
+            .await
+            .unwrap();
+            let m = marker(report.tx);
+            assert_eq!(report.txs_blanked, 2);
+            let c2 = ro(&path);
+            let row = |id: i64| -> (Option<String>, Option<String>) {
+                c2.query_row("select answer, note from tx where id = ?1", [id], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .unwrap()
+            };
+            assert_eq!(
+                row(first.tx),
+                (Some(m.clone()), None),
+                "an unset note stays unset"
+            );
+            assert_eq!(row(t2), (None, Some(m.clone())));
+            let unrelated: String = c2
+                .query_row(
+                    "select note from tx where note like 'an unrelated%'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(unrelated, "an unrelated note");
+            assert!(
+                report
+                    .needles
+                    .iter()
+                    .any(|x| x == format!("because {c}").as_bytes())
+            );
+            stop(w).await;
+        })
+    }
+
+    #[test]
+    fn a_replay_after_excise_is_refused() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn(&dir);
+            let make = || {
+                let new = task("task:a", "a secret title", "b", json!({}));
+                move |tx: &mut Tx<'_>| Ok(entity::create(tx, new)?.title)
+            };
+            let first = h.write(keyed("agent:s1", "r-1"), make()).await.unwrap();
+            assert_eq!(first.value.as_deref(), Some("a secret title"));
+            excise(
+                &h,
+                user(),
+                Target::Entity("task:a".into()),
+                None,
+                "r".into(),
+                vec![],
+            )
+            .await
+            .unwrap();
+            let again = h.write(keyed("agent:s1", "r-1"), make()).await.unwrap_err();
+            assert_eq!(
+                again,
+                WriteError::Refused("this answer was excised; read the entity".into())
+            );
+            let entities: i64 = ro(&path)
+                .query_row("select count(*) from entity", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(entities, 1, "the repeat ran nothing");
+            stop(w).await;
+        })
     }
 
     /// A keyed write that wrote no version of the target still loses its answer when the answer quotes the target's
     /// text, or the write linked the target: its replay names nothing of it (call 3).
-    #[tokio::test]
-    async fn an_answer_that_names_the_target_is_blanked() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn(&dir);
-        let c = canary();
-        let title = format!("t {c}");
-        let (a, _) = create(&h, agent(), task("task:a", &title, "b", json!({}))).await;
-        let (b, _) = create(&h, agent(), task("task:b", "b title here", "b", json!({}))).await;
-        // Writes a version of task:b only, and answers task:a's title.
-        let quote = move || {
-            move |tx: &mut Tx<'_>| -> Result<Option<String>, WriteError> {
-                entity::update(tx, b, None, body("b2".into()))?;
-                Ok(tx
-                    .sql()
-                    .query_row("select title from entity where n = ?1", [a], |r| r.get(0))?)
-            }
-        };
-        let first = h.write(keyed("agent:s1", "q-1"), quote()).await.unwrap();
-        assert_eq!(first.value.as_deref(), Some(title.as_str()));
-        // Links task:a, and answers nothing of its text.
-        let link = move || {
-            move |tx: &mut Tx<'_>| -> Result<String, WriteError> {
-                crate::graph::link::add(tx, a, "blocks", b, None, Origin::Recorded, None)?;
-                Ok("linked".into())
-            }
-        };
-        h.write(keyed("agent:s1", "l-1"), link()).await.unwrap();
-        let mut plain = agent();
-        plain.note = Some("an unrelated note".into());
-        let other = change(&h, plain, b, body("b3".into())).await;
-        let report = excise(
-            &h,
-            user(),
-            Target::Entity("task:a".into()),
-            None,
-            "r".into(),
-            vec![],
-        )
-        .await
-        .unwrap();
-        let excised = WriteError::Refused("this answer was excised; read the entity".into());
-        let again = h
-            .write(keyed("agent:s1", "q-1"), quote())
-            .await
-            .unwrap_err();
-        assert_eq!(again, excised);
-        let again = h.write(keyed("agent:s1", "l-1"), link()).await.unwrap_err();
-        assert_eq!(again, excised);
-        let c2 = ro(&path);
-        let left: i64 = c2
-            .query_row(
-                "select count(*) from tx where instr(coalesce(answer, '') || coalesce(note, ''), ?1) > 0",
-                [&c],
-                |r| r.get(0),
+    #[test]
+    fn an_answer_that_names_the_target_is_blanked() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn(&dir);
+            let c = canary();
+            let title = format!("t {c}");
+            let (a, _) = create(&h, agent(), task("task:a", &title, "b", json!({}))).await;
+            let (b, _) = create(&h, agent(), task("task:b", "b title here", "b", json!({}))).await;
+            // Writes a version of task:b only, and answers task:a's title.
+            let quote = move || {
+                move |tx: &mut Tx<'_>| -> Result<Option<String>, WriteError> {
+                    entity::update(tx, b, None, body("b2".into()))?;
+                    Ok(tx
+                        .sql()
+                        .query_row("select title from entity where n = ?1", [a], |r| r.get(0))?)
+                }
+            };
+            let first = h.write(keyed("agent:s1", "q-1"), quote()).await.unwrap();
+            assert_eq!(first.value.as_deref(), Some(title.as_str()));
+            // Links task:a, and answers nothing of its text.
+            let link = move || {
+                move |tx: &mut Tx<'_>| -> Result<String, WriteError> {
+                    crate::graph::link::add(tx, a, "blocks", b, None, Origin::Recorded, None)?;
+                    Ok("linked".into())
+                }
+            };
+            h.write(keyed("agent:s1", "l-1"), link()).await.unwrap();
+            let mut plain = agent();
+            plain.note = Some("an unrelated note".into());
+            let other = change(&h, plain, b, body("b3".into())).await;
+            let report = excise(
+                &h,
+                user(),
+                Target::Entity("task:a".into()),
+                None,
+                "r".into(),
+                vec![],
             )
+            .await
             .unwrap();
-        assert_eq!(left, 0, "no tx row keeps the target's text");
-        let note: String = c2
-            .query_row("select note from tx where id = ?1", [other], |r| r.get(0))
-            .unwrap();
-        assert_eq!(
-            note, "an unrelated note",
-            "a tx that names nothing of it stays"
-        );
-        assert_eq!(report.entities, 1);
-        stop(w).await;
+            let excised = WriteError::Refused("this answer was excised; read the entity".into());
+            let again = h
+                .write(keyed("agent:s1", "q-1"), quote())
+                .await
+                .unwrap_err();
+            assert_eq!(again, excised);
+            let again = h.write(keyed("agent:s1", "l-1"), link()).await.unwrap_err();
+            assert_eq!(again, excised);
+            let c2 = ro(&path);
+            let left: i64 = c2
+                .query_row(
+                    "select count(*) from tx where instr(coalesce(answer, '') || coalesce(note, ''), ?1) > 0",
+                    [&c],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(left, 0, "no tx row keeps the target's text");
+            let note: String = c2
+                .query_row("select note from tx where id = ?1", [other], |r| r.get(0))
+                .unwrap();
+            assert_eq!(
+                note, "an unrelated note",
+                "a tx that names nothing of it stays"
+            );
+            assert_eq!(report.entities, 1);
+            stop(w).await;
+        })
     }
 
-    #[tokio::test]
-    async fn holding_lists_pre7_and_schema5() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn(&dir);
-        let c = canary();
-        // A quote in the title: an export holds it JSON-escaped.
-        let title = format!("say \"{c}\"");
-        create(&h, agent(), task("task:a", &title, "b", json!({}))).await;
-        let report = excise(
-            &h,
-            user(),
-            Target::Entity("task:a".into()),
-            None,
-            "r".into(),
-            vec![],
-        )
-        .await
-        .unwrap();
-        let data = dir.path();
-        let backup = data.join("backup");
-        let export = data.join("export").join("e1");
-        fs::create_dir_all(&backup).unwrap();
-        fs::create_dir_all(&export).unwrap();
-        let mut held = title.clone().into_bytes();
-        held.splice(0..0, vec![0u8; CHUNK - 5]); // across a chunk boundary
-        fs::write(backup.join("work-20261020.db"), &held).unwrap();
-        fs::write(backup.join("work-pre7-1761000000.db"), format!("x{title}x")).unwrap();
-        fs::write(backup.join("work-20261021.db"), b"nothing here").unwrap();
-        fs::write(data.join("work.db.schema5"), title.as_bytes()).unwrap();
-        // What `restore-pre7` moved aside: a schema-7 file and its WAL.
-        fs::write(data.join("work.db.schema7-1761000100"), b"no text").unwrap();
-        fs::write(
-            data.join("work.db.schema7-1761000100-wal"),
-            title.as_bytes(),
-        )
-        .unwrap();
-        let escaped = serde_json::to_string(&title).unwrap();
-        fs::write(
-            export.join("entities.jsonl"),
-            format!("{{\"title\":{escaped}}}\n"),
-        )
-        .unwrap();
-        fs::write(export.join("links.jsonl"), b"").unwrap();
-        let files = kept_copies(&path);
-        assert_eq!(
-            files,
-            [
-                backup.join("work-20261020.db"),
-                backup.join("work-20261021.db"),
-                backup.join("work-pre7-1761000000.db"),
-                data.join("work.db.schema5"),
-                data.join("work.db.schema7-1761000100"),
-                data.join("work.db.schema7-1761000100-wal"),
-                export.join("entities.jsonl"),
-                export.join("links.jsonl"),
-            ]
-        );
-        let mut with_gone = files.clone();
-        with_gone.push(backup.join("gone.db"));
-        assert_eq!(
-            holding(&with_gone, &report.needles),
-            [
-                backup.join("work-20261020.db"),
-                backup.join("work-pre7-1761000000.db"),
-                data.join("work.db.schema5"),
-                data.join("work.db.schema7-1761000100-wal"),
-                export.join("entities.jsonl"),
-            ]
-        );
-        assert!(holding(&files, &[]).is_empty());
-        stop(w).await;
+    #[test]
+    fn holding_lists_pre7_and_schema5() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn(&dir);
+            let c = canary();
+            // A quote in the title: an export holds it JSON-escaped.
+            let title = format!("say \"{c}\"");
+            create(&h, agent(), task("task:a", &title, "b", json!({}))).await;
+            let report = excise(
+                &h,
+                user(),
+                Target::Entity("task:a".into()),
+                None,
+                "r".into(),
+                vec![],
+            )
+            .await
+            .unwrap();
+            let data = dir.path();
+            let backup = data.join("backup");
+            let export = data.join("export").join("e1");
+            fs::create_dir_all(&backup).unwrap();
+            fs::create_dir_all(&export).unwrap();
+            let mut held = title.clone().into_bytes();
+            held.splice(0..0, vec![0u8; CHUNK - 5]); // across a chunk boundary
+            eitri::replace_file(&backup.join("work-20261020.db"), &held).unwrap();
+            eitri::replace_file(
+                &backup.join("work-pre7-1761000000.db"),
+                format!("x{title}x").as_bytes(),
+            )
+            .unwrap();
+            eitri::replace_file(&backup.join("work-20261021.db"), b"nothing here").unwrap();
+            eitri::replace_file(&data.join("work.db.schema5"), title.as_bytes()).unwrap();
+            // What `restore-pre7` moved aside: a schema-7 file and its WAL.
+            eitri::replace_file(&data.join("work.db.schema7-1761000100"), b"no text").unwrap();
+            eitri::replace_file(
+                &data.join("work.db.schema7-1761000100-wal"),
+                title.as_bytes(),
+            )
+            .unwrap();
+            let escaped = serde_json::to_string(&title).unwrap();
+            eitri::replace_file(
+                &export.join("entities.jsonl"),
+                format!("{{\"title\":{escaped}}}\n").as_bytes(),
+            )
+            .unwrap();
+            eitri::replace_file(&export.join("links.jsonl"), b"").unwrap();
+            let files = kept_copies(&path);
+            assert_eq!(
+                files,
+                [
+                    backup.join("work-20261020.db"),
+                    backup.join("work-20261021.db"),
+                    backup.join("work-pre7-1761000000.db"),
+                    data.join("work.db.schema5"),
+                    data.join("work.db.schema7-1761000100"),
+                    data.join("work.db.schema7-1761000100-wal"),
+                    export.join("entities.jsonl"),
+                    export.join("links.jsonl"),
+                ]
+            );
+            let mut with_gone = files.clone();
+            with_gone.push(backup.join("gone.db"));
+            assert_eq!(
+                holding(&with_gone, &report.needles),
+                [
+                    backup.join("work-20261020.db"),
+                    backup.join("work-pre7-1761000000.db"),
+                    data.join("work.db.schema5"),
+                    data.join("work.db.schema7-1761000100-wal"),
+                    export.join("entities.jsonl"),
+                ]
+            );
+            assert!(holding(&files, &[]).is_empty());
+            stop(w).await;
+        })
     }
 
     #[test]
@@ -1331,13 +1339,13 @@ mod tests {
         let file = dir.path().join("s1.jsonl");
         let title = format!("say \"{c}\"");
         let line = format!("{{\"text\":{}}}\n", serde_json::to_string(&title).unwrap());
-        fs::write(&file, format!("{line}{{\"text\":\"plain\"}}\n")).unwrap();
+        eitri::replace_file(&file, format!("{line}{{\"text\":\"plain\"}}\n").as_bytes()).unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
         let mut needles = BTreeSet::new();
         push_needle(&title, &mut needles);
         let needles: Vec<Vec<u8>> = needles.into_iter().collect();
         assert!(redact(&file, &needles, "[excised 9]").unwrap());
-        let text = fs::read_to_string(&file).unwrap();
+        let text = eitri::read_string(&file, crate::graph::READ_CAP).unwrap();
         assert_eq!(text, "{\"text\":\"[excised 9]\"}\n{\"text\":\"plain\"}\n");
         let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
@@ -1348,104 +1356,108 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn no_trace_in_file_or_wal() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn(&dir);
-        let c = canary();
-        // A keyed write whose answer is the canary title.
-        let new = task(
-            "task:a",
-            &format!("t {c}"),
-            &format!("b1 {c}"),
-            json!({ "k": c }),
-        );
-        h.write(keyed("agent:s1", "r-1"), move |tx: &mut Tx<'_>| {
-            Ok(entity::create(tx, new)?.title)
-        })
-        .await
-        .unwrap();
-        let n: i64 = ro(&path)
-            .query_row("select n from entity where id = 'task:a'", [], |r| r.get(0))
+    #[test]
+    fn no_trace_in_file_or_wal() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn(&dir);
+            let c = canary();
+            // A keyed write whose answer is the canary title.
+            let new = task(
+                "task:a",
+                &format!("t {c}"),
+                &format!("b1 {c}"),
+                json!({ "k": c }),
+            );
+            h.write(keyed("agent:s1", "r-1"), move |tx: &mut Tx<'_>| {
+                Ok(entity::create(tx, new)?.title)
+            })
+            .await
             .unwrap();
-        // The body edited twice (three versions); a tx note.
-        let mut noted = agent();
-        noted.note = Some(format!("why {c}"));
-        change(&h, noted, n, body(format!("b2 {c}"))).await;
-        change(&h, agent(), n, body(format!("b3 {c}"))).await;
-        let both = |path: &Path| [bytes(path), bytes(&wal(path))].concat();
-        assert!(
-            contains(&both(&path), c.as_bytes()),
-            "the canary is in the file first"
-        );
-        excise(
-            &h,
-            user(),
-            Target::Entity("task:a".into()),
-            None,
-            "r".into(),
-            vec![],
-        )
-        .await
-        .unwrap();
-        let report = scrub(&h).await.unwrap();
-        assert_eq!(
-            report,
-            ScrubReport {
-                vacuumed: true,
-                wal_truncated: true,
-                blocked_by: None
-            }
-        );
-        assert!(
-            !contains(&bytes(&path), c.as_bytes()),
-            "work.db holds the canary"
-        );
-        assert!(
-            !contains(&bytes(&wal(&path)), c.as_bytes()),
-            "work.db-wal holds the canary"
-        );
-        stop(w).await;
+            let n: i64 = ro(&path)
+                .query_row("select n from entity where id = 'task:a'", [], |r| r.get(0))
+                .unwrap();
+            // The body edited twice (three versions); a tx note.
+            let mut noted = agent();
+            noted.note = Some(format!("why {c}"));
+            change(&h, noted, n, body(format!("b2 {c}"))).await;
+            change(&h, agent(), n, body(format!("b3 {c}"))).await;
+            let both = |path: &Path| [bytes(path), bytes(&wal(path))].concat();
+            assert!(
+                contains(&both(&path), c.as_bytes()),
+                "the canary is in the file first"
+            );
+            excise(
+                &h,
+                user(),
+                Target::Entity("task:a".into()),
+                None,
+                "r".into(),
+                vec![],
+            )
+            .await
+            .unwrap();
+            let report = scrub(&h).await.unwrap();
+            assert_eq!(
+                report,
+                ScrubReport {
+                    vacuumed: true,
+                    wal_truncated: true,
+                    blocked_by: None
+                }
+            );
+            assert!(
+                !contains(&bytes(&path), c.as_bytes()),
+                "work.db holds the canary"
+            );
+            assert!(
+                !contains(&bytes(&wal(&path)), c.as_bytes()),
+                "work.db-wal holds the canary"
+            );
+            stop(w).await;
+        })
     }
 
-    #[tokio::test]
-    async fn a_reader_blocks_truncate_and_the_report_says_so() {
-        let dir = tempfile::tempdir().unwrap();
-        let (w, h, path) = spawn(&dir);
-        create(&h, agent(), task("task:a", "a title here", "b", json!({}))).await;
-        // A read transaction pins a snapshot in the WAL.
-        let reader = ro(&path);
-        reader.execute_batch("begin").unwrap();
-        let _: i64 = reader
-            .query_row("select count(*) from entity", [], |r| r.get(0))
+    #[test]
+    fn a_reader_blocks_truncate_and_the_report_says_so() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (w, h, path) = spawn(&dir);
+            create(&h, agent(), task("task:a", "a title here", "b", json!({}))).await;
+            // A read transaction pins a snapshot in the WAL.
+            let reader = ro(&path);
+            reader.execute_batch("begin").unwrap();
+            let _: i64 = reader
+                .query_row("select count(*) from entity", [], |r| r.get(0))
+                .unwrap();
+            excise(
+                &h,
+                user(),
+                Target::Entity("task:a".into()),
+                None,
+                "r".into(),
+                vec![],
+            )
+            .await
             .unwrap();
-        excise(
-            &h,
-            user(),
-            Target::Entity("task:a".into()),
-            None,
-            "r".into(),
-            vec![],
-        )
-        .await
-        .unwrap();
-        let report = scrub(&h).await.unwrap();
-        assert!(!report.wal_truncated);
-        assert_eq!(
-            report.blocked_by,
-            Some(crate::graph::writer::Blocker::Readers)
-        );
-        let shown = serde_json::to_value(&report).unwrap();
-        assert_eq!(shown["wal_truncated"], json!(false));
-        assert_eq!(shown["blocked_by"], json!("readers"));
-        // Once the reader is gone, scrub on its own finishes the job.
-        reader.execute_batch("commit").unwrap();
-        drop(reader);
-        let again = scrub(&h).await.unwrap();
-        assert!(
-            again.wal_truncated && again.blocked_by.is_none(),
-            "{again:?}"
-        );
-        stop(w).await;
+            let report = scrub(&h).await.unwrap();
+            assert!(!report.wal_truncated);
+            assert_eq!(
+                report.blocked_by,
+                Some(crate::graph::writer::Blocker::Readers)
+            );
+            let shown = serde_json::to_value(&report).unwrap();
+            assert_eq!(shown["wal_truncated"], json!(false));
+            assert_eq!(shown["blocked_by"], json!("readers"));
+            // Once the reader is gone, scrub on its own finishes the job.
+            reader.execute_batch("commit").unwrap();
+            drop(reader);
+            let again = scrub(&h).await.unwrap();
+            assert!(
+                again.wal_truncated && again.blocked_by.is_none(),
+                "{again:?}"
+            );
+            stop(w).await;
+        })
     }
 }

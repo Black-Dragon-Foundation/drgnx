@@ -4,8 +4,8 @@
 //! older version are ignored.
 
 use crate::model::{
-    EdgeKey, Focus, GroupId, Node, OverlayId, OverlayKind, Rect, Ref, Region, SideFold, TabId,
-    Version, WinId, Workbench,
+    Focus, GroupId, Node, OverlayId, OverlayKind, Rect, Ref, Region, SideFold, TabId, Version,
+    WinId, WindowEdge, Workbench,
 };
 
 /// One region of the skeleton: shown or not, folded (the right's strip), its size in device px (cells on a TTY).
@@ -135,7 +135,12 @@ impl Workbench {
     }
 
     /// Emacs's actual device-px edges after realising `version`; ignored (false) when the model has moved on.
-    pub fn set_edges(&mut self, w: WinId, version: Version, edges: Vec<(EdgeKey, Rect)>) -> bool {
+    pub fn set_edges(
+        &mut self,
+        w: WinId,
+        version: Version,
+        edges: Vec<(WindowEdge, Rect)>,
+    ) -> bool {
         if version != self.version {
             return false;
         }
@@ -180,23 +185,23 @@ impl Workbench {
     /// The rectangle chrome and hit tests use, in device px: the reported edge, else the requested one.
     /// The edges Emacs last reported for OS window `w` (empty: none, or no such window): what the chrome's rects
     /// follow besides the version, which a report does not change.
-    pub fn reported_edges(&self, w: WinId) -> &[(EdgeKey, Rect)] {
+    pub fn reported_edges(&self, w: WinId) -> &[(WindowEdge, Rect)] {
         self.windows
             .iter()
             .find(|x| x.id == w)
             .map_or(&[], |x| x.edges.as_slice())
     }
 
-    pub fn rect(&self, w: WinId, key: EdgeKey) -> Option<Rect> {
+    pub fn rect(&self, w: WinId, key: WindowEdge) -> Option<Rect> {
         let wi = self.windows.iter().position(|x| x.id == w)?;
         if let Some((_, r)) = self.windows[wi].edges.iter().find(|(k, _)| *k == key) {
             return Some(*r);
         }
         let s = self.scale_of(wi);
         let r = match key {
-            EdgeKey::Region(reg) => self.region_rects(wi).into_iter().find(|x| x.0 == reg)?.1,
-            EdgeKey::Group(g) => self.group_rects(wi).into_iter().find(|x| x.0 == g)?.1,
-            EdgeKey::Section(i) => self.section_rect(wi, i)?,
+            WindowEdge::Region(reg) => self.region_rects(wi).into_iter().find(|x| x.0 == reg)?.1,
+            WindowEdge::Group(g) => self.group_rects(wi).into_iter().find(|x| x.0 == g)?.1,
+            WindowEdge::Section(i) => self.section_rect(wi, i)?,
         };
         let d = |v: i32| (v as f32 * s).round() as i32;
         Some(Rect {

@@ -28,7 +28,7 @@ proptest! {
         let stream: Vec<u8> = pieces.concat();
         let mut c = codec();
         let mut buf = Default::default();
-        let _ = c.decode(&mut buf);
+        drop(c.decode(&mut buf));
         let (mut at, mut r) = (0, 0);
         'reading: while at < stream.len() {
             let n = reads[r % reads.len()].min(stream.len() - at);
@@ -39,7 +39,7 @@ proptest! {
                 match c.decode(&mut buf) {
                     Ok(Some(line)) => {
                         prop_assert!(line.len() <= MAX_CLIENT_LINE);
-                        let _ = parse_strict(&line);
+                        drop(parse_strict(&line));
                     }
                     Ok(None) => break,
                     // the connection is closed: nothing after it is read

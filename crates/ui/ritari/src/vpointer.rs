@@ -6,7 +6,7 @@
 //! It exits at the end of stdin or when the compositor goes.
 
 use std::io::BufRead;
-use std::time::Instant;
+use stund::Instant;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::wl_pointer::ButtonState;
 use wayland_client::protocol::{wl_registry::WlRegistry, wl_seat::WlSeat};
@@ -38,7 +38,7 @@ delegate_noop!(Client: ZwlrVirtualPointerV1);
 /// Run the client; exits 0 at the end of stdin or when the compositor goes, 1 without a virtual pointer manager.
 pub fn run() -> ! {
     let fail = |e: String| -> ! {
-        eprintln!("nh-recorder --virtual-pointer: {e}");
+        annall::cli_err(&format!("nh-recorder --virtual-pointer: {e}")).unwrap_or_default();
         std::process::exit(1)
     };
     let conn = Connection::connect_to_env().unwrap_or_else(|e| fail(e.to_string()));
@@ -53,7 +53,7 @@ pub fn run() -> ! {
     queue
         .roundtrip(&mut Client)
         .unwrap_or_else(|e| fail(e.to_string()));
-    println!("READY");
+    annall::cli_out("READY").unwrap_or_default();
     let start = Instant::now();
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
@@ -69,7 +69,10 @@ pub fn run() -> ! {
             ["press"] => pointer.button(time, LEFT, ButtonState::Pressed),
             ["release"] => pointer.button(time, LEFT, ButtonState::Released),
             _ => {
-                eprintln!("nh-recorder --virtual-pointer: unknown line {line:?}");
+                annall::cli_err(&format!(
+                    "nh-recorder --virtual-pointer: unknown line {line:?}"
+                ))
+                .unwrap_or_default();
                 continue;
             }
         }
@@ -77,7 +80,7 @@ pub fn run() -> ! {
         if conn.flush().is_err() {
             break;
         }
-        println!("ok");
+        annall::cli_out("ok").unwrap_or_default();
     }
     std::process::exit(0)
 }

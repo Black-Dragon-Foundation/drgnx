@@ -108,36 +108,14 @@ pub async fn run_command(
     let Some((prog, args)) = argv.split_first() else {
         return Err(CredError::Failed("the credential command is empty".into()));
     };
-    let mut cmd = tokio::process::Command::new(prog);
-    cmd.args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-    // SAFETY: only `setsid(2)`, which is async-signal-safe, runs between fork and exec. A session of its own has no
-    // controlling terminal, so the command cannot open `/dev/tty` to ask the user anything.
-    unsafe {
-        cmd.pre_exec(|| {
-            rustix::process::setsid()
-                .map(|_| ())
-                .map_err(std::io::Error::from)
-        });
-    }
-    let child = cmd
-        .spawn()
-        .map_err(|e| CredError::Failed(format!("{prog} did not start: {e}")))?;
-    let group = child
-        .id()
-        .and_then(|p| rustix::process::Pid::from_raw(p as i32));
-    let out = match crate::clock::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => return Err(CredError::Failed(format!("{prog}: {e}"))),
-        Err(_) => {
-            if let Some(g) = group {
-                let _ = rustix::process::kill_process_group(g, rustix::process::Signal::KILL);
-            }
-            return Err(CredError::TimedOut);
-        }
+    let mut cmd = crate::proc::Command::new(prog);
+    // a session of its own has no controlling terminal, so the command cannot open `/dev/tty` to ask the user anything;
+    // past the deadline its whole group is ended
+    cmd.args(args).new_session().deadline(timeout);
+    let out = match cmd.output_async().await {
+        Ok(out) => out,
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => return Err(CredError::TimedOut),
+        Err(e) => return Err(CredError::Failed(format!("{prog} did not run: {e}"))),
     };
     let stdout = Zeroizing::new(out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -232,17 +210,13 @@ impl Resolver {
 
     /// Forget what is cached: the provider said the credentials are expired.
     pub fn forget(&self) {
-        *self.cached.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *saman::lock(&self.cached) = None;
     }
 
     /// The AWS credentials, fetched when none are cached or they expire within five minutes.
     pub async fn aws(&self) -> Result<Arc<AwsCredentials>, CloudError> {
         let now = crate::clock::wall();
-        if let Some(c) = self
-            .cached
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
+        if let Some(c) = saman::lock(&self.cached).as_ref()
             && c.expires.is_none_or(|t| t > now + REFRESH_MARGIN)
         {
             return Ok(c.clone());
@@ -253,7 +227,7 @@ impl Resolver {
             Source::Keyring(name) => CloudError::Other(format!("the keyring key {name:?}: {e}")),
         })?;
         let creds = Arc::new(creds);
-        *self.cached.lock().unwrap_or_else(|e| e.into_inner()) = Some(creds.clone());
+        *saman::lock(&self.cached) = Some(creds.clone());
         Ok(creds)
     }
 
@@ -295,52 +269,54 @@ mod tests {
     }
 
     // [D] pure (a real child, no timing: it answers or fails at once)
-    #[tokio::test]
-    async fn a_credential_command_that_prompts_is_refused() {
-        // a prompt on stderr is refused even when the command then goes on and exits 0
-        let mfa = sh(&format!(
-            "printf 'Enter MFA code for arn:aws:iam::000000000000:mfa/u: ' >&2; read code; printf '%s' '{}'",
-            fake_json()
-        ));
-        assert_eq!(
-            run_command(&mfa, COMMAND_TIMEOUT).await.err(),
-            Some(CredError::Prompted)
-        );
-        // no terminal to open: the command is in a session of its own
-        let tty = sh("exec 3</dev/tty || exit 9; echo opened");
-        assert!(matches!(
-            run_command(&tty, COMMAND_TIMEOUT).await,
-            Err(CredError::Failed(_))
-        ));
-        // stdin is empty, not the hub's
-        let stdin = sh("if read -r x; then echo got-input; else exit 3; fi");
-        assert!(matches!(
-            run_command(&stdin, COMMAND_TIMEOUT).await,
-            Err(CredError::Failed(_))
-        ));
-        // a well-behaved command gives credentials; the error of a broken one never quotes its output
-        let good = sh(&format!("printf '%s' '{}'", fake_json()));
-        let out = run_command(&good, COMMAND_TIMEOUT).await.unwrap();
-        let c = parse_aws(&out).unwrap();
-        assert!(
-            c.access_key_id
-                .expose_secret()
-                .ends_with("FAKEFAKEFAKE0001")
-        );
-        assert_eq!(c.session_token.unwrap().expose_secret(), "tok");
-        assert!(c.expires.is_some());
-        let bad = parse_aws(b"{\"AccessKeyId\": \"leaked-value\"")
-            .err()
-            .unwrap();
-        assert!(!bad.to_string().contains("leaked-value"), "{bad}");
-        assert_eq!(
-            shown(&[
-                "aws".into(),
-                "configure".into(),
-                "export-credentials".into(),
-                "a b".into()
-            ]),
-            "aws configure export-credentials 'a b'"
-        );
+    #[test]
+    fn a_credential_command_that_prompts_is_refused() {
+        saman::block_on_current(async move {
+            // a prompt on stderr is refused even when the command then goes on and exits 0
+            let mfa = sh(&format!(
+                "printf 'Enter MFA code for arn:aws:iam::000000000000:mfa/u: ' >&2; read code; printf '%s' '{}'",
+                fake_json()
+            ));
+            assert_eq!(
+                run_command(&mfa, COMMAND_TIMEOUT).await.err(),
+                Some(CredError::Prompted)
+            );
+            // no terminal to open: the command is in a session of its own
+            let tty = sh("exec 3</dev/tty || exit 9; echo opened");
+            assert!(matches!(
+                run_command(&tty, COMMAND_TIMEOUT).await,
+                Err(CredError::Failed(_))
+            ));
+            // stdin is empty, not the hub's
+            let stdin = sh("if read -r x; then echo got-input; else exit 3; fi");
+            assert!(matches!(
+                run_command(&stdin, COMMAND_TIMEOUT).await,
+                Err(CredError::Failed(_))
+            ));
+            // a well-behaved command gives credentials; the error of a broken one never quotes its output
+            let good = sh(&format!("printf '%s' '{}'", fake_json()));
+            let out = run_command(&good, COMMAND_TIMEOUT).await.unwrap();
+            let c = parse_aws(&out).unwrap();
+            assert!(
+                c.access_key_id
+                    .expose_secret()
+                    .ends_with("FAKEFAKEFAKE0001")
+            );
+            assert_eq!(c.session_token.unwrap().expose_secret(), "tok");
+            assert!(c.expires.is_some());
+            let bad = parse_aws(b"{\"AccessKeyId\": \"leaked-value\"")
+                .err()
+                .unwrap();
+            assert!(!bad.to_string().contains("leaked-value"), "{bad}");
+            assert_eq!(
+                shown(&[
+                    "aws".into(),
+                    "configure".into(),
+                    "export-credentials".into(),
+                    "a b".into()
+                ]),
+                "aws configure export-credentials 'a b'"
+            );
+        })
     }
 }

@@ -1202,159 +1202,159 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
         });
         return Ok(RunStarted { run: id });
     }
-    std::thread::Builder::new()
-        .name("grep".into())
-        .spawn(move || {
-            // a git scope's files (and with `±` their added lines), found here, off the request's path
-            let (mut query, mut keep) = (query, None::<Arc<Keep>>);
-            if let Some(g) = &git {
-                let (done, why) = match scoped::find(&query.root, g) {
-                    Ok(s) => {
-                        query.files = Some(s.files);
-                        keep = s.keep.map(Arc::new);
-                        (s.done, None)
-                    }
-                    Err((done, why)) => (done, Some(why)),
-                };
-                let Some(f) = front.upgrade() else { return };
-                let (files, k) = (query.files.clone(), keep.clone());
-                f.core.views.greps.with(conn, &view, id, |r| {
-                    r.query.files = files;
-                    r.keep = k;
-                    r.scope = Some(done);
-                });
-                if why.is_some() {
-                    f.core.views.grep_done(&f, conn, &view, id, why);
-                    return;
+    saman::spawn_thread("grep", move || {
+        // a git scope's files (and with `±` their added lines), found here, off the request's path
+        let (mut query, mut keep) = (query, None::<Arc<Keep>>);
+        if let Some(g) = &git {
+            let (done, why) = match scoped::find(&query.root, g) {
+                Ok(s) => {
+                    query.files = Some(s.files);
+                    keep = s.keep.map(Arc::new);
+                    (s.done, None)
                 }
-            }
-            // a file's matches as the run lists them, and the file as the search read it (and its definitions), read
-            // outside every lock; none when the run is over or a buffer's text stands for the file (its matches come
-            // at the end)
-            let read_file = |mut ms: Vec<Match>| -> Option<(String, Vec<Match>, Option<Read>)> {
-                if cancel.load(Ordering::Relaxed) {
-                    return None;
-                }
-                let file = ms[0].file.clone();
-                scoped::kept(keep.as_deref(), &file, &mut ms);
-                if ms.is_empty() {
-                    return None;
-                }
-                let Some(f) = front.upgrade() else {
-                    cancel.store(true, Ordering::Relaxed);
-                    return None;
-                };
-                if !f.core.views.greps.disk_ok(conn, &view, &file) {
-                    return None;
-                }
-                let read = run::read(Path::new(&file), &ms, context);
-                Some((file, ms, read))
+                Err((done, why)) => (done, Some(why)),
             };
-            // the batches go from one thread, as they come: one holder of the run's locks at a time, so the next
-            // search's request never waits behind several
-            let send = |(file, ms, read): (String, Vec<Match>, Option<Read>)| {
-                if cancel.load(Ordering::Relaxed) {
-                    return;
-                }
-                let Some(f) = front.upgrade() else {
-                    cancel.store(true, Ordering::Relaxed);
-                    return;
-                };
-                if !f.core.views.grep_batch(&f, conn, &view, id, file, ms, read) {
-                    cancel.store(true, Ordering::Relaxed);
-                }
-            };
-            // a Pattern search reads and parses each file itself (`pattern`), its marks kept with the matches a
-            // `±` scope leaves; the editor's unsaved buffers are not searched (their files neither)
-            if let Mode::Pattern(find) = &mode {
-                let result = pattern::run(&query, find, &cancel, |batch| {
-                    let marks: std::collections::HashMap<(u32, u32), run::Mark> = batch
-                        .iter()
-                        .map(|(m, k)| ((m.line, m.col), k.clone()))
-                        .collect();
-                    let ms = batch.into_iter().map(|(m, _)| m).collect();
-                    if let Some((file, ms, read)) = read_file(ms) {
-                        let read = read.map(|mut r| {
-                            r.marks = ms
-                                .iter()
-                                .map(|m| marks.get(&(m.line, m.col)).cloned())
-                                .collect();
-                            r
-                        });
-                        send((file, ms, read));
-                    }
-                });
-                if let Some(f) = front.upgrade() {
-                    f.core.views.grep_done(&f, conn, &view, id, result.err());
-                }
+            let Some(f) = front.upgrade() else { return };
+            let (files, k) = (query.files.clone(), keep.clone());
+            f.core.views.greps.with(conn, &view, id, |r| {
+                r.query.files = files;
+                r.keep = k;
+                r.scope = Some(done);
+            });
+            if why.is_some() {
+                f.core.views.grep_done(&f, conn, &view, id, why);
                 return;
             }
-            // with context, a file's read parses it: a few readers take the files as grep finds them (its order is
-            // already unordered) and hand them to this thread
-            let result = if context {
-                let (to_read, files) = std::sync::mpsc::channel::<Vec<Match>>();
-                let (to_send, reads) = std::sync::mpsc::channel();
-                let files = std::sync::Mutex::new(files);
-                let readers = std::thread::available_parallelism()
-                    .map_or(1, |n| n.get().min(CONTEXT_READERS));
-                std::thread::scope(|s| {
-                    for _ in 0..readers {
-                        let to_send = to_send.clone();
-                        let (files, read_file) = (&files, &read_file);
-                        s.spawn(move || {
-                            // the receiver's lock is let go before the file is read
-                            loop {
-                                let next = lock(files).recv();
-                                let Ok(ms) = next else { break };
-                                if let Some(r) = read_file(ms) {
-                                    let _ = to_send.send(r);
-                                }
-                            }
-                        });
-                    }
-                    drop(to_send);
-                    let (q, c) = (&query, &cancel);
-                    let grep = s.spawn(move || {
-                        // its end drops the readers' sender: they stop once they have taken every file
-                        grep::run(q, c, |ms| {
-                            let _ = to_read.send(ms);
-                        })
-                    });
-                    for r in reads {
-                        send(r);
-                    }
-                    grep.join()
-                        .unwrap_or_else(|_| Err("the search's grep thread failed".into()))
-                })
-            } else {
-                grep::run(&query, &cancel, |ms| {
-                    if let Some(r) = read_file(ms) {
-                        send(r);
-                    }
-                })
+        }
+        // a file's matches as the run lists them, and the file as the search read it (and its definitions), read
+        // outside every lock; none when the run is over or a buffer's text stands for the file (its matches come
+        // at the end)
+        let read_file = |mut ms: Vec<Match>| -> Option<(String, Vec<Match>, Option<Read>)> {
+            if cancel.load(Ordering::Relaxed) {
+                return None;
+            }
+            let file = ms[0].file.clone();
+            scoped::kept(keep.as_deref(), &file, &mut ms);
+            if ms.is_empty() {
+                return None;
+            }
+            let Some(f) = front.upgrade() else {
+                cancel.store(true, Ordering::Relaxed);
+                return None;
             };
-            if let Some(f) = front.upgrade() {
-                // the editor's buffers with unsaved edits, searched here, outside every lock
-                let puts = f
-                    .core
-                    .views
-                    .greps
-                    .buffers_of(conn, &view)
-                    .into_iter()
-                    .filter_map(|(file, b)| {
-                        Some((
-                            file.clone(),
-                            put_of(&query, &file, &b, context, keep.as_deref())?,
-                        ))
-                    })
-                    .collect::<Vec<_>>();
-                if !cancel.load(Ordering::Relaxed) && !puts.is_empty() {
-                    f.core.views.grep_puts(&f, conn, &view, id, puts);
+            if !f.core.views.greps.disk_ok(conn, &view, &file) {
+                return None;
+            }
+            let read = run::read(Path::new(&file), &ms, context);
+            Some((file, ms, read))
+        };
+        // the batches go from one thread, as they come: one holder of the run's locks at a time, so the next
+        // search's request never waits behind several
+        let send = |(file, ms, read): (String, Vec<Match>, Option<Read>)| {
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            let Some(f) = front.upgrade() else {
+                cancel.store(true, Ordering::Relaxed);
+                return;
+            };
+            if !f.core.views.grep_batch(&f, conn, &view, id, file, ms, read) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        };
+        // a Pattern search reads and parses each file itself (`pattern`), its marks kept with the matches a
+        // `±` scope leaves; the editor's unsaved buffers are not searched (their files neither)
+        if let Mode::Pattern(find) = &mode {
+            let result = pattern::run(&query, find, &cancel, |batch| {
+                let marks: std::collections::HashMap<(u32, u32), run::Mark> = batch
+                    .iter()
+                    .map(|(m, k)| ((m.line, m.col), k.clone()))
+                    .collect();
+                let ms = batch.into_iter().map(|(m, _)| m).collect();
+                if let Some((file, ms, read)) = read_file(ms) {
+                    let read = read.map(|mut r| {
+                        r.marks = ms
+                            .iter()
+                            .map(|m| marks.get(&(m.line, m.col)).cloned())
+                            .collect();
+                        r
+                    });
+                    send((file, ms, read));
                 }
+            });
+            if let Some(f) = front.upgrade() {
                 f.core.views.grep_done(&f, conn, &view, id, result.err());
             }
-        })
-        .map_err(|e| invalid("view", &e.to_string()))?;
+            return;
+        }
+        // with context, a file's read parses it: a few readers take the files as grep finds them (its order is
+        // already unordered) and hand them to this thread
+        let result = if context {
+            let (to_read, files) = std::sync::mpsc::channel::<Vec<Match>>();
+            let (to_send, reads) = std::sync::mpsc::channel();
+            let files = std::sync::Mutex::new(files);
+            let readers =
+                std::thread::available_parallelism().map_or(1, |n| n.get().min(CONTEXT_READERS));
+            std::thread::scope(|s| {
+                for _ in 0..readers {
+                    let to_send = to_send.clone();
+                    let (files, read_file) = (&files, &read_file);
+                    s.spawn(move || {
+                        // the receiver's lock is let go before the file is read
+                        loop {
+                            let next = lock(files).recv();
+                            let Ok(ms) = next else { break };
+                            if let Some(r) = read_file(ms) {
+                                crate::soft::done(to_send.send(r), "to_send send");
+                            }
+                        }
+                    });
+                }
+                drop(to_send);
+                let (q, c) = (&query, &cancel);
+                let grep = s.spawn(move || {
+                    // its end drops the readers' sender: they stop once they have taken every file
+                    grep::run(q, c, |ms| {
+                        crate::soft::done(to_read.send(ms), "to_read send");
+                    })
+                    .map_err(|e| e.to_string())
+                });
+                for r in reads {
+                    send(r);
+                }
+                grep.join()
+                    .unwrap_or_else(|_| Err("the search's grep thread failed".into()))
+            })
+        } else {
+            grep::run(&query, &cancel, |ms| {
+                if let Some(r) = read_file(ms) {
+                    send(r);
+                }
+            })
+            .map_err(|e| e.to_string())
+        };
+        if let Some(f) = front.upgrade() {
+            // the editor's buffers with unsaved edits, searched here, outside every lock
+            let puts = f
+                .core
+                .views
+                .greps
+                .buffers_of(conn, &view)
+                .into_iter()
+                .filter_map(|(file, b)| {
+                    Some((
+                        file.clone(),
+                        put_of(&query, &file, &b, context, keep.as_deref())?,
+                    ))
+                })
+                .collect::<Vec<_>>();
+            if !cancel.load(Ordering::Relaxed) && !puts.is_empty() {
+                f.core.views.grep_puts(&f, conn, &view, id, puts);
+            }
+            f.core.views.grep_done(&f, conn, &view, id, result.err());
+        }
+    })
+    .map_err(|e| invalid("view", &e.to_string()))?;
     Ok(RunStarted { run: id })
 }
 
@@ -2030,7 +2030,7 @@ async fn handoff_pair(f: &Front, c: &Caller, root: &Path, profile: &str) -> Resu
         Err(e) => Err(e),
     };
     if let Err(e) = paired {
-        let _ = f.core.agents.kill(started.id.as_str()).await;
+        crate::soft::done(f.core.agents.kill(started.id.as_str()).await, "mod");
         return Err(e);
     }
     Ok(started.id)
@@ -2079,7 +2079,7 @@ async fn handoff_worker(
             c,
         )
         .await?;
-    let _ = f.core.runs.git().touched(&tree.path).await;
+    crate::soft::done(f.core.runs.git().touched(&tree.path).await, "mod");
     let cwd = tree.path.to_string_lossy().into_owned();
     let reg = norn::write::agents::AgentRegister {
         id: started.id.clone(),

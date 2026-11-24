@@ -2901,7 +2901,7 @@ mod tests {
     fn the_detail_tile_opens_with_the_agent_s_avatar_and_muted_section_heads() {
         let mut tile = env(2.0);
         tile.width_px = 800;
-        tile.palette = vec![("agent-1".into(), "#c6a0ff".into())];
+        tile.palette = vec![("agent-1".into(), "rebeccapurple".into())];
         let (rows, images) = detail_tile(&flow(), "task:J#5", &tile, &fonts());
         let all: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         let all = all.join("\n");
@@ -2922,7 +2922,7 @@ mod tests {
             .find(|(id, _)| *id == head.images[0].1)
             .expect("the avatar's image");
         assert!(
-            svg.contains("<circle") && svg.contains("#c6a0ff") && svg.contains(">S<"),
+            svg.contains("<circle") && svg.contains("rebeccapurple") && svg.contains(">S<"),
             "{svg}"
         );
         assert!(

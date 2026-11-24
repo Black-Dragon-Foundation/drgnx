@@ -21,20 +21,18 @@ pub struct RelayPair {
 }
 
 /// `"3128=/run/drgnx/proxy.sock"`: the port is 1-65535 and the path absolute.
-pub fn parse_pair(s: &str) -> Result<RelayPair, String> {
+pub fn parse_pair(s: &str) -> villa::Result<RelayPair> {
     let (port, socket) = s
         .split_once('=')
-        .ok_or_else(|| format!("relay pair {s:?}: expected PORT=SOCKET"))?;
-    let port: u16 = port
-        .parse()
-        .ok()
-        .filter(|p| *p != 0)
-        .ok_or_else(|| format!("relay pair {s:?}: the port must be 1-65535"))?;
+        .ok_or_else(|| villa::Error::invalid(format!("relay pair {s:?}: expected PORT=SOCKET")))?;
+    let port: u16 = port.parse().ok().filter(|p| *p != 0).ok_or_else(|| {
+        villa::Error::invalid(format!("relay pair {s:?}: the port must be 1-65535"))
+    })?;
     let socket = PathBuf::from(socket);
     if !socket.is_absolute() {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "relay pair {s:?}: the socket path must be absolute"
-        ));
+        )));
     }
     Ok(RelayPair { port, socket })
 }
@@ -44,7 +42,17 @@ async fn forward(tcp: TcpStream, socket: PathBuf) {
     match UnixStream::connect(&socket).await {
         // Errors mid-stream (a peer reset) end this connection only; there is nothing to report.
         Ok(unix) => splice(tcp, unix).await,
-        Err(e) => eprintln!("gleipnir relay: cannot reach {}: {e}", socket.display()),
+        Err(e) => crate::say(&format!(
+            "gleipnir relay: cannot reach {}: {e}",
+            socket.display()
+        )),
+    }
+}
+
+/// A copy or a shutdown that ended with an error: a peer's reset ends its own connection and nothing else, so it is only logged.
+fn peer_gone<T>(ended: io::Result<T>, what: &str) {
+    if let Err(e) = ended {
+        tracing::debug!(error = %e, what, "a relayed connection ended with an error");
     }
 }
 
@@ -58,14 +66,20 @@ async fn splice(tcp: TcpStream, unix: UnixStream) {
     let (mut ur, mut uw) = unix.into_split();
     let up = async {
         if tokio::io::copy(&mut tr, &mut uw).await.is_ok() {
-            let _ = uw.shutdown().await;
+            peer_gone(uw.shutdown().await, "shutdown toward the socket");
         } else {
-            let _ = tokio::io::copy(&mut tr, &mut tokio::io::sink()).await;
+            peer_gone(
+                tokio::io::copy(&mut tr, &mut tokio::io::sink()).await,
+                "drain of the client",
+            );
         }
     };
     let down = async {
-        let _ = tokio::io::copy(&mut ur, &mut tw).await;
-        let _ = tw.shutdown().await;
+        peer_gone(
+            tokio::io::copy(&mut ur, &mut tw).await,
+            "copy to the client",
+        );
+        peer_gone(tw.shutdown().await, "shutdown toward the client");
     };
     tokio::join!(up, down);
 }
@@ -74,12 +88,13 @@ async fn accept_loop(listener: TcpListener, socket: PathBuf) {
     loop {
         match listener.accept().await {
             Ok((tcp, _)) => {
-                tokio::spawn(forward(tcp, socket.clone()));
+                saman::spawn("relay-forward", forward(tcp, socket.clone()))
+                    .detach("a connection lives until one of its two ends closes");
             }
             Err(e) => {
                 // EMFILE and friends: back off instead of spinning.
-                eprintln!("gleipnir relay: accept: {e}");
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                crate::say(&format!("gleipnir relay: accept: {e}"));
+                stund::sleep(Duration::from_millis(100)).await;
             }
         }
     }
@@ -111,7 +126,7 @@ pub async fn run(pairs: Vec<RelayPair>, ready: Option<OwnedFd>) -> io::Result<()
 /// Resolves when the parent process changes (the sandbox's init went away).
 async fn parent_gone(initial: Option<rustix::process::Pid>) {
     loop {
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        stund::sleep(Duration::from_secs(1)).await;
         if rustix::process::getppid() != initial {
             return;
         }
@@ -153,7 +168,7 @@ fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Args, String> {
             parent = Some(pid);
         } else {
             let s = a.to_str().ok_or("relay pair is not UTF-8")?;
-            pairs.push(parse_pair(s)?);
+            pairs.push(parse_pair(s).map_err(|e| e.to_string())?);
         }
     }
     match parent {
@@ -193,35 +208,32 @@ pub fn main(args: impl Iterator<Item = OsString>) -> i32 {
     } = match parse_args(args) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("gleipnir relay: {e}");
+            crate::say(&format!("gleipnir relay: {e}"));
             return 2;
         }
     };
     if let Err(e) = adopt_parent(parent) {
-        eprintln!("gleipnir relay: {e}");
+        crate::say(&format!("gleipnir relay: {e}"));
         return 1;
     }
     let initial = Some(parent);
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
+    let pool = match saman::Executor::new(1) {
+        Ok(pool) => pool,
         Err(e) => {
-            eprintln!("gleipnir relay: runtime: {e}");
+            crate::say(&format!("gleipnir relay: runtime: {e}"));
             return 1;
         }
     };
-    rt.block_on(async {
+    pool.block_on(async {
         let Ok(mut term) = signal(SignalKind::terminate()) else {
-            eprintln!("gleipnir relay: cannot watch SIGTERM");
+            crate::say("gleipnir relay: cannot watch SIGTERM");
             return 1;
         };
         tokio::select! {
             r = run(pairs, ready) => match r {
                 Ok(()) => 0,
                 Err(e) => {
-                    eprintln!("gleipnir relay: {e}");
+                    crate::say(&format!("gleipnir relay: {e}"));
                     1
                 }
             },
@@ -251,18 +263,20 @@ mod tests {
     /// An echo server: every byte read comes back; half-close is passed on.
     fn echo_server(path: &std::path::Path) {
         let l = UnixListener::bind(path).unwrap();
-        tokio::spawn(async move {
+        saman::spawn("echo-accept", async move {
             loop {
                 let Ok((mut s, _)) = l.accept().await else {
                     return;
                 };
-                tokio::spawn(async move {
+                saman::spawn("echo", async move {
                     let (mut r, mut w) = s.split();
-                    let _ = tokio::io::copy(&mut r, &mut w).await;
-                    let _ = w.shutdown().await;
-                });
+                    peer_gone(tokio::io::copy(&mut r, &mut w).await, "echo copy");
+                    peer_gone(w.shutdown().await, "echo shutdown");
+                })
+                .detach("an echo lives until its client closes");
             }
-        });
+        })
+        .detach("the echo server lives until the test's runtime ends");
     }
 
     fn pattern(n: usize, seed: u8) -> Vec<u8> {
@@ -278,12 +292,12 @@ mod tests {
     async fn start(
         n: usize,
         make: impl Fn(&[u16]) -> Vec<RelayPair>,
-    ) -> (tokio::task::JoinHandle<io::Result<()>>, Vec<u16>) {
+    ) -> (saman::Task<io::Result<()>>, Vec<u16>) {
         for _ in 0..5 {
             let ports: Vec<u16> = (0..n).map(|_| free_port()).collect();
             let (mut r, w) = std::io::pipe().unwrap();
-            let h = tokio::spawn(run(make(&ports), Some(OwnedFd::from(w))));
-            let line = tokio::task::spawn_blocking(move || {
+            let h = saman::spawn("relay", run(make(&ports), Some(OwnedFd::from(w))));
+            let line = saman::spawn_blocking("read-ready", move || {
                 let mut s = String::new();
                 r.read_to_string(&mut s).unwrap();
                 s
@@ -325,226 +339,242 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn bytes_both_ways() {
-        let dir = tempfile::tempdir().unwrap();
-        let sock = dir.path().join("e.sock");
-        echo_server(&sock);
-        let (h, ports) = start(1, |p| {
-            vec![RelayPair {
-                port: p[0],
-                socket: sock.clone(),
-            }]
-        })
-        .await;
-        let port = ports[0];
-        let up = pattern(1 << 20, 1);
-        let mut c = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-        let (mut r, mut w) = c.split();
-        let send = async {
-            w.write_all(&up).await.unwrap();
-            w.shutdown().await.unwrap();
-        };
-        let mut got = Vec::new();
-        let recv = r.read_to_end(&mut got);
-        let (_, n) = tokio::join!(send, recv);
-        assert_eq!(n.unwrap(), up.len());
-        assert_eq!(got, up);
-        h.abort();
-    }
-
-    #[tokio::test]
-    async fn ready_only_after_every_listener() {
-        // The second port is taken: run fails, and `ready` is closed without a byte.
-        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let busy = taken.local_addr().unwrap().port();
-        let (mut r, w) = std::io::pipe().unwrap();
-        let res = run(
-            vec![
-                RelayPair {
-                    port: free_port(),
-                    socket: "/nonexistent/a".into(),
-                },
-                RelayPair {
-                    port: busy,
-                    socket: "/nonexistent/b".into(),
-                },
-            ],
-            Some(OwnedFd::from(w)),
-        )
-        .await;
-        assert!(res.is_err());
-        let mut s = String::new();
-        r.read_to_string(&mut s).unwrap();
-        assert_eq!(s, "", "no ready line when a listener failed");
-        // And on success the listeners are already accepting when `ready` arrives.
-        let dir = tempfile::tempdir().unwrap();
-        let sock = dir.path().join("e.sock");
-        echo_server(&sock);
-        let (h, ports) = start(1, |p| {
-            vec![RelayPair {
-                port: p[0],
-                socket: sock.clone(),
-            }]
-        })
-        .await;
-        let mut c = TcpStream::connect(("127.0.0.1", ports[0])).await.unwrap();
-        c.write_all(b"hi").await.unwrap();
-        let mut b = [0u8; 2];
-        c.read_exact(&mut b).await.unwrap();
-        assert_eq!(&b, b"hi");
-        h.abort();
-    }
-
-    #[tokio::test]
-    async fn hundred_connections() {
-        let dir = tempfile::tempdir().unwrap();
-        let sock = dir.path().join("e.sock");
-        echo_server(&sock);
-        let (h, ports) = start(1, |p| {
-            vec![RelayPair {
-                port: p[0],
-                socket: sock.clone(),
-            }]
-        })
-        .await;
-        let port = ports[0];
-        let mut set = tokio::task::JoinSet::new();
-        for i in 0..100u8 {
-            set.spawn(async move {
-                let mut c = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-                let msg = pattern(4096, i);
-                c.write_all(&msg).await.unwrap();
-                let mut got = vec![0u8; msg.len()];
-                c.read_exact(&mut got).await.unwrap();
-                assert_eq!(got, msg);
-            });
-        }
-        while let Some(r) = set.join_next().await {
-            r.unwrap();
-        }
-        h.abort();
-    }
-
-    #[tokio::test]
-    async fn unreachable_socket_closes_only_that_connection() {
-        let dir = tempfile::tempdir().unwrap();
-        let good = dir.path().join("good.sock");
-        echo_server(&good);
-        let (h, ports) = start(2, |p| {
-            vec![
-                RelayPair {
+    #[test]
+    fn bytes_both_ways() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sock = dir.path().join("e.sock");
+            echo_server(&sock);
+            let (h, ports) = start(1, |p| {
+                vec![RelayPair {
                     port: p[0],
-                    socket: dir.path().join("missing.sock"),
-                },
-                RelayPair {
-                    port: p[1],
-                    socket: good.clone(),
-                },
-            ]
-        })
-        .await;
-        let (bad_port, good_port) = (ports[0], ports[1]);
-        let mut c = TcpStream::connect(("127.0.0.1", bad_port)).await.unwrap();
-        let mut buf = Vec::new();
-        let n = tokio::time::timeout(Duration::from_secs(5), c.read_to_end(&mut buf))
-            .await
-            .expect("closed, not hung");
-        assert!(n.is_err() || n.unwrap() == 0);
-        // The listener and the other pair live on.
-        for port in [bad_port, good_port] {
+                    socket: sock.clone(),
+                }]
+            })
+            .await;
+            let port = ports[0];
+            let up = pattern(1 << 20, 1);
             let mut c = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-            let _ = c.write_all(b"x").await;
-        }
-        let mut c = TcpStream::connect(("127.0.0.1", good_port)).await.unwrap();
-        c.write_all(b"ok").await.unwrap();
-        let mut b = [0u8; 2];
-        c.read_exact(&mut b).await.unwrap();
-        assert_eq!(&b, b"ok");
-        assert!(!h.is_finished());
-        h.abort();
+            let (mut r, mut w) = c.split();
+            let send = async {
+                w.write_all(&up).await.unwrap();
+                w.shutdown().await.unwrap();
+            };
+            let mut got = Vec::new();
+            let recv = r.read_to_end(&mut got);
+            let (_, n) = tokio::join!(send, recv);
+            assert_eq!(n.unwrap(), up.len());
+            assert_eq!(got, up);
+            drop(h);
+        });
     }
 
-    #[tokio::test]
-    async fn half_close_preserved() {
-        // The server answers only after it saw EOF from the client; the client must still be able to read.
-        let dir = tempfile::tempdir().unwrap();
-        let sock = dir.path().join("h.sock");
-        let l = UnixListener::bind(&sock).unwrap();
-        tokio::spawn(async move {
-            let (mut s, _) = l.accept().await.unwrap();
-            let mut all = Vec::new();
-            s.read_to_end(&mut all).await.unwrap();
-            s.write_all(format!("saw {}", all.len()).as_bytes())
-                .await
-                .unwrap();
+    #[test]
+    fn ready_only_after_every_listener() {
+        saman::block_on_current(async {
+            // The second port is taken: run fails, and `ready` is closed without a byte.
+            let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let busy = taken.local_addr().unwrap().port();
+            let (mut r, w) = std::io::pipe().unwrap();
+            let res = run(
+                vec![
+                    RelayPair {
+                        port: free_port(),
+                        socket: "/nonexistent/a".into(),
+                    },
+                    RelayPair {
+                        port: busy,
+                        socket: "/nonexistent/b".into(),
+                    },
+                ],
+                Some(OwnedFd::from(w)),
+            )
+            .await;
+            assert!(res.is_err());
+            let mut s = String::new();
+            r.read_to_string(&mut s).unwrap();
+            assert_eq!(s, "", "no ready line when a listener failed");
+            // And on success the listeners are already accepting when `ready` arrives.
+            let dir = tempfile::tempdir().unwrap();
+            let sock = dir.path().join("e.sock");
+            echo_server(&sock);
+            let (h, ports) = start(1, |p| {
+                vec![RelayPair {
+                    port: p[0],
+                    socket: sock.clone(),
+                }]
+            })
+            .await;
+            let mut c = TcpStream::connect(("127.0.0.1", ports[0])).await.unwrap();
+            c.write_all(b"hi").await.unwrap();
+            let mut b = [0u8; 2];
+            c.read_exact(&mut b).await.unwrap();
+            assert_eq!(&b, b"hi");
+            drop(h);
         });
-        let (h, ports) = start(1, |p| {
-            vec![RelayPair {
-                port: p[0],
-                socket: sock.clone(),
-            }]
-        })
-        .await;
-        let mut c = TcpStream::connect(("127.0.0.1", ports[0])).await.unwrap();
-        c.write_all(&[7u8; 1000]).await.unwrap();
-        c.shutdown().await.unwrap();
-        let mut reply = String::new();
-        c.read_to_string(&mut reply).await.unwrap();
-        assert_eq!(reply, "saw 1000");
-        h.abort();
+    }
+
+    #[test]
+    fn hundred_connections() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sock = dir.path().join("e.sock");
+            echo_server(&sock);
+            let (h, ports) = start(1, |p| {
+                vec![RelayPair {
+                    port: p[0],
+                    socket: sock.clone(),
+                }]
+            })
+            .await;
+            let port = ports[0];
+            let mut set = tokio::task::JoinSet::new();
+            for i in 0..100u8 {
+                set.spawn(async move {
+                    let mut c = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+                    let msg = pattern(4096, i);
+                    c.write_all(&msg).await.unwrap();
+                    let mut got = vec![0u8; msg.len()];
+                    c.read_exact(&mut got).await.unwrap();
+                    assert_eq!(got, msg);
+                });
+            }
+            while let Some(r) = set.join_next().await {
+                r.unwrap();
+            }
+            drop(h);
+        });
+    }
+
+    #[test]
+    fn unreachable_socket_closes_only_that_connection() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let good = dir.path().join("good.sock");
+            echo_server(&good);
+            let (h, ports) = start(2, |p| {
+                vec![
+                    RelayPair {
+                        port: p[0],
+                        socket: dir.path().join("missing.sock"),
+                    },
+                    RelayPair {
+                        port: p[1],
+                        socket: good.clone(),
+                    },
+                ]
+            })
+            .await;
+            let (bad_port, good_port) = (ports[0], ports[1]);
+            let mut c = TcpStream::connect(("127.0.0.1", bad_port)).await.unwrap();
+            let mut buf = Vec::new();
+            let n = tokio::time::timeout(Duration::from_secs(5), c.read_to_end(&mut buf))
+                .await
+                .expect("closed, not hung");
+            assert!(n.is_err() || n.unwrap() == 0);
+            // The listener and the other pair live on.
+            for port in [bad_port, good_port] {
+                let mut c = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+                peer_gone(c.write_all(b"x").await, "a probe write");
+            }
+            let mut c = TcpStream::connect(("127.0.0.1", good_port)).await.unwrap();
+            c.write_all(b"ok").await.unwrap();
+            let mut b = [0u8; 2];
+            c.read_exact(&mut b).await.unwrap();
+            assert_eq!(&b, b"ok");
+            assert!(!h.is_finished());
+            drop(h);
+        });
+    }
+
+    #[test]
+    fn half_close_preserved() {
+        saman::block_on_current(async {
+            // The server answers only after it saw EOF from the client; the client must still be able to read.
+            let dir = tempfile::tempdir().unwrap();
+            let sock = dir.path().join("h.sock");
+            let l = UnixListener::bind(&sock).unwrap();
+            saman::spawn("half-close-server", async move {
+                let (mut s, _) = l.accept().await.unwrap();
+                let mut all = Vec::new();
+                s.read_to_end(&mut all).await.unwrap();
+                s.write_all(format!("saw {}", all.len()).as_bytes())
+                    .await
+                    .unwrap();
+            })
+            .detach("the server lives until the test's runtime ends");
+            let (h, ports) = start(1, |p| {
+                vec![RelayPair {
+                    port: p[0],
+                    socket: sock.clone(),
+                }]
+            })
+            .await;
+            let mut c = TcpStream::connect(("127.0.0.1", ports[0])).await.unwrap();
+            c.write_all(&[7u8; 1000]).await.unwrap();
+            c.shutdown().await.unwrap();
+            let mut reply = String::new();
+            c.read_to_string(&mut reply).await.unwrap();
+            assert_eq!(reply, "saw 1000");
+            drop(h);
+        });
     }
 
     /// The socket's side answers and goes while the client is still sending (the proxy's 403 to a flooding client,
     /// GLP-T10-3): the answer still reaches the client, and the client's connection is never reset under it. The order
     /// is forced: the answer and the close both land while the relay cannot run (the test holds its runtime's only
     /// thread), so its next poll sees them at once, with most of the client's 32 MiB still to come.
-    #[tokio::test]
-    async fn an_answer_sent_before_the_socket_went_reaches_a_client_still_sending() {
-        let dir = tempfile::tempdir().unwrap();
-        let sock = dir.path().join("p.sock");
-        let ul = std::os::unix::net::UnixListener::bind(&sock).unwrap();
-        let tl = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = tl.local_addr().unwrap();
-        // the client: its head, then 32 MiB without reading (more than both sockets' buffers), then its answer
-        let client = std::thread::spawn(move || {
-            let mut c = std::net::TcpStream::connect(addr).unwrap();
-            c.write_all(b"HEAD\n").unwrap();
-            let sent = c.write_all(&vec![b'x'; 32 << 20]).map_err(|e| e.kind());
-            let mut got = Vec::new();
-            let _ = c.read_to_end(&mut got);
-            (sent, got)
+    #[test]
+    fn an_answer_sent_before_the_socket_went_reaches_a_client_still_sending() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let sock = dir.path().join("p.sock");
+            let ul = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+            let tl = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = tl.local_addr().unwrap();
+            // the client: its head, then 32 MiB without reading (more than both sockets' buffers), then its answer
+            let client = saman::spawn_thread("flooding-client", move || {
+                let mut c = std::net::TcpStream::connect(addr).unwrap();
+                c.write_all(b"HEAD\n").unwrap();
+                let sent = c.write_all(&vec![b'x'; 32 << 20]).map_err(|e| e.kind());
+                let mut got = Vec::new();
+                // a reset here is what the test's assertion on `got` reports
+                peer_gone(c.read_to_end(&mut got), "the client's read");
+                (sent, got)
+            })
+            .unwrap();
+            let (tcp, _) = tl.accept().unwrap();
+            tcp.set_nonblocking(true).unwrap();
+            let tcp = TcpStream::from_std(tcp).unwrap();
+            let unix = UnixStream::connect(&sock).await.unwrap();
+            let (mut server, _) = ul.accept().unwrap();
+            let (head_tx, head_rx) = tokio::sync::oneshot::channel();
+            let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+            let (gone_tx, gone_rx) = std::sync::mpsc::channel::<()>();
+            let srv = saman::spawn_thread("closing-server", move || {
+                let mut head = [0u8; 5];
+                server.read_exact(&mut head).unwrap();
+                head_tx.send(()).unwrap();
+                go_rx.recv().unwrap();
+                server.write_all(b"403\n").unwrap();
+                // closed with the flood unread
+                drop(server);
+                gone_tx.send(()).unwrap();
+            })
+            .unwrap();
+            let relay = saman::spawn("splice", splice(tcp, unix));
+            head_rx.await.unwrap();
+            // this thread is the relay's: held here, it runs again only after the answer and the close
+            go_tx.send(()).unwrap();
+            gone_rx.recv().unwrap();
+            relay.await.unwrap();
+            srv.join().unwrap();
+            // the client's flood was read to its end (a relay that closed with it unread resets the connection, and a reset
+            // can take the answer with it), and the answer arrived
+            let (sent, got) = client.join().unwrap();
+            assert_eq!(sent, Ok(()), "the client's connection was reset");
+            assert_eq!(got, b"403\n");
         });
-        let (tcp, _) = tl.accept().unwrap();
-        tcp.set_nonblocking(true).unwrap();
-        let tcp = TcpStream::from_std(tcp).unwrap();
-        let unix = UnixStream::connect(&sock).await.unwrap();
-        let (mut server, _) = ul.accept().unwrap();
-        let (head_tx, head_rx) = tokio::sync::oneshot::channel();
-        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
-        let (gone_tx, gone_rx) = std::sync::mpsc::channel::<()>();
-        let srv = std::thread::spawn(move || {
-            let mut head = [0u8; 5];
-            server.read_exact(&mut head).unwrap();
-            head_tx.send(()).unwrap();
-            go_rx.recv().unwrap();
-            server.write_all(b"403\n").unwrap();
-            // closed with the flood unread
-            drop(server);
-            gone_tx.send(()).unwrap();
-        });
-        let relay = tokio::spawn(splice(tcp, unix));
-        head_rx.await.unwrap();
-        // this thread is the relay's: held here, it runs again only after the answer and the close
-        go_tx.send(()).unwrap();
-        gone_rx.recv().unwrap();
-        relay.await.unwrap();
-        srv.join().unwrap();
-        // the client's flood was read to its end (a relay that closed with it unread resets the connection, and a reset
-        // can take the answer with it), and the answer arrived
-        let (sent, got) = client.join().unwrap();
-        assert_eq!(sent, Ok(()), "the client's connection was reset");
-        assert_eq!(got, b"403\n");
     }
 
     /// Not a test of its own: the entry the parent test re-executes this binary into.
@@ -566,33 +596,42 @@ mod tests {
     /// it does not start either.
     #[test]
     fn refuses_a_parent_it_was_not_given() {
-        use std::process::Command;
         let exe = std::env::current_exe().unwrap();
         let port = free_port();
         let pair = format!("{port}=/nonexistent/s.sock");
         let run = |args: String| {
-            Command::new(&exe)
-                .args(["--exact", "net::relay::tests::child_entry", "--nocapture"])
-                .arg("--test-threads=1")
-                .env("GLEIPNIR_RELAY_CHILD", args)
-                .output()
-                .unwrap()
+            draugr::run(
+                draugr::Spec {
+                    program: exe.clone(),
+                    args: ["--exact", "net::relay::tests::child_entry", "--nocapture"]
+                        .map(OsString::from)
+                        .into_iter()
+                        .chain([OsString::from("--test-threads=1")])
+                        .collect(),
+                    env: draugr::env::build(
+                        &["PATH", "TMPDIR", "RUST_BACKTRACE"],
+                        &[],
+                        &[("GLEIPNIR_RELAY_CHILD", std::ffi::OsStr::new(&args))],
+                    ),
+                    cwd: None,
+                    stdin_null: true,
+                    pass_fds: Vec::new(),
+                    new_session: false,
+                },
+                Duration::from_secs(60),
+            )
+            .unwrap()
         };
         // The child's parent is this process; ours is someone else.
         let out = run(format!(
             "{pair} --parent-pid {}",
             std::os::unix::process::parent_id()
         ));
-        assert_eq!(
-            out.status.code(),
-            Some(1),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        assert_eq!(out.status.code(), Some(1), "{}", out.stderr);
         // "it has gone" is `adopt_parent`'s refusal, which `main` returns before it binds anything. (No connect to the
         // port here: the child has exited, so nothing it bound could still listen, and another test of this process
         // may hold that free port: ci/ci-gate, 1 of 60 local runs.)
-        assert!(String::from_utf8_lossy(&out.stderr).contains("it has gone"));
+        assert!(out.stderr.contains("it has gone"));
         let out = run(pair);
         assert_eq!(out.status.code(), Some(2), "no --parent-pid: usage");
         let parse = |a: &[&str]| parse_args(a.iter().map(OsString::from)).map(|a| a.pairs.len());
@@ -607,49 +646,57 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "android"))] // only the /proc liveness probe below uses it
     fn state_of(pid: u32) -> Option<char> {
-        let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let s =
+            eitri::read_string(std::path::Path::new(&format!("/proc/{pid}/stat")), 1 << 16).ok()?;
         s.rsplit(')').next()?.trim().chars().next()
     }
 
     #[test]
     #[cfg(any(target_os = "linux", target_os = "android"))] // /proc; macOS CI skips the liveness probe
     fn ends_when_the_parent_goes() {
-        use std::io::Write;
-        use std::process::{Command, Stdio};
+        use tokio::io::AsyncBufReadExt;
         let dir = tempfile::tempdir().unwrap();
         let port = free_port();
         let exe = std::env::current_exe().unwrap();
+        // the shell's stdout and the relay's are read on a pool of two while this thread waits on the kernel
+        let pool = saman::Executor::new(2).unwrap();
         // The shell is the relay's parent and stays alive while we hold its stdin.
-        let mut sh = Command::new("sh")
-            .arg("-c")
-            // fd 3 is the shell's stdout for the relay: it says `ready` there once its port is bound
-            .arg(
-                r#"GLEIPNIR_RELAY_CHILD="$1 --parent-pid $$ --ready-fd 3" "$0" --exact net::relay::tests::child_entry --nocapture --test-threads=1 </dev/null 3>&1 >/dev/null 2>&1 &
-echo $!; read x"#,
-            )
-            .arg(&exe)
-            .arg(format!("{port}={}", dir.path().join("s.sock").display()))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
+        let mut sh = pool
+            .block_on(draugr::spawn(draugr::Spec {
+                program: "sh".into(),
+                args: vec![
+                    "-c".into(),
+                    // fd 3 is the shell's stdout for the relay: it says `ready` there once its port is bound
+                    r#"GLEIPNIR_RELAY_CHILD="$1 --parent-pid $$ --ready-fd 3" "$0" --exact net::relay::tests::child_entry --nocapture --test-threads=1 </dev/null 3>&1 >/dev/null 2>&1 &
+echo $!; read x"#
+                        .into(),
+                    exe.into_os_string(),
+                    format!("{port}={}", dir.path().join("s.sock").display()).into(),
+                ],
+                env: draugr::env::build(&["PATH", "TMPDIR", "RUST_BACKTRACE"], &[], &[]),
+                cwd: None,
+                stdin_null: false,
+                pass_fds: Vec::new(),
+                new_session: false,
+            }))
             .unwrap();
         // GLEIPNIR_RELAY_CHILD: the pair, then the shell's own pid as the expected parent.
         // The shell says its relay's pid (`echo $!`); the relay says `ready` on the same pipe once its port is bound.
         // Both lines are read, in whichever order they came.
-        let (mut pid, mut ready) = (None, false);
-        let mut lines = std::io::BufReader::new(sh.stdout.take().unwrap());
-        while pid.is_none() || !ready {
-            let mut line = String::new();
-            assert!(
-                std::io::BufRead::read_line(&mut lines, &mut line).unwrap() > 0,
-                "the shell or the relay ended before it was ready (pid {pid:?})"
-            );
-            match line.trim() {
-                "ready" => ready = true,
-                n => pid = Some(n.parse::<u32>().unwrap()),
+        let mut lines = tokio::io::BufReader::new(sh.take_stdout().unwrap()).lines();
+        let pid = pool.block_on(async {
+            let (mut pid, mut ready) = (None, false);
+            while pid.is_none() || !ready {
+                let line = lines.next_line().await.unwrap().unwrap_or_else(|| {
+                    panic!("the shell or the relay ended before it was ready (pid {pid:?})")
+                });
+                match line.trim() {
+                    "ready" => ready = true,
+                    n => pid = Some(n.parse::<u32>().unwrap()),
+                }
             }
-        }
-        let pid = pid.unwrap();
+            pid.unwrap()
+        });
         // A handle on the relay's exit, taken while it is certainly there (its parent lives).
         // SAFETY: pidfd_open(2) with plain integers; the result is a new descriptor of ours.
         let pidfd = unsafe {
@@ -665,8 +712,12 @@ echo $!; read x"#,
         skuld::window(A_POLL_AND_A_HALF, "the relay ends while its parent lives");
         assert!(alive(pid), "still up after a poll while the parent lives");
         // The parent goes.
-        drop(sh.stdin.take().unwrap().write_all(b"\n"));
-        let _ = sh.wait();
+        let mut stdin = sh.take_stdin().unwrap();
+        pool.block_on(tokio::io::AsyncWriteExt::write_all(&mut stdin, b"\n"))
+            .unwrap();
+        drop(stdin);
+        pool.block_on(sh.wait_deadline(Duration::from_secs(30)))
+            .unwrap();
         // The relay's exit is what the descriptor reports; 30 s only bounds a failure.
         let mut p = libc::pollfd {
             fd: std::os::fd::AsRawFd::as_raw_fd(&pidfd),
@@ -675,11 +726,13 @@ echo $!; read x"#,
         };
         // SAFETY: poll(2) on one valid pollfd.
         let gone = unsafe { libc::poll(&mut p, 1, 30_000) } == 1;
-        if !gone {
-            let _ = rustix::process::kill_process(
+        if !gone
+            && let Err(e) = rustix::process::kill_process(
                 rustix::process::Pid::from_raw(pid as i32).unwrap(),
                 rustix::process::Signal::KILL,
-            );
+            )
+        {
+            tracing::debug!(error = %e, "the relay was already gone");
         }
         assert!(gone, "the relay exits when its parent does");
         assert!(!alive(pid));

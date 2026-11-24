@@ -752,9 +752,9 @@ mod tests {
             "/tests/fixtures/minimap-push.json"
         );
         if std::env::var_os("UPDATE_SJA_FIXTURES").is_some() {
-            std::fs::write(path, serde_json::to_string_pretty(&now).unwrap() + "\n").unwrap();
+            crate::fsio::write(path, serde_json::to_string_pretty(&now).unwrap() + "\n").unwrap();
         }
-        let held: Option<Value> = std::fs::read_to_string(path)
+        let held: Option<Value> = crate::fsio::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok());
         assert!(

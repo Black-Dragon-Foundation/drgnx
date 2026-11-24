@@ -4,10 +4,9 @@
 //! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
 //! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, watch: {max_user_watches?, projects: [{root, watched, error?}]}?,
 //! socket_dir: {path, mode, ok}, sqlite,
-//! job_agents, exe_mode (`private-table`, `lock` or `direct`: how a file written and run is kept from ETXTBSY), sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}, legacy: {moved, left, at,
-//! lisp_processes: [{pid, what}]}}`.  `legacy` is what the Lisp runtime left (`crate::legacy`): what the first start
-//! moved to `<state>/hub/migrated-p7/`, what stays (a command job still running), and the user's processes that are
-//! still the Lisp hub or its coordination server.  `store` is the running hub's
+//! engine ({installed, asset, missing_libs, devices, backend, gpu, why_not} of the first installed build, `asset` null with none; and
+//! assets: [{asset, backend, installed, bytes, ...its check}], vendors, plan, more_gpus, on_battery, limits, settings_errors}),
+//! job_agents, exe_mode (`private-table`, `lock` or `direct`: how a file written and run is kept from ETXTBSY), sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}}`.  `store` is the running hub's
 //! work.db: a failed move to schema 7, and the copies that still hold what its deny-list kept out; and from files
 //! (also with no hub, when work.db exists) `wal_bytes`, `last_backup`, `backup_ok`, `backup_age_s`, `deny_list:
 //! {opted_in, warnings}`, `copies: {pre7, schema5}` and `warnings` (a WAL above 64 MiB, a backup older than 48 h or
@@ -74,6 +73,70 @@ fn socket_dir(socket: &Path, uid: u32) -> Value {
     }
 }
 
+/// The local engine section: the check of the first installed asset (libraries, device, why no GPU; `asset` null and
+/// `installed` false when none is installed), and for the pool the vendor builds (`assets`, each with its own check and
+/// the bytes its download costs), the plan (the pinned devices, or why none runs and the user's options), the limits
+/// and any setting that is refused.
+fn engine_section(env: &Env) -> Value {
+    use crate::search::{engine_doctor, engine_pick, engine_setup};
+    let values =
+        crate::settings::Settings::load(&paths::config_dir(env), &crate::settings::Kv::default())
+            .values;
+    let st = engine_setup::EngineSettings::from_values(&values);
+    let machine = engine_pick::Machine::read();
+    let on_battery = crate::search::power::on_battery(Path::new(crate::search::power::SYS));
+    let r = engine_setup::resolve(
+        &paths::cache_dir(env),
+        &machine,
+        &engine_pick::Visible::from_env(),
+        &st,
+        on_battery,
+    );
+    let host = engine_doctor::Host::read();
+    let mut assets = Vec::new();
+    let mut first: Option<Value> = None;
+    for s in &r.assets {
+        let mut a = json!({
+            "asset": s.asset.id(),
+            "backend": s.asset.backend,
+            "installed": s.exe.is_some(),
+            "bytes": s.asset.total_bytes(),
+        });
+        if let Some(exe) = &s.exe {
+            let mut c = engine_doctor::check(exe, s.asset.backend, Path::new("ldd"), &host).json();
+            c["asset"] = json!(s.asset.id());
+            for (k, v) in c.as_object().cloned().unwrap_or_default() {
+                a[k.as_str()] = v;
+            }
+            first.get_or_insert(c);
+        }
+        assets.push(a);
+    }
+    let mut v = first.unwrap_or_else(|| {
+        json!({"asset": null, "missing_libs": [], "devices": [], "backend": null, "gpu": false, "why_not": []})
+    });
+    v["installed"] = json!(!assets.is_empty() && v["asset"].is_string());
+    v["assets"] = json!(assets);
+    v["vendors"] = json!(r.picks.iter().map(|p| json!({
+        "vendor": p.vendor.name(), "gpus": p.gpus, "asset": p.asset.id(), "fallback": p.fallback,
+    })).collect::<Vec<_>>());
+    v["plan"] = r.plan.json();
+    v["more_gpus"] = json!(
+        engine_setup::more_gpus(&r.plan, &st.cfg)
+            .iter()
+            .map(|d| format!("{}: {}", d.id, d.name))
+            .collect::<Vec<_>>()
+    );
+    v["on_battery"] = json!(on_battery);
+    v["limits"] = json!({
+        "cpu_percent": st.limits.cpu_percent, "memory_mib": st.limits.memory_mib,
+        "vram_mib": st.limits.vram_mib, "gpu_busy": st.limits.gpu_busy,
+        "cgroup": st.limits.cpu_percent.is_some() || st.limits.memory_mib.is_some(),
+    });
+    v["settings_errors"] = json!(st.errors);
+    v
+}
+
 /// The job sandbox section: what the check found. `in_use` is true: every session starts in it
 /// (`agents::launch`), so where the check fails no session starts.
 fn sandbox_section(c: &Check) -> Value {
@@ -135,7 +198,11 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         "job_agents": JOB_AGENTS,
         "exe_mode": hlaup::mode().name(),
         "sandbox": sandbox_section(sandbox),
-        "legacy": crate::legacy::section(env),
+        "engine": engine_section(env),
+        "tei": crate::search::tei_support::section(
+            &crate::search::engine_pick::Machine::read(),
+            &crate::search::engine_pick::nvidia_compute_caps(),
+        ),
         "packs": packs_section(env),
         "debug_adapters": debug_adapters_section(env),
     });
@@ -179,6 +246,7 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
                 &crate::exec::container::podman_env(&crate::shell_env::ShellEnv::default()),
                 std::time::Duration::from_secs(10),
             )
+            .map_err(|e| e.to_string())
         })
     ));
     let values =
@@ -212,7 +280,7 @@ pub fn container_net_verdict(
         Some(Err(e)) => e,
         Some(Ok(i)) => match sleipnir::linux::netcheck::net_ready(&i) {
             Ok(()) => "ok (rootless podman 5.0 or newer)".into(),
-            Err(e) => e,
+            Err(e) => e.to_string(),
         },
     }
 }
@@ -465,7 +533,11 @@ fn store_files(env: &Env, v: &mut Value, now: u64) {
     v["store"]["history_size"] = json!(history_rows(env, &mut history_warnings));
     v["store"]["history_warnings"] = json!(history_warnings);
     // the personal-notes opt-in file, as it loads now
-    if let Some(home) = env.vars.get("HOME").filter(|h| Path::new(h).is_absolute()) {
+    if let Some(home) = env
+        .vars
+        .get(stig::HOME_VAR)
+        .filter(|h| Path::new(h).is_absolute())
+    {
         let deny = norn::deny::DenyList::load(Path::new(home), &paths::config_dir(env));
         v["store"]["deny_list"] = json!({
             "opted_in": deny.opt_ins().len(),
@@ -591,9 +663,9 @@ pub fn status(env: &Env, json_out: bool) -> i32 {
     let socket = paths::socket_path(env);
     if let Some(why) = client::refused(&socket) {
         if json_out {
-            println!("{}", json!({"running": false, "error": why}));
+            crate::soft::out_line(&(json!({"running": false, "error": why})).to_string());
         }
-        eprintln!("ratatoskr status: {why}");
+        crate::soft::err_line(&format!("ratatoskr status: {why}"));
         return 1;
     }
     let asked = Client::user(env, ASK).and_then(|mut c| c.call("status", json!({}), ASK));
@@ -601,9 +673,9 @@ pub fn status(env: &Env, json_out: bool) -> i32 {
         Ok(mut v) => {
             if json_out {
                 v["running"] = json!(true);
-                println!("{v}");
+                crate::soft::out_line(&v.to_string());
             } else {
-                println!("{}", summary(&v));
+                crate::soft::out_line(&(summary(&v)).to_string());
             }
             0
         }
@@ -611,17 +683,19 @@ pub fn status(env: &Env, json_out: bool) -> i32 {
             // a hub answers but would not tell: say so rather than "not running"
             Some(pid) => {
                 if json_out {
-                    println!("{}", json!({"running": true, "pid": pid, "error": e}));
+                    crate::soft::out_line(
+                        &(json!({"running": true, "pid": pid, "error": e.message()})).to_string(),
+                    );
                 } else {
-                    println!("running (pid {pid}), but status failed: {e}");
+                    crate::soft::out_line(&format!("running (pid {pid}), but status failed: {e}"));
                 }
                 1
             }
             None => {
                 if json_out {
-                    println!("{}", json!({"running": false}));
+                    crate::soft::out_line(&(json!({"running": false})).to_string());
                 } else {
-                    println!("not running");
+                    crate::soft::out_line("not running");
                 }
                 1
             }
@@ -664,9 +738,12 @@ struct BoundedCheck {
 fn bounded(limit: Duration, f: impl FnOnce() -> Check + Send + 'static) -> BoundedCheck {
     let (tx, rx) = std::sync::mpsc::channel();
     let started = crate::clock::real_now();
-    std::thread::spawn(move || {
-        let _ = tx.send(f());
-    });
+    crate::soft::done(
+        saman::spawn_thread("ratatoskr:doctor", move || {
+            crate::soft::done(tx.send(f()), "tx send");
+        }),
+        "thread",
+    );
     BoundedCheck { rx, started, limit }
 }
 
@@ -722,9 +799,9 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
     let sandbox = check.wait();
     let v = report(env, &binary, running, &sandbox);
     if json_out {
-        println!("{v}");
+        crate::soft::out_line(&v.to_string());
     } else {
-        println!("{}", text(&v, &sandbox));
+        crate::soft::out_line(&(text(&v, &sandbox)).to_string());
     }
     0
 }
@@ -878,14 +955,18 @@ fn text(v: &Value, sandbox: &Check) -> String {
         "\nnetworked container jobs: {}",
         t(&v["container_net"])
     ));
+    if v["engine"].is_object() {
+        out.push_str(&crate::search::engine_doctor::section_lines(&v["engine"]));
+    }
+    if v["tei"].is_object() {
+        out.push_str(&crate::search::tei_support::section_lines(&v["tei"]));
+    }
     out.push_str(&watch_lines(&v["watch"]));
-    out.push_str(&legacy_lines(&v["legacy"]));
     out.push_str(&pack_lines(&v["packs"]));
     out.push_str(&debug_adapter_lines(&v["debug_adapters"]));
     out
 }
 
-/// Lines about what the Lisp runtime left: a command job still running there, and its processes still alive.
 /// `watch`: the inotify budget and the open projects' watches; a project that runs unwatched is named with why.
 fn watch_lines(watch: &Value) -> String {
     let Some(projects) = watch["projects"].as_array().filter(|p| !p.is_empty()) else {
@@ -909,25 +990,6 @@ fn watch_lines(watch: &Value) -> String {
     out
 }
 
-fn legacy_lines(legacy: &Value) -> String {
-    let list = |k: &str, f: &dyn Fn(&Value) -> String| {
-        legacy[k]
-            .as_array()
-            .map(|a| a.iter().map(f).collect::<Vec<_>>().join(", "))
-            .filter(|s| !s.is_empty())
-    };
-    let mut out = String::new();
-    if let Some(left) = list("left", &|v| v.as_str().unwrap_or("?").to_string()) {
-        out.push_str(&format!("\nlegacy: left in place until it ends: {left}"));
-    }
-    if let Some(p) = list("lisp_processes", &|v| {
-        format!("{} (pid {})", v["what"].as_str().unwrap_or("?"), v["pid"])
-    }) {
-        out.push_str(&format!("\nlegacy: Lisp runtime still running: {p}"));
-    }
-    out
-}
-
 /// A line for a running hub that refuses keys (its GATEWAY status says why), else nothing.
 fn keys_refused_line(gateway: &Value) -> String {
     gateway["keys_refused"]
@@ -940,11 +1002,11 @@ fn keys_refused_line(gateway: &Value) -> String {
 pub fn restart(env: &Env) -> i32 {
     match Client::user(env, ASK).and_then(|mut c| c.call("restart", json!({}), ASK)) {
         Ok(_) => {
-            println!("restarting");
+            crate::soft::out_line("restarting");
             0
         }
         Err(e) => {
-            eprintln!("ratatoskr restart: {e}");
+            crate::soft::err_line(&format!("ratatoskr restart: {e}"));
             1
         }
     }
@@ -961,7 +1023,7 @@ mod tests {
     fn a_slow_check_is_a_failed_one_at_the_bound() {
         let (release, held) = std::sync::mpsc::channel::<()>();
         let slow = bounded(Duration::from_millis(20), move || {
-            let _ = held.recv();
+            crate::soft::done(held.recv(), "doctor");
             Check::failed("late".into(), None)
         })
         .wait();
@@ -1001,10 +1063,10 @@ mod tests {
         let p = |s: &str| dir.path().join(s).to_string_lossy().into_owned();
         let env = Env::new(
             &[
-                ("XDG_RUNTIME_DIR", &p("r")),
+                (stig::SYSTEM_RUNTIME_VAR, &p("r")),
                 ("DRGNX_DATA_DIR", &p("d")),
-                ("XDG_STATE_HOME", &p("s")),
-                ("HOME", &p("h")),
+                (stig::Xdg::State.var(), &p("s")),
+                (stig::HOME_VAR, &p("h")),
             ],
             uid,
         );
@@ -1025,10 +1087,6 @@ mod tests {
         assert_eq!(v["exe_mode"], hlaup::mode().name());
         assert!(text(&v, &working()).contains("files run after writing: "));
         assert!(!text(&v, &working()).contains("writing: ?"));
-        for k in ["moved", "left", "lisp_processes"] {
-            assert!(v["legacy"][k].is_array(), "legacy.{k}");
-        }
-        assert!(v["legacy"]["at"].is_null());
         assert!(v.get("running").is_none());
         // too open: not ok
         std::fs::set_permissions(&sock_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1095,15 +1153,15 @@ mod tests {
         let state = dir.path().join("s");
         let env = Env::new(
             &[
-                ("XDG_STATE_HOME", &state.to_string_lossy()),
-                ("HOME", &dir.path().to_string_lossy()),
+                (stig::Xdg::State.var(), &state.to_string_lossy()),
+                (stig::HOME_VAR, &dir.path().to_string_lossy()),
             ],
             1000,
         );
         for (p, size) in [("p1", 1_900_000_000u64), ("p2", 5_000)] {
             let d = paths::state_dir(&env).join("hub/history").join(p);
             std::fs::create_dir_all(&d).unwrap();
-            std::fs::write(
+            crate::fsio::write(
                 d.join("size-report.json"),
                 json!({"size": size, "cap": 2u64 << 30, "pins": [
                     {"kind": "frozen", "name": "wt-x", "bytes": 1_500_000_000u64},
@@ -1150,22 +1208,24 @@ mod tests {
         std::fs::create_dir_all(data.join("backup")).unwrap();
         std::fs::create_dir_all(home.join("org")).unwrap();
         std::fs::create_dir_all(&config).unwrap();
-        std::fs::write(data.join("work.db"), b"x").unwrap();
-        let wal = std::fs::File::create(data.join("work.db-wal")).unwrap();
+        crate::fsio::write(data.join("work.db"), b"x").unwrap();
+        let wal = eitri::create_exclusive(&data.join("work.db-wal"), 0o666)
+            .map_err(std::io::Error::from)
+            .unwrap();
         wal.set_len(WAL_WARN + (1 << 20)).unwrap();
-        std::fs::write(data.join("work.db.schema5"), b"x").unwrap();
-        std::fs::write(data.join("backup/work-pre7-1.db"), b"x").unwrap();
-        std::fs::write(data.join("backup/work-20200101.db"), b"x").unwrap();
+        crate::fsio::write(data.join("work.db.schema5"), b"x").unwrap();
+        crate::fsio::write(data.join("backup/work-pre7-1.db"), b"x").unwrap();
+        crate::fsio::write(data.join("backup/work-20200101.db"), b"x").unwrap();
         // an opt-in file anyone can write is refused with a warning
         let allow = config.join("personal-notes-allow.json");
-        std::fs::write(&allow, "[]").unwrap();
+        crate::fsio::write(&allow, "[]").unwrap();
         std::fs::set_permissions(&allow, std::fs::Permissions::from_mode(0o666)).unwrap();
         let path = |p: &Path| p.to_string_lossy().into_owned();
         let env = Env::new(
             &[
                 ("DRGNX_DATA_DIR", &path(&data)),
                 ("DRGNX_CONFIG_DIR", &path(&config)),
-                ("HOME", &path(&home)),
+                (stig::HOME_VAR, &path(&home)),
             ],
             1000,
         );
@@ -1197,8 +1257,8 @@ mod tests {
     fn a_missing_socket_dir_is_fine_until_the_first_start() {
         let env = Env::new(
             &[
-                ("XDG_STATE_HOME", "/nonexistent/s"),
-                ("HOME", "/nonexistent/h"),
+                (stig::Xdg::State.var(), "/nonexistent/s"),
+                (stig::HOME_VAR, "/nonexistent/h"),
             ],
             1000,
         );
@@ -1245,7 +1305,7 @@ mod tests {
     }
 
     fn report_of(c: &Check) -> Value {
-        let env = Env::new(&[("HOME", "/nonexistent/h")], 1000);
+        let env = Env::new(&[(stig::HOME_VAR, "/nonexistent/h")], 1000);
         report(&env, Path::new("/b"), None, c)
     }
 
@@ -1433,8 +1493,8 @@ mod tests {
     fn a_hub_that_refuses_keys_says_so() {
         let env = Env::new(
             &[
-                ("XDG_STATE_HOME", "/nonexistent/s"),
-                ("HOME", "/nonexistent/h"),
+                (stig::Xdg::State.var(), "/nonexistent/s"),
+                (stig::HOME_VAR, "/nonexistent/h"),
             ],
             1000,
         );

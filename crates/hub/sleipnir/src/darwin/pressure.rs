@@ -103,6 +103,10 @@ mod tests {
         assert_eq!(of(CRITICAL), Level::Danger);
         start();
         start();
-        let _ = level();
+        // whatever level this machine reads now, the read itself must work
+        assert!(matches!(
+            level(),
+            Level::Normal | Level::Tight | Level::Danger
+        ));
     }
 }

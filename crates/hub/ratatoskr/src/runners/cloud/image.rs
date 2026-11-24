@@ -380,31 +380,33 @@ mod tests {
     }
 
     // [D] pure
-    #[tokio::test]
-    async fn no_base_is_unavailable_and_a_fallback_is_named() {
-        let err = resolve_base(&Fixed(None), None, "eu-west-1", Arch::X86_64)
-            .await
-            .unwrap_err();
-        assert_eq!(err.to_string(), "unavailable: no supported base image");
-        let fb = Base {
-            id: "ami-fb".into(),
-            name: "Another distribution, podman 5".into(),
-            fallback: true,
-        };
-        let b = resolve_base(&Fixed(None), Some(&fb), "eu-west-1", Arch::X86_64)
-            .await
-            .unwrap();
-        assert!(b.fallback && b.id == "ami-fb");
-        // a listed Fedora base wins over the fallback
-        let fed = Base {
-            id: "ami-fed".into(),
-            name: "Fedora Cloud 45".into(),
-            fallback: false,
-        };
-        let b = resolve_base(&Fixed(Some(fed)), Some(&fb), "eu-west-1", Arch::X86_64)
-            .await
-            .unwrap();
-        assert_eq!(b.id, "ami-fed");
+    #[test]
+    fn no_base_is_unavailable_and_a_fallback_is_named() {
+        saman::block_on_current(async move {
+            let err = resolve_base(&Fixed(None), None, "eu-west-1", Arch::X86_64)
+                .await
+                .unwrap_err();
+            assert_eq!(err.to_string(), "unavailable: no supported base image");
+            let fb = Base {
+                id: "ami-fb".into(),
+                name: "Another distribution, podman 5".into(),
+                fallback: true,
+            };
+            let b = resolve_base(&Fixed(None), Some(&fb), "eu-west-1", Arch::X86_64)
+                .await
+                .unwrap();
+            assert!(b.fallback && b.id == "ami-fb");
+            // a listed Fedora base wins over the fallback
+            let fed = Base {
+                id: "ami-fed".into(),
+                name: "Fedora Cloud 45".into(),
+                fallback: false,
+            };
+            let b = resolve_base(&Fixed(Some(fed)), Some(&fb), "eu-west-1", Arch::X86_64)
+                .await
+                .unwrap();
+            assert_eq!(b.id, "ami-fed");
+        })
     }
 
     /// The mock's account, with the calls the build makes logged in order, and the guest's power-off played by the test
@@ -417,7 +419,7 @@ mod tests {
 
     impl Api<'_> {
         fn note(&self, s: impl Into<String>) {
-            self.log.lock().unwrap().push(s.into());
+            saman::lock(&self.log).push(s.into());
         }
     }
 
@@ -505,114 +507,116 @@ mod tests {
     }
 
     // [B] gate: the guest's power-off is the test's, at the wait
-    #[tokio::test]
-    async fn build_then_start_from_it() {
-        let m = Mock::start();
-        let api = Api {
-            aws: m.client(),
-            mock: &m,
-            log: Mutex::default(),
-        };
-        let (_, ca_pub) = Ca::new();
-        let inp = inputs(ca_pub.to_openssh("drgnx-ca"));
-        let cfg = BuildCfg {
-            region: "us-east-1".into(),
-            arch: Arch::X86_64,
-            size: "m7g.large".into(),
-            token: "tok-image-1".into(),
-            fallback: None,
-            wait: Duration::from_secs(1800),
-        };
-        let list = Fixed(Some(Base {
-            id: "ami-base0fedora45x86".into(),
-            name: "Fedora Cloud 45 (test)".into(),
-            fallback: false,
-        }));
-        let built = build(&api, &list, &cfg, &inp).await.unwrap();
-        assert!(built.id.starts_with("ami-"), "{built:?}");
-        assert!(!built.reused);
-        assert_eq!(built.base.id, "ami-base0fedora45x86");
-        // order: the machine powered off before the snapshot, and is ended after it
-        assert_eq!(
-            *api.log.lock().unwrap(),
-            ["start_builder", "wait_stopped", "create_image", "end"]
-        );
-        // the image carries the hub's tag and ours, and is encrypted
-        let found = api.images().await.unwrap();
-        assert_eq!(found.len(), 1);
-        let tags = &found[0].tags;
-        assert_eq!(tags.get("drgnx-hub").map(String::as_str), Some("hub-1"));
-        assert_eq!(tags.get(TAG_VERSION).map(String::as_str), Some("0.6.0"));
-        assert_eq!(tags.get(TAG_BUNDLE).map(String::as_str), Some("6.0.0-1"));
-        assert_eq!(tags.get(TAG_HASH).map(String::len), Some(64));
-        // a machine started from it is ours, and the same inputs reuse the image instead of building again
-        let started = api
-            .start(&StartReq {
-                token: "tok-from-image".into(),
-                name: "drgnx-c1".into(),
+    #[test]
+    fn build_then_start_from_it() {
+        saman::block_on_current(async move {
+            let m = Mock::start();
+            let api = Api {
+                aws: m.client(),
+                mock: &m,
+                log: Mutex::default(),
+            };
+            let (_, ca_pub) = Ca::new();
+            let inp = inputs(ca_pub.to_openssh("drgnx-ca"));
+            let cfg = BuildCfg {
+                region: "us-east-1".into(),
+                arch: Arch::X86_64,
                 size: "m7g.large".into(),
-                image: built.id.clone(),
-                market: Market::OnDemand,
-                user_data: crate::runners::cloud::user_data::render(
-                    None,
-                    "drgnx-c1",
-                    crate::runners::cloud::user_data::Limits {
-                        idle: 600,
-                        lifetime: 28800,
-                        unattended: 3600,
-                    },
-                    crate::runners::cloud::user_data::Flavor::Aws,
-                ),
-                security_group: None,
-            })
+                token: "tok-image-1".into(),
+                fallback: None,
+                wait: Duration::from_secs(1800),
+            };
+            let list = Fixed(Some(Base {
+                id: "ami-base0fedora45x86".into(),
+                name: "Fedora Cloud 45 (test)".into(),
+                fallback: false,
+            }));
+            let built = build(&api, &list, &cfg, &inp).await.unwrap();
+            assert!(built.id.starts_with("ami-"), "{built:?}");
+            assert!(!built.reused);
+            assert_eq!(built.base.id, "ami-base0fedora45x86");
+            // order: the machine powered off before the snapshot, and is ended after it
+            assert_eq!(
+                *saman::lock(&api.log),
+                ["start_builder", "wait_stopped", "create_image", "end"]
+            );
+            // the image carries the hub's tag and ours, and is encrypted
+            let found = api.images().await.unwrap();
+            assert_eq!(found.len(), 1);
+            let tags = &found[0].tags;
+            assert_eq!(tags.get("drgnx-hub").map(String::as_str), Some("hub-1"));
+            assert_eq!(tags.get(TAG_VERSION).map(String::as_str), Some("0.6.0"));
+            assert_eq!(tags.get(TAG_BUNDLE).map(String::as_str), Some("6.0.0-1"));
+            assert_eq!(tags.get(TAG_HASH).map(String::len), Some(64));
+            // a machine started from it is ours, and the same inputs reuse the image instead of building again
+            let started = api
+                .start(&StartReq {
+                    token: "tok-from-image".into(),
+                    name: "drgnx-c1".into(),
+                    size: "m7g.large".into(),
+                    image: built.id.clone(),
+                    market: Market::OnDemand,
+                    user_data: crate::runners::cloud::user_data::render(
+                        None,
+                        "drgnx-c1",
+                        crate::runners::cloud::user_data::Limits {
+                            idle: 600,
+                            lifetime: 28800,
+                            unattended: 3600,
+                        },
+                        crate::runners::cloud::user_data::Flavor::Aws,
+                    ),
+                    security_group: None,
+                })
+                .await
+                .unwrap();
+            assert!(started.id.starts_with("i-"));
+            saman::lock(&api.log).clear();
+            let again = build(
+                &api,
+                &list,
+                &BuildCfg {
+                    token: "tok-image-2".into(),
+                    ..cfg.clone()
+                },
+                &inp,
+            )
             .await
             .unwrap();
-        assert!(started.id.starts_with("i-"));
-        api.log.lock().unwrap().clear();
-        let again = build(
-            &api,
-            &list,
-            &BuildCfg {
-                token: "tok-image-2".into(),
-                ..cfg.clone()
-            },
-            &inp,
-        )
-        .await
-        .unwrap();
-        assert!(again.reused && again.id == built.id);
-        assert!(
-            api.log.lock().unwrap().is_empty(),
-            "no machine for an image that is current"
-        );
-        // new inputs: a second image, then a third; only the newest two stay, the oldest goes with its snapshot
-        let mut ids = vec![built.id.clone()];
-        for (n, v) in ["6.0.0-2", "6.0.0-3"].into_iter().enumerate() {
-            m.knob("clock", json!({"advance_s": 60})).await;
-            let mut i2 = inp.clone();
-            i2.bundle_version = v.into();
-            let c = BuildCfg {
-                token: format!("tok-image-v{n}"),
-                ..cfg.clone()
-            };
-            ids.push(build(&api, &list, &c, &i2).await.unwrap().id);
-        }
-        let left: Vec<String> = api
-            .images()
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|i| i.id)
-            .collect();
-        assert_eq!(left.len(), 2, "{left:?}");
-        assert!(
-            !left.contains(&ids[0]) && left.contains(&ids[1]) && left.contains(&ids[2]),
-            "{left:?} of {ids:?}"
-        );
-        let r = resources(&m).await.to_string();
-        assert!(
-            !r.contains(&format!("snap-{}", &ids[0][4..])),
-            "the oldest image's snapshot is gone: {r}"
-        );
+            assert!(again.reused && again.id == built.id);
+            assert!(
+                saman::lock(&api.log).is_empty(),
+                "no machine for an image that is current"
+            );
+            // new inputs: a second image, then a third; only the newest two stay, the oldest goes with its snapshot
+            let mut ids = vec![built.id.clone()];
+            for (n, v) in ["6.0.0-2", "6.0.0-3"].into_iter().enumerate() {
+                m.knob("clock", json!({"advance_s": 60})).await;
+                let mut i2 = inp.clone();
+                i2.bundle_version = v.into();
+                let c = BuildCfg {
+                    token: format!("tok-image-v{n}"),
+                    ..cfg.clone()
+                };
+                ids.push(build(&api, &list, &c, &i2).await.unwrap().id);
+            }
+            let left: Vec<String> = api
+                .images()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|i| i.id)
+                .collect();
+            assert_eq!(left.len(), 2, "{left:?}");
+            assert!(
+                !left.contains(&ids[0]) && left.contains(&ids[1]) && left.contains(&ids[2]),
+                "{left:?} of {ids:?}"
+            );
+            let r = resources(&m).await.to_string();
+            assert!(
+                !r.contains(&format!("snap-{}", &ids[0][4..])),
+                "the oldest image's snapshot is gone: {r}"
+            );
+        })
     }
 }

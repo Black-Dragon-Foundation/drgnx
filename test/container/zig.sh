@@ -38,15 +38,8 @@ if ! command -v minisign >/dev/null 2>&1; then
     macos) brew install minisign ;;
   esac
 fi
-# ZIG_DOWNLOADS=DIR (CI: the prebuilt assets, .github/ci/assets.sh): the tarball and its signature are there, and are
-# checked below like a download; a missing one is downloaded (HTTP/1.1, retried)
-if [ -n "${ZIG_DOWNLOADS:-}" ] && [ -f "$ZIG_DOWNLOADS/$name.tar.xz" ] && [ -f "$ZIG_DOWNLOADS/$name.tar.xz.minisig" ]; then
-  cp "$ZIG_DOWNLOADS/$name.tar.xz" "$ZIG_DOWNLOADS/$name.tar.xz.minisig" "$work/"
-  echo "zig.sh: $name.tar.xz from $ZIG_DOWNLOADS"
-else
-  curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 -o "$work/$name.tar.xz" "$ZIG_URL/$ZIG_VERSION/$name.tar.xz"
-  curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 -o "$work/$name.tar.xz.minisig" "$ZIG_URL/$ZIG_VERSION/$name.tar.xz.minisig"
-fi
+curl -fsSL -o "$work/$name.tar.xz" "$ZIG_URL/$ZIG_VERSION/$name.tar.xz"
+curl -fsSL -o "$work/$name.tar.xz.minisig" "$ZIG_URL/$ZIG_VERSION/$name.tar.xz.minisig"
 if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$work/$name.tar.xz" | cut -d' ' -f1); else got=$(shasum -a 256 "$work/$name.tar.xz" | cut -d' ' -f1); fi
 [ "$got" = "$sha" ] || { echo "zig.sh: $name.tar.xz is not the pinned file (sha256 $got, expected $sha)" >&2; exit 1; }
 minisign -Vm "$work/$name.tar.xz" -P "$ZIG_PUBKEY" -x "$work/$name.tar.xz.minisig" >/dev/null ||

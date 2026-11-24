@@ -48,9 +48,21 @@ pub const STATUSES: &[&str] = &[
     "blocked",
     "done",
     "dropped",
+    "accepted",
+    "parked",
+    "superseded",
 ];
-/// The statuses that close a task: its `blocks` and its parent's wait end.
-pub const CLOSED: &[&str] = &["done", "dropped"];
+/// Whether a live `supersedes` link ends at task N: another task replaced it (`superseded` needs one).
+pub fn replaced_by_link(c: &Connection, n: i64) -> Result<bool, WriteError> {
+    Ok(c.query_row(
+        &format!("select count(*) from link where kind = 'supersedes' and dst = ?1 and tx_to = {SENTINEL}"),
+        [n],
+        |r| r.get::<_, i64>(0),
+    )? > 0)
+}
+/// The statuses that close a task: its `blocks` and its parent's wait end.  `accepted` is finished like `done` (a spike
+/// whose result was accepted); `parked` and `superseded` are closed, not open.
+pub const CLOSED: &[&str] = &["done", "dropped", "accepted", "parked", "superseded"];
 
 /// A column of the board (agent system part 1, Calls made 17).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -73,7 +85,7 @@ pub fn board_column(status: &str) -> Column {
         "waiting" => Column::Waiting,
         "needs-input" => Column::NeedsYou,
         "in-review" => Column::Review,
-        "done" | "dropped" => Column::Done,
+        "done" | "dropped" | "accepted" | "parked" | "superseded" => Column::Done,
         _ => Column::Queued,
     }
 }
@@ -139,6 +151,10 @@ pub enum TaskOp {
         kind: LinkName,
         dst: String,
     },
+    Note {
+        id: String,
+        text: String,
+    },
     Unlink {
         src: String,
         kind: LinkName,
@@ -172,6 +188,7 @@ impl TaskOp {
             TaskOp::Link { .. } => "link",
             TaskOp::Unlink { .. } => "unlink",
             TaskOp::Label { .. } => "label",
+            TaskOp::Note { .. } => "note",
             TaskOp::Tools { .. } => "tools",
         }
     }
@@ -190,6 +207,7 @@ impl TaskOp {
             | TaskOp::Split { id, .. }
             | TaskOp::Complete { id, .. }
             | TaskOp::Label { id, .. }
+            | TaskOp::Note { id, .. }
             | TaskOp::Tools { id, .. } => Some(id),
         }
     }
@@ -305,6 +323,7 @@ pub fn op(tx: &mut Tx<'_>, caller: &Caller, op: TaskOp) -> Result<TaskAnswer, Wr
         TaskOp::Link { src, kind, dst } => ops::link(tx, caller, &src, &kind, &dst)?,
         TaskOp::Unlink { src, kind, dst } => ops::unlink(tx, caller, &src, &kind, &dst)?,
         TaskOp::Label { id, add, remove } => ops::label(tx, caller, &id, &add, &remove)?,
+        TaskOp::Note { id, text } => ops::note(tx, caller, &id, &text)?,
         TaskOp::Tools { id, tracker } => ops::tools(tx, caller, &id, tracker)?,
     };
     // The ops answer from the entity as they read it; an `Update` may have changed the title since.
@@ -379,9 +398,7 @@ pub fn op_or_roll_back(
     if answer.wrote() {
         return Ok(answer);
     }
-    *kept
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(answer);
+    *saman::lock(kept) = Some(answer);
     Err(refused("the op wrote nothing; rolled back"))
 }
 
@@ -481,10 +498,10 @@ fn ready_sql() -> String {
          and (e.lease_holder is null or e.lease_until is null or e.lease_until <= ?1) \
          and not exists (select 1 from link l join entity b on b.n = l.src \
                          where l.dst = e.n and l.kind = 'blocks' and l.tx_to = {SENTINEL} \
-                         and b.retired_tx is null and coalesce(b.status, '') not in ('done', 'dropped')) \
+                         and b.retired_tx is null and coalesce(b.status, '') not in ('done', 'dropped', 'accepted', 'parked', 'superseded')) \
          and not exists (select 1 from link l join entity c on c.n = l.dst \
                          where l.src = e.n and l.kind = 'parent_of' and l.tx_to = {SENTINEL} \
-                         and c.retired_tx is null and coalesce(c.status, '') not in ('done', 'dropped'))"
+                         and c.retired_tx is null and coalesce(c.status, '') not in ('done', 'dropped', 'accepted', 'parked', 'superseded'))"
     )
 }
 
@@ -501,7 +518,7 @@ pub(crate) fn is_ready(conn: &Connection, n: i64, now: f64) -> Result<bool, urdr
 }
 
 fn now_secs() -> f64 {
-    std::time::SystemTime::now()
+    stund::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
 }
@@ -526,6 +543,8 @@ pub(crate) fn opt<T>(r: Result<T, urdr::SqliteError>) -> Result<Option<T>, urdr:
 pub(crate) fn is_parsed(e: &Ent) -> bool {
     e.origin == Origin::Parsed
         || e.id.starts_with("task:/")
+        // a task of an imported plan file: the file's view owns its status (plans/write changes both)
+        || (e.kind == "task" && e.data.get("records").is_some())
         || matches!(
             e.kind.as_str(),
             "spec" | "plan" | "step" | "ruling" | "todo"
@@ -613,6 +632,7 @@ pub(crate) fn from_a_file(e: &Ent, full: bool) -> WriteError {
         e.data
             .get("path")
             .and_then(Value::as_str)
+            .or_else(|| e.data.pointer("/records/file").and_then(Value::as_str))
             .map(str::to_owned)
             .or_else(|| e.source.clone())
             .unwrap_or_else(|| e.id.clone())
@@ -631,14 +651,27 @@ pub(crate) fn of_a_job(job: &str) -> WriteError {
     ))
 }
 
-/// The task ID that CALLER may change: a tracker task (a job's task too when JOBS) in CALLER's project.
+/// The task ID that CALLER may change: a tracker task (a job's task too when JOBS) in CALLER's project, or in another
+/// project when a `task-write` grant covers it for every one of OPS ([`crate::grants::may_write_task`]).
 pub(crate) fn writable_task(
     tx: &Tx<'_>,
     caller: &Caller,
     id: &str,
     jobs: bool,
+    ops: &[&str],
 ) -> Result<Ent, WriteError> {
-    let (e, full) = visible(tx, caller, id, "task")?;
+    let granted = |e: &Ent| -> Result<bool, WriteError> {
+        Ok(!ops.is_empty()
+            && e.kind == "task"
+            && crate::grants::may_write_task(tx.sql(), caller, e.n, ops, tx.at())?)
+    };
+    let (e, full) = match visible(tx, caller, id, "task") {
+        Ok(seen) => seen,
+        Err(err) => match entity::by_id(tx.sql(), id)?.filter(|e| e.retired_tx.is_none()) {
+            Some(e) if granted(&e)? => (e, true),
+            _ => return Err(err),
+        },
+    };
     if is_parsed(&e) {
         return Err(from_a_file(&e, full));
     }
@@ -648,9 +681,9 @@ pub(crate) fn writable_task(
     if e.kind != "task" {
         return Err(refused(format!("{id} is a {}, not a task", e.kind)));
     }
-    if !caller.may_write_into(e.project) {
+    if !caller.may_write_into(e.project) && !granted(&e)? {
         return Err(refused(format!(
-            "{id} is in another project: a grant opens reading only; add a task in your project that relates to it"
+            "{id} is in another project: a read grant opens reading only; add a task in your project that relates to it, or ask the user for a write grant"
         )));
     }
     Ok(e)
@@ -678,7 +711,7 @@ pub fn new_id(tx: &Tx<'_>, kind: &str, project: Option<i64>) -> Result<String, W
         prefix.push('x');
     }
     let state = RandomState::new();
-    let nanos = std::time::SystemTime::now()
+    let nanos = stund::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
     for attempt in 0..32u32 {

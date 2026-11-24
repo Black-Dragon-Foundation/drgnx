@@ -20,7 +20,7 @@ use std::fs::File;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use std::ops::Range;
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -76,19 +76,20 @@ impl Default for Blocks {
 
 /// DIR, made shared and sticky when missing: every account may add a lock file and none may delete another's (or a
 /// held lock could be deleted and its name locked again). An existing one that is not a sticky directory is refused.
-fn lock_dir(dir: &Path) -> Result<(), String> {
+fn lock_dir(dir: &Path) -> villa::Result<()> {
     match std::fs::create_dir(dir) {
         Ok(()) => std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o1777))
-            .map_err(|e| format!("{}: {e}", dir.display()))?,
+            .map_err(|e| villa::Error::io(format!("{}: {e}", dir.display())))?,
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(format!("{}: {e}", dir.display())),
+        Err(e) => return Err(villa::Error::io(format!("{}: {e}", dir.display()))),
     }
-    let m = std::fs::symlink_metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let m = std::fs::symlink_metadata(dir)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", dir.display())))?;
     if !m.is_dir() || m.permissions().mode() & 0o1000 == 0 {
-        return Err(format!(
+        return Err(villa::Error::io(format!(
             "{} is not a sticky shared directory: debug port blocks cannot be locked there",
             dir.display()
-        ));
+        )));
     }
     Ok(())
 }
@@ -96,16 +97,12 @@ fn lock_dir(dir: &Path) -> Result<(), String> {
 /// PATH (created open to every account, never through a link), locked exclusively without waiting; none when another
 /// process holds it or the file is not ours to open (another account's, made private: that block is passed over).
 fn lock(path: &Path) -> Option<File> {
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .mode(0o666)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .ok()?;
+    let f = eitri::open_lock(path, 0o666).ok()?;
     // the umask narrowed the mode: widen it (only ours can be changed, and only ours needs it)
-    let _ = f.set_permissions(std::fs::Permissions::from_mode(0o666));
+    crate::soft::done(
+        f.set_permissions(std::fs::Permissions::from_mode(0o666)),
+        "ports",
+    );
     // SAFETY: flock(2) on a descriptor this function owns.
     (unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(f)
 }
@@ -150,9 +147,9 @@ impl Blocks {
     }
 
     /// The first block no session holds whose ports are all free; an error naming the range when there is none.
-    pub fn claim(&self) -> Result<Block, String> {
-        lock_dir(&self.dir)?;
-        let mut taken = self.taken.lock().unwrap_or_else(|e| e.into_inner());
+    pub fn claim(&self) -> villa::Result<Block> {
+        lock_dir(&self.dir).map_err(|e| villa::Error::invalid(e.to_string()))?;
+        let mut taken = saman::lock(&self.taken);
         let mut first = self.range.start;
         while first.saturating_add(self.len) <= self.range.end {
             if !taken.contains(&first)
@@ -169,12 +166,12 @@ impl Blocks {
             }
             first += self.len;
         }
-        Err(format!(
+        Err(villa::Error::invalid(format!(
             "no free block of {} debug ports in {}-{}: other sessions or programs hold them",
             self.len,
             self.range.start,
             self.range.end - 1
-        ))
+        )))
     }
 }
 
@@ -190,10 +187,7 @@ impl Drop for Block {
         // SAFETY: flock(2) on the descriptor this block owns. Unlocking (not only closing) lets go even while a
         // forked child that has not exec'd yet holds a copy of the descriptor.
         unsafe { libc::flock(self.lock.as_raw_fd(), libc::LOCK_UN) };
-        self.taken
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.first);
+        saman::lock(&self.taken).remove(&self.first);
     }
 }
 
@@ -202,8 +196,8 @@ impl Drop for Block {
 /// when it can be seen). macOS: `lsof`, which sees this account's processes only (another account's listener makes the
 /// adapter's own bind fail instead). Linux: `/proc/net/tcp*` and each listener's socket among this account's
 /// processes' descriptors.
-pub fn owned(port: u16, groups: &[i32]) -> Result<bool, String> {
-    let pids = listener_pids(port)?;
+pub fn owned(port: u16, groups: &[i32]) -> villa::Result<bool> {
+    let pids = listener_pids(port).map_err(|e| villa::Error::invalid(e.to_string()))?;
     if pids.is_empty() {
         return Ok(false);
     }
@@ -214,14 +208,14 @@ pub fn owned(port: u16, groups: &[i32]) -> Result<bool, String> {
             g > 0 && groups.contains(&g)
         });
         if !ours {
-            return Err(match pid {
+            return Err(villa::Error::refused(match pid {
                 Some(pid) => format!(
                     "port {port} is held by process {pid}, not the session's adapter or program: the session ends"
                 ),
                 None => format!(
                     "port {port} is held by a process that is not the session's adapter or program: the session ends"
                 ),
-            });
+            }));
         }
     }
     Ok(true)
@@ -233,21 +227,21 @@ pub fn owned(port: u16, groups: &[i32]) -> Result<bool, String> {
 /// second bind is possible, on Linux and macOS alike, so the check holds from then on: a second socket asks to bind the
 /// port with SO_REUSEPORT, which the system grants only when every listener on it has set it too, and drops it again (a
 /// socket that is bound and not listening takes no connection).
-pub fn exclusively_owned(port: u16, groups: &[i32]) -> Result<bool, String> {
+pub fn exclusively_owned(port: u16, groups: &[i32]) -> villa::Result<bool> {
     if !owned(port, groups)? {
         return Ok(false);
     }
-    if joinable(port)? {
-        return Err(format!(
+    if joinable(port).map_err(|e| villa::Error::invalid(e.to_string()))? {
+        return Err(villa::Error::invalid(format!(
             "port {port}'s listener allows another process of this account to share the port (SO_REUSEPORT): the session ends"
-        ));
+        )));
     }
     Ok(true)
 }
 
 /// Whether a socket with SO_REUSEPORT can bind 127.0.0.1:PORT now, i.e. nothing holds it, or every listener on it set
 /// SO_REUSEPORT as well. Any other refusal (it is held without the option) is `false`; an error is an unexpected one.
-fn joinable(port: u16) -> Result<bool, String> {
+fn joinable(port: u16) -> villa::Result<bool> {
     // SAFETY: socket(2), setsockopt(2), bind(2), fcntl(2) and close(2) on a descriptor made and closed here; the sockaddr
     // is zeroed, then set.
     unsafe {
@@ -258,10 +252,10 @@ fn joinable(port: u16) -> Result<bool, String> {
         #[cfg(not(target_os = "linux"))]
         let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
         if fd < 0 {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "port check: socket: {}",
                 std::io::Error::last_os_error()
-            ));
+            )));
         }
         libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
         let on: libc::c_int = 1;
@@ -288,7 +282,9 @@ fn joinable(port: u16) -> Result<bool, String> {
         } else if err.raw_os_error() == Some(libc::EADDRINUSE) {
             Ok(false)
         } else {
-            Err(format!("port check: bind 127.0.0.1:{port}: {err}"))
+            Err(villa::Error::invalid(format!(
+                "port check: bind 127.0.0.1:{port}: {err}"
+            )))
         }
     }
 }
@@ -299,69 +295,27 @@ pub const LSOF_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// CMD's output (stdin closed), or an error once it has run WITHIN without exiting (it is killed then).
 pub fn output_within(
-    mut cmd: std::process::Command,
+    mut cmd: crate::proc::Command,
     within: std::time::Duration,
-) -> Result<std::process::Output, String> {
-    use std::io::Read;
-    use std::process::Stdio;
-    let name = cmd.get_program().to_string_lossy().into_owned();
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("{name}: {e}"))?;
-    // read both pipes as it runs: a full pipe would stop it before it exits
-    let drain = |p: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = p {
-                let _ = p.read_to_end(&mut buf);
-            }
-            buf
-        })
-    };
-    let out = drain(
-        child
-            .stdout
-            .take()
-            .map(|p| Box::new(p) as Box<dyn Read + Send>),
-    );
-    let err = drain(
-        child
-            .stderr
-            .take()
-            .map(|p| Box::new(p) as Box<dyn Read + Send>),
-    );
-    let start = crate::clock::real_now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) if start.elapsed() < within => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "{name} did not answer within {} ms (killed)",
-                    within.as_millis()
-                ));
-            }
-            Err(e) => return Err(format!("{name}: {e}")),
+) -> villa::Result<crate::proc::Output> {
+    let name = cmd.program().to_string_lossy().into_owned();
+    // past WITHIN the child's group is killed (draugr's deadline)
+    cmd.deadline(within).output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::TimedOut {
+            villa::Error::invalid(format!(
+                "{name} did not answer within {} ms (killed)",
+                within.as_millis()
+            ))
+        } else {
+            villa::Error::invalid(format!("{name}: {e}"))
         }
-    };
-    Ok(std::process::Output {
-        status,
-        stdout: out.join().unwrap_or_default(),
-        stderr: err.join().unwrap_or_default(),
     })
 }
 
 /// The process of each listener on PORT; `None` where it cannot be seen.
 #[cfg(target_os = "macos")]
-fn listener_pids(port: u16) -> Result<Vec<Option<i32>>, String> {
-    let mut cmd = std::process::Command::new("/usr/sbin/lsof");
+fn listener_pids(port: u16) -> villa::Result<Vec<Option<i32>>> {
+    let mut cmd = crate::proc::Command::new("/usr/sbin/lsof");
     // -b -w: no kernel call that can block (a stat of a hung mount); the deadline covers the rest
     cmd.args([
         "-b",
@@ -383,10 +337,10 @@ fn listener_pids(port: u16) -> Result<Vec<Option<i32>>, String> {
 
 /// The process of each listener on PORT; `None` where it cannot be seen.
 #[cfg(not(target_os = "macos"))]
-fn listener_pids(port: u16) -> Result<Vec<Option<i32>>, String> {
+fn listener_pids(port: u16) -> villa::Result<Vec<Option<i32>>> {
     let mut inodes = vec![];
     for f in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        let Ok(t) = std::fs::read_to_string(f) else {
+        let Ok(t) = crate::fsio::read_to_string(f) else {
             continue;
         };
         for line in t.lines().skip(1) {
@@ -408,7 +362,7 @@ fn listener_pids(port: u16) -> Result<Vec<Option<i32>>, String> {
         return Ok(vec![]);
     }
     let mut found: Vec<Option<i32>> = vec![None; inodes.len()];
-    let procs = std::fs::read_dir("/proc").map_err(|e| format!("/proc: {e}"))?;
+    let procs = std::fs::read_dir("/proc").map_err(|e| villa::Error::io(format!("/proc: {e}")))?;
     for p in procs.flatten() {
         let Some(pid) = p.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else {
             continue;

@@ -751,7 +751,7 @@ mod tests {
                 p.headers.insert(AUTHORIZATION, HeaderValue::from_str(&bearer(token)).unwrap());
             }
             let on = if session { ListenerId::Session("s1".into()) } else { ListenerId::Loopback };
-            let _ = admit(&p, &on);
+            drop(admit(&p, &on));
         }
     }
 }

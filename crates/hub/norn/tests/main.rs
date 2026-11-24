@@ -47,3 +47,47 @@ fn every_test_file_is_a_module_here_or_a_declared_binary() {
         "no `mod` line in tests/main.rs (or no [[test]] for an APART file): {unlisted:?}"
     );
 }
+
+/// TEXT as the file at PATH, written through eitri (the files standard); the test's failure otherwise.
+pub(crate) fn put_file(path: impl AsRef<std::path::Path>, text: impl AsRef<[u8]>) {
+    eitri::replace_file(path.as_ref(), text.as_ref()).unwrap();
+}
+
+/// The text of the file at PATH, read through eitri (a regular file, no link in the path); the test's failure
+/// otherwise.
+pub(crate) fn read_file(path: impl AsRef<std::path::Path>) -> String {
+    eitri::read_string(path.as_ref(), 16 << 20).unwrap()
+}
+
+/// The repository's `test/fixtures`, its checkout's own links resolved first (eitri refuses a link in any component).
+pub(crate) fn fixtures() -> std::path::PathBuf {
+    std::fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
+        .unwrap()
+        .join("../../../test/fixtures")
+}
+
+/// PROGRAM run with ARGS in CWD and exactly the environment ENV, to its end (a minute at most): through draugr, on a
+/// thread of its own, since a test that calls this may already run inside a runtime.
+pub(crate) fn run_child(
+    program: impl Into<std::path::PathBuf>,
+    args: &[&str],
+    cwd: &std::path::Path,
+    env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+) -> draugr::Output {
+    let spec = draugr::Spec {
+        program: program.into(),
+        args: args.iter().map(std::ffi::OsString::from).collect(),
+        env,
+        cwd: Some(cwd.to_path_buf()),
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
+    };
+    saman::spawn_thread("test-child", move || {
+        draugr::run(spec, std::time::Duration::from_secs(60))
+    })
+    .unwrap()
+    .join()
+    .unwrap()
+    .unwrap()
+}

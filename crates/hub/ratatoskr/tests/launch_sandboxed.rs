@@ -37,9 +37,9 @@ impl Fx {
         ] {
             std::fs::create_dir_all(b.join(d)).unwrap();
         }
-        std::fs::write(b.join("home/.codex/auth.json"), "codex-token").unwrap();
-        std::fs::write(b.join("home/secret.txt"), "home-file").unwrap();
-        std::fs::write(b.join("wt/.codex/config.toml"), "orig").unwrap();
+        ratatoskr::fsio::write(b.join("home/.codex/auth.json"), "codex-token").unwrap();
+        ratatoskr::fsio::write(b.join("home/secret.txt"), "home-file").unwrap();
+        ratatoskr::fsio::write(b.join("wt/.codex/config.toml"), "orig").unwrap();
         Fx { _dir: dir, b }
     }
 
@@ -51,8 +51,8 @@ impl Fx {
         let s = |rel: &str| self.p(rel).to_str().unwrap().to_owned();
         Env::new(
             &[
-                ("HOME", &s("home")),
-                ("XDG_RUNTIME_DIR", &s("run")),
+                (stig::HOME_VAR, &s("home")),
+                (stig::SYSTEM_RUNTIME_VAR, &s("run")),
                 ("TMPDIR", &s("t")),
                 ("PATH", "/usr/bin:/bin"),
             ],
@@ -93,11 +93,7 @@ impl Fx {
         let env = self.env();
         let launch = launch_on(&env, &sb, plan, shape).unwrap_or_else(|r| panic!("refused: {r}"));
         between();
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
+        saman::block_on_current(async {
             let mut child = draugr::spawn_pinned(launch.spec).await.expect("spawn");
             let deadline = std::time::Duration::from_secs(20);
             if let Some(fd) = launch.status {
@@ -135,9 +131,9 @@ fn reduced() -> Tier {
     if abi >= 9 {
         Tier::Reduced
     } else {
-        eprintln!(
+        ratatoskr::soft::err_line(&format!(
             "the kernel's Landlock ABI is {abi}, below the reduced tier's 9: this row runs on the full tier"
-        );
+        ));
         Tier::Full
     }
 }
@@ -195,11 +191,7 @@ fn an_agent_sessions_stdin_reaches_the_program_inside() {
     )
     .unwrap_or_else(|r| panic!("refused: {r}"));
     let launch = with_stdin(launch);
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let code = rt.block_on(async {
+    let code = saman::block_on_current(async {
         let mut child = draugr::spawn_pinned(launch.spec).await.expect("spawn");
         let mut stdin = child.take_stdin().expect("a pipe on the agent's stdin");
         if let Some(fd) = launch.status {
@@ -231,13 +223,16 @@ fn mock_llm(fx: &Fx) -> (std::process::Child, u16, PathBuf) {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../test/conformance/fixtures/llm-messages.json");
     let log = fx.p("llm.log");
-    let mut llm = std::process::Command::new(&mock)
+    let mut llm = ratatoskr::proc::Command::new(&mock)
         .args(["llm", "--script"])
         .arg(&script)
         .arg("--log")
         .arg(&log)
-        .stdout(std::process::Stdio::piped())
-        .spawn()
+        .spawn(
+            ratatoskr::proc::Io::Inherit,
+            ratatoskr::proc::Io::Pipe,
+            ratatoskr::proc::Io::Inherit,
+        )
         .expect("ratatoskr-mock llm");
     let mut line = String::new();
     std::io::BufReader::new(llm.stdout.take().unwrap())
@@ -270,21 +265,22 @@ fn a_gateway_session_reaches_the_hubs_gateway_through_its_relay() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(fx.p("run"), std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let mut hub = std::process::Command::new(RATATOSKR)
+    let mut hub = ratatoskr::proc::Command::new(RATATOSKR)
         .args(["serve", "--foreground", "--parent-pid", &me.to_string()])
         .env_clear()
         .envs([
-            ("HOME", fx.p("home")),
-            ("XDG_RUNTIME_DIR", fx.p("run")),
+            (stig::HOME_VAR, fx.p("home")),
+            (stig::SYSTEM_RUNTIME_VAR, fx.p("run")),
             ("TMPDIR", fx.p("t")),
             ("PATH", PathBuf::from("/usr/bin:/bin")),
             ("RATATOSKR_SUPERVISOR", PathBuf::from("none")),
         ])
         .current_dir(fx.p(""))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::fs::File::create(fx.p("hub.err")).unwrap())
-        .spawn()
+        .spawn(
+            ratatoskr::proc::Io::Null,
+            ratatoskr::proc::Io::Null,
+            ratatoskr::proc::Io::file(eitri::create_exclusive(&fx.p("hub.err"), 0o666).unwrap()),
+        )
         .expect("the hub");
     let within = Duration::from_secs(10);
     // a look repeated: the hub says nothing when it is ready; 30 s only bounds a failure
@@ -330,11 +326,7 @@ fn a_gateway_session_reaches_the_hubs_gateway_through_its_relay() {
     let shape = fx.shape(NetCell::ProviderOnly);
     let launch = launch_on(&env, &sandbox(Tier::Full), &plan, &shape)
         .unwrap_or_else(|r| panic!("refused: {r}"));
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let (code, tail) = rt.block_on(async {
+    let (code, tail) = saman::block_on_current(async {
         let mut child = draugr::spawn_pinned(launch.spec).await.expect("spawn");
         if let Some(fd) = launch.status {
             gleipnir::read_status(fd, &|| child.stderr_tail(), Duration::from_secs(20))
@@ -344,13 +336,13 @@ fn a_gateway_session_reaches_the_hubs_gateway_through_its_relay() {
         (status.code().unwrap_or(-1), child.stderr_tail())
     });
     drop(c);
-    let _ = hub.kill();
-    let _ = hub.wait();
-    let _ = llm.kill();
-    let _ = llm.wait();
+    ratatoskr::soft::done(hub.kill(), "launch_sandboxed");
+    ratatoskr::soft::done(hub.wait(), "launch_sandboxed");
+    ratatoskr::soft::done(llm.kill(), "launch_sandboxed");
+    ratatoskr::soft::done(llm.wait(), "launch_sandboxed");
     assert_eq!(code, 0, "the gateway was not reached: {tail}");
     assert!(
-        std::fs::read_to_string(&log).is_ok_and(|t| t.contains("\"request\"")),
+        ratatoskr::fsio::read_to_string(&log).is_ok_and(|t| t.contains("\"request\"")),
         "the mock saw no request"
     );
 }
@@ -392,21 +384,22 @@ fn hub_socket_identifies_its_session() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(fx.p("run"), std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let mut hub = std::process::Command::new(RATATOSKR)
+    let mut hub = ratatoskr::proc::Command::new(RATATOSKR)
         .args(["serve", "--foreground", "--parent-pid", &me.to_string()])
         .env_clear()
         .envs([
-            ("HOME", fx.p("home")),
-            ("XDG_RUNTIME_DIR", fx.p("run")),
+            (stig::HOME_VAR, fx.p("home")),
+            (stig::SYSTEM_RUNTIME_VAR, fx.p("run")),
             ("TMPDIR", fx.p("t")),
             ("PATH", PathBuf::from("/usr/bin:/bin")),
             ("RATATOSKR_SUPERVISOR", PathBuf::from("none")),
         ])
         .current_dir(fx.p(""))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::fs::File::create(fx.p("hub.err")).unwrap())
-        .spawn()
+        .spawn(
+            ratatoskr::proc::Io::Null,
+            ratatoskr::proc::Io::Null,
+            ratatoskr::proc::Io::file(eitri::create_exclusive(&fx.p("hub.err"), 0o666).unwrap()),
+        )
         .expect("the hub");
     let within = Duration::from_secs(10);
     // a look repeated: the hub says nothing when it is ready; 30 s only bounds a failure
@@ -441,11 +434,7 @@ fn hub_socket_identifies_its_session() {
         &fx.shape(NetCell::ProviderOnly),
     )
     .unwrap_or_else(|r| panic!("refused: {r}"));
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let (code, tail) = rt.block_on(async {
+    let (code, tail) = saman::block_on_current(async {
         let mut child = draugr::spawn_pinned(launch.spec).await.expect("spawn");
         if let Some(fd) = launch.status {
             gleipnir::read_status(fd, &|| child.stderr_tail(), Duration::from_secs(20))
@@ -455,9 +444,9 @@ fn hub_socket_identifies_its_session() {
         (status.code().unwrap_or(-1), child.stderr_tail())
     });
     drop(c);
-    let _ = hub.kill();
-    let _ = hub.wait();
-    let said = std::fs::read_to_string(&out).unwrap_or_default();
+    ratatoskr::soft::done(hub.kill(), "launch_sandboxed");
+    ratatoskr::soft::done(hub.wait(), "launch_sandboxed");
+    let said = ratatoskr::fsio::read_to_string(&out).unwrap_or_default();
     assert_eq!(code, 0, "the child: {said} {tail}");
     let line = |tag: &str| -> serde_json::Value {
         let l = said
@@ -499,12 +488,7 @@ fn a_session_reaches_its_provider_through_the_proxy() {
     let launch = launch_on(&env, &sandbox(Tier::Full), &plan, &shape)
         .unwrap_or_else(|r| panic!("refused: {r}"));
     let dir = paths::session_dir(&env, &paths::socket_path(&env), &shape.sid).unwrap();
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .unwrap();
-    let code = rt.block_on(async {
+    let code = saman::block_on_current(async {
         let allow = vec![gleipnir::net::host::parse_target(&format!("llm.test:{port}")).unwrap()];
         let pinned = vec![("llm.test".to_string(), std::net::Ipv4Addr::LOCALHOST.into())];
         let net = SessionNet::start(&dir, &shape.sid, allow, pinned, None).expect("the proxy");
@@ -518,11 +502,11 @@ fn a_session_reaches_its_provider_through_the_proxy() {
         drop(net);
         (status.code().unwrap_or(-1), tail)
     });
-    let _ = llm.kill();
-    let _ = llm.wait();
+    ratatoskr::soft::done(llm.kill(), "launch_sandboxed");
+    ratatoskr::soft::done(llm.wait(), "launch_sandboxed");
     assert_eq!(code.0, 0, "the provider was not reached: {}", code.1);
     assert!(
-        std::fs::read_to_string(&log).is_ok_and(|t| t.contains("\"request\"")),
+        ratatoskr::fsio::read_to_string(&log).is_ok_and(|t| t.contains("\"request\"")),
         "the mock saw no request"
     );
     assert!(std::fs::symlink_metadata(dir.join(paths::SESSION_PROXY_SOCKET)).is_err());
@@ -564,7 +548,7 @@ fn codex_config_is_read_only() {
     );
     assert_eq!(code, 0);
     assert_eq!(
-        std::fs::read_to_string(fx.p("wt/.codex/config.toml")).unwrap(),
+        ratatoskr::fsio::read_to_string(fx.p("wt/.codex/config.toml")).unwrap(),
         "orig"
     );
 }
@@ -611,10 +595,10 @@ fn the_login_dir_takes_only_the_token_and_the_sessions_state() {
     for d in ["hooks", "commands", "shell-snapshots"] {
         std::fs::create_dir_all(c.join(d)).unwrap();
     }
-    std::fs::write(c.join("settings.json"), "{}").unwrap();
-    std::fs::write(c.join("commands/c.md"), "orig").unwrap();
-    std::fs::write(c.join(".credentials.json"), "old").unwrap();
-    std::fs::write(c.join("shell-snapshots/snapshot-zsh-1.sh"), "orig").unwrap();
+    ratatoskr::fsio::write(c.join("settings.json"), "{}").unwrap();
+    ratatoskr::fsio::write(c.join("commands/c.md"), "orig").unwrap();
+    ratatoskr::fsio::write(c.join(".credentials.json"), "old").unwrap();
+    ratatoskr::fsio::write(c.join("shell-snapshots/snapshot-zsh-1.sh"), "orig").unwrap();
     let project = c.join("projects").join(claude_folder(&fx.p("wt")));
     let script = format!(
         "cat {c}/settings.json >/dev/null || exit 10; \
@@ -641,7 +625,11 @@ fn the_login_dir_takes_only_the_token_and_the_sessions_state() {
         ("commands/c.md", "orig"),
         ("shell-snapshots/snapshot-zsh-1.sh", "orig"),
     ] {
-        assert_eq!(std::fs::read_to_string(c.join(f)).unwrap(), was, "{f}");
+        assert_eq!(
+            ratatoskr::fsio::read_to_string(c.join(f)).unwrap(),
+            was,
+            "{f}"
+        );
     }
     for f in [
         "settings.local.json",
@@ -653,7 +641,7 @@ fn the_login_dir_takes_only_the_token_and_the_sessions_state() {
         assert!(!c.join(f).exists(), "{f} was made");
     }
     assert_eq!(
-        std::fs::read_to_string(c.join(".credentials.json")).unwrap(),
+        ratatoskr::fsio::read_to_string(c.join(".credentials.json")).unwrap(),
         "new\n"
     );
     assert!(project.join("s.jsonl").exists());
@@ -671,8 +659,8 @@ fn a_project_chat_has_a_claude_project_folder_of_its_own() {
     std::fs::create_dir_all(&project).unwrap();
     let yours = fx.p("home/.claude/projects").join(claude_folder(&project));
     std::fs::create_dir_all(yours.join("memory")).unwrap();
-    std::fs::write(yours.join("you.jsonl"), "yours").unwrap();
-    std::fs::write(yours.join("memory/MEMORY.md"), "yours").unwrap();
+    ratatoskr::fsio::write(yours.join("you.jsonl"), "yours").unwrap();
+    ratatoskr::fsio::write(yours.join("memory/MEMORY.md"), "yours").unwrap();
     let script = format!(
         "cat {y}/you.jsonl 2>/dev/null && exit 11; echo x >> {y}/memory/MEMORY.md 2>/dev/null; \
          echo t > {y}/chat.jsonl || exit 12; exit 0",
@@ -682,7 +670,7 @@ fn a_project_chat_has_a_claude_project_folder_of_its_own() {
     let code = fx.run(Tier::Full, &plan, &shape);
     assert_eq!(code, 0);
     assert_eq!(
-        std::fs::read_to_string(yours.join("memory/MEMORY.md")).unwrap(),
+        ratatoskr::fsio::read_to_string(yours.join("memory/MEMORY.md")).unwrap(),
         "yours"
     );
     assert!(!yours.join("chat.jsonl").exists());
@@ -730,8 +718,8 @@ fn a_project_chat_reads_the_project_and_writes_only_its_scratch() {
     let env = fx.env();
     let project = fx.p("proj");
     std::fs::create_dir_all(project.join(".git/hooks")).unwrap();
-    std::fs::write(project.join(".git/config"), "[core]\n").unwrap();
-    std::fs::write(project.join("README"), "readme").unwrap();
+    ratatoskr::fsio::write(project.join(".git/config"), "[core]\n").unwrap();
+    ratatoskr::fsio::write(project.join("README"), "readme").unwrap();
     let scratch = scratch_dir(&env, "C1").unwrap();
     let script = format!(
         "[ \"$(pwd)\" = {p} ] || exit 11; grep -q readme README || exit 12; echo n > {s}/note || exit 13; \
@@ -746,14 +734,14 @@ fn a_project_chat_reads_the_project_and_writes_only_its_scratch() {
     assert!(scratch.join("note").exists());
     assert!(!project.join("new").exists() && !project.join(".envrc").exists());
     assert_eq!(
-        std::fs::read_to_string(project.join(".git/config")).unwrap(),
+        ratatoskr::fsio::read_to_string(project.join(".git/config")).unwrap(),
         "[core]\n"
     );
 
     // a linked worktree of a repository elsewhere (made by git, with HOME in the fixture): `git log` and `git diff`
     // work, and the common git folder cannot be written
     let git = |args: &[&str]| {
-        let ok = std::process::Command::new("git")
+        let ok = ratatoskr::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -763,7 +751,7 @@ fn a_project_chat_reads_the_project_and_writes_only_its_scratch() {
                 "init.defaultBranch=main",
             ])
             .args(args)
-            .env("HOME", fx.p("home"))
+            .env(stig::HOME_VAR, fx.p("home"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .status()
             .expect("git")
@@ -774,7 +762,7 @@ fn a_project_chat_reads_the_project_and_writes_only_its_scratch() {
     let linked = fx.p("lw");
     let (r, l) = (repo.to_str().unwrap(), linked.to_str().unwrap());
     git(&["init", "-q", r]);
-    std::fs::write(repo.join("f"), "one\n").unwrap();
+    ratatoskr::fsio::write(repo.join("f"), "one\n").unwrap();
     git(&["-C", r, "add", "f"]);
     git(&["-C", r, "commit", "-q", "-m", "first"]);
     git(&["-C", r, "worktree", "add", "-q", l]);
@@ -785,14 +773,14 @@ fn a_project_chat_reads_the_project_and_writes_only_its_scratch() {
          echo x > {c}/hooks/post-checkout 2>/dev/null && exit 25; exit 0",
         c = common.display()
     );
-    let config = std::fs::read_to_string(common.join("config")).unwrap();
+    let config = ratatoskr::fsio::read_to_string(common.join("config")).unwrap();
     let (plan, shape) = chat_launch(&env, &fx.plan(&script), "C2", &linked).unwrap();
     assert!(shape.read.contains(&common) && !shape.write.iter().any(|w| common.starts_with(w)));
     let code = fx.run(reduced(), &plan, &shape);
     assert_eq!(code, 0);
     assert!(!common.join("planted").exists() && !common.join("hooks/post-checkout").exists());
     assert_eq!(
-        std::fs::read_to_string(common.join("config")).unwrap(),
+        ratatoskr::fsio::read_to_string(common.join("config")).unwrap(),
         config
     );
 }
@@ -824,10 +812,10 @@ fn the_login_dir_shows_only_what_the_cli_loads() {
         "shell-snapshots/snapshot-zsh-1.sh",
         "commands/c.md",
     ] {
-        std::fs::write(c.join(f), "x").unwrap();
+        ratatoskr::fsio::write(c.join(f), "x").unwrap();
     }
     std::fs::create_dir_all(fx.p("home/dotfiles")).unwrap();
-    std::fs::write(fx.p("home/dotfiles/settings.json"), "dotfile").unwrap();
+    ratatoskr::fsio::write(fx.p("home/dotfiles/settings.json"), "dotfile").unwrap();
     std::os::unix::fs::symlink(fx.p("home/dotfiles/settings.json"), c.join("settings.json"))
         .unwrap();
     let script = format!(
@@ -857,7 +845,7 @@ fn a_codex_session_records_into_a_sessions_folder_of_its_own() {
     let env = fx.env();
     let s = fx.p("home/.codex/sessions");
     std::fs::create_dir_all(s.join("2026")).unwrap();
-    std::fs::write(s.join("2026/old.jsonl"), "yours").unwrap();
+    ratatoskr::fsio::write(s.join("2026/old.jsonl"), "yours").unwrap();
     let script = format!(
         "cat {s}/2026/old.jsonl 2>/dev/null && exit 11; echo x >> {s}/2026/old.jsonl 2>/dev/null; \
          mkdir -p {s}/2026/11 && echo t > {s}/2026/11/new.jsonl || exit 12; exit 0",
@@ -868,7 +856,7 @@ fn a_codex_session_records_into_a_sessions_folder_of_its_own() {
     let code = fx.run(Tier::Full, &plan, &fx.shape(NetCell::ProviderOnly));
     assert_eq!(code, 0);
     assert_eq!(
-        std::fs::read_to_string(s.join("2026/old.jsonl")).unwrap(),
+        ratatoskr::fsio::read_to_string(s.join("2026/old.jsonl")).unwrap(),
         "yours"
     );
     assert!(!s.join("2026/11").exists());

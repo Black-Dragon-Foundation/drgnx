@@ -112,11 +112,8 @@ There is no Lisp runtime. Ratatoskr is the whole server side, and the editor is 
 - **The editor's background jobs** (grammars, mermaid, the browser, local AI servers, onboarding installs) are the hub's
   `exec/*` jobs (`core/drgnx-exec.el` is the client); a server that stays up for days starts with `no_timebox`
   ([hub.md](hub.md#jobs-exec)).
-- **At start** the hub reaps the process groups `runtime.db` recorded and moves what the Lisp runtime left in the state
-  directory aside, once (`legacy::migrate`, [hub.md](hub.md#what-the-lisp-runtime-left)).
-- **The doctor** has a `lisp-runtime` check (a Lisp hub still running, an outside agent's config that still starts the
-  Lisp coordination server, old jobs still running, what waits in `hub/migrated-p7/`; [install.md](../guide/install.md))
-  and reads the job sandbox's state from `ratatoskr doctor --json`.
+- **At start** the hub reaps the process groups `runtime.db` recorded.
+- **The doctor** reads the job sandbox's state from `ratatoskr doctor --json`.
 
 ## runstav: the contract
 
@@ -734,8 +731,7 @@ Every scenario gets fresh temporary roots under `/tmp/rtsk-XXXXXX/` (`/tmp`, not
 short; taken by its true name, so `$ROOT` is `/private/tmp/rtsk-XXXXXX` on macOS, where `/tmp` is a link the hub
 refuses in a path and resolves in what it reports) holding `home run state data config cache tmp`, and the hub's `HOME`, `XDG_*`, `DRGNX_DATA_DIR`,
 `DRGNX_CONFIG_DIR` and `TMPDIR` point there. A hub is started with `--parent-pid` of the harness, so it ends with the
-test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH`, `DRGNX_EMACS` (for the rows that
-run the editor's own CLIs, such as the personal-notes canary) and `DBUS_SESSION_BUS_ADDRESS` are inherited, and
+test, and `RATATOSKR_SUPERVISOR=none` keeps a supervisor out of it. Only `PATH` and `DBUS_SESSION_BUS_ADDRESS` are inherited, and
 `DRGNX_RATATOSKR_LOG` and `DRGNX_RATATOSKR_STALL_FILE` (the stall watchdog's reports, hub.md) when set. Without it the hub logs `info` with a session's turn stages at `debug` (`HUB_LOG`:
 sending, the snapshot before the prompt, the prompt written, each update read and applied) and the long request paths'
 stages (target `ratatoskr::stages`, `src/stages.rs`: `history/fork`'s source, step, tree, branch and conversation,
@@ -1025,7 +1021,7 @@ Rows with `"requires": ["v1"]` (all of them) run against Ratatoskr:
 | `lifecycle/` (Task 16) | `ensure-starts-once` (two `ensure`s at once with no supervisor: one hub), `stop-ends-it`, `kill-9-then-ensure-restarts`, `stop-ends-a-non-dumpable-hub` (`test-hooks`: `--test-ignore-shutdown`, so `stop` reaches its SIGTERM through the listener's pidfd; `drop_ptrace`), `stop-never-signals-a-forged-argv0` (`test-hooks`, `linux`: the lock's text rewritten to name a `sleep` started as `exec -a ratatoskr`, with its true start time; `stop` exits 1 and both live), `stop-with-a-stale-lock-signals-nothing` (a lock file naming a live `sleep` that nobody holds: not running, no signal) |
 | `restart/` | `the-restart-method-exits-75`, `a-self-detached-hub-re-execs`; with `test-hooks` (`--idle-tick-ms 200`; a running turn of a mock agent is what keeps the hub): `a-changed-binary-sends-the-notice`, `a-busy-session-delays-it`, `a-missing-or-broken-new-binary-never-restarts` |
 | `reaper/` | `a-recorded-orphan-is-killed-at-start` (`linux`: the row plants a `runtime.db` record for a live process of its own group, as an older hub's Emacs child left one; the next hub kills it within 4 s and logs it), `a-row-without-a-pid-is-dropped-and-kills-nothing` (NULL rows in `runtime.db`: removed, nothing signalled) |
-| `mcp/` | the coordination tools on session sockets and outside bridges ([hub.md](hub.md#sessions-and-their-sockets)): `the-session-directory-is-private`, `a-gone-owners-sessions-are-closed` (a `spawn`ed owner killed), `a-closed-session-is-gone`, `an-unknown-tool-is-32602`, `a-fifth-connection-is-closed`, `a-session-socket-is-its-identity` (an `agent` argument changes nothing), `an-outside-bridge-is-ext-and-unverified`, `sessions-come-back-after-a-restart`, `bad-argument-is-a-tool-error-with-its-path`, `modern-and-legacy-handshakes`, `tool-writes-are-broadcast-as-events`, `drgnx-agent-in-the-environment-is-ignored`; with `test-hooks`: `attach-needs-service-or-gets-not-allowed` |
+| `mcp/` | the coordination tools on session sockets and outside bridges ([hub.md](hub.md#sessions-and-their-sockets)): `the-session-directory-is-private`, `a-gone-owners-sessions-are-closed` (a `spawn`ed owner killed), `a-closed-session-is-gone`, `an-unknown-tool-is-32602`, `a-fifth-connection-is-closed`, `a-session-socket-is-its-identity` (an `agent` argument changes nothing), `an-outside-bridge-is-ext-and-unverified`, `sessions-come-back-after-a-restart`, `bad-argument-is-a-tool-error-with-its-path`, `modern-and-legacy-handshakes`, `tool-writes-are-broadcast-as-events`, `drgnx-agent-in-the-environment-is-ignored`, `search-tools-read-the-index-only` (a session's `search.sock`: eight tools, `index_list` and `index_status` answer, a pause or delete tool is unknown); with `test-hooks`: `attach-needs-service-or-gets-not-allowed` |
 | `bridge/` | `ratatoskr mcp-bridge` ([hub.md](hub.md#the-mcp-bridge)), a copy of the hub under test (`install_bin`) run by `spawn_conn`: `outside-refuses-an-untrusted-directory` (the socket's directory at 0755: exit 1, the reason on stderr); more: `survives-a-hub-restart` and `survives-a-hub-restart-modern` (the gate rows: a TERM, a start on the same root, the next call works; both eras), `an-in-flight-call-is-an-error-never-a-retry` (a call to a STOPped hub, then KILL: the went-away tool error, one event after the restart), `a-call-while-away-waits-then-errors`, `tools-list-from-the-cache-while-away`, `drgnx-agent-in-the-environment-is-ignored`, `outside-is-service-class-and-ext`, `stdin-eof-ends-it`; with `test-hooks` (`--bridge-backoff-ms`, `--bridge-give-up-ms`): `gives-up` |
 | `panel/` | what the agent panel reads from the hub: `tool-output-pages` (a 600000-byte output reaches the editor as head, tail and `outputBytes`; `agents/tool-output` pages it, 256 KiB at most, `truncated` only when the answer is short) |
 
@@ -1334,6 +1330,45 @@ so one vector serves every repo, clone, branch and worktree that has the text.
   1 GiB. The hub sweeps at most once an hour (`CACHE_SWEEP`), from the projects' tree sweep: gone holders released,
   then each open cache collected.
 
+### Vector packs
+
+A **vector pack** (`hrafn::vector_pack`, written by `ratatoskr search export`, read by `search import`) is an index's
+vectors as one file, for a machine that has the code and not the GPU hours: build on the desktop, import on the laptop.
+(Not a language pack: those are `packs.md`.)
+
+> **A vector pack is source-equivalent.** Vectors leak content: inversion attacks recover most short inputs (Vec2Text
+> 92% exact on 32-token inputs; defences unreliable). A vector pack is treated as source-equivalent: this file can
+> recreate the code's text. Share it only where you would share the code. `search export` prints this before the path.
+
+- **Format (`PACK_FORMAT` = 1).** A SQLite file of two tables, nothing else. `meta(key, value)` is the header: `format`,
+  `record` (the fingerprint's record as JSON; the importer derives the fingerprint from it), `created_at`,
+  `tool_version`, and optionally `repo_url` and `commit` (for display only). `vec(kind, key, bits, vec, scale)` holds
+  one row per chunk (kind 0) or path (kind 1) vector, in the form the cache stores it. **No path, no chunk text, no file
+  list**: a key is a hash.
+- **Content-addressed.** Rows are written in key order in one transaction with a fixed page size and no journal, so the
+  same header and rows are the same bytes; `write_pack` returns the file's sha256, and the default file name is its first
+  16 hex characters (`<repo>/.drgnx/packs/<sha16>.vpack`). The time is in the header, so two exports at different
+  seconds are two packs.
+- **Strict reading.** `read_pack` refuses a file that is not a pack, a format other than 1, and any table, view,
+  trigger, column or header field the format does not define.
+- **Export** (`search/export {root, out?, branch?, all_trees?}`): the keys the folder's tree sees (the base's content
+  and a worktree's own files over it; `branch` names another indexed checkout's tree, `all_trees` every tree of the
+  repo's store), with the vectors the caches have for them, from the fingerprint that covers most of them. A pack goes
+  inside the repo (`.drgnx/packs/`) unless the user gives `out`; nothing publishes it. The answer is `{path, sha256,
+  keys, warning}`.
+- **Import** (`search/import {file, root?, keep_all?}`) runs in the hub, the only writer of the caches.
+  - It refuses a fingerprint no source or engine of this machine can make query vectors for (the servers that answer
+    and the built-in model), since its vectors would never be searched; `keep_all` takes it anyway.
+  - **Proof of possession (after Cursor §15 [P1]).** It keeps only the keys a repo store here references. Every open
+    project's store, and every other store file under `<state>/code/` (opened for the purpose: a closed repo still
+    counts, MP-21), first reports its live key set to the cache (`hrafn::hold`); a pack key is written only when a live
+    holder holds it. A pack cannot add vectors for code the importer does not have; with no repo here the answer is "0
+    of N keys kept: no repo here references them".
+  - `keep_all` keeps the whole pack, for a repo opened later. The answer counts `{keys_in_pack, kept,
+    skipped_unreferenced, already_had}`; a second import of one pack keeps nothing and says `already_had`.
+  - Every row is checked to be the fingerprint's size (sign bits plus one int8 per dimension) before it is written.
+- Signatures, automatic fetching and OCI distribution are not built (spec §12A): a pack is a file the user passes.
+
 ### The file list and coverage
 
 `files::list(root, git, config, allow)` is the one place a path enters the index. Git sits behind the `Git` trait
@@ -1626,6 +1661,77 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   retries: `Offline` is reported once, and the hub tries again at its next start or on `search/model-download`. Proxies come
   from the environment, through `bifrost::upstream::Upstream::get`. `test-tiny` (test-hooks builds, `test/fixtures/test-tiny/`)
   is a model of no weights for the flows that need no inference. The download's stall limit runs on the hub's clock.
+- **The engine's download (`engine_install.rs`, MP-20).** The local engine is two pinned downloads: the GGUF of
+  `GGUF_MODELS` (Qwen3-Embedding-0.6B in Q8_0, from `Qwen/Qwen3-Embedding-0.6B-GGUF` at a pinned revision, into
+  `<cache>/models/<id>/<file>`) and the llama.cpp release assets of `ENGINES` the machine's GPUs name (upstream's own
+  build at one tag, by sha256 and size): CUDA for NVIDIA on Linux x64 (12.8 and 13.5, by the driver) and arm64 (13.5),
+  each with its `cudart` archive; ROCm 10.0 for AMD on x64; Metal on macOS; Vulkan for Intel and for any GPU the vendor
+  build cannot drive (its reason is kept). `search/engine_pick.rs` chooses (`vendor_picks`), `engine_setup::resolve`
+  lists the installed assets' devices and plans the pool. `search/model-download` with `{model:
+  "qwen3-embedding-0.6b-q8_0"}` takes one consent whose bytes are the sum of the GGUF and every asset's archive and runtime
+  archive, keeps it in `kv` (`search.consent.engine`) and fetches them: the GGUF from the model host (or the mirror),
+  the assets from their pinned URLs by the same redirect rules. A consent with another number is refused with each
+  file's bytes, the total and the exact command (`ratatoskr search download MODEL --consent-bytes N`); the CLI without
+  `--consent-bytes` asks for that list. A wrong sum of an asset keeps its `.part` and says where (the next install
+  fetches it over); the GGUF's is removed as a model file's is. The archives are unpacked into `<cache>/engines/<asset
+  id>/bin.new` by the hub's own unpackers (zip, or tar with flate2; a CUDA runtime is a second folder beside the
+  release's own, and both are on the engine's library path), which refuse an entry that is absolute or climbs out of the
+  folder, a link that leaves it, a name twice and sizes past their limits. `llama-server` is made executable, the folder
+  becomes `bin/`, the archives go, and only then is `.installed` written (the asset's sum), so a half install is never
+  taken for one. Nothing is fetched on an idle path: the engine with no download is a source that is not there, and the
+  chain goes on without it.
+
+### The engine per GPU (MP-20, revised)
+
+- **Vendor build.** NVIDIA runs CUDA (the newest build the driver runs: `EngineAsset::min_driver`), AMD runs ROCm on
+  x64 when `/dev/kfd` exists and the card's gfx target (`/sys/class/kfd`) is on `ROCM_TARGETS`, macOS runs Metal, and
+  Intel and every card the vendor build cannot drive run Vulkan, with the reason in `doctor`. Upstream's ROCm asset
+  bundles no ROCm libraries: the machine needs ROCm 7.x (`doctor` names each missing library).
+- **Device.** The engine is started with `--device ID --split-mode none` (`ID` from its own `--list-devices`).
+  `CUDA_VISIBLE_DEVICES`, `ROCR_VISIBLE_DEVICES` and `HIP_VISIBLE_DEVICES` are passed to it and also read by the
+  vendor choice (`visible`). The default is the fastest GPU (memory, discrete over integrated, until rates are
+  measured); `drgnx-search-gpus` adds more. The rates are kept in `<cache>/engines/pin.json` with a key of the device
+  list, the driver and the engine tag: another key measures again.
+- **Never the CPU, silently.** No usable GPU (a software rasteriser is none) gives `Plan::Wait`: the engine does not
+  start, bulk indexing waits and `doctor` offers a pack or remote GPU, the CPU within a limit, or the CPU when idle
+  (`drgnx-search-no-gpu`). On battery `drgnx-search-battery-gpu` decides.
+- **Pool.** `engine_pool::EnginePool` holds one `LocalEngine` per member, hands each a share of a batch by its rate
+  (`split_weighted`, a moving average of vectors per second), and moves a dead member's share to the others; one member
+  failing alone is an error. Its `max_batch` is one engine's batch per member.
+- **Limits.** `engine_limits`: CPU is `-t` and `cpu.max`, memory is `memory.max`, both through `systemd-run --user
+  --scope` where the user manager runs (else the thread count alone, noted in `doctor`); VRAM is checked against the
+  device's free memory and the ceiling before a start (`vram_check`, from the device's `--list-devices` line) and after
+  it (`vram_over`); the GPU busy cap rests the engine after each batch (`hrafn_embed::pace::rest_after`).
+
+### The local engine
+
+`search/engine.rs` (MP-8) runs llama.cpp's `llama-server` from the installed asset as a process the hub manages, the
+way it runs the built-in model's worker: started by the first request that needs it, ended after `IDLE` (300 s, on the
+hub's clock) without one, and started again, once, when it dies inside a request.
+
+- **The start.** Through `draugr`, in a process group of its own, with an allowlisted environment (`PATH`, `HOME`,
+  `XDG_RUNTIME_DIR`, the locale, and the `VK_`, `MESA_`, `RADV_`, `__NV_`, `__GLX_` and `GGML_` variables) and the
+  release's folder as `LD_LIBRARY_PATH`: `llama-server -m GGUF --embedding --pooling last -c CTX -b CTX -ub CTX -ngl 999
+  --host 127.0.0.1 --port 0 --no-webui`. The port is read from its log line (`… listening on http://127.0.0.1:PORT …`, or
+  the older `… port: PORT …`), and the start waits for `/health` to answer 200 (its model loaded), at most 120 s.
+- **Never cut.** A text's tokens are at most its bytes plus two (the end-of-text token that last-token pooling reads,
+  and one spare). A text whose bound passes the fingerprint's 8,192 tokens is counted by the engine (`/tokenize`); one
+  over the limit is an error to the caller, and no embeddings request goes out. The chunker keeps chunks under it.
+- **Batches.** A request's texts go shortest first (`hrafn_embed::pace::by_length`), in batches of at most `ubatch`
+  tokens (`Pacer::fixed`, the engine's own budget; the built-in engine keeps its stall-measured one). CTX is the longest
+  text rounded up to 512, at most 8,192; a request that needs more starts the engine again with more. Vectors come
+  back in the caller's order, normalised.
+- **The self-check.** After each start the engine embeds the reference text of
+  `hrafn-embed/data/qwen3-embedding-0.6b.selfcheck.json` and compares it with the stored F16 reference vector
+  (Transformers on the safetensors in float16 on the CPU, last-token pooling, normalised; the text is a typical chunk of
+  drgnx's own tree, from `eval run --dump-chunks`, and the Q8_0 engine on an RX 7900 gives it 0.9994; a unit row checks
+  the data reads and is a unit vector of the model's dims). Under a cosine of 0.99 the engine is refused: its
+  process ends, it embeds nothing more, and the chain goes on without it.
+- **Backend.** The asset's own: Vulkan on Linux and Windows, Metal on macOS. With several Vulkan devices ggml's own
+  default holds (the dedicated GPUs, else the first integrated one); a user's `GGML_VK_VISIBLE_DEVICES` is passed on.
+- **Identity.** The engine knows its fingerprint without a start: the GGUF row's record (`Qwen/Qwen3-Embedding-0.6B`,
+  the GGUF's sha256, `Q8_0`, last-token pooling, normalised, 1,024 dims, 8,192 tokens, no document prefix, the Qwen3
+  query template). Its source kind is `LocalEngine` and its source id `llama`.
 
 ### The index: tier 1, tier 2 and the embed worker
 
@@ -1677,13 +1783,47 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   inside a request is started again and the request sent again, once.
 - **A project (`search/project.rs`).** The store is `<state>/code/<id>.db`, `id` the first 16 hex characters of the
   sha256 of the main checkout's real path, so a linked worktree shares its main checkout's store. A root the deny-list
-  refuses is refused before anything is listed; inside an allowed root every file is checked again. Tier 2 sends requests
-  of 8 missing keys to each embedder that answers: a server whose own address accepts no connection (the default TEI
-  at 127.0.0.1:8080 when it is not running) gets no request in that pass and does not make tier 2 `Failed`, so tier 2
-  ends `Idle` once the others are done, and the server is asked again at the next change. Between requests it waits while typing holds (3 s from the last `note_typing`) and,
-  on battery, until AC or `index_now`. Its state (`Stopped`, `Idle`, `Running`, `Typing`, `Battery`, `Failed`) and the
-  vectors written are published for `search/status`. Its embedders are `DocEmbedder`s: the built-in model's worker and
-  each server that answers, every one filling its own fingerprint's cache (`Project::cache(id)`).
+  refuses is refused before anything is listed; inside an allowed root every file is checked again. Tier 2 is a chain of
+  sources per fingerprint (`search/sources.rs`, below): a server whose own address accepts no connection (the default TEI
+  at 127.0.0.1:8080 when it is not running) has no fingerprint in that pass, gets no request and does not make tier 2
+  `Failed`, so tier 2 ends `Idle` once the others are done, and the server is asked again at the next change, or every 30 s (`PROBE_POLL`) while no source answers at all (an engine or a
+  model whose install has just finished is found that way). Between
+  requests it waits while typing holds (3 s from the last `note_typing`). Its state (`Stopped`, `Idle`, `Running`,
+  `Typing`, `Battery`, `Paused`, `Failed`) and the vectors written are published for `search/status`. Its embedders are
+  `DocEmbedder`s (the built-in model's worker and each server that answers), each wrapped in a `DocSource`; the
+  sources that state one fingerprint are one chain, filling that fingerprint's cache (`Project::cache(id)`).
+- **The source chain (`search/sources.rs`, `chain.rs`).** Per batch of at most the chain's `max_batch` missing keys (8
+  for the built-in model and for servers):
+  1. The cache is asked first (a vector that arrived since the keys were read: an import, another repo).
+  2. Lookup sources (`SourceKind::Lookup`) get the keys, never a text; the vectors they hold go into the cache.
+  3. The keys still missing go, as the texts their keys were made of, to the first source that may be sent text and
+     answers: an `Embed` source only when it is on this machine (`embed::is_loopback`) or its provider entry says
+     `trusted`, the local engine, the built-in model. A source that fails is marked down and
+     the **same** batch goes to the next. Each source has its own backoff (`chain::Chain`, shared with the entity
+     embedder: 1, 5, 30 minutes, then 6 hours, on the hub's clock); a source whose wait is over is asked again with
+     the next batch, and tier 2 wakes when one is due. While every source is down and none is due,
+     `SourceChain::step` reads no store rows.
+  A `Guarded` wrapper refuses `embed` for a source that may not be sent text, so a lookup-only source never sees one
+  whatever the chain does. `Project::add_sources` adds sources before tier 2 starts (the engine, and the remotes).
+  **Remote sources (`search/remote.rs`, MP-18).** A `vectors` provider (another machine's `ratatoskr embed serve`,
+  [vector-protocol.md](vector-protocol.md)) is a `RemoteVectors` source: `Lookup` (source 2: keys only) unless its
+  entry says `trusted`, then `Embed` (source 3: its `embed` asks `/v1/lookup` for the batch first and sends only the
+  misses as texts). Its identity is the first fingerprint of its `/v1/info`; its certificate is pinned on first use.
+  Entity vectors build no chain (MP-17).
+  **The user's state (§11A, `search/manage.rs`).** `Project::pause` writes `index_state = paused` to the store's meta
+  and wakes tier 2, which finishes the batch in flight and then holds in its gates (`Tier2::Paused`) until `resume`;
+  `stop` writes `stopped`, aborts tier 2 and publishes `Stopped`, and the next refresh that changed files (or
+  `search/index`) resumes it. The user's pause is checked before any automatic gate, so the battery's end never lifts
+  it. `Project::state()` is `RootState` (`Idle`, `Running`, `Paused(PauseWhy)`, `Stopped`), the user's reason first.
+  `manage::delete_root` removes a closed root's store files and packs and drops its holds in every cache
+  (`VectorCache::drop_holder`, which deletes only the keys no other holder holds).
+  **Order of work (MP-14).** `missing_first(store, cache, n, order)` takes the chunks of `order`'s paths first (open
+  files from `Project::order_hint`, files the history feed names as edited, then the paths of the newest 300 commits,
+  at most 500 paths), then the rest in chunk order. **The built-in model's chain** (its own fingerprint, its own
+  vectors) steps only in a pass where no main chain filled anything (MP-15). **Battery:** the local sources (built-in,
+  local engine) wait unless `index now` or `drgnx-search-battery-engine` is on; remote sources are never held, and
+  `Tier2::Battery` shows only when a local source is all there is. `search/status` has `sources`: per fingerprint the
+  chain's entries (`cache`, then each source with `answering`, `down` and why, `held` or `no text`).
 - **The query (`hrafn::query`).** Lists from the routes, fused by RRF (k = 60): an exact one-identifier query pins its
   definitions first (non-test before test, then by kind); prefix and trigram name matches from the identifier-like
   tokens of a question add a list that is never pinned; a token that names a file adds a path list; `bm25(chunk_fts, 5,
@@ -1719,16 +1859,12 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   user's: an agent has no search method. A project's rules are `.drgnx/search.toml` (read at every listing; a file that does
   not read is an error the listing reports) and the editor's per-project `drgnx-search-{rules,off}`
   (`overrides::PER_PROJECT`); `search/why` says which layer decided a file.
-- **Servers on request (`search/servers.rs`).** `search/server-plan` shows what starting TEI or Ollama would run (it
-  writes and runs nothing); `search/server-start` needs `confirm: true` and answers the provider entry for the settings'
-  provider table (the hub writes no settings: the editor's writer adds it); `search/server-stop` stops it. TEI is a
-  podman Quadlet `drgnx-tei.container` under `$XDG_CONFIG_HOME/containers/systemd/` (CPU image, or the GPU tag of the
-  card when the NVIDIA CDI device is present; 4 GiB or 2 GiB memory cap, loopback port 8087, a named cache volume, no
-  `[Install]`): Linux with podman and a systemd user session, and not inside a container. Ollama needs `ollama` on the
-  PATH; its service starts only when it does not answer (`systemctl --user`, or `launchctl` on macOS), then the model
-  is pulled. Nothing in the hub's idle paths reaches a start. With test-hooks the runner only records the commands in
-  `$XDG_STATE_HOME/drgnx/servers-test.log`. The macOS Ollama start (`launchctl start com.ollama.ollama`) is unverified
-  on a Mac.
+- **The embed role and its sources.** The shipped `embed` role is `(llama)`: the `llama` preset, of kind `llama`, is the
+  local engine (§"The local engine"), which has no URL and which the gateway never forwards to. It takes part only once
+  its download was consented and is in place; until then it is not in the chain and the chain goes on (the built-in
+  model, as `drgnx-search-builtin` says). TEI and Ollama stay providers the user runs and names in the role (their
+  fingerprints from `/info` and `/api/show`); the hub starts neither. The work graph's entity vectors (MP-17) take the
+  engine, the built-in model and servers on this machine only: a provider elsewhere never gets work-graph text.
 - **The eval (`hrafn::eval`, `ratatoskr search eval`).** `eval gen ROOT` makes questions from the project's own history
   (commit subjects without ticket ids, dropping those that name an identifier; the answer is the top-level forms the
   commit changed, found again at HEAD by name) into `crates/hub/hrafn/eval/<project>/{dev,test}.jsonl`, which are
@@ -1754,14 +1890,20 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   Documents go plain and questions carry `Instruct: <task>\nQuery:<q>` as the hub's do. `--query-source SRC` embeds the
   questions with another source (the same model on another machine, for a parity check); with `--state DIR` the chunk
   vectors already in DIR are reused and no document text is sent. The report JSON has `source` and
-  `embed_seconds_per_chunk`.
+  `embed_seconds_per_chunk`. The run prints `embedded N chunks, Ns` after every embed batch of 256 keys, so a slow
+  embedder (TEI on the CPU) shows life. `eval run ROOT --dump-chunks N --out FILE` only indexes and writes N of the project's chunk
+  texts (evenly spread; documents plain, as tier 2 embeds them) to FILE as `{"texts": [...]}`, opening no model: the
+  engine's parity check and its self-check reference come from such a dump.
 - **The MCP tools (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
   `search.sock` beside `mcp.sock` (recorded in the session's row, so it is bound again at a restart and closed with the
   session): the tools `search` (`query`, `scope`, `k`), `symbols` (`name`, `match`, `kind`, `path`, `scope`, `k`) and
   `outline` (`path`, `docs`), pinned to the session's `cwd`; the paths a tool takes are relative and stay inside it.
   The agent's `mcpServers` list them as `drgnx-search`. `ratatoskr search mcp [ROOT]` serves the same tools on stdio
   for an agent outside drgnx, their questions going to the hub; `ratatoskr search index|query|symbols|outline` are
-  terminal clients of the `search/*` methods.
+  terminal clients of the `search/*` methods, and `search list|status|pause|resume|stop|delete` manage every root's
+  index (`delete` asks first unless `--yes`). The tools `index_list` and `index_status` (no arguments) read every
+  root's state and the session folder's; the MCP tools may call only `mcp::MCP_METHODS` (reading, `list`, `status`):
+  pausing, resuming, stopping and deleting are the user's, and no tool does them.
 - **Servers as embedders (`embed.rs`, `Gate::embedders`).** The providers of kind `tei` and `ollama` with the `embed`
   capability embed through the hub's own gateway listener (`/p/ID/embed`, `/p/ID/api/embed`), so each request is in
   `spend`. An Ollama provider needs the model the `embed` role names for it. **A server's model is its fingerprint**, not
@@ -1829,7 +1971,7 @@ Users get the binary from install.sh and `drgnx update`; both call `drgnx runtim
   `DRGNX_CHECKOUT` the checkout, so `ratatoskr version --json` says what it was built from. On Linux with a user systemd
   the build runs in `systemd-run --user --scope` with `MemoryMax` min(jobs x 1536 MiB + 1 GiB, available - 1 GiB) and
   `MemorySwapMax=0`; without one, `-j` alone and a note. macOS has no cap. It then builds `drgnx-key` the same way
-  (`-p sleipnir --no-default-features --bin drgnx-key`; a failure fails the build), and the relay sidecar and a static
+  (`-p sleipnir --no-default-features --features std-owners --bin drgnx-key`; a failure fails the build), and the relay sidecar and a static
   `drgnx-key` for `<arch>-unknown-linux-musl` into `<cache>/ratatoskr-px-target` (a failure there only warns).
 - `drgnx runtime install [--prefix DIR]`: refuses a binary whose `version --json` says `"test_hooks": true` (or says
   nothing), copies it to `<data>/bin/ratatoskr.new` and renames it to `ratatoskr` (a running hub sees a new inode at

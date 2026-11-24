@@ -424,6 +424,48 @@ fn parsed_and_board_are_refused() {
 }
 
 #[test]
+fn a_task_of_an_imported_plan_file_changes_only_through_plans_write() {
+    let mut fx = Fx::new();
+    let pa = fx.a;
+    let import = TxMeta::new("hub", Class::System, "records");
+    fx.write(import, |tx| {
+        entity::create(
+            tx,
+            EntityNew {
+                id: "task:aa-00001".into(),
+                kind: "task".into(),
+                project: Some(pa),
+                title: Some("1 first".into()),
+                status: Some("open".into()),
+                body: None,
+                priority: None,
+                assignee: None,
+                data: json!({"number": "1", "records": {"file": "/w/alpha/docs/plans/x/p.md"}}),
+                origin: Origin::Imported,
+                source: Some("records:/w/alpha/docs/plans/x/p.md".into()),
+            },
+        )
+    });
+    // the user too: the file's view would put the old status back
+    let t = no(fx.run(
+        &fx.user(pa),
+        TaskOp::Update {
+            id: "task:aa-00001".into(),
+            ver: 1,
+            title: None,
+            body: None,
+            priority: None,
+            acceptance: None,
+            status: Some("done".into()),
+        },
+    ));
+    assert!(
+        t.starts_with("this comes from /w/alpha/docs/plans/x/p.md"),
+        "{t}"
+    );
+}
+
+#[test]
 fn job_tasks_are_refused() {
     let mut fx = Fx::new();
     let a = fx.agent("s1");
@@ -644,81 +686,83 @@ fn label_and_link_need_no_ver() {
     );
 }
 
-#[tokio::test]
-async fn concurrent_label_adds_lose_none() {
-    use crate::project::{self, ProjectRef};
-    use crate::store::{CoordDb, CoordError};
-    let dir = tempfile::tempdir().unwrap();
-    let db = CoordDb::spawn(dir.path().join("work.db"));
-    let root = ProjectRef {
-        id: "project:0123456789ab".into(),
-        root: dir.path().join("alpha"),
-        slug: "alpha".into(),
-        root_commit: Some("0123456789ab0123456789ab0123456789ab0123".into()),
-        roots: vec!["0123456789ab0123456789ab0123456789ab0123".into()],
-    };
-    let p = db
-        .write(TxMeta::new("hub", Class::System, "test"), move |tx| {
-            Ok(project::register(tx, &root)?)
-        })
-        .await
-        .unwrap();
-    let agent = |sid: &str| Caller {
-        class: Class::Agent,
-        actor: format!("agent:{sid}"),
-        session: Some(sid.into()),
-        profile: None,
-        job: None,
-        project: Some(p),
-    };
-    let maker = agent("s0");
-    let id = match db
-        .write(maker.tx_meta("mcp:task_write/create"), move |tx| {
-            Ok(op(tx, &maker, create("shared"))?)
-        })
-        .await
-        .unwrap()
-    {
-        TaskAnswer::Done { id, .. } => id,
-        other => panic!("{other:?}"),
-    };
-    let mut runs = Vec::new();
-    for i in 0..24 {
-        let db = db.clone();
-        let id = id.clone();
-        let who = agent(&format!("s{}", i % 3));
-        runs.push(tokio::spawn(async move {
-            db.write(who.tx_meta("mcp:task_write/label"), move |tx| {
-                op(
-                    tx,
-                    &who,
-                    TaskOp::Label {
-                        id,
-                        add: vec![format!("l{i}")],
-                        remove: vec![],
-                    },
-                )
-                .map_err(CoordError::from)
+#[test]
+fn concurrent_label_adds_lose_none() {
+    saman::block_on_current(async {
+        use crate::project::{self, ProjectRef};
+        use crate::store::{CoordDb, CoordError};
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let root = ProjectRef {
+            id: "project:0123456789ab".into(),
+            root: dir.path().join("alpha"),
+            slug: "alpha".into(),
+            root_commit: Some("0123456789ab0123456789ab0123456789ab0123".into()),
+            roots: vec!["0123456789ab0123456789ab0123456789ab0123".into()],
+        };
+        let p = db
+            .write(TxMeta::new("hub", Class::System, "test"), move |tx| {
+                Ok(project::register(tx, &root)?)
             })
             .await
-        }));
-    }
-    for r in runs {
-        assert!(matches!(r.await.unwrap(), Ok(TaskAnswer::Done { .. })));
-    }
-    let (labels, ver) = db
-        .read(move |c| {
-            let e = entity::by_id(c, &id)?.unwrap();
-            Ok((labels_of(&e), e.ver))
-        })
-        .await
-        .unwrap();
-    let mut want: Vec<String> = (0..24).map(|i| format!("l{i}")).collect();
-    let mut got = labels.clone();
-    want.sort();
-    got.sort();
-    assert_eq!(got, want);
-    assert_eq!(ver, 25);
+            .unwrap();
+        let agent = |sid: &str| Caller {
+            class: Class::Agent,
+            actor: format!("agent:{sid}"),
+            session: Some(sid.into()),
+            profile: None,
+            job: None,
+            project: Some(p),
+        };
+        let maker = agent("s0");
+        let id = match db
+            .write(maker.tx_meta("mcp:task_write/create"), move |tx| {
+                Ok(op(tx, &maker, create("shared"))?)
+            })
+            .await
+            .unwrap()
+        {
+            TaskAnswer::Done { id, .. } => id,
+            other => panic!("{other:?}"),
+        };
+        let mut runs = Vec::new();
+        for i in 0..24 {
+            let db = db.clone();
+            let id = id.clone();
+            let who = agent(&format!("s{}", i % 3));
+            runs.push(saman::spawn("a label write", async move {
+                db.write(who.tx_meta("mcp:task_write/label"), move |tx| {
+                    op(
+                        tx,
+                        &who,
+                        TaskOp::Label {
+                            id,
+                            add: vec![format!("l{i}")],
+                            remove: vec![],
+                        },
+                    )
+                    .map_err(CoordError::from)
+                })
+                .await
+            }));
+        }
+        for r in runs {
+            assert!(matches!(r.await.unwrap(), Ok(TaskAnswer::Done { .. })));
+        }
+        let (labels, ver) = db
+            .read(move |c| {
+                let e = entity::by_id(c, &id)?.unwrap();
+                Ok((labels_of(&e), e.ver))
+            })
+            .await
+            .unwrap();
+        let mut want: Vec<String> = (0..24).map(|i| format!("l{i}")).collect();
+        let mut got = labels.clone();
+        want.sort();
+        got.sort();
+        assert_eq!(got, want);
+        assert_eq!(ver, 25);
+    })
 }
 
 #[test]
@@ -1715,6 +1759,83 @@ fn dropped_stays_the_users() {
     assert_eq!(fx.ent(&t).status.as_deref(), Some("dropped"));
 }
 
+#[test]
+fn accepted_parked_and_superseded_are_statuses_that_close() {
+    for s in ["accepted", "parked", "superseded"] {
+        assert!(STATUSES.contains(&s), "{s}");
+        assert!(CLOSED.contains(&s), "{s}");
+        assert_eq!(board_column(s), Column::Done, "{s}");
+    }
+}
+
+#[test]
+fn parked_is_the_users_never_an_agents_even_with_a_grant() {
+    let mut fx = Fx::new();
+    let a = fx.agent("a");
+    let mine = fx.task(&a, "mine");
+    let got = no(fx.update(&a, &mine, |f| f.status = Some("parked".into())));
+    assert!(got.contains("agents never defer"), "{got}");
+    // the user's task with an edit grant: the grant does not open parked either
+    let theirs = fx.task(&fx.user(fx.a), "the user's");
+    fx.edit_grant("a", &theirs);
+    let got = no(fx.update(&a, &theirs, |f| f.status = Some("parked".into())));
+    assert!(got.contains("agents never defer"), "{got}");
+    assert_eq!(fx.ent(&theirs).status.as_deref(), Some("open"));
+    ok(fx.update(&fx.user(fx.a), &theirs, |f| {
+        f.status = Some("parked".into())
+    }));
+    assert_eq!(fx.ent(&theirs).status.as_deref(), Some("parked"));
+}
+
+#[test]
+fn a_note_op_writes_a_note_about_the_task() {
+    let mut fx = Fx::new();
+    let a = fx.agent("a");
+    let t = fx.task(&a, "mine");
+    ok(fx.run(
+        &a,
+        TaskOp::Note {
+            id: t.clone(),
+            text: "waiting on B1".into(),
+        },
+    ));
+    assert_eq!(
+        fx.count("select count(*) from entity where kind = 'note' and body = 'waiting on B1'"),
+        1
+    );
+}
+
+#[test]
+fn accepted_is_set_like_any_status_and_releases_what_it_blocks() {
+    let mut fx = Fx::new();
+    let a = fx.agent("a");
+    let (spike, after) = (fx.task(&a, "spike"), fx.task(&a, "after"));
+    fx.link(&a, &spike, "blocks", &after);
+    assert!(!is_ready(&fx.c, fx.n(&after), 1_000.0).unwrap());
+    ok(fx.update(&a, &spike, |f| f.status = Some("accepted".into())));
+    assert_eq!(fx.ent(&spike).status.as_deref(), Some("accepted"));
+    assert!(
+        is_ready(&fx.c, fx.n(&after), 1_000.0).unwrap(),
+        "accepted ends the wait"
+    );
+}
+
+#[test]
+fn superseded_needs_a_supersedes_link_from_the_replacement() {
+    let mut fx = Fx::new();
+    let a = fx.agent("a");
+    let (old, new) = (fx.task(&a, "old"), fx.task(&a, "new"));
+    let got = no(fx.update(&a, &old, |f| f.status = Some("superseded".into())));
+    assert!(got.contains("link that task first"), "{got}");
+    assert_eq!(fx.ent(&old).status.as_deref(), Some("open"));
+    // the link the other way round does not count
+    fx.link(&a, &old, "supersedes", &new);
+    no(fx.update(&a, &old, |f| f.status = Some("superseded".into())));
+    fx.link(&a, &new, "supersedes", &old);
+    ok(fx.update(&a, &old, |f| f.status = Some("superseded".into())));
+    assert_eq!(fx.ent(&old).status.as_deref(), Some("superseded"));
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
 
@@ -1810,6 +1931,9 @@ fn board_columns_map_every_status() {
         ("in-review", Review),
         ("done", Done),
         ("dropped", Done),
+        ("accepted", Done),
+        ("parked", Done),
+        ("superseded", Done),
     ];
     for (status, column) in want {
         assert_eq!(board_column(status), column, "{status}");
@@ -1820,4 +1944,81 @@ fn board_columns_map_every_status() {
         assert!(want.iter().any(|(w, _)| w == s), "{s} is not in the table");
     }
     assert_eq!(board_column("nonsense"), Queued);
+}
+
+impl Fx {
+    /// A `task-write` grant to session SID on WHAT for OPS.
+    fn write_grant(&mut self, sid: &str, what: What, ops: &[&str]) -> String {
+        let ops: Vec<String> = ops.iter().map(|o| (*o).to_owned()).collect();
+        self.write(TxMeta::new("user", Class::User, "test"), |tx| {
+            grants::create_task_write(tx, Who::Session(sid.into()), what, ops, None)
+        })
+        .id
+    }
+}
+
+#[test]
+fn a_task_write_grant_lifts_the_users_task_rules_one_operation_at_a_time() {
+    let mut fx = Fx::new();
+    let (a, b) = (fx.agent("a"), fx.agent("b"));
+    let t = fx.task(&fx.user(fx.a), "the user's");
+    let n = fx.n(&t);
+    // no grant: exactly today's rules
+    assert!(no(fx.update(&a, &t, |f| f.title = Some("x".into()))).contains("permission"));
+    assert!(no(fx.update(&a, &t, |f| f.status = Some("done".into()))).contains("the user closes"));
+    assert!(
+        no(fx.update(&a, &t, |f| f.status = Some("blocked".into()))).contains("only in-review")
+    );
+    // update.title opens the title, not the body, not done
+    let g = fx.write_grant("a", What::Task(n), &["update.title", "status.blocked"]);
+    ok(fx.update(&a, &t, |f| f.title = Some("renamed".into())));
+    assert!(no(fx.update(&a, &t, |f| f.body = Some("x".into()))).contains("permission"));
+    assert!(no(fx.update(&a, &t, |f| f.status = Some("done".into()))).contains("the user closes"));
+    ok(fx.update(&a, &t, |f| f.status = Some("blocked".into())));
+    // another session has nothing
+    assert!(no(fx.update(&b, &t, |f| f.title = Some("b".into()))).contains("permission"));
+    // revoking takes effect on the next write
+    fx.write(TxMeta::new("user", Class::User, "test"), |tx| {
+        grants::revoke(tx, &g)
+    });
+    assert!(no(fx.update(&a, &t, |f| f.title = Some("again".into()))).contains("permission"));
+    // status.done is its own right; with "only I close my tasks" on it is inert
+    fx.write_grant("a", What::Project(fx.a), &["status.done"]);
+    let u = fx.task(&fx.user(fx.a), "another of the user's");
+    fx.only_user_closes(true);
+    assert!(no(fx.update(&a, &u, |f| f.status = Some("done".into()))).contains("the user closes"));
+    fx.only_user_closes(false);
+    ok(fx.update(&a, &u, |f| f.status = Some("done".into())));
+    assert_eq!(fx.ent(&u).status.as_deref(), Some("done"));
+    // complete on an agent's own task is done, not in-review, with the right
+    let own = fx.task(&a, "mine");
+    let lease = fx.claim(&a, &own);
+    ok(fx.run(
+        &a,
+        TaskOp::Complete {
+            id: own.clone(),
+            lease,
+            note: None,
+        },
+    ));
+    assert_eq!(fx.ent(&own).status.as_deref(), Some("done"));
+}
+
+#[test]
+fn a_write_in_another_project_needs_a_grant_naming_it() {
+    let mut fx = Fx::new();
+    let a = fx.agent("a");
+    let tb = fx.task(&fx.user(fx.b), "beta's");
+    let note = |id: &str| TaskOp::Note {
+        id: id.into(),
+        text: "hello".into(),
+    };
+    no(fx.run(&a, note(&tb)));
+    // a grant for project alpha does not reach beta; one for beta reaches only its operations
+    fx.write_grant("a", What::Project(fx.a), &["note"]);
+    no(fx.run(&a, note(&tb)));
+    fx.write_grant("a", What::Project(fx.b), &["note"]);
+    ok(fx.run(&a, note(&tb)));
+    no(fx.update(&a, &tb, |f| f.title = Some("x".into())));
+    no(fx.run(&a, TaskOp::Claim { id: tb.clone() }));
 }

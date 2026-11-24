@@ -12,13 +12,13 @@
 
 use gleipnir::trace::{self, Handed, ListenOptions, Listener, Offer, Open};
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
+use std::ffi::OsStr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixListener;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
+use std::time::Duration;
+use tokio::io::AsyncReadExt;
 
 /// The wrapper, as Claude Code's `CLAUDE_CODE_SHELL_PREFIX` runs it.
 pub const WRAPPER: &str = env!("CARGO_BIN_EXE_gleipnir-trace");
@@ -66,11 +66,83 @@ pub fn child_line(c: &Kid) -> String {
 }
 
 /// The child's argv and environment, to spawn directly.
-pub fn child_command(c: &Kid) -> Command {
-    let mut cmd = Command::new(std::env::current_exe().unwrap());
+pub fn child_command(c: &Kid) -> Cmd {
+    let mut cmd = Cmd::new(std::env::current_exe().unwrap());
     cmd.args(["--exact", "child", "--test-threads", "1"])
         .env(CHILD_ENV, serde_json::to_string(c).unwrap());
     cmd
+}
+
+/// How long a child may run before its process group is ended.
+const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+
+/// A child to start, built up as `std::process::Command` was: the spec `draugr` starts. Its environment is `PATH`,
+/// `TMPDIR` and `RUST_BACKTRACE` of the test's own, and what `env` adds; stdin is closed, stdout and stderr are kept.
+pub struct Cmd {
+    spec: draugr::Spec,
+}
+
+impl Cmd {
+    pub fn new(program: impl Into<PathBuf>) -> Cmd {
+        Cmd {
+            spec: draugr::Spec {
+                program: program.into(),
+                args: Vec::new(),
+                env: draugr::env::build(&["PATH", "TMPDIR", "RUST_BACKTRACE"], &[], &[]),
+                cwd: None,
+                stdin_null: true,
+                pass_fds: Vec::new(),
+                new_session: false,
+            },
+        }
+    }
+
+    pub fn arg(&mut self, a: impl AsRef<OsStr>) -> &mut Cmd {
+        self.spec.args.push(a.as_ref().to_os_string());
+        self
+    }
+
+    pub fn args<I, S>(&mut self, args: I) -> &mut Cmd
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.spec
+            .args
+            .extend(args.into_iter().map(|a| a.as_ref().to_os_string()));
+        self
+    }
+
+    pub fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Cmd {
+        self.spec.cwd = Some(dir.as_ref().to_path_buf());
+        self
+    }
+
+    pub fn env(&mut self, name: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Cmd {
+        let name = name.as_ref().to_os_string();
+        self.spec.env.retain(|(n, _)| *n != name);
+        self.spec.env.push((name, value.as_ref().to_os_string()));
+        self
+    }
+
+    /// Run to its end, and what it printed.
+    pub fn output(&mut self) -> draugr::Output {
+        run(spawn(Cmd {
+            spec: self.spec.clone(),
+        }))
+    }
+}
+
+/// A running child, and the pool its stderr is read on.
+pub struct Spawned {
+    pool: saman::Executor,
+    child: draugr::Child,
+}
+
+impl Spawned {
+    pub fn id(&self) -> i32 {
+        self.child.id()
+    }
 }
 
 pub fn shell_quote(s: &str) -> String {
@@ -78,9 +150,7 @@ pub fn shell_quote(s: &str) -> String {
 }
 
 fn marker(line: &str) {
-    let mut out = std::io::stdout().lock();
-    writeln!(out, "{line}").unwrap();
-    out.flush().unwrap();
+    annall::cli_out(line).unwrap();
 }
 
 /// The child's body: never returns.
@@ -165,10 +235,17 @@ fn jail(c: &Kid) -> ! {
         let got = trace::offer(outer, trace::Scope::Tree, "outer");
         assert_eq!(got, trace::Offered::Traced, "the outer listener");
     }
-    let err = Command::new(&c.exec[0])
-        .args(&c.exec[1..])
-        .env_remove(CHILD_ENV)
-        .exec();
+    let err = draugr::exec(&draugr::Spec {
+        program: (&c.exec[0]).into(),
+        args: c.exec[1..].iter().map(Into::into).collect(),
+        env: std::env::vars_os()
+            .filter(|(k, _)| k != CHILD_ENV)
+            .collect(),
+        cwd: None,
+        stdin_null: false,
+        pass_fds: Vec::new(),
+        new_session: false,
+    });
     panic!("exec {:?}: {err}", c.exec);
 }
 
@@ -233,27 +310,24 @@ impl Sup {
     pub fn file(&self, rel: &str, text: &str) -> PathBuf {
         let p = self.root.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(&p, text).unwrap();
+        eitri::replace_file(&p, text.as_bytes()).unwrap();
         p
     }
 
     /// `gleipnir-trace CMD` in the fixture dir, with the socket set, stdout and stderr piped.
-    pub fn wrapper(&self, cmd: &str) -> Command {
-        let mut c = Command::new(WRAPPER);
+    pub fn wrapper(&self, cmd: &str) -> Cmd {
+        let mut c = Cmd::new(WRAPPER);
         c.arg(cmd)
             .current_dir(&self.root)
-            .env(trace::SOCK_ENV, &self.sock)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .env(trace::SOCK_ENV, &self.sock);
         c
     }
 
     /// The next hand-off, or the child's exit if it ends before announcing (pattern C: socket and pidfd polled
     /// together, no timeout).
-    pub fn next(&self, child: &mut Child) -> Offer {
+    pub fn next(&self, child: &mut Spawned) -> Offer {
         // SAFETY: pidfd_open on our own child's pid.
-        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, child.id() as libc::pid_t, 0u32) };
+        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, child.id(), 0u32) };
         assert!(
             pidfd >= 0,
             "pidfd_open: {}",
@@ -281,22 +355,24 @@ impl Sup {
             }
         }
         if fds[0].revents & libc::POLLIN == 0 {
-            let status = child.wait().unwrap();
-            let (mut out, mut err) = (String::new(), String::new());
-            if let Some(mut o) = child.stdout.take() {
-                let _ = o.read_to_string(&mut out);
+            let Spawned { pool, child } = child;
+            let status = pool.block_on(child.wait_deadline(CHILD_DEADLINE)).unwrap();
+            let mut out = Vec::new();
+            if let Some(mut o) = child.take_stdout() {
+                pool.block_on(o.read_to_end(&mut out)).unwrap();
             }
-            if let Some(mut e) = child.stderr.take() {
-                let _ = e.read_to_string(&mut err);
-            }
-            panic!("the child ended before its hand-off: {status:?}\nstdout: {out}\nstderr: {err}");
+            panic!(
+                "the child ended before its hand-off: {status:?}\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&out),
+                child.stderr_tail()
+            );
         }
         let (stream, _) = self.listener.accept().unwrap();
         trace::accept(stream).expect("the hello")
     }
 
     /// Answer the next hand-off `trace`, and listen with `opts` if a listener came.
-    pub fn trace(&self, child: &mut Child, opts: ListenOptions) -> Traced {
+    pub fn trace(&self, child: &mut Spawned, opts: ListenOptions) -> Traced {
         let offer = self.next(child);
         let hello = offer.hello.clone();
         match offer.trace().expect("the hand-off") {
@@ -364,18 +440,33 @@ impl Traced {
     }
 }
 
-pub fn run(child: Child) -> Output {
-    child.wait_with_output().unwrap()
+/// The child to its end: all of its stdout, its stderr's tail and its status.
+pub fn run(child: Spawned) -> draugr::Output {
+    let Spawned { pool, mut child } = child;
+    pool.block_on(async {
+        let mut stdout = Vec::new();
+        if let Some(mut o) = child.take_stdout() {
+            o.read_to_end(&mut stdout).await.unwrap();
+        }
+        let status = child
+            .wait_deadline(CHILD_DEADLINE)
+            .await
+            .unwrap()
+            .expect("not waited for before");
+        draugr::Output {
+            status,
+            stdout,
+            stderr: child.stderr_tail(),
+        }
+    })
 }
 
 pub fn path_list(paths: &[&Path]) -> Vec<PathBuf> {
     paths.iter().map(|p| p.to_path_buf()).collect()
 }
 
-pub fn spawn(mut c: Command) -> Child {
-    c.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap()
+pub fn spawn(c: Cmd) -> Spawned {
+    let pool = saman::Executor::new(2).unwrap();
+    let child = pool.block_on(draugr::spawn(c.spec)).unwrap();
+    Spawned { pool, child }
 }

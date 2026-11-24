@@ -16,7 +16,7 @@ fn env() -> Env {
     }
 }
 
-fn plan_of(id: &str, found: Found, config: Value) -> Result<Plan, String> {
+fn plan_of(id: &str, found: Found, config: Value) -> villa::Result<Plan> {
     let t = Table::builtin();
     blocked::plan(
         t.by_id(id).unwrap(),
@@ -196,7 +196,7 @@ fn what_a_block_cannot_run_says_why() {
         json!({"type": "debugpy", "request": "attach", "processId": 12}),
     )
     .unwrap_err();
-    assert!(attach.contains("launch"), "{attach}");
+    assert!(attach.message().contains("launch"), "{attach}");
     let none = plan_of(
         "debugpy",
         Found::Python("/x/python3".into()),
@@ -204,7 +204,7 @@ fn what_a_block_cannot_run_says_why() {
     )
     .unwrap_err();
     assert!(
-        none.contains("program") && none.contains("module"),
+        none.message().contains("program") && none.message().contains("module"),
         "{none}"
     );
     let lldb = plan_of(
@@ -213,7 +213,7 @@ fn what_a_block_cannot_run_says_why() {
         json!({"type": "lldb-dap", "request": "launch", "program": "/p/a"}),
     )
     .unwrap_err();
-    assert!(lldb.contains("lldb-dap"), "{lldb}");
+    assert!(lldb.message().contains("lldb-dap"), "{lldb}");
 }
 
 /// A plan whose adapter and program never listen (`sleep`), on PORT and the next.
@@ -259,78 +259,83 @@ fn a_blocks_session_starts_with_the_plans_request_not_the_launch() {
     assert_eq!(s.arguments, want);
 }
 
-#[tokio::test]
-async fn a_strangers_listener_on_the_adapters_port_ends_the_session_unconnected() {
-    use super::Launcher;
-    // the test process listens where the adapter should: another process group than the adapter's
-    let stranger = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    stranger.set_nonblocking(true).unwrap();
-    let port = stranger.local_addr().unwrap().port();
-    let l = blocked::Blocked::new(
-        sleeping(port),
-        std::env::vars_os().collect(),
-        std::env::temp_dir(),
-        None,
-    );
-    let e = match l.connect().await {
-        Ok(_) => panic!("connected to a stranger's listener"),
-        Err(e) => e,
-    };
-    assert!(
-        e.contains(&port.to_string()) && e.contains("not the session's"),
-        "{e}"
-    );
-    // never connected to it
-    assert_eq!(
-        stranger.accept().map(|_| ()).unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock
-    );
+#[test]
+fn a_strangers_listener_on_the_adapters_port_ends_the_session_unconnected() {
+    saman::block_on_current(async move {
+        use super::Launcher;
+        // the test process listens where the adapter should: another process group than the adapter's
+        let stranger = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        stranger.set_nonblocking(true).unwrap();
+        let port = stranger.local_addr().unwrap().port();
+        let l = blocked::Blocked::new(
+            sleeping(port),
+            std::env::vars_os().collect(),
+            std::env::temp_dir(),
+            None,
+        );
+        let e = match l.connect().await {
+            Ok(_) => panic!("connected to a stranger's listener"),
+            Err(e) => e,
+        };
+        assert!(
+            e.message().contains(&port.to_string()) && e.message().contains("not the session's"),
+            "{e}"
+        );
+        // never connected to it
+        assert_eq!(
+            stranger.accept().map(|_| ()).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    })
 }
 
 /// macOS: the adapter and the program each start through the session's seal (Seatbelt with the block's ports), never
 /// bare; the seal's refusal is the start's error.
-#[tokio::test]
-async fn the_adapter_and_the_program_start_through_the_seal() {
-    use super::Launcher;
-    let seen: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
-    let seal = |seen: Arc<Mutex<Vec<Vec<String>>>>| -> blocked::Seal {
-        Arc::new(move |spec: draugr::Spec| {
-            let seen = seen.clone();
-            Box::pin(async move {
-                let mut argv = vec![spec.program.display().to_string()];
-                argv.extend(spec.args.iter().map(|a| a.to_string_lossy().into_owned()));
-                seen.lock().unwrap().push(argv);
-                Err::<draugr::Spec, String>("sealed: refused here".into())
+#[test]
+fn the_adapter_and_the_program_start_through_the_seal() {
+    saman::block_on_current(async move {
+        use super::Launcher;
+        let seen: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+        let seal = |seen: Arc<Mutex<Vec<Vec<String>>>>| -> blocked::Seal {
+            Arc::new(move |spec: draugr::Spec| {
+                let seen = seen.clone();
+                Box::pin(async move {
+                    let mut argv = vec![spec.program.display().to_string()];
+                    argv.extend(spec.args.iter().map(|a| a.to_string_lossy().into_owned()));
+                    saman::lock(&seen).push(argv);
+                    Err::<draugr::Spec, villa::Error>(villa::Error::refused("sealed: refused here"))
+                })
             })
-        })
-    };
-    // debugpy's shape: the adapter first
-    let l = blocked::Blocked::new(sleeping(47990), vec![], std::env::temp_dir(), None)
-        .sealed(seal(seen.clone()));
-    let e = l
-        .connect()
-        .await
-        .err()
-        .expect("a refused seal starts nothing");
-    assert!(e.contains("sealed: refused here"), "{e}");
-    // js-debug's shape: the program first
-    let mut p = sleeping(47990);
-    p.debuggee.after_listen = None;
-    p.debuggee.argv = vec!["sleep".into(), "31".into()];
-    let l = blocked::Blocked::new(p, vec![], std::env::temp_dir(), None).sealed(seal(seen.clone()));
-    let e = l
-        .connect()
-        .await
-        .err()
-        .expect("a refused seal starts nothing");
-    assert!(e.contains("sealed: refused here"), "{e}");
-    assert_eq!(
-        *seen.lock().unwrap(),
-        [
-            vec!["sleep".to_owned(), "30".into()],
-            vec!["sleep".to_owned(), "31".into()]
-        ]
-    );
+        };
+        // debugpy's shape: the adapter first
+        let l = blocked::Blocked::new(sleeping(47990), vec![], std::env::temp_dir(), None)
+            .sealed(seal(seen.clone()));
+        let e = l
+            .connect()
+            .await
+            .err()
+            .expect("a refused seal starts nothing");
+        assert!(e.message().contains("sealed: refused here"), "{e}");
+        // js-debug's shape: the program first
+        let mut p = sleeping(47990);
+        p.debuggee.after_listen = None;
+        p.debuggee.argv = vec!["sleep".into(), "31".into()];
+        let l =
+            blocked::Blocked::new(p, vec![], std::env::temp_dir(), None).sealed(seal(seen.clone()));
+        let e = l
+            .connect()
+            .await
+            .err()
+            .expect("a refused seal starts nothing");
+        assert!(e.message().contains("sealed: refused here"), "{e}");
+        assert_eq!(
+            *saman::lock(&seen),
+            [
+                vec!["sleep".to_owned(), "30".into()],
+                vec!["sleep".to_owned(), "31".into()]
+            ]
+        );
+    })
 }
 
 /// An adapter whose port never listened: the error says whether it still runs and how its stderr ends (a sandbox's
@@ -338,17 +343,25 @@ async fn the_adapter_and_the_program_start_through_the_seal() {
 #[test]
 fn a_port_that_never_listened_says_what_the_adapter_did() {
     let e = blocked::why_not_listening(
-        "nothing listened".into(),
+        villa::Error::unavailable("nothing listened"),
         i32::MAX,
         "  PermissionError: denied\n",
     );
     assert_eq!(
         e,
-        "nothing listened (the adapter had exited; its stderr ends:\nPermissionError: denied)"
+        villa::Error::unavailable(
+            "nothing listened (the adapter had exited; its stderr ends:\nPermissionError: denied)"
+        )
     );
-    let e = blocked::why_not_listening("nothing listened".into(), std::process::id() as i32, "");
+    let e = blocked::why_not_listening(
+        villa::Error::unavailable("nothing listened"),
+        std::process::id() as i32,
+        "",
+    );
     assert_eq!(
         e,
-        "nothing listened (the adapter still runs, nothing on its stderr)"
+        villa::Error::unavailable(
+            "nothing listened (the adapter still runs, nothing on its stderr)"
+        )
     );
 }

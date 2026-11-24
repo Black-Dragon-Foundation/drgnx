@@ -1,0 +1,5 @@
+error[E0451]: field `e` of struct `Rd` is private
+ --> tests/compile/read_outside.rs:7:24
+  |
+7 |     let r = tafl::Rd { e: &e };
+  |                        ^ private field

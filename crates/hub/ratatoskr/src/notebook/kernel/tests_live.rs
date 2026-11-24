@@ -15,7 +15,7 @@ use crate::notebook::spec::{Transport, private_folder};
 fn kernel_python() -> String {
     let python = std::env::var("DRGNX_NB_KERNEL_PYTHON")
         .unwrap_or_else(|_| "/opt/nb-kernel/bin/python3".into());
-    let ok = std::process::Command::new(&python)
+    let ok = crate::proc::Command::new(&python)
         .args(["-c", "import ipykernel_launcher"])
         .output()
         .is_ok_and(|o| o.status.success());
@@ -141,7 +141,7 @@ async fn a_real_kernel_lives(transport: Transport) -> (tempfile::TempDir, PathBu
         .unwrap_or_else(|e| panic!("the kernel did not start: {e}"));
     let pid = k.pid();
     let file = folder.join("kernel-live.json");
-    let body: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let body: Value = serde_json::from_str(&crate::fsio::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(
         body["transport"],
         if transport == Transport::Tcp {
@@ -223,9 +223,9 @@ async fn a_real_kernel_lives(transport: Transport) -> (tempfile::TempDir, PathBu
     // sometimes aborts (SIGABRT) in its interpreter teardown, about one run in five, after it has done everything asked;
     // the status is printed whenever it is not a plain 0, so a pattern shows in the logs.)
     if exit.code != Some(0) {
-        eprintln!(
+        crate::soft::err_line(&format!(
             "the kernel's exit status after an orderly shutdown over {transport:?}: {exit:?}"
-        );
+        ));
     }
     assert!(
         exit.signal != Some(libc::SIGKILL) && exit.code.is_none_or(|c| c == 0),
@@ -240,30 +240,34 @@ async fn a_real_kernel_lives(transport: Transport) -> (tempfile::TempDir, PathBu
     (d, folder)
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: a real ipykernel (the adapter image: test/container/Containerfile.debug)"]
-async fn a_real_ipykernel_lives_over_ipc() {
-    let (_keep, folder) = a_real_kernel_lives(Transport::Ipc).await;
-    // the sockets were files in the 0700 folder, and went with the kernel
-    assert!(
-        std::fs::read_dir(&folder)
-            .unwrap()
-            .flatten()
-            .all(|e| !e.file_name().to_string_lossy().starts_with("k-live-"))
-    );
+fn a_real_ipykernel_lives_over_ipc() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_keep, folder) = a_real_kernel_lives(Transport::Ipc).await;
+        // the sockets were files in the 0700 folder, and went with the kernel
+        assert!(
+            std::fs::read_dir(&folder)
+                .unwrap()
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().starts_with("k-live-"))
+        );
+    })
 }
 
 /// The positive path of the tcp transport and of `debug::ports::owned` over a kernel's group: a kernelspec that says it cannot
 /// use ipc gets loopback ports the hub claimed, and the hub connects only once every listener on them is the kernel's.
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[ignore = "live: a real ipykernel (the adapter image: test/container/Containerfile.debug)"]
-async fn a_real_ipykernel_lives_over_tcp() {
-    let (_keep, folder) = a_real_kernel_lives(Transport::Tcp).await;
-    // no socket files in the folder: the sockets were loopback ports, released with the kernel
-    assert!(
-        std::fs::read_dir(&folder)
-            .unwrap()
-            .flatten()
-            .all(|e| !e.file_name().to_string_lossy().starts_with("k-live"))
-    );
+fn a_real_ipykernel_lives_over_tcp() {
+    saman::Executor::new(2).unwrap().block_on(async move {
+        let (_keep, folder) = a_real_kernel_lives(Transport::Tcp).await;
+        // no socket files in the folder: the sockets were loopback ports, released with the kernel
+        assert!(
+            std::fs::read_dir(&folder)
+                .unwrap()
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().starts_with("k-live"))
+        );
+    })
 }

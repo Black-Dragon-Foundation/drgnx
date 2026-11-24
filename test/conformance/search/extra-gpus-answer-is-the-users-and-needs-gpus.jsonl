@@ -1,0 +1,10 @@
+{"scenario": "search/extra-gpus-answer-is-the-users-and-needs-gpus", "requires": ["v1", "test-hooks"], "doc": "The answer to the one-time extra-GPU notice (`search/extra-gpus`) is the user's: an agent on its socket is refused (not-allowed). The test hub has no GPUs beyond one, so the user's answer finds nothing to answer: `{gpus: [], changed: false}`, and nothing is written."}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "search/extra-gpus", "params": {"answer": "use"}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "search/extra-gpus", "params": {"answer": "dismiss"}}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": {"gpus": [], "changed": false}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "search/extra-gpus", "params": {"answer": "maybe"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "error": {"code": "invalid-params"}}}

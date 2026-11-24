@@ -181,26 +181,23 @@ pub struct Live(
 
 impl Live {
     fn add(&self, id: &str, session: Option<String>) {
-        self.0.lock().unwrap().insert(id.to_string(), session);
+        saman::lock(&self.0).insert(id.to_string(), session);
     }
 
     /// Job ID's name (its given name, else its argv) and start time, for the session's background list.
     fn describe(&self, id: &str, name: Option<&str>, argv: &[String], started: f64) {
         let label = name.map_or_else(|| argv.join(" "), str::to_string);
-        self.1
-            .lock()
-            .unwrap()
-            .insert(id.to_string(), (label, started));
+        saman::lock(&self.1).insert(id.to_string(), (label, started));
     }
 
     fn remove(&self, id: &str) {
-        self.0.lock().unwrap().remove(id);
-        self.1.lock().unwrap().remove(id);
+        saman::lock(&self.0).remove(id);
+        saman::lock(&self.1).remove(id);
     }
 
     /// The running jobs SESSION started, as (id, name, start time in seconds), by id.
     pub fn jobs(&self, session: &str) -> Vec<(String, String, f64)> {
-        let labels = self.1.lock().unwrap();
+        let labels = saman::lock(&self.1);
         self.ids(session)
             .into_iter()
             .map(|id| {
@@ -211,7 +208,7 @@ impl Live {
     }
 
     fn has(&self, id: &str) -> bool {
-        self.0.lock().unwrap().contains_key(id)
+        saman::lock(&self.0).contains_key(id)
     }
 
     /// Job ID of SESSION runs, as a start records it (for the tests of the modules that read the running jobs).
@@ -222,10 +219,7 @@ impl Live {
 
     /// The running jobs SESSION started.
     pub fn ids(&self, session: &str) -> Vec<String> {
-        let mut ids: Vec<String> = self
-            .0
-            .lock()
-            .unwrap()
+        let mut ids: Vec<String> = saman::lock(&self.0)
             .iter()
             .filter(|(_, s)| s.as_deref() == Some(session))
             .map(|(id, _)| id.clone())
@@ -412,7 +406,7 @@ struct KeySocket {
 /// A running keyed job's key socket (removed when the job ends) and the task that redacts its output into its log.
 struct Keyed {
     _socket: Option<keys::Socket>,
-    pump: tokio::task::JoinHandle<()>,
+    pump: crate::clock::Spawned<()>,
 }
 
 /// How long a keyed job's log may take to drain once its process has ended (a child it left may hold the pipe).
@@ -423,14 +417,13 @@ const DRAIN: Duration = Duration::from_secs(5);
 fn write_infra(dir: &Path, reason: &str) {
     use std::io::Write;
     let line = format!("{}: {reason}", net::INFRA);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("log"))
-    {
-        let _ = writeln!(f, "drgnx: {line}");
+    if let Ok(mut f) = crate::fsio::append(dir.join("log"), true) {
+        crate::soft::done(writeln!(f, "drgnx: {line}"), "writeln");
     }
-    let _ = std::fs::write(dir.join("why"), line);
+    crate::soft::done(
+        crate::fsio::write(dir.join("why"), line),
+        "crate::fsio::write",
+    );
 }
 
 /// What a queued job is started from, kept with it in the queue (`rq_job.spec`; an older hub wrote it as
@@ -611,7 +604,7 @@ pub(crate) struct Starting<'a> {
 
 impl Drop for Starting<'_> {
     fn drop(&mut self) {
-        let mut s = self.runner.starting.lock().unwrap();
+        let mut s = saman::lock(&self.runner.starting);
         if let Some(i) = s.iter().position(|w| *w == self.worktree) {
             s.swap_remove(i);
         }
@@ -650,7 +643,7 @@ pub(crate) fn env_stamp() -> &'static str {
     static STAMP: OnceLock<String> = OnceLock::new();
     STAMP.get_or_init(|| {
         let tool = |p: &str| {
-            std::process::Command::new(p)
+            crate::proc::Command::new(p)
                 .arg("--version")
                 .stdin(std::process::Stdio::null())
                 .output()
@@ -737,7 +730,7 @@ impl Snap {
     fn moved(&self, now: &Snap, top: &Path) -> Vec<String> {
         let mut out = std::collections::BTreeSet::new();
         if self.tree != now.tree
-            && let Ok(o) = std::process::Command::new("git")
+            && let Ok(o) = crate::proc::Command::new("git")
                 .args([
                     "diff-tree",
                     "-r",
@@ -895,7 +888,7 @@ impl Runner {
         let i = self.inner()?.clone();
         let facts = facts_of(&spec).await;
         if let Some((f, _)) = &facts
-            && vordr::facts::cacheable(&f.selector, &self.no_cache.lock().unwrap())
+            && vordr::facts::cacheable(&f.selector, &saman::lock(&self.no_cache))
             && let Some(id) = i.green_with(f)
         {
             return Ok((id, true));
@@ -906,7 +899,7 @@ impl Runner {
     /// The words the rule pack marks `no-cache` (clock-, network- or machine-dependent groups): a job whose selector
     /// holds one is never served from the cache.
     pub fn set_no_cache(&self, words: Vec<String>) {
-        *self.no_cache.lock().unwrap() = words;
+        *saman::lock(&self.no_cache) = words;
     }
 
     /// Job ID's facts as recorded at its submit, with the machine it ran on (a runner's job: `runner/NAME`, its env
@@ -948,7 +941,7 @@ impl Runner {
         }
         if let Some(mut m) = i.meta(id) {
             m.priority = Some(1);
-            let _ = i.save_meta(&m);
+            crate::soft::done(i.save_meta(&m), "mod");
         }
         i.pump();
         i.row(id)
@@ -956,8 +949,11 @@ impl Runner {
 
     /// The user moves job ID to TO (`machines/move`): the queue's answer ([`Queue::move_job`]), its tick run at once
     /// for a job that now waits elsewhere. A job no queue holds (ended, or a server) is refused, saying so.
-    pub fn move_job(&self, id: &str, to: Machine) -> Result<queue::Moved, String> {
-        let i = self.inner.get().ok_or("jobs are not open yet")?;
+    pub fn move_job(&self, id: &str, to: Machine) -> villa::Result<queue::Moved> {
+        let i = self
+            .inner
+            .get()
+            .ok_or_else(|| villa::Error::invalid("jobs are not open yet"))?;
         let moved = i.queue.move_job(id, to)?;
         if moved == queue::Moved::Requeued {
             i.pump();
@@ -968,14 +964,20 @@ impl Runner {
     /// The user's Restart of running job ID on TO (the move card's): one on a runner goes back to the queue pinned
     /// to TO, its attempt there cancelled; one here has no attempt to requeue, so it is stopped and its request
     /// started again, pinned to TO, as a new job. The id of the job that now runs it.
-    pub async fn restart_on(&self, id: &str, to: Machine) -> Result<String, String> {
-        let i = self.inner.get().ok_or("jobs are not open yet")?.clone();
-        let row = i.row(id).ok_or_else(|| format!("no job {id}"))?;
+    pub async fn restart_on(&self, id: &str, to: Machine) -> villa::Result<String> {
+        let i = self
+            .inner
+            .get()
+            .ok_or_else(|| villa::Error::invalid("jobs are not open yet"))?
+            .clone();
+        let row = i
+            .row(id)
+            .ok_or_else(|| villa::Error::invalid(format!("no job {id}")))?;
         if row.status != ExecStatus::Running {
-            return Err(format!("job {id} no longer runs"));
+            return Err(villa::Error::invalid(format!("job {id} no longer runs")));
         }
         if let Some(why) = i.queue.refusal(id, &to) {
-            return Err(why);
+            return Err(villa::Error::refused(why));
         }
         if row.machine.as_deref().is_some_and(|m| m != queue::LOCAL) {
             let outs = i.queue.restart_on(id, to, now() as u64)?;
@@ -987,19 +989,24 @@ impl Runner {
             .queue
             .pending(id)
             .and_then(|v| serde_json::from_value::<Pending>(v).ok())
-            .ok_or_else(|| format!("job {id}: its start request is gone"))?
+            .ok_or_else(|| villa::Error::invalid(format!("job {id}: its start request is gone")))?
             .into_spec();
         spec.place.machine = to;
         spec.place.by_user = true;
-        i.clone().stop(id).await.map_err(|e| e.message)?;
-        i.start(spec).await.map_err(|e| e.message)
+        i.clone()
+            .stop(id)
+            .await
+            .map_err(|e| villa::Error::refused(e.message))?;
+        i.start(spec)
+            .await
+            .map_err(|e| villa::Error::refused(e.message))
     }
 
     /// The user moves session SESSION's next jobs to TO ([`Queue::prefer`]).
-    pub fn prefer(&self, session: &str, to: Machine) -> Result<(), String> {
+    pub fn prefer(&self, session: &str, to: Machine) -> villa::Result<()> {
         self.inner
             .get()
-            .ok_or("jobs are not open yet")?
+            .ok_or_else(|| villa::Error::invalid("jobs are not open yet"))?
             .queue
             .prefer(session, to)
     }
@@ -1009,7 +1016,7 @@ impl Runner {
     /// are (the next hub adopts them).
     pub async fn end_networked(&self) {
         let Some(i) = self.inner.get() else { return };
-        let stops: Vec<NetStop> = i.nets.lock().unwrap().drain().map(|(_, s)| s).collect();
+        let stops: Vec<NetStop> = saman::lock(&i.nets).drain().map(|(_, s)| s).collect();
         let mut acks = Vec::new();
         for s in stops {
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -1018,7 +1025,7 @@ impl Runner {
             }
         }
         for a in acks {
-            let _ = a.await;
+            crate::soft::done(a.await, "mod");
         }
     }
 
@@ -1064,7 +1071,7 @@ impl Runner {
 
     /// A session's `exec/start` in WORKTREE is on its way until the answer drops.
     pub(crate) fn starting(&self, worktree: PathBuf) -> Starting<'_> {
-        self.starting.lock().unwrap().push(worktree.clone());
+        saman::lock(&self.starting).push(worktree.clone());
         Starting {
             runner: self,
             worktree,
@@ -1079,12 +1086,12 @@ impl Runner {
 
     /// The end of job ID was taken (its evidence recorded, or it is no one's).
     pub fn settled(&self, id: &str) {
-        self.unsettled.jobs.lock().unwrap().retain(|(j, _)| j != id);
+        saman::lock(&self.unsettled.jobs).retain(|(j, _)| j != id);
     }
 
     /// Every end so far was taken (the reader missed some: they are no one's evidence).
     pub fn settled_all(&self) {
-        self.unsettled.jobs.lock().unwrap().clear();
+        saman::lock(&self.unsettled.jobs).clear();
     }
 
     /// [`Runner::busy_in`] of the tree TOP names, by its true name (read off the hub's workers): a job's folder is
@@ -1101,16 +1108,10 @@ impl Runner {
     /// job there queued or running, or one that ended whose end the reader of the ends has not taken yet.  TOP is a
     /// true name (no link on the way), as the jobs' folders are recorded: [`Runner::busy_in_tree`] finds it.
     pub fn busy_in(&self, top: &Path) -> bool {
-        self.starting
-            .lock()
-            .unwrap()
+        saman::lock(&self.starting)
             .iter()
             .any(|w| w.starts_with(top))
-            || self
-                .unsettled
-                .jobs
-                .lock()
-                .unwrap()
+            || saman::lock(&self.unsettled.jobs)
                 .iter()
                 .any(|(_, cwd)| cwd.starts_with(top))
             || self
@@ -1183,18 +1184,18 @@ impl Inner {
     }
 
     fn meta(&self, id: &str) -> Option<Meta> {
-        let text = std::fs::read_to_string(self.dir(id).join("meta.json")).ok()?;
+        let text = crate::fsio::read_to_string(self.dir(id).join("meta.json")).ok()?;
         serde_json::from_str(&text).ok()
     }
 
     fn end(&self, id: &str) -> Option<End> {
-        let text = std::fs::read_to_string(self.dir(id).join("result.json")).ok()?;
+        let text = crate::fsio::read_to_string(self.dir(id).join("result.json")).ok()?;
         serde_json::from_str(&text).ok()
     }
 
     /// The files [`MOVED`] names, when job ID's tree moved while it ran.
     fn moved(&self, id: &str) -> Option<Vec<String>> {
-        let text = std::fs::read_to_string(self.dir(id).join(MOVED)).ok()?;
+        let text = crate::fsio::read_to_string(self.dir(id).join(MOVED)).ok()?;
         Some(text.lines().map(String::from).collect())
     }
 
@@ -1235,8 +1236,8 @@ impl Inner {
     fn save_meta(&self, m: &Meta) -> Result<(), Refusal> {
         let dir = self.dir(&m.id);
         let tmp = dir.join("meta.tmp");
-        std::fs::write(&tmp, serde_json::to_vec(m).unwrap_or_default())
-            .and_then(|()| std::fs::rename(&tmp, dir.join("meta.json")))
+        crate::fsio::write(&tmp, serde_json::to_vec(m).unwrap_or_default())
+            .and_then(|()| crate::fsio::rename(&tmp, dir.join("meta.json")))
             .map_err(|e| setup(format!("{}: {e}", dir.display())))
     }
 
@@ -1367,30 +1368,36 @@ impl Inner {
         let dir = self.dir(&id);
         std::fs::create_dir_all(&dir).map_err(|e| setup(format!("{}: {e}", dir.display())))?;
         if let Some((f, snap)) = &facts {
-            let _ = std::fs::write(dir.join(FACTS), serde_json::to_vec(f).unwrap_or_default());
-            let _ = std::fs::write(dir.join(SNAP), serde_json::to_vec(snap).unwrap_or_default());
+            crate::soft::done(
+                crate::fsio::write(dir.join(FACTS), serde_json::to_vec(f).unwrap_or_default()),
+                "crate::fsio::write",
+            );
+            crate::soft::done(
+                crate::fsio::write(dir.join(SNAP), serde_json::to_vec(snap).unwrap_or_default()),
+                "crate::fsio::write",
+            );
         }
         // The user's servers (no time box: the editor's, which run for days) never queue: they start at once and count
         // only in the memory the machine shows.  Every other job enters the queue.
         if spec.starter == Starter::User && spec.user.no_timebox {
             let r = self.clone().launch(&id, &dir, spec, None).await;
             if r.is_err() {
-                let _ = std::fs::remove_dir_all(&dir);
+                crate::soft::done(std::fs::remove_dir_all(&dir), "std::fs::remove_dir_all");
             }
             return r.map(|()| id);
         }
         // this start owns the job until its own tick: a tick of the queue's in between (its first, before this start
         // runs) leaves it claimed for this start rather than launching it on another task
-        self.admit.lock().unwrap().owned.insert(id.clone());
+        saman::lock(&self.admit).owned.insert(id.clone());
         if let Err(e) = self.enqueue(&id, &dir, &spec) {
-            self.admit.lock().unwrap().owned.remove(&id);
-            let _ = std::fs::remove_dir_all(&dir);
+            saman::lock(&self.admit).owned.remove(&id);
+            crate::soft::done(std::fs::remove_dir_all(&dir), "std::fs::remove_dir_all");
             return Err(e);
         }
         gap(&self);
         // admitted at once: started here, so a refused launch is the start's answer (one that waits is the queue's)
         let (t, claimed) = {
-            let mut a = self.admit.lock().unwrap();
+            let mut a = saman::lock(&self.admit);
             let t = self.queue.tick(now() as u64);
             a.owned.remove(&id);
             (t, a.claimed.remove(&id))
@@ -1412,7 +1419,7 @@ impl Inner {
         let r = self.clone().launch(&id, &dir, spec, Some(slot)).await;
         if r.is_err() {
             self.live.remove(&id);
-            let _ = std::fs::remove_dir_all(&dir);
+            crate::soft::done(std::fs::remove_dir_all(&dir), "std::fs::remove_dir_all");
             self.pump();
         }
         r.map(|()| id)
@@ -1420,11 +1427,11 @@ impl Inner {
 
     /// Record job ID as queued: a meta saying it waits, and its place in the queue (what to start is kept there).
     fn enqueue(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<(), Refusal> {
-        let _ = dir;
+        let _only_when_used_elsewhere = &dir;
         // a job may need only jobs the queue knows, never one that waits on it
         self.queue
             .check_needs(&spec.forseti_spec(id, &self.hooks.memory))
-            .map_err(refusal)?;
+            .map_err(|e| refusal(e.message()))?;
         let started = now();
         let session = spec.starter.session();
         self.save_meta(&Meta {
@@ -1529,13 +1536,16 @@ impl Inner {
             }
             let dir = self.dir(&id);
             let file = dir.join("pending.json");
-            let pending = std::fs::read_to_string(&file)
+            let pending = crate::fsio::read_to_string(&file)
                 .ok()
                 .and_then(|t| serde_json::from_str::<Pending>(&t).ok());
             let Some(p) = pending else {
-                let _ = std::fs::write(
-                    dir.join("log"),
-                    "could not start: its start request is gone\n",
+                crate::soft::done(
+                    crate::fsio::write(
+                        dir.join("log"),
+                        "could not start: its start request is gone\n",
+                    ),
+                    "crate::fsio::write",
                 );
                 self.finish(&id).await;
                 continue;
@@ -1557,7 +1567,7 @@ impl Inner {
     /// A tick of the queue: start what this machine admits, carry out what ended on runners.
     fn pump(self: &Arc<Self>) {
         let t = {
-            let mut a = self.admit.lock().unwrap();
+            let mut a = saman::lock(&self.admit);
             let mut t = self.queue.tick(now() as u64);
             // a job whose start is on its way is that start's to launch
             t.starts.retain(|id| {
@@ -1676,7 +1686,7 @@ impl Inner {
             };
             let dir = self.dir(&id);
             let write = |name: &str, text: &str| {
-                if let Err(e) = std::fs::write(dir.join(name), text) {
+                if let Err(e) = crate::fsio::write(dir.join(name), text) {
                     tracing::warn!("job {id}: {name} not written: {e}");
                 }
             };
@@ -1728,33 +1738,36 @@ impl Inner {
         let session = self.meta(id).and_then(|m| m.session);
         let history = self.hooks.history.clone();
         let (runner, id) = (back.runner.clone(), id.to_owned());
-        let _ = crate::clock::blocking(move || {
-            let record = |tree: &Path, writes: &crate::runners::returned::Writes| {
-                let Some((hubs, state)) = &history else {
-                    return Ok(());
+        crate::soft::done(
+            crate::clock::blocking(move || {
+                let record = |tree: &Path, writes: &crate::runners::returned::Writes| {
+                    let Some((hubs, state)) = &history else {
+                        return Ok(());
+                    };
+                    let (hub, tree) = hubs.of_tree(state, tree).map_err(|e| e.message)?;
+                    hub.on_returned_writes(&tree, writes, session.as_deref(), &runner, now())
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
                 };
-                let (hub, tree) = hubs.of_tree(state, tree).map_err(|e| e.message)?;
-                hub.on_returned_writes(&tree, writes, session.as_deref(), &runner, now())
-                    .map(|_| ())
-                    .map_err(|e| e.to_string())
-            };
-            // a patch that comes while its session's revert runs is kept, and the revert lists it
-            let patch = crate::runners::queue::returned_file(&dir, "patch", "");
-            let held = match (&history, &session) {
-                (Some((hubs, _)), Some(sid)) if patch.metadata().is_ok_and(|m| m.len() > 0) => {
-                    crate::history::revert::patch_returned(hubs, sid, &id)
+                // a patch that comes while its session's revert runs is kept, and the revert lists it
+                let patch = crate::runners::queue::returned_file(&dir, "patch", "");
+                let held = match (&history, &session) {
+                    (Some((hubs, _)), Some(sid)) if patch.metadata().is_ok_and(|m| m.len() > 0) => {
+                        crate::history::revert::patch_returned(hubs, sid, &id)
+                    }
+                    _ => false,
+                };
+                let lines = crate::runners::returned::take_back(&dir, &back, held, &record);
+                if !lines.is_empty() {
+                    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+                    if let Err(e) = crate::fsio::write(dir.join(RETURNED), text) {
+                        tracing::warn!("{}: {e}", dir.join(RETURNED).display());
+                    }
                 }
-                _ => false,
-            };
-            let lines = crate::runners::returned::take_back(&dir, &back, held, &record);
-            if !lines.is_empty() {
-                let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
-                if let Err(e) = std::fs::write(dir.join(RETURNED), text) {
-                    tracing::warn!("{}: {e}", dir.join(RETURNED).display());
-                }
-            }
-        })
-        .await;
+            })
+            .await,
+            "crate::clock::blocking",
+        );
     }
 
     /// A queued job was admitted here: start it, or end it when it cannot start (stopped while it waited, its spec
@@ -1786,7 +1799,10 @@ impl Inner {
         };
         drop(permit);
         if let Some(why) = failed {
-            let _ = std::fs::write(dir.join("log"), format!("could not start: {why}\n"));
+            crate::soft::done(
+                crate::fsio::write(dir.join("log"), format!("could not start: {why}\n")),
+                "crate::fsio::write",
+            );
         }
         self.finish(&id).await;
         self.pump();
@@ -2188,7 +2204,7 @@ impl Inner {
             })
             .await
             .map_err(|e| e.to_string())
-            .and_then(|r| r);
+            .and_then(|r| r.map_err(|e| e.to_string()));
             if let Err(e) = set {
                 tracing::warn!(
                     "job {id}: its slice's memory limit not set ({e}); its scope's holds"
@@ -2231,7 +2247,7 @@ impl Inner {
                 gleipnir::read_status(
                     fd,
                     &|| {
-                        std::fs::read_to_string(&log)
+                        crate::fsio::read_to_string(&log)
                             .map(|t| t.lines().next().unwrap_or("").to_string())
                             .unwrap_or_default()
                     },
@@ -2241,7 +2257,7 @@ impl Inner {
             .await
             .map_err(|e| setup(format!("reading the sandbox status: {e}")))?;
             if let Err(e) = read {
-                let _ =
+                let _group_ended =
                     draugr::kill_group(pid, Duration::from_secs(1), &draugr::RealSignaller).await;
                 return Err(e);
             }
@@ -2249,7 +2265,7 @@ impl Inner {
         let start_time = match start_time_or_refuse(draugr::start_time(pid), pid) {
             Ok(t) => t,
             Err(e) => {
-                let _ =
+                let _group_ended =
                     draugr::kill_group(pid, Duration::from_secs(1), &draugr::RealSignaller).await;
                 return Err(e);
             }
@@ -2289,7 +2305,7 @@ impl Inner {
         // a networked job's relay answers for as long as the job runs; a graceful hub stop ends it through `nets`
         let relay = relay.map(|net| {
             let (tx, stop) = tokio::sync::oneshot::channel();
-            self.nets.lock().unwrap().insert(id.clone(), tx);
+            saman::lock(&self.nets).insert(id.clone(), tx);
             Net { net, stop }
         });
         let guard = guard_of(&spec);
@@ -2312,10 +2328,7 @@ impl Inner {
         if self.hooks.editors.is_none() {
             return;
         }
-        self.progress
-            .lock()
-            .unwrap()
-            .insert(id.to_owned(), (file, progress::Watch::default()));
+        saman::lock(&self.progress).insert(id.to_owned(), (file, progress::Watch::default()));
         let me = self.clone();
         let id = id.to_owned();
         crate::clock::spawn("exec:progress", async move {
@@ -2323,14 +2336,14 @@ impl Inner {
                 crate::clock::sleep(progress::EVERY).await;
             }
             // a job that left the table without its end (lost) takes its watch with it
-            me.progress.lock().unwrap().remove(&id);
+            saman::lock(&me.progress).remove(&id);
         });
     }
 
     /// One look at job ID's progress: what changed goes to the editors as `exec-progress`. LAST: the job ended, its
     /// watch goes. False when the job has no watch (any more).
     fn look_progress(&self, id: &str, last: bool) -> bool {
-        let mut all = self.progress.lock().unwrap();
+        let mut all = saman::lock(&self.progress);
         let Some((file, watch)) = all.get_mut(id) else {
             return false;
         };
@@ -2424,20 +2437,20 @@ impl Inner {
                         // the report and the log line, then the reason; the job's group goes, and its slice at the end
                         let slice = self.guard_slice_dir(id);
                         let (d, s) = (dir.clone(), stop);
-                        let _ = crate::clock::blocking(move || {
+                        crate::soft::done(crate::clock::blocking(move || {
                             if let Err(e) = pguard::stuck_report(&d, &s, slice.as_deref(), &d.join("log")) {
                                 tracing::warn!("the stuck report: {e}");
                             }
                             use std::io::Write;
-                            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(d.join("log")) {
-                                let _ = writeln!(f, "{}", pguard::log_line(&s));
+                            if let Ok(mut f) = crate::fsio::append(d.join("log"), false) {
+                                crate::soft::done(writeln!(f, "{}", pguard::log_line(&s)), "writeln");
                             }
-                            let _ = std::fs::write(d.join("why"), format!("infra: {}", pguard::verdict_text(&s)));
+                            crate::soft::done(crate::fsio::write(d.join("why"), format!("infra: {}", pguard::verdict_text(&s))), "the why of an infra stop");
                         })
-                        .await;
+                        .await, "crate::clock::blocking");
                         crate::clock::real(async {
-                            let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
-                            let _ = c.wait().await;
+                            draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
+                            crate::soft::done(c.wait().await, "mod");
                         })
                         .await;
                     }
@@ -2455,17 +2468,17 @@ impl Inner {
                         };
                         write_infra(&dir, &reason);
                         crate::clock::real(async {
-                            let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
-                            let _ = c.wait().await;
+                            draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
+                            crate::soft::done(c.wait().await, "mod");
                         })
                         .await;
                     }
                     () = time_up => {
-                        let _ = std::fs::write(dir.join("why"), "timed-out");
+                        crate::soft::done(crate::fsio::write(dir.join("why"), "timed-out"), "the why of a time box");
                         // the kill ends by itself, within its grace: an advance past the time box waits for it
                         crate::clock::real(async {
-                            let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
-                            let _ = c.wait().await;
+                            draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
+                            crate::soft::done(c.wait().await, "mod");
                         })
                         .await;
                     }
@@ -2480,9 +2493,9 @@ impl Inner {
                 tokio::select! {
                     () = gone => {}
                     () = time_up => {
-                        let _ = std::fs::write(dir.join("why"), "timed-out");
+                        crate::soft::done(crate::fsio::write(dir.join("why"), "timed-out"), "the why of a time box");
                         if let Some(p) = meta.pid {
-                            let _ = crate::clock::real(draugr::kill_group(
+                            crate::clock::real(draugr::kill_group(
                                 p,
                                 Duration::from_secs(2),
                                 &draugr::RealSignaller,
@@ -2503,23 +2516,23 @@ impl Inner {
                 pump.abort();
             }
         }
-        self.nets.lock().unwrap().remove(id);
+        saman::lock(&self.nets).remove(id);
         self.finish(id).await;
         for ack in acks {
-            let _ = ack.send(());
+            crate::soft::done(ack.send(()), "ack send");
         }
     }
 
     /// Write the job's result once: status from `why` and the exit file, the summary from the log; record it in the
     /// store; tell the subscribers.
     async fn finish(&self, id: &str) {
-        if self.end(id).is_some() || !self.finishing.lock().unwrap().insert(id.to_string()) {
+        if self.end(id).is_some() || !saman::lock(&self.finishing).insert(id.to_string()) {
             return;
         }
         let Some(meta) = self.meta(id) else { return };
         // busy in its tree from before its result shows until the reader of the ends has taken it ([`Unsettled`])
         if self.unsettled.on.load(Ordering::SeqCst) {
-            (self.unsettled.jobs.lock().unwrap()).push((id.to_string(), PathBuf::from(&meta.cwd)));
+            (saman::lock(&self.unsettled.jobs)).push((id.to_string(), PathBuf::from(&meta.cwd)));
         }
         let dir = self.dir(id);
         crate::sandbox::remove_made(&dir.join(STUBS));
@@ -2527,7 +2540,10 @@ impl Inner {
         #[cfg(target_os = "linux")]
         if self.hooks.systemd && meta.machine.as_deref().is_none_or(|m| m == "local") {
             let slice = unit::job_slice_name(id);
-            let _ = crate::clock::blocking(move || sleipnir::linux::slices::forget(&slice)).await;
+            crate::soft::done(
+                crate::clock::blocking(move || sleipnir::linux::slices::forget(&slice)).await,
+                "crate::clock::blocking",
+            );
         }
         // a job here ran on its tree as it was while it ran (a runner's ran on the inputs frozen at its submit): when
         // the tree's key moved since the submit, its facts go, so it is no one's evidence and never reused
@@ -2552,12 +2568,18 @@ impl Inner {
                     "job {id}: its tree moved while it ran ({}): no facts kept",
                     some_paths(&files)
                 );
-                let _ = std::fs::rename(dir.join(FACTS), dir.join(FACTS_MOVED));
-                let _ = std::fs::write(dir.join(MOVED), files.join("\n"));
+                crate::soft::done(
+                    crate::fsio::rename(dir.join(FACTS), dir.join(FACTS_MOVED)),
+                    "crate::fsio::rename",
+                );
+                crate::soft::done(
+                    crate::fsio::write(dir.join(MOVED), files.join("\n")),
+                    "crate::fsio::write",
+                );
             }
         }
         let exit = unit::read_exit(&dir);
-        let status = match std::fs::read_to_string(dir.join("why")).as_deref() {
+        let status = match crate::fsio::read_to_string(dir.join("why")).as_deref() {
             Ok("stopped") => ExecStatus::Stopped,
             Ok("timed-out") => ExecStatus::TimedOut,
             Ok(w) if w.starts_with("infra:") => ExecStatus::Infra,
@@ -2572,18 +2594,18 @@ impl Inner {
             &dir.join("log").display().to_string(),
         );
         // rows that ran over several attempts: the split first
-        if let Ok(line) = std::fs::read_to_string(dir.join(SPLIT)) {
+        if let Ok(line) = crate::fsio::read_to_string(dir.join(SPLIT)) {
             summary.lines.insert(0, line);
         }
         if let Some(files) = self.moved(id) {
             summary.lines.push(moved_line(&files));
         }
         // what a runner returned, and where it went
-        if let Ok(text) = std::fs::read_to_string(dir.join(RETURNED)) {
+        if let Ok(text) = crate::fsio::read_to_string(dir.join(RETURNED)) {
             summary.lines.extend(text.lines().map(String::from));
         }
         // a shared runner's output reaches the summary, and so the starter's wake, labelled untrusted
-        if let Ok(runner) = std::fs::read_to_string(dir.join(SHARED)) {
+        if let Ok(runner) = crate::fsio::read_to_string(dir.join(SHARED)) {
             summary
                 .lines
                 .insert(0, crate::runners::returned::shared_label(runner.trim()));
@@ -2614,8 +2636,8 @@ impl Inner {
             rows,
         };
         let tmp = dir.join("result.tmp");
-        let written = std::fs::write(&tmp, serde_json::to_vec(&end).unwrap_or_default())
-            .and_then(|()| std::fs::rename(&tmp, dir.join("result.json")));
+        let written = crate::fsio::write(&tmp, serde_json::to_vec(&end).unwrap_or_default())
+            .and_then(|()| crate::fsio::rename(&tmp, dir.join("result.json")));
         if let Err(e) = written {
             tracing::warn!("job {id}: result not written: {e}");
         }
@@ -2658,7 +2680,7 @@ impl Inner {
             );
         }
         self.queue.release(id);
-        let _ = self.events.send(JobEvent::Done(done));
+        crate::soft::done(self.events.send(JobEvent::Done(done)), "events send");
         self.prune();
     }
 
@@ -2684,7 +2706,7 @@ impl Inner {
         for (rank, (t, dir)) in done.iter().enumerate() {
             let age = now - t;
             if age > KEEP_GRACE_S && (rank >= KEEP_JOBS || age > KEEP_DAYS * 86400.0) {
-                let _ = std::fs::remove_dir_all(dir);
+                crate::soft::done(std::fs::remove_dir_all(dir), "std::fs::remove_dir_all");
             }
         }
     }
@@ -2695,33 +2717,42 @@ impl Inner {
             let (removed, outs) = self.queue.remove(id, now() as u64);
             if removed || self.queue.row(id).is_none() {
                 // still waiting in the queue: it never starts
-                let _ = std::fs::write(self.dir(id).join("why"), "stopped");
+                crate::soft::done(
+                    crate::fsio::write(self.dir(id).join("why"), "stopped"),
+                    "crate::fsio::write",
+                );
                 self.finish(id).await;
                 return self.row(id).ok_or_else(|| no_job(id));
             }
             // on a runner: cancelled there; its end comes back through the link (or at once when it can't be told)
             let mut events = self.events.subscribe();
             self.outcomes(outs);
-            let _ = crate::clock::timeout(STOP_WAIT, async {
-                while self.end(id).is_none() {
-                    if let Err(tokio::sync::broadcast::error::RecvError::Closed) =
-                        events.recv().await
-                    {
-                        break;
+            crate::soft::done(
+                crate::clock::timeout(STOP_WAIT, async {
+                    while self.end(id).is_none() {
+                        if let Err(tokio::sync::broadcast::error::RecvError::Closed) =
+                            events.recv().await
+                        {
+                            break;
+                        }
                     }
-                }
-            })
-            .await;
+                })
+                .await,
+                "crate::clock::timeout",
+            );
             return self.row(id).ok_or_else(|| no_job(id));
         }
         if self.end(id).is_none() {
             // subscribed before the first look, so an end after it is an event this receiver holds
             let mut events = self.events.subscribe();
-            let _ = std::fs::write(self.dir(id).join("why"), "stopped");
+            crate::soft::done(
+                crate::fsio::write(self.dir(id).join("why"), "stopped"),
+                "crate::fsio::write",
+            );
             if let (Some(p), Some(t)) = (meta.pid, meta.start_time)
                 && unit::same_process(p, t)
             {
-                let _ = draugr::kill_group(p, Duration::from_secs(2), &draugr::RealSignaller).await;
+                draugr::kill_group(p, Duration::from_secs(2), &draugr::RealSignaller).await;
             }
             // the watcher records the end, then says so: wait for that, at most 5 s on the hub's clock
             let ended = crate::clock::timeout(STOP_WAIT, async {
@@ -2752,7 +2783,7 @@ impl Inner {
                 }
                 return self.row(id).ok_or_else(|| no_job(id));
             }
-            let _ = ended.await;
+            crate::soft::done(ended.await, "mod");
         }
         self.row(id).ok_or_else(|| no_job(id))
     }
@@ -2785,15 +2816,18 @@ impl Inner {
                             (me.hooks.podman.clone(), container::name_of(&id))
                         {
                             let shell = me.hooks.shell_env.clone();
-                            let _ = crate::clock::blocking(move || {
-                                sleipnir::linux::podman::run_limited(
-                                    &podman,
-                                    &["rm", "-f", "-t", "0", &name],
-                                    &container::podman_env(&shell),
-                                    Duration::from_secs(30),
-                                )
-                            })
-                            .await;
+                            crate::soft::done(
+                                crate::clock::blocking(move || {
+                                    sleipnir::linux::podman::run_limited(
+                                        &podman,
+                                        &["rm", "-f", "-t", "0", &name],
+                                        &container::podman_env(&shell),
+                                        Duration::from_secs(30),
+                                    )
+                                })
+                                .await,
+                                "crate::clock::blocking",
+                            );
                         }
                         write_infra(&me.dir(&id), net::HUB_RESTARTED);
                         me.finish(&id).await;
@@ -2808,7 +2842,7 @@ impl Inner {
                             && m.start_time.is_some()
                             && m.start_time == draugr::start_time(p).ok()
                         {
-                            let _ = crate::clock::real(draugr::kill_group(
+                            crate::clock::real(draugr::kill_group(
                                 p,
                                 Duration::from_secs(2),
                                 &draugr::RealSignaller,
@@ -2816,7 +2850,10 @@ impl Inner {
                             .await;
                         }
                         let dir = me.dir(&id);
-                        let _ = std::fs::write(dir.join("why"), KEYED_RESTART);
+                        crate::soft::done(
+                            crate::fsio::write(dir.join("why"), KEYED_RESTART),
+                            "crate::fsio::write",
+                        );
                         me.finish(&id).await;
                     });
                     continue;
@@ -2876,7 +2913,7 @@ async fn wait_gone(pid: i32, start_time: u64) {
             tokio::io::unix::AsyncFd::register_with_interest(fd, tokio::io::Interest::READABLE)
         };
         if let Ok(a) = registered {
-            let _ = a.readable().await;
+            crate::soft::done(a.readable().await, "mod");
             return;
         }
     }
@@ -2902,7 +2939,14 @@ fn plain_spec(spec: &ExecSpec, env: Vec<(OsString, OsString)>) -> draugr::Spec {
 fn agent_plain_env(shell: &crate::shell_env::ShellEnv) -> Vec<(OsString, OsString)> {
     shell.build(
         &[
-            "PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "TMPDIR", "SHELL",
+            "PATH",
+            stig::HOME_VAR,
+            "USER",
+            "LOGNAME",
+            "LANG",
+            "TERM",
+            "TMPDIR",
+            "SHELL",
         ],
         &["LC_", "CARGO", "RUST", "MISE_"],
         &[],
@@ -2984,10 +3028,10 @@ fn tool_env(shell: &crate::shell_env::ShellEnv) -> Vec<(String, String)> {
         .collect()
 }
 
-fn error(code: ErrorCode, message: impl Into<String>) -> Error {
+fn error(code: ErrorCode, message: impl ToString) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }

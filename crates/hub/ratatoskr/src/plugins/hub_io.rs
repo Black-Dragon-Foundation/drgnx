@@ -176,7 +176,7 @@ pub struct HubIo {
 }
 
 /// Aborts the connection's task when the request is done or dropped (the host aborts a request past its deadline).
-struct Abort(tokio::task::JoinHandle<()>);
+struct Abort(crate::clock::Spawned<()>);
 
 impl Drop for Abort {
     fn drop(&mut self) {
@@ -301,7 +301,7 @@ impl HubIo {
                 .await
                 .map_err(|e| format!("HTTP: {e}"))?;
         let _conn = Abort(crate::clock::spawn("plugins/http", async move {
-            let _ = conn.await;
+            crate::soft::done(conn.await, "hub_io");
         }));
         let resp = crate::clock::real(sender.send_request(request(req)?))
             .await
@@ -331,11 +331,7 @@ impl HubIo {
     /// A refusal of PLUGIN's request to HOST (WHY): logged, and a `proxy-denied` event once per host.
     async fn record(&self, plugin: &str, host: &str, why: &str) {
         tracing::info!(plugin, host, why, "a plugin's request was refused");
-        let first = self
-            .denied
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(host.to_owned());
+        let first = saman::lock(&self.denied).insert(host.to_owned());
         if !first {
             return;
         }

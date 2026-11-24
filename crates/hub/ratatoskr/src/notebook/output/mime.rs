@@ -52,11 +52,11 @@ fn text_of(v: &Value) -> Option<String> {
 }
 
 /// An image's width and height from its header, when BYTES start as the type MIME says.
-pub fn dimensions(mime: &str, b: &[u8]) -> Result<(u32, u32), String> {
+pub fn dimensions(mime: &str, b: &[u8]) -> villa::Result<(u32, u32)> {
     match mime {
         "image/png" => {
             if b.len() < 24 || b[..8] != *b"\x89PNG\r\n\x1a\n" || &b[12..16] != b"IHDR" {
-                return Err("not a PNG".into());
+                return Err(villa::Error::invalid("not a PNG"));
             }
             Ok((
                 u32::from_be_bytes(b[16..20].try_into().unwrap()),
@@ -65,13 +65,13 @@ pub fn dimensions(mime: &str, b: &[u8]) -> Result<(u32, u32), String> {
         }
         _ => {
             if b.len() < 4 || b[..3] != [0xff, 0xd8, 0xff] {
-                return Err("not a JPEG".into());
+                return Err(villa::Error::invalid("not a JPEG"));
             }
             // walk the segments to a start-of-frame
             let mut i = 2;
             while i + 4 <= b.len() {
                 if b[i] != 0xff {
-                    return Err("a broken JPEG".into());
+                    return Err(villa::Error::invalid("a broken JPEG"));
                 }
                 let marker = b[i + 1];
                 if marker == 0xff {
@@ -81,7 +81,7 @@ pub fn dimensions(mime: &str, b: &[u8]) -> Result<(u32, u32), String> {
                 let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
                 if (0xc0..=0xcf).contains(&marker) && !matches!(marker, 0xc4 | 0xc8 | 0xcc) {
                     if i + 9 > b.len() {
-                        return Err("a cut JPEG".into());
+                        return Err(villa::Error::invalid("a cut JPEG"));
                     }
                     let h = u16::from_be_bytes([b[i + 5], b[i + 6]]) as u32;
                     let w = u16::from_be_bytes([b[i + 7], b[i + 8]]) as u32;
@@ -89,7 +89,7 @@ pub fn dimensions(mime: &str, b: &[u8]) -> Result<(u32, u32), String> {
                 }
                 i += 2 + len;
             }
-            Err("a JPEG without a frame".into())
+            Err(villa::Error::invalid("a JPEG without a frame"))
         }
     }
 }

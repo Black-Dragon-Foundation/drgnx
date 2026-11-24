@@ -11,7 +11,7 @@ fn dir() -> PathBuf {
 }
 
 fn lisp() -> Value {
-    let text = std::fs::read_to_string(dir().join("lisp-dump.json"))
+    let text = crate::fsio::read_to_string(dir().join("lisp-dump.json"))
         .expect("lisp-dump.json: run test/conformance/settings/dump.el (its header)");
     serde_json::from_str(&text).expect("lisp-dump.json is JSON")
 }

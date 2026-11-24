@@ -4,7 +4,6 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::settings::RuntimeValues;
@@ -176,13 +175,14 @@ fn usable(roots: &Roots, path: &Path) -> Option<PathBuf> {
 
 /// The first line `PROGRAM --version` prints, or none (it did not run, or took too long).  Its environment is empty.
 fn version_output(program: &Path) -> Option<String> {
-    let mut child = Command::new(program)
+    let mut child = crate::proc::Command::new(program)
         .arg("--version")
         .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+        .spawn(
+            crate::proc::Io::Null,
+            crate::proc::Io::Pipe,
+            crate::proc::Io::Null,
+        )
         .ok()?;
     // a blocking wait on a program outside the hub: real time, which a virtual clock would never end
     let deadline = crate::clock::real_now() + VERSION_TIMEOUT;
@@ -190,11 +190,11 @@ fn version_output(program: &Path) -> Option<String> {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) if crate::clock::real_now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20));
+                stund::real::sleep_blocking(Duration::from_millis(20));
             }
             _ => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::soft::done(child.kill(), "resolve");
+                crate::soft::done(child.wait(), "resolve");
                 return None;
             }
         }
@@ -245,7 +245,7 @@ pub(crate) fn installed(data_dir: &Path) -> Vec<(PathBuf, InstalledFile)> {
         .filter_map(|e| {
             let key = version_key(e.file_name().to_str()?)?;
             let dir = e.path();
-            let text = std::fs::read_to_string(dir.join("installed.json")).ok()?;
+            let text = crate::fsio::read_to_string(dir.join("installed.json")).ok()?;
             let file: InstalledFile = serde_json::from_str(&text).ok()?;
             Some((key, dir, file))
         })
@@ -299,7 +299,7 @@ mod tests {
             at: 1,
             binary: "shell/chrome-headless-shell".into(),
         };
-        std::fs::write(
+        crate::fsio::write(
             dir.join("installed.json"),
             serde_json::to_string(&file).unwrap(),
         )
@@ -427,7 +427,7 @@ mod tests {
             at: 0,
             binary: "../../escape".into(),
         };
-        std::fs::write(
+        crate::fsio::write(
             dir.join("installed.json"),
             serde_json::to_string(&file).unwrap(),
         )

@@ -22,13 +22,13 @@ use gleipnir::net::proxy::{
     self, Connect, Connecting, Listener, Policy, ProxyConfig, ProxyEvent, Resolver, SystemResolver,
     WebState,
 };
+use saman::lock;
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
@@ -85,7 +85,7 @@ impl Resolver for ScriptedResolver {
         host: &str,
         port: u16,
     ) -> Pin<Box<dyn Future<Output = io::Result<Vec<SocketAddr>>> + Send>> {
-        let answer = self.0.lock().unwrap().get(host).map(|ips| {
+        let answer = lock(&self.0).get(host).map(|ips| {
             ips.iter()
                 .map(|ip| SocketAddr::new(*ip, port))
                 .collect::<Vec<_>>()
@@ -141,7 +141,7 @@ pub struct Fixture {
     asked: AtomicUsize,
     /// The relay port the last spec built for a Linux row gave (`${RELAY_PORT}`); 0 before any (the control run).
     relay_port: std::sync::atomic::AtomicU16,
-    rt: Option<tokio::runtime::Runtime>,
+    rt: Option<saman::Executor>,
     _proxy: proxy::ProxyHandle,
     /// The web proxy (`Policy::Web`) on `${RUN}/web.sock`, its state and its resolver, set per row
     /// ([`Fixture::use_web_proxy`]).
@@ -150,7 +150,7 @@ pub struct Fixture {
     dns: Arc<ScriptedResolver>,
     /// `HTTPS_PROXY` in [`Fixture::env`] is the web proxy's.
     use_web: bool,
-    pub sleep: Option<Child>,
+    pub sleep: Option<draugr::Child>,
     /// Directories made as root (`/var/lib/glp-XXXXXX`), removed with `sudo -n` when they are not ours.
     pub root_dirs: Vec<PathBuf>,
     users_shared: Option<PathBuf>,
@@ -160,7 +160,7 @@ fn write(path: &Path, text: &str) -> io::Result<()> {
     if let Some(p) = path.parent() {
         std::fs::create_dir_all(p)?;
     }
-    std::fs::write(path, text)
+    eitri::replace_file(path, text.as_bytes()).map_err(io::Error::other)
 }
 
 impl Fixture {
@@ -208,16 +208,12 @@ impl Fixture {
             None
         };
 
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()?;
+        let rt = saman::Executor::new(2).map_err(io::Error::other)?;
         let mut counts: HashMap<&'static str, Arc<AtomicUsize>> = HashMap::new();
         let events = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
         let abstract_name = format!("glp-{}", random_hex());
         let dns = Arc::new(ScriptedResolver::default());
-        let (addrs, handle, web_handle, web) = {
-            let _g = rt.enter();
+        let (addrs, handle, web_handle, web) = rt.block_on(async {
             let mut count = |name: &'static str| {
                 let c = Arc::new(AtomicUsize::new(0));
                 counts.insert(name, c.clone());
@@ -293,13 +289,14 @@ impl Fixture {
             web_handle.listen(Listener::Tcp(tokio::net::TcpListener::from_std(wtcp)?), 4);
 
             let sink = events.clone();
-            tokio::spawn(async move {
+            saman::spawn("fixture-events", async move {
                 while let Some(e) = rx.recv().await {
-                    sink.0.lock().unwrap().push(event_text(&e));
+                    lock(&sink.0).push(event_text(&e));
                     sink.1.notify_all();
                 }
-            });
-            (
+            })
+            .detach("the event sink lives until the fixture's pool ends");
+            Ok::<_, io::Error>((
                 Addrs {
                     tcp_lo,
                     tcp_nl,
@@ -316,8 +313,8 @@ impl Fixture {
                 handle,
                 web_handle,
                 web,
-            )
-        };
+            ))
+        })?;
         let mut sentinels: HashMap<&'static str, Sentinel> = HashMap::new();
         let mut sentinel =
             |name: &'static str, trip: Box<dyn Fn() -> io::Result<()> + Send + Sync>| {
@@ -393,8 +390,8 @@ impl Fixture {
     pub fn env(&self, path: &str) -> Vec<(String, String)> {
         let s = |p: PathBuf| p.to_string_lossy().into_owned();
         vec![
-            ("HOME".into(), s(self.path("home"))),
-            ("XDG_RUNTIME_DIR".into(), s(self.path("run"))),
+            (stig::HOME_VAR.into(), s(self.path("home"))),
+            (stig::SYSTEM_RUNTIME_VAR.into(), s(self.path("run"))),
             ("DRGNX_DATA_DIR".into(), s(self.path("data"))),
             ("DRGNX_CONFIG_DIR".into(), s(self.path("config"))),
             ("SSH_AUTH_SOCK".into(), s(self.path("run/ssh-agent.sock"))),
@@ -430,7 +427,7 @@ impl Fixture {
         web: bool,
         grants: Vec<PrivateGrant>,
         dns: &BTreeMap<String, Vec<String>>,
-    ) -> Result<(), String> {
+    ) -> villa::Result<()> {
         let mut names = HashMap::new();
         for (name, addrs) in dns {
             let ips = addrs
@@ -438,12 +435,12 @@ impl Fixture {
                 .map(|a| {
                     let a = self.expand(a)?;
                     a.parse::<IpAddr>()
-                        .map_err(|e| format!("dns {name}: {a:?}: {e}"))
+                        .map_err(|e| villa::Error::invalid(format!("dns {name}: {a:?}: {e}")))
                 })
-                .collect::<Result<Vec<_>, String>>()?;
+                .collect::<villa::Result<Vec<_>>>()?;
             names.insert(self.expand(name)?.to_ascii_lowercase(), ips);
         }
-        *self.dns.0.lock().unwrap() = names;
+        *lock(&self.dns.0) = names;
         self.web.set_web(web);
         self.web.set_grants(grants);
         self.use_web = true;
@@ -482,7 +479,7 @@ impl Fixture {
         assert!(status.contains(" 403 "), "the proxy answered {status:?}");
         let (events, added) = &*self.events;
         let (mut events, timed_out) = added
-            .wait_timeout_while(events.lock().unwrap(), FAILED_AFTER, |e| !e.contains(&told))
+            .wait_timeout_while(lock(events), FAILED_AFTER, |e| !e.contains(&told))
             .unwrap();
         assert!(
             !timed_out.timed_out(),
@@ -495,11 +492,12 @@ impl Fixture {
     }
 
     /// `${NAME}` for the closed list (`row::PLACEHOLDERS`).
-    pub fn value(&self, name: &str) -> Result<String, String> {
+    pub fn value(&self, name: &str) -> villa::Result<String> {
         let s = |p: PathBuf| p.to_string_lossy().into_owned();
         let a = &self.addrs;
         Ok(match name {
-            "HOME" => s(self.path("home")),
+            // the placeholder is named for the variable it fills
+            stig::HOME_VAR => s(self.path("home")),
             "RUNTIME" => s(self.path("run")),
             "RUN" => s(self.path("run/drgnx/s/S1")),
             "TASK" => s(self.path("tasks/t1")),
@@ -513,17 +511,17 @@ impl Fixture {
                 .users_shared
                 .as_ref()
                 .map(|d| s(d.clone()))
-                .ok_or("${USERS_SHARED} exists only on macOS")?,
+                .ok_or_else(|| villa::Error::invalid("${USERS_SHARED} exists only on macOS"))?,
             "ABSTRACT" => format!("@{}", a.abstract_name),
             "TCP_LO" => a.tcp_lo.to_string(),
             "UDP_LO" => a.udp_lo.to_string(),
             "TCP_NL" => a
                 .tcp_nl
-                .ok_or("no non-loopback address for ${TCP_NL}")?
+                .ok_or_else(|| villa::Error::invalid("no non-loopback address for ${TCP_NL}"))?
                 .to_string(),
             "UDP_NL" => a
                 .udp_nl
-                .ok_or("no non-loopback address for ${UDP_NL}")?
+                .ok_or_else(|| villa::Error::invalid("no non-loopback address for ${UDP_NL}"))?
                 .to_string(),
             "UPSTREAM" => format!("upstream.test:{}", a.upstream.port()),
             "PROXY_TCP" => a.proxy_tcp.to_string(),
@@ -532,10 +530,12 @@ impl Fixture {
                 .sleep
                 .as_ref()
                 .map(|c| c.id().to_string())
-                .ok_or("${SLEEP_PID} needs the start-sleep setup step")?,
+                .ok_or_else(|| {
+                    villa::Error::invalid("${SLEEP_PID} needs the start-sleep setup step")
+                })?,
             "MARKER" => s(self.path("marker")),
             "GIT" => s(draugr::git::git_program()
-                .map_err(|e| format!("${{GIT}}: no trusted git here: {e}"))?
+                .map_err(|e| villa::Error::invalid(format!("${{GIT}}: no trusted git here: {e}")))?
                 .path),
             "HOST_LAN" => HOST_LAN.to_string(),
             "GATEWAY_PORT" => a.gateway_tcp.port().to_string(),
@@ -550,14 +550,22 @@ impl Fixture {
             // whose git draugr refuses).
             "DEVELOPER_DIR" => s(developer_dir()?),
             "LLDB_FRAMEWORKS" => s(lldb_frameworks(&developer_dir()?)),
-            "FAKE_BWRAP" => s(self
-                .root_dirs
-                .first()
-                .map(|d| d.join("bwrap"))
-                .ok_or("${FAKE_BWRAP} needs the fake-bwrap setup step")?),
+            "FAKE_BWRAP" => {
+                s(self
+                    .root_dirs
+                    .first()
+                    .map(|d| d.join("bwrap"))
+                    .ok_or_else(|| {
+                        villa::Error::invalid("${FAKE_BWRAP} needs the fake-bwrap setup step")
+                    })?)
+            }
             // Only the probe inside knows the stand-in agent's pid: it fills this in (`gleipnir-probe --as-browser`).
             "PARENT" => "{agent-pid}".into(),
-            other => return Err(format!("undefined placeholder ${{{other}}}")),
+            other => {
+                return Err(villa::Error::invalid(format!(
+                    "undefined placeholder ${{{other}}}"
+                )));
+            }
         })
     }
 
@@ -568,7 +576,7 @@ impl Fixture {
     }
 
     /// `s` with every placeholder filled.
-    pub fn expand(&self, s: &str) -> Result<String, String> {
+    pub fn expand(&self, s: &str) -> villa::Result<String> {
         let mut out = String::new();
         let mut rest = s;
         while let Some(i) = rest.find("${") {
@@ -576,7 +584,7 @@ impl Fixture {
             let after = &rest[i + 2..];
             let j = after
                 .find('}')
-                .ok_or_else(|| format!("unclosed placeholder in {s:?}"))?;
+                .ok_or_else(|| villa::Error::invalid(format!("unclosed placeholder in {s:?}")))?;
             out.push_str(&self.value(&after[..j])?);
             rest = &after[j + 1..];
         }
@@ -588,30 +596,25 @@ impl Fixture {
     /// echoes, so the stand-in agent reaches them where the browser must not. One that is there already is kept.
     pub fn session_sockets(&self) -> io::Result<()> {
         let rt = self.rt.as_ref().expect("the fixture's runtime");
-        let _g = rt.enter();
-        for name in SESSION_SOCKETS {
-            let path = self.path("run/drgnx/s/S1").join(name);
-            if !path.exists() {
-                serve_unix(
-                    tokio::net::UnixListener::bind(&path)?,
-                    Arc::new(AtomicUsize::new(0)),
-                );
+        rt.block_on(async {
+            for name in SESSION_SOCKETS {
+                let path = self.path("run/drgnx/s/S1").join(name);
+                if !path.exists() {
+                    serve_unix(
+                        tokio::net::UnixListener::bind(&path)?,
+                        Arc::new(AtomicUsize::new(0)),
+                    );
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Starts the `sleep` that `${SLEEP_PID}` names.
     pub fn start_sleep(&mut self) -> io::Result<()> {
         if self.sleep.is_none() {
-            self.sleep = Some(
-                Command::new("sleep")
-                    .arg("300")
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()?,
-            );
+            let rt = self.rt.as_ref().expect("the fixture's runtime");
+            self.sleep = Some(rt.block_on(draugr::spawn(program("sleep", vec!["300".into()])))?);
         }
         Ok(())
     }
@@ -619,29 +622,51 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        if let Some(mut c) = self.sleep.take() {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
         if let Some(rt) = self.rt.take() {
+            if let Some(mut c) = self.sleep.take() {
+                // the group is ended and reaped
+                if let Err(e) = rt.block_on(c.wait_deadline(Duration::ZERO)) {
+                    tracing::debug!(error = %e, "the fixture's sleep was not reaped");
+                }
+            }
+            for d in &self.root_dirs {
+                let gone = if rustix::process::geteuid().is_root() {
+                    std::fs::remove_dir_all(d)
+                } else {
+                    let mut spec = program(
+                        "sudo",
+                        vec!["-n".into(), "rm".into(), "-r".into(), "--".into()],
+                    );
+                    spec.args.push(d.clone().into_os_string());
+                    rt.block_on(async {
+                        draugr::spawn(spec).await?.wait_deadline(FAILED_AFTER).await
+                    })
+                    .map(|_| ())
+                };
+                if let Err(e) = gone {
+                    tracing::debug!(error = %e, dir = %d.display(), "a root-made directory was not removed");
+                }
+            }
             rt.shutdown_background();
         }
-        for d in &self.root_dirs {
-            let _ = if rustix::process::geteuid().is_root() {
-                std::fs::remove_dir_all(d)
-            } else {
-                Command::new("sudo")
-                    .args(["-n", "rm", "-r", "--"])
-                    .arg(d)
-                    .stderr(Stdio::null())
-                    .status()
-                    .map(|_| ())
-            };
+        for d in std::iter::once(&self.root).chain(&self.users_shared) {
+            if let Err(e) = std::fs::remove_dir_all(d) {
+                tracing::debug!(error = %e, dir = %d.display(), "a fixture directory was not removed");
+            }
         }
-        let _ = std::fs::remove_dir_all(&self.root);
-        if let Some(d) = &self.users_shared {
-            let _ = std::fs::remove_dir_all(d);
-        }
+    }
+}
+
+/// A spec for PROGRAM with ARGS: a `PATH` of the harness's own and nothing else, no input.
+pub(crate) fn program(program: &str, args: Vec<std::ffi::OsString>) -> draugr::Spec {
+    draugr::Spec {
+        program: program.into(),
+        args,
+        env: draugr::env::build(&["PATH"], &[], &[]),
+        cwd: None,
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
     }
 }
 
@@ -733,36 +758,41 @@ fn ask_proxy(socket: &Path, target: &str) -> io::Result<String> {
 
 /// Accept, count, then echo until the peer closes.
 fn serve_unix(l: tokio::net::UnixListener, count: Arc<AtomicUsize>) {
-    tokio::spawn(async move {
+    saman::spawn("fixture-unix", async move {
         while let Ok((s, _)) = l.accept().await {
             count.fetch_add(1, Ordering::SeqCst);
-            tokio::spawn(echo(s));
+            saman::spawn("fixture-echo", echo(s)).detach("an echo lives until its peer closes");
         }
-    });
+    })
+    .detach("a listener lives until the fixture's pool ends");
 }
 
 fn serve_tcp(l: std::net::TcpListener, count: Arc<AtomicUsize>) -> SocketAddr {
     let addr = l.local_addr().expect("local addr");
     let l = tokio::net::TcpListener::from_std(l).expect("tokio listener");
-    tokio::spawn(async move {
+    saman::spawn("fixture-tcp", async move {
         while let Ok((s, _)) = l.accept().await {
             count.fetch_add(1, Ordering::SeqCst);
-            tokio::spawn(echo(s));
+            saman::spawn("fixture-echo", echo(s)).detach("an echo lives until its peer closes");
         }
-    });
+    })
+    .detach("a listener lives until the fixture's pool ends");
     addr
 }
 
 fn serve_udp(s: std::net::UdpSocket, count: Arc<AtomicUsize>) -> SocketAddr {
     let addr = s.local_addr().expect("local addr");
     let s = tokio::net::UdpSocket::from_std(s).expect("tokio socket");
-    tokio::spawn(async move {
+    saman::spawn("fixture-udp", async move {
         let mut buf = [0u8; 512];
         while let Ok((n, from)) = s.recv_from(&mut buf).await {
             count.fetch_add(1, Ordering::SeqCst);
-            let _ = s.send_to(&buf[..n], from).await;
+            if let Err(e) = s.send_to(&buf[..n], from).await {
+                tracing::debug!(error = %e, "an echoed datagram was not sent");
+            }
         }
-    });
+    })
+    .detach("a listener lives until the fixture's pool ends");
     addr
 }
 
@@ -799,12 +829,14 @@ fn redirect_to(web_upstream: SocketAddr) -> Connect {
 fn serve_web_upstream(l: std::net::TcpListener, count: Arc<AtomicUsize>) -> SocketAddr {
     let addr = l.local_addr().expect("local addr");
     let l = tokio::net::TcpListener::from_std(l).expect("tokio listener");
-    tokio::spawn(async move {
+    saman::spawn("fixture-web-upstream", async move {
         while let Ok((s, _)) = l.accept().await {
             count.fetch_add(1, Ordering::SeqCst);
-            tokio::spawn(web_upstream_conn(s));
+            saman::spawn("fixture-web-conn", web_upstream_conn(s))
+                .detach("a connection lives until its peer closes");
         }
-    });
+    })
+    .detach("a listener lives until the fixture's pool ends");
     addr
 }
 
@@ -834,8 +866,10 @@ async fn web_upstream_conn(mut s: tokio::net::TcpStream) {
             };
             let text =
                 format!("HTTP/1.1 {answer}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-            let _ = s.write_all(text.as_bytes()).await;
-            let _ = s.shutdown().await;
+            // a client that is gone already needs no answer
+            if s.write_all(text.as_bytes()).await.is_ok() {
+                s.shutdown().await.unwrap_or_default();
+            }
             return;
         }
         if buf.len() > 16384 {
@@ -887,15 +921,16 @@ fn check_forwarded(head: &[u8]) -> Result<String, String> {
 
 async fn echo<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static>(s: S) {
     let (mut r, mut w) = tokio::io::split(s);
-    let _ = tokio::io::copy(&mut r, &mut w).await;
+    // the peer's close or reset ends the echo
+    tokio::io::copy(&mut r, &mut w).await.unwrap_or_default();
 }
 
 /// The active developer dir, by its true name, as the hub's Seatbelt profile has it.
-fn developer_dir() -> Result<PathBuf, String> {
+fn developer_dir() -> villa::Result<PathBuf> {
     draugr::git::developer_dir()
         .ok()
         .and_then(|d| std::fs::canonicalize(d).ok())
-        .ok_or_else(|| "${DEVELOPER_DIR}: no active developer dir here".to_owned())
+        .ok_or_else(|| villa::Error::invalid("${DEVELOPER_DIR}: no active developer dir here"))
 }
 
 /// Where LLDB.framework lives for the developer dir DEV: beside an Xcode's `Contents/Developer` (its
@@ -967,7 +1002,7 @@ mod tests {
             "{}",
             a.root.display()
         );
-        let real = std::env::var_os("HOME").map(PathBuf::from);
+        let real = std::env::var_os(stig::HOME_VAR).map(PathBuf::from);
         for f in [&a, &b] {
             if let Some(h) = &real
                 && !h.starts_with("/tmp")
@@ -981,7 +1016,7 @@ mod tests {
             }
             // The canary files hold exactly the canary text.
             assert_eq!(
-                std::fs::read_to_string(f.path("home/.ssh/id_canary")).unwrap(),
+                eitri::read_string(&f.path("home/.ssh/id_canary"), 1 << 16).unwrap(),
                 f.canary("ssh-key")
             );
         }
@@ -1001,7 +1036,7 @@ mod tests {
         for p in crate::row::PLACEHOLDERS {
             // Each is either filled or says why not; none is "undefined".
             if let Err(e) = f.value(p) {
-                assert!(!e.starts_with("undefined"), "{p}: {e}");
+                assert!(!e.message().starts_with("undefined"), "{p}: {e}");
             }
         }
     }

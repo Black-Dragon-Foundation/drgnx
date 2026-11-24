@@ -94,7 +94,7 @@ pub fn run(args: &[String]) -> ! {
             "usage: ratatoskr-mock acp --replay DIR --as KIND [--speed N] [--misses FILE] [--roots JSON] [--strict]",
         )
     };
-    let manifest = rec::read_manifest(&dir).unwrap_or_else(|e| crate::die(&e));
+    let manifest = rec::read_manifest(&dir).unwrap_or_else(|e| crate::die(&e.to_string()));
     let conns = load(&dir, &manifest).unwrap_or_else(|e| crate::die(&e));
     if conns.is_empty() {
         crate::die(&format!(

@@ -16,7 +16,7 @@ use crate::store::{KeyKind, StoreError};
 use rusqlite::{Connection, OpenFlags, params};
 use std::fs::File;
 use std::io::{self, Read, Seek, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use urdr::{Handle, Mode, Store, StoreSpec};
@@ -358,6 +358,33 @@ impl VectorCache {
             .await?)
     }
 
+    /// STORE_ID is no holder any more (its repo's index was deleted): its rows go, and with them the vectors of the keys
+    /// only it held. A key another holder holds keeps its vector. How many vectors went.
+    pub async fn drop_holder(&self, store_id: &str) -> Result<u32, StoreError> {
+        let id = store_id.to_string();
+        Ok(self
+            .handle
+            .write(move |c| {
+                let mut n = 0u32;
+                for kind in [KeyKind::Chunk, KeyKind::Path] {
+                    n += c.execute(
+                        &format!(
+                            "delete from {} where key in
+                               (select h.key from held h where h.holder = ?1 and h.kind = ?2
+                                and not exists (select 1 from held o
+                                                where o.kind = h.kind and o.key = h.key and o.holder != ?1))",
+                            table(kind)
+                        ),
+                        params![id, kind.as_i64()],
+                    )? as u32;
+                }
+                c.execute("delete from held where holder = ?1", [&id])?;
+                c.execute("delete from holder where id = ?1", [&id])?;
+                Ok(n)
+            })
+            .await?)
+    }
+
     /// Whether a live holder holds each of KEYS.
     pub async fn referenced(
         &self,
@@ -445,7 +472,14 @@ impl VectorCache {
     /// one, the thread is joined from another).
     pub fn shutdown(mut self) {
         if let Some(store) = self.store.take() {
-            let _ = std::thread::spawn(move || store.shutdown()).join();
+            match saman::spawn_thread("hrafn-cache-shutdown", move || store.shutdown()) {
+                Ok(thread) => {
+                    if thread.join().is_err() {
+                        tracing::warn!("the cache's shutdown thread panicked");
+                    }
+                }
+                Err(e) => tracing::warn!("the cache could not be shut down: {e}"),
+            }
         }
     }
 }
@@ -455,13 +489,8 @@ impl VectorCache {
 fn writer_lock(path: &Path) -> Result<File, StoreError> {
     let mut name = path.as_os_str().to_owned();
     name.push(".writer");
-    let mut f = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(PathBuf::from(name))?;
+    let mut f = eitri::open_lock(&PathBuf::from(name), 0o600)
+        .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
     match f.try_lock() {
         Ok(()) => {
             f.set_len(0)?;
@@ -471,7 +500,8 @@ fn writer_lock(path: &Path) -> Result<File, StoreError> {
         }
         Err(std::fs::TryLockError::WouldBlock) => {
             let mut pid = String::new();
-            let _ = f.read_to_string(&mut pid);
+            // the holder's PID only names who it is; an unreadable lock file names nobody
+            f.read_to_string(&mut pid).unwrap_or_default();
             Err(StoreError::Busy(format!(
                 "the cache is written by hub PID {} ({})",
                 pid.trim(),

@@ -46,10 +46,10 @@ const SETTING_PLUGINS: &str = "drgnx-agents-plugins";
 const SETTING_RULES: &str = "drgnx-agents-hook-rules";
 const SETTING_RULES_OFF: &str = "drgnx-agents-hook-rules-off";
 
-fn error(code: ErrorCode, message: impl Into<String>, path: Option<&str>) -> Error {
+fn error(code: ErrorCode, message: impl ToString, path: Option<&str>) -> Error {
     Error {
         code,
-        message: message.into(),
+        message: message.to_string(),
         path: path.map(str::to_owned),
     }
 }
@@ -59,14 +59,14 @@ fn internal(e: impl std::fmt::Display) -> Error {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
 /// The lower-case hex of a hash.
 pub fn hex(hash: &[u8; 32]) -> String {
     use std::fmt::Write;
     hash.iter().fold(String::with_capacity(64), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
+        crate::soft::done(write!(s, "{b:02x}"), "write");
         s
     })
 }
@@ -182,7 +182,7 @@ pub struct Plugins {
     /// The network plugins reach, made at the first [`host_io`].
     net: OnceLock<Arc<hub_io::Net>>,
     /// The plugin host, started at the first plugin call ([`Plugins::host`]).
-    host: OnceLock<Result<brokkr::Host, String>>,
+    host: OnceLock<villa::Result<brokkr::Host>>,
     /// The plugins loaded into it, by the hash the user approved: a plugin is read and checked once per approval.
     loaded: Mutex<BTreeMap<[u8; 32], Arc<brokkr::Plugin>>>,
     /// The ability calls waiting for a card's answer.
@@ -256,7 +256,7 @@ pub fn host_io(
 impl Plugins {
     /// The plugins under ROOT (`<data>/plugins`), their approvals in DB (`runtime.db`) and the lists in SETTINGS.
     pub fn open(&self, root: PathBuf, db: urdr::Handle, settings: Arc<Settings>) {
-        let _ = self.open.set(Open { root, db, settings });
+        crate::soft::done(self.open.set(Open { root, db, settings }), "plugins");
     }
 
     /// Every plugin's row and the names the user's setting turns on, as of the last [`Plugins::sync`]: memory only,
@@ -311,7 +311,7 @@ impl Plugins {
             .collect();
         for id in ids {
             if let Some((_, tx)) = by.remove(&id) {
-                let _ = tx.send(());
+                crate::soft::done(tx.send(()), "tx send");
             }
         }
     }
@@ -338,11 +338,16 @@ impl Plugins {
     }
 
     /// The hub's one plugin host (its guest runtime and epoch ticker start with it), or why it could not start.
-    pub fn host(&self) -> Result<&brokkr::Host, String> {
+    pub fn host(&self) -> villa::Result<&brokkr::Host> {
         self.host
-            .get_or_init(|| brokkr::Host::new(brokkr::Limits::default()).map_err(|e| e.to_string()))
+            .get_or_init(|| {
+                brokkr::Host::new(brokkr::Limits::default())
+                    .map_err(|e| villa::Error::invalid(e.to_string()))
+            })
             .as_ref()
-            .map_err(|e| format!("the plugin host did not start: {e}"))
+            .map_err(|e| {
+                villa::Error::unavailable(format!("the plugin host did not start: {}", e.message()))
+            })
     }
 
     /// PLUGINS loaded into the host, in their order: each the first time its approved hash is asked for (its files
@@ -359,7 +364,9 @@ impl Plugins {
                 if let Some(l) = lock(&self.loaded).get(&p.hash) {
                     return Ok(l.clone());
                 }
-                let host = self.host().map_err(|e| (name.clone(), e))?;
+                let host = self
+                    .host()
+                    .map_err(|e| (name.clone(), e.message().to_owned()))?;
                 let l = Arc::new(host.load(p, p.hash).map_err(|e| (name, e.to_string()))?);
                 lock(&self.loaded).insert(p.hash, l.clone());
                 Ok(l)
@@ -839,54 +846,59 @@ pub struct Installation {
 /// mode 0700. A plugin of that name is installed already: refused, unless REPLACE (the new files take the folder's
 /// place whole, and the plugin turns `changed` if it was approved). The files are parsed first; nothing is copied for a
 /// manifest that does not read.
-pub fn install(root: &Path, src: &Path, replace: bool) -> Result<Installation, String> {
+pub fn install(root: &Path, src: &Path, replace: bool) -> villa::Result<Installation> {
     use brokkr::store::MAX_WASM_BYTES;
     let src = src
         .canonicalize()
-        .map_err(|e| format!("{}: {e}", src.display()))?;
-    let dir = eitri::open_path(&src, Kind::Dir).map_err(|e| format!("{}: {e}", src.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", src.display())))?;
+    let dir = eitri::open_path(&src, Kind::Dir)
+        .map_err(|e| villa::Error::io(format!("{}: {e}", src.display())))?;
     let read = |file: &str, cap: u64| {
         eitri::read_regular(dir.fd.as_fd(), Path::new(file), cap)
-            .map_err(|e| format!("{}: {file}: {e}", src.display()))
+            .map_err(|e| villa::Error::io(format!("{}: {file}: {e}", src.display())))
     };
     let manifest_bytes = read("plugin.json", brokkr::manifest::MAX_MANIFEST_BYTES)?;
     let wasm = read("plugin.wasm", MAX_WASM_BYTES)?;
-    let manifest = brokkr::parse(&manifest_bytes).map_err(|e| format!("plugin.json: {e}"))?;
+    let manifest = brokkr::parse(&manifest_bytes)
+        .map_err(|e| villa::Error::invalid(format!("plugin.json: {e}")))?;
     let name = manifest.name.as_str().to_owned();
     if root.join(&name).symlink_metadata().is_ok() && !replace {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{name} is installed already: install it with --replace to put these files in its place"
-        ));
+        )));
     }
-    private_dir(root)?;
+    private_dir(root).map_err(|e| villa::Error::invalid(e.to_string()))?;
     // ROOT by its true name, as SRC: a link above it (macOS's /var, a moved home) is the system's; the files below
     // it are written with none followed
     let root = &root
         .canonicalize()
-        .map_err(|e| format!("{}: {e}", root.display()))?;
+        .map_err(|e| villa::Error::invalid(format!("{}: {e}", root.display())))?;
     let dest = root.join(&name);
-    let parent = root
-        .parent()
-        .ok_or_else(|| format!("{}: has no parent folder", root.display()))?;
+    let parent = root.parent().ok_or_else(|| {
+        villa::Error::invalid(format!("{}: has no parent folder", root.display()))
+    })?;
     let stage = parent.join(format!(".plugin-new-{name}-{}", std::process::id()));
     let old = parent.join(format!(".plugin-old-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&stage);
-    let _ = std::fs::remove_dir_all(&old);
-    let made = (|| -> Result<(), String> {
+    crate::soft::done(std::fs::remove_dir_all(&stage), "std::fs::remove_dir_all");
+    crate::soft::done(std::fs::remove_dir_all(&old), "std::fs::remove_dir_all");
+    let made = (|| -> villa::Result<()> {
         private_dir(&stage)?;
-        let pinned = eitri::open_path(&stage, Kind::Dir).map_err(|e| e.to_string())?;
+        let pinned =
+            eitri::open_path(&stage, Kind::Dir).map_err(|e| villa::Error::io(e.to_string()))?;
         for (file, bytes) in [("plugin.json", &manifest_bytes), ("plugin.wasm", &wasm)] {
             eitri::write_regular(pinned.fd.as_fd(), Path::new(file), bytes, 0o600)
-                .map_err(|e| format!("{file}: {e}"))?;
+                .map_err(|e| villa::Error::io(format!("{file}: {e}")))?;
         }
         if dest.symlink_metadata().is_ok() {
-            std::fs::rename(&dest, &old).map_err(|e| format!("{}: {e}", dest.display()))?;
+            crate::fsio::rename(&dest, &old)
+                .map_err(|e| villa::Error::io(format!("{}: {e}", dest.display())))?;
         }
-        std::fs::rename(&stage, &dest).map_err(|e| format!("{}: {e}", dest.display()))
+        crate::fsio::rename(&stage, &dest)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", dest.display())))
     })();
-    let _ = std::fs::remove_dir_all(&old);
+    crate::soft::done(std::fs::remove_dir_all(&old), "std::fs::remove_dir_all");
     if let Err(e) = made {
-        let _ = std::fs::remove_dir_all(&stage);
+        crate::soft::done(std::fs::remove_dir_all(&stage), "std::fs::remove_dir_all");
         return Err(e);
     }
     Ok(Installation {
@@ -897,25 +909,29 @@ pub fn install(root: &Path, src: &Path, replace: bool) -> Result<Installation, S
 }
 
 /// DIR made (with its parents) and set to 0700.
-fn private_dir(dir: &Path) -> Result<(), String> {
+fn private_dir(dir: &Path) -> villa::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(dir)
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
+        .map_err(|e| villa::Error::io(format!("{}: {e}", dir.display())))?;
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| format!("{}: {e}", dir.display()))
+        .map_err(|e| villa::Error::io(format!("{}: {e}", dir.display())))
 }
 
 /// Delete the installed plugin NAME's folder. The hub forgets its approval at its next look.
-pub fn remove(root: &Path, name: &str) -> Result<(), String> {
+pub fn remove(root: &Path, name: &str) -> villa::Result<()> {
     if brokkr::PluginName::try_from(name.to_owned()).is_err() {
-        return Err(format!("{name:?} is not a plugin name"));
+        return Err(villa::Error::invalid(format!(
+            "{name:?} is not a plugin name"
+        )));
     }
     let dir = root.join(name);
     if dir.symlink_metadata().is_err() {
-        return Err(format!("no plugin {name} is installed"));
+        return Err(villa::Error::invalid(format!(
+            "no plugin {name} is installed"
+        )));
     }
-    std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))
+    std::fs::remove_dir_all(&dir).map_err(|e| villa::Error::io(format!("{}: {e}", dir.display())))
 }

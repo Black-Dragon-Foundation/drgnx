@@ -392,49 +392,51 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_retry_is_one_tx() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        let w = db.graph_writer().unwrap().clone();
-        w.tick().await;
-        let p = params(
-            json!({"changes": [change("option:global:fill-column", Some("80"), Some(3))],
+    #[test]
+    fn a_retry_is_one_tx() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            let w = db.graph_writer().unwrap().clone();
+            w.tick().await;
+            let p = params(
+                json!({"changes": [change("option:global:fill-column", Some("80"), Some(3))],
                               "tool": "file:settings.el", "req": "stamp-1"}),
-        );
-        let run = |p: RecordParams| {
-            let w = w.clone();
-            async move {
-                let changes = p.changes.clone();
-                w.write(
-                    meta(TxMeta::new("user", Class::User, "x"), &p, None),
-                    move |tx| record(tx, &changes),
-                )
-                .await
-                .unwrap()
-            }
-        };
-        let first = run(p.clone()).await;
-        let again = run(p.clone()).await;
-        assert!(!first.replayed);
-        assert!(again.replayed);
-        assert_eq!(first.tx, again.tx);
-        // Another key is another tx, even with the same changes.
-        let mut other = p.clone();
-        other.req = serde_json::from_value(json!("stamp-2")).unwrap();
-        let third = run(other).await;
-        assert_ne!(third.tx, first.tx);
-        let conn = Connection::open(dir.path().join("work.db")).unwrap();
-        let (txs, ver): (i64, i64) = conn
-            .query_row(
-                "select (select count(*) from tx where tool = 'file:settings.el'), \
+            );
+            let run = |p: RecordParams| {
+                let w = w.clone();
+                async move {
+                    let changes = p.changes.clone();
+                    w.write(
+                        meta(TxMeta::new("user", Class::User, "x"), &p, None),
+                        move |tx| record(tx, &changes),
+                    )
+                    .await
+                    .unwrap()
+                }
+            };
+            let first = run(p.clone()).await;
+            let again = run(p.clone()).await;
+            assert!(!first.replayed);
+            assert!(again.replayed);
+            assert_eq!(first.tx, again.tx);
+            // Another key is another tx, even with the same changes.
+            let mut other = p.clone();
+            other.req = serde_json::from_value(json!("stamp-2")).unwrap();
+            let third = run(other).await;
+            assert_ne!(third.tx, first.tx);
+            let conn = Connection::open(dir.path().join("work.db")).unwrap();
+            let (txs, ver): (i64, i64) = conn
+                .query_row(
+                    "select (select count(*) from tx where tool = 'file:settings.el'), \
                  (select ver from entity where id = 'option:global:fill-column')",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        // The third wrote the same data: a tx, but no new version.
-        assert_eq!((txs, ver), (2, 1));
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            // The third wrote the same data: a tx, but no new version.
+            assert_eq!((txs, ver), (2, 1));
+        })
     }
 
     #[test]
@@ -479,9 +481,12 @@ mod tests {
     #[test]
     fn a_secret_is_never_stored() {
         let (_d, _p, mut conn) = db();
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        // eitri refuses a link in any component of a path: the checkout's own are resolved first
+        let path = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
+            .unwrap()
             .join("../../../test/fixtures/secret-cases.json");
-        let table: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let table: Value =
+            serde_json::from_str(&eitri::read_string(&path, 1 << 20).unwrap()).unwrap();
         let cases = table["cases"].as_array().unwrap();
         assert!(cases.len() > 30);
         let id = "option:global:my-key";

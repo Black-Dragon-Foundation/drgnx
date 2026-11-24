@@ -4,22 +4,18 @@
 use hrafn::grep::Ignore;
 use hrafn::rank::{NameList, names};
 use std::path::Path;
-use std::process::Command;
 use std::sync::atomic::AtomicBool;
 
 fn write(root: &Path, rel: &str, bytes: &[u8]) {
     let p = root.join(rel);
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-    std::fs::write(p, bytes).unwrap();
+    eitri::replace_file(&p, bytes).unwrap();
 }
 
 fn repo() -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
-    let ok = Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(d.path())
-        .status()
-        .unwrap()
+    let ok = crate::gitfx::out(d.path(), &["init", "-q"])
+        .status
         .success();
     assert!(ok, "git init");
     d
@@ -194,4 +190,18 @@ fn search_setting_real_lists_dot_paths() {
 fn search_setting_index_hides_them() {
     let d = dotted();
     assert_eq!(names(d.path(), Ignore::Index, &[]).unwrap(), ["a.rs"]);
+}
+
+/// Pattern D. A `.gitignore` that is a link is not read: the walk never follows a link out of the tree for rules.
+#[test]
+fn a_gitignore_that_is_a_link_is_not_read() {
+    let d = tempfile::tempdir().unwrap();
+    write(d.path(), "rules.txt", b"linked.rs\n");
+    std::os::unix::fs::symlink("rules.txt", d.path().join(".gitignore")).unwrap();
+    write(d.path(), "linked.rs", b"x\n");
+    write(d.path(), "a.rs", b"x\n");
+    assert_eq!(
+        names(d.path(), Ignore::Index, &[]).unwrap(),
+        ["a.rs", "linked.rs", "rules.txt"]
+    );
 }

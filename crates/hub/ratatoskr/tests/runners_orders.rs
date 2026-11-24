@@ -304,7 +304,7 @@ fn check(s: &Shell) -> Result<(), String> {
             .iter()
             .any(|(_, e)| matches!(e, Effect::KeepLate { attempt: 1, .. }))
         {
-            return Err("attempt 1 was requeued and is finished, but not as late".into());
+            return Err("attempt 1 was requeued and is finished, but not as late".to_string());
         }
     }
     Ok(())

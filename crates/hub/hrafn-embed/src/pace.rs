@@ -4,6 +4,10 @@
 //!
 //! Pure logic with no clock of its own: the caller hands in `Forward::worst_submit`. On the CPU path that is zero, so
 //! the budget sits at the cap.
+//!
+//! Each source has a budget of its own: the built-in engine's [`Pacer::new`] (capped at [`TOKEN_CAP`]), the llama.cpp
+//! engine's [`Pacer::fixed`] (its batch size, which no stall measure moves). Either takes chunks in the order
+//! [`by_length`] gives, so a batch holds texts of about one length.
 
 use crate::local::TOKEN_CAP;
 use std::time::Duration;
@@ -18,6 +22,7 @@ pub const PACE_UNDER: Duration = Duration::from_millis(4);
 #[derive(Debug, Clone)]
 pub struct Pacer {
     budget: usize,
+    cap: usize,
 }
 
 impl Default for Pacer {
@@ -28,7 +33,20 @@ impl Default for Pacer {
 
 impl Pacer {
     pub fn new() -> Pacer {
-        Pacer { budget: PACE_START }
+        Pacer {
+            budget: PACE_START,
+            cap: TOKEN_CAP,
+        }
+    }
+
+    /// A budget of TOKENS that stays there: a source whose batches no stall measure sizes (the llama.cpp engine's
+    /// batch size).
+    pub fn fixed(tokens: usize) -> Pacer {
+        let tokens = tokens.max(1);
+        Pacer {
+            budget: tokens,
+            cap: tokens,
+        }
     }
 
     /// The token budget of the next batch.
@@ -41,7 +59,7 @@ impl Pacer {
         if worst_submit > PACE_OVER {
             self.budget = (self.budget / 2).max(1);
         } else if worst_submit < PACE_UNDER {
-            self.budget = (self.budget * 2).min(TOKEN_CAP);
+            self.budget = (self.budget * 2).min(self.cap);
         }
     }
 
@@ -62,5 +80,44 @@ impl Pacer {
             n += 1;
         }
         n
+    }
+}
+
+/// How long the GPU rests after a batch it was busy with for BUSY, to hold its utilisation to CAP percent
+/// (`drgnx-search-gpu-busy`): busy over busy plus rest is CAP. No rest at 100 percent or over.
+pub fn rest_after(busy: Duration, cap_percent: u32) -> Duration {
+    if cap_percent >= 100 {
+        return Duration::ZERO;
+    }
+    let cap = cap_percent.max(1);
+    busy.mul_f64(f64::from(100 - cap) / f64::from(cap))
+}
+
+/// The order to batch texts of LENGTHS in: shortest first, equal lengths in their given order. Each batch then holds
+/// texts of about one length, so a batch's padding and context are sized to its own longest.
+pub fn by_length(lengths: &[usize]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..lengths.len()).collect();
+    order.sort_by_key(|&i| lengths[i]);
+    order
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fixed_budget_never_moves() {
+        let mut p = Pacer::fixed(8192);
+        p.observe(Duration::from_millis(100));
+        assert_eq!(p.budget(), 4096, "a stall still halves it");
+        p.observe(Duration::ZERO);
+        p.observe(Duration::ZERO);
+        assert_eq!(p.budget(), 8192, "and it never passes its own cap");
+    }
+
+    #[test]
+    fn by_length_is_shortest_first_and_stable() {
+        assert_eq!(by_length(&[5, 1, 5, 3, 1]), vec![1, 4, 3, 0, 2]);
+        assert!(by_length(&[]).is_empty());
     }
 }

@@ -13,7 +13,7 @@ use huginn::read::{Limits, read_all};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{LazyLock, Mutex};
 use std::time::SystemTime;
 
 /// The newest version of the file this hub reads (`drgnx-trust-folders-version`).
@@ -67,21 +67,22 @@ fn broad(dir: &Path, home: &Path) -> bool {
 
 impl Trusted {
     /// The file's BYTES, HOME the user's home; an error says what is wrong with the file.
-    pub fn parse(bytes: &[u8], home: &Path) -> Result<Trusted, String> {
-        let nodes =
-            read_all(bytes, Limits::default()).map_err(|r| format!("does not read: {r:?}"))?;
+    pub fn parse(bytes: &[u8], home: &Path) -> villa::Result<Trusted> {
+        let nodes = read_all(bytes, Limits::default())
+            .map_err(|r| villa::Error::invalid(format!("does not read: {r:?}")))?;
         let node = match nodes.as_slice() {
             [] => return Ok(Trusted::default()),
             [one] => one,
-            _ => return Err("holds more than one form".into()),
+            _ => return Err(villa::Error::invalid("holds more than one form")),
         };
-        let raw: Raw = huginn::de::from_node(node).map_err(|e| format!("has a mistake: {e}"))?;
-        let _ = (&raw.allowed, &raw.denied);
+        let raw: Raw = huginn::de::from_node(node)
+            .map_err(|e| villa::Error::invalid(format!("has a mistake: {e}")))?;
+        let _only_when_used_elsewhere = (&raw.allowed, &raw.denied);
         if raw.version.is_some_and(|v| v > VERSION) {
-            return Err("was written by a newer drgnx".into());
+            return Err(villa::Error::invalid("was written by a newer drgnx"));
         }
         if raw.version.is_some_and(|v| v < 1) {
-            return Err("names a version that does not exist".into());
+            return Err(villa::Error::invalid("names a version that does not exist"));
         }
         let roots = |names: &[String]| -> Vec<PathBuf> {
             names
@@ -113,7 +114,7 @@ impl Trusted {
 /// What the file said last (read when its modification time was STAMP), and whether its problem was told.
 struct Cached {
     stamp: Option<SystemTime>,
-    read: Result<Trusted, String>,
+    read: villa::Result<Trusted>,
     told: bool,
 }
 
@@ -131,13 +132,13 @@ pub struct Answer {
 /// file trusts nothing and says nothing; any other problem is in `problem` once per change of the file.
 pub fn trusts(file: &Path, home: &Path, dir: &Path) -> Answer {
     let stamp = std::fs::metadata(file).and_then(|m| m.modified()).ok();
-    let mut files = FILES.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut files = saman::lock(&FILES);
     let fresh = files.get(file).is_some_and(|c| c.stamp == stamp);
     if !fresh {
         let read = match std::fs::read(file) {
             Ok(bytes) => Trusted::parse(&bytes, home),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Trusted::default()),
-            Err(e) => Err(format!("cannot be read: {e}")),
+            Err(e) => Err(villa::Error::io(format!("cannot be read: {e}"))),
         };
         files.insert(
             file.to_path_buf(),
@@ -160,7 +161,7 @@ pub fn trusts(file: &Path, home: &Path, dir: &Path) -> Answer {
             problem: None,
         },
         Err(why) => {
-            let problem = (!cached.told).then(|| format!("{} {why}", file.display()));
+            let problem = (!cached.told).then(|| format!("{} {}", file.display(), why.message()));
             cached.told = true;
             Answer {
                 trusted: false,
@@ -188,7 +189,7 @@ mod tests {
 
     fn file(d: &Path, text: &str) -> PathBuf {
         let f = d.join("trusted-folders.eld");
-        std::fs::write(&f, text).unwrap();
+        crate::fsio::write(&f, text).unwrap();
         f
     }
 
@@ -293,16 +294,15 @@ mod tests {
         let (d, home, proj) = dirs();
         let f = file(d.path(), "(:version 2 :folders ())");
         assert!(!trusts(&f, &home, &proj).trusted);
-        std::fs::write(
+        crate::fsio::write(
             &f,
             format!("(:version 2 :folders (\"{}/\"))", proj.display()),
         )
         .unwrap();
         // a write within the same clock tick keeps the stamp: move it on, as an editor's later write does
         let later = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(4_000_000_000);
-        std::fs::File::options()
-            .write(true)
-            .open(&f)
+        eitri::open_existing(&f)
+            .map_err(std::io::Error::from)
             .unwrap()
             .set_modified(later)
             .unwrap();

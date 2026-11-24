@@ -216,7 +216,7 @@ pub fn edit_lines_now(
     }
     let text = match std::fs::metadata(&file) {
         Ok(m) if m.len() > EDIT_TEXT_MAX => return None,
-        Ok(_) => std::fs::read_to_string(&file).ok()?,
+        Ok(_) => crate::fsio::read_to_string(&file).ok()?,
         // not there yet: a new file
         Err(_) => String::new(),
     };

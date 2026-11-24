@@ -117,17 +117,16 @@ fn timing(job: &Job, m: &MachineState) -> Result<(), WaitReason> {
 
 /// Whether `job` may start on `m` now. The checks, in order: the timing lane ([`timing`]); the count (fixed
 /// slots); power; the gap since the last start; memory (`budget ≥ mem_min`); CPU (`budget ≥` the expected CPU, with
-/// overcommit while the running jobs are mostly idle); the PSI limits; the disk after the job's need. `eff` is the
+/// overcommit while the running jobs are mostly idle); the PSI limits; the disk after the job's need. `_eff` is the
 /// job's effective priority; F1's checks don't read it.
 pub fn admit(
     job: &Job,
-    eff: Priority,
+    _eff: Priority,
     exp: &Expected,
     m: &MachineState,
     budget: &Budget,
     limits: &Limits,
 ) -> Result<(), WaitReason> {
-    let _ = eff;
     timing(job, m)?;
     if let Some(n) = limits.fixed_slots {
         return if m.running.len() as u64 >= u64::from(n) {

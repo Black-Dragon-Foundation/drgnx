@@ -4,7 +4,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use stund::Instant;
 
 use rusqlite::Connection;
 use rusqlite::params_from_iter;
@@ -200,7 +201,7 @@ where
     let flag = Arc::clone(&late);
     let res = pool
         .with(move |conn| {
-            let _ = conn.progress_handler(
+            conn.progress_handler(
                 PROGRESS_STEPS,
                 Some(move || {
                     let over = Instant::now() >= end;
@@ -209,9 +210,11 @@ where
                     }
                     over
                 }),
-            );
+            )?;
             let r = f(conn);
-            let _ = conn.progress_handler(0, None::<fn() -> bool>);
+            if let Err(e) = conn.progress_handler(0, None::<fn() -> bool>) {
+                tracing::debug!(error = %e, "the walk's deadline handler was not removed");
+            }
             r
         })
         .await
@@ -835,327 +838,356 @@ mod tests {
         v
     }
 
-    #[tokio::test]
-    async fn dedups_nodes_not_rows() {
-        let f = fx(2);
-        f.ents(1, 4);
-        f.link(1, "blocks", 2);
-        f.link(1, "relates", 2);
-        f.link(1, "blocks", 3);
-        f.link(2, "blocks", 4);
-        f.link(3, "blocks", 4);
-        let o = neighbors(&f.pool, walk(1, 3), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&o), vec![1, 2, 3, 4]);
-        assert_eq!(o.links.len(), 5, "every link once, every node once");
-        assert_eq!(o.truncated, None);
-    }
-
-    #[tokio::test]
-    async fn path_meets_in_the_middle() {
-        let f = fx(2);
-        f.ents(1, 60);
-        for n in 1..9 {
-            f.link(n, "next", n + 1);
-        }
-        for n in 10..=59 {
-            f.link(1, "fan", n);
-        }
-        let q = PathQ {
-            from: 1,
-            to: 9,
-            kinds: vec!["next".into(), "fan".into()],
-            max_depth: 10,
-            as_of: None,
-        };
-        let (o, st) = path_stats(&f.pool, q, &Open, Budget::default())
-            .await
-            .unwrap();
-        let order: Vec<i64> = o.nodes.iter().map(|n| n.n).collect();
-        assert_eq!(order, (1..=9).collect::<Vec<_>>());
-        assert_eq!(o.links.len(), 8);
-        assert_eq!(st.levels, 8);
-        assert!(st.seen < 60, "the fan was expanded: {}", st.seen);
-        assert!(o.nodes.iter().enumerate().all(|(i, n)| n.depth == i as u32));
-    }
-
-    #[tokio::test]
-    async fn path_not_found_and_depth() {
-        let f = fx(1);
-        f.ents(1, 5);
-        for n in 1..5 {
-            f.link(n, "next", n + 1);
-        }
-        let q = |to, max_depth| PathQ {
-            from: 1,
-            to,
-            kinds: vec!["next".into()],
-            max_depth,
-            as_of: None,
-        };
-        let o = path(&f.pool, q(5, 2), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert!(o.nodes.is_empty());
-        assert_eq!(o.truncated, Some(Truncated::Depth));
-        f.ent(9, Some(1));
-        let o = path(&f.pool, q(9, 8), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert!(o.nodes.is_empty() && o.truncated.is_none());
-    }
-
-    #[tokio::test]
-    async fn visit_budget() {
-        let f = fx(1);
-        f.ents(1, 40);
-        for n in 2..=40 {
-            f.link(1, "x", n);
-        }
-        let b = Budget {
-            visits: 10,
-            cap: 1000,
-            ..Budget::default()
-        };
-        let o = neighbors(&f.pool, walk(1, 2), &Open, b).await.unwrap();
-        assert_eq!(o.truncated, Some(Truncated::Budget));
-        assert_eq!(o.nodes.len(), 10);
-    }
-
-    #[tokio::test]
-    async fn deadline_inside_sqlite() {
-        let f = fx(1);
-        f.conn
-            .execute(
-                "insert into entity (n, id, kind, project, origin, ver, created_tx, updated_tx)
-                 with recursive c(i) as (select 1 union all select i + 1 from c where i < 300001)
-                 select i, 'note:' || i, 'note', 1, 'recorded', 1, 1, 1 from c",
-                [],
-            )
-            .unwrap();
-        f.conn
-            .execute(
-                "insert into link (src, kind, dst, origin, tx_from)
-                 with recursive c(i) as (select 2 union all select i + 1 from c where i < 300001)
-                 select 1, 'x', i, 'recorded', 1 from c",
-                [],
-            )
-            .unwrap();
-        let b = Budget {
-            deadline: Duration::from_millis(2),
-            hot_degree: u32::MAX,
-            cap: 1_000_000,
-            visits: 1_000_000,
-        };
-        let o = neighbors(&f.pool, walk(1, 1), &Open, b).await.unwrap();
-        assert_eq!(o.truncated, Some(Truncated::Deadline));
-        // The connection went back to the pool without the handler.
-        let again = neighbors(&f.pool, walk(2, 1), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(again.truncated, None);
-    }
-
-    #[tokio::test]
-    async fn kinds_required_past_three() {
-        let f = fx(1);
-        f.ents(1, 2);
-        let mut bare = walk(1, 4);
-        bare.kinds.clear();
-        let e = neighbors(&f.pool, bare, &Open, Budget::default())
-            .await
-            .unwrap_err();
-        assert_eq!(e, WalkError::Refused("name kinds for depth over 3".into()));
-        let mut w = walk(1, 4);
-        w.kinds = vec!["x".into()];
-        assert!(
-            neighbors(&f.pool, w, &Open, Budget::default())
+    #[test]
+    fn dedups_nodes_not_rows() {
+        saman::block_on_current(async {
+            let f = fx(2);
+            f.ents(1, 4);
+            f.link(1, "blocks", 2);
+            f.link(1, "relates", 2);
+            f.link(1, "blocks", 3);
+            f.link(2, "blocks", 4);
+            f.link(3, "blocks", 4);
+            let o = neighbors(&f.pool, walk(1, 3), &Open, Budget::default())
                 .await
-                .is_ok()
-        );
+                .unwrap();
+            assert_eq!(ids(&o), vec![1, 2, 3, 4]);
+            assert_eq!(o.links.len(), 5, "every link once, every node once");
+            assert_eq!(o.truncated, None);
+        })
     }
 
-    #[tokio::test]
-    async fn answers_capped_at_200() {
-        let f = fx(1);
-        f.ents(1, 301);
-        for n in 2..=301 {
-            f.link(1, "x", n);
-        }
-        let b = Budget {
-            hot_degree: 10_000,
-            ..Budget::default()
-        };
-        let o = neighbors(&f.pool, walk(1, 1), &Open, b).await.unwrap();
-        assert_eq!(o.nodes.len(), 200);
-        assert_eq!(o.truncated, Some(Truncated::Cap));
-        assert!(o.links.len() <= 199);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn one_connection_per_level() {
-        let f = fx(1);
-        f.ents(1, 8);
-        for n in 1..8 {
-            f.link(n, "next", n + 1);
-        }
-        // Between level 0 and level 1 (the third scope check) the walker holds no connection, and another reader
-        // (the pool has one) gets it there. The reader runs inside that check, so nothing depends on when a spawned
-        // task is first polled: one spawned at a level once lost the race to the whole walk on a loaded machine.
-        struct Spy {
-            pool: ReadPool,
-            events: Arc<Mutex<Vec<&'static str>>>,
-        }
-        impl Scope for Spy {
-            fn allows(&self, _: Option<i64>) -> Seen {
-                Seen::Full
+    #[test]
+    fn path_meets_in_the_middle() {
+        saman::block_on_current(async {
+            let f = fx(2);
+            f.ents(1, 60);
+            for n in 1..9 {
+                f.link(n, "next", n + 1);
             }
-            fn valid(&self) -> bool {
-                let checks = {
-                    let mut ev = self.events.lock().unwrap();
-                    ev.push("level");
-                    ev.len()
-                };
-                if checks == 3 {
-                    assert_eq!(self.pool.in_use(), 0, "the walker kept its connection");
-                    let (pool, events) = (self.pool.clone(), Arc::clone(&self.events));
-                    tokio::task::block_in_place(move || {
-                        tokio::runtime::Handle::current()
-                            .block_on(pool.with(move |_| events.lock().unwrap().push("reader")))
-                            .unwrap();
-                    });
+            for n in 10..=59 {
+                f.link(1, "fan", n);
+            }
+            let q = PathQ {
+                from: 1,
+                to: 9,
+                kinds: vec!["next".into(), "fan".into()],
+                max_depth: 10,
+                as_of: None,
+            };
+            let (o, st) = path_stats(&f.pool, q, &Open, Budget::default())
+                .await
+                .unwrap();
+            let order: Vec<i64> = o.nodes.iter().map(|n| n.n).collect();
+            assert_eq!(order, (1..=9).collect::<Vec<_>>());
+            assert_eq!(o.links.len(), 8);
+            assert_eq!(st.levels, 8);
+            assert!(st.seen < 60, "the fan was expanded: {}", st.seen);
+            assert!(o.nodes.iter().enumerate().all(|(i, n)| n.depth == i as u32));
+        })
+    }
+
+    #[test]
+    fn path_not_found_and_depth() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.ents(1, 5);
+            for n in 1..5 {
+                f.link(n, "next", n + 1);
+            }
+            let q = |to, max_depth| PathQ {
+                from: 1,
+                to,
+                kinds: vec!["next".into()],
+                max_depth,
+                as_of: None,
+            };
+            let o = path(&f.pool, q(5, 2), &Open, Budget::default())
+                .await
+                .unwrap();
+            assert!(o.nodes.is_empty());
+            assert_eq!(o.truncated, Some(Truncated::Depth));
+            f.ent(9, Some(1));
+            let o = path(&f.pool, q(9, 8), &Open, Budget::default())
+                .await
+                .unwrap();
+            assert!(o.nodes.is_empty() && o.truncated.is_none());
+        })
+    }
+
+    #[test]
+    fn visit_budget() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.ents(1, 40);
+            for n in 2..=40 {
+                f.link(1, "x", n);
+            }
+            let b = Budget {
+                visits: 10,
+                cap: 1000,
+                ..Budget::default()
+            };
+            let o = neighbors(&f.pool, walk(1, 2), &Open, b).await.unwrap();
+            assert_eq!(o.truncated, Some(Truncated::Budget));
+            assert_eq!(o.nodes.len(), 10);
+        })
+    }
+
+    #[test]
+    fn deadline_inside_sqlite() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.conn
+                .execute(
+                    "insert into entity (n, id, kind, project, origin, ver, created_tx, updated_tx)
+                     with recursive c(i) as (select 1 union all select i + 1 from c where i < 300001)
+                     select i, 'note:' || i, 'note', 1, 'recorded', 1, 1, 1 from c",
+                    [],
+                )
+                .unwrap();
+            f.conn
+                .execute(
+                    "insert into link (src, kind, dst, origin, tx_from)
+                     with recursive c(i) as (select 2 union all select i + 1 from c where i < 300001)
+                     select 1, 'x', i, 'recorded', 1 from c",
+                    [],
+                )
+                .unwrap();
+            let b = Budget {
+                deadline: Duration::from_millis(2),
+                hot_degree: u32::MAX,
+                cap: 1_000_000,
+                visits: 1_000_000,
+            };
+            let o = neighbors(&f.pool, walk(1, 1), &Open, b).await.unwrap();
+            assert_eq!(o.truncated, Some(Truncated::Deadline));
+            // The connection went back to the pool without the handler.
+            let again = neighbors(&f.pool, walk(2, 1), &Open, Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(again.truncated, None);
+        })
+    }
+
+    #[test]
+    fn kinds_required_past_three() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.ents(1, 2);
+            let mut bare = walk(1, 4);
+            bare.kinds.clear();
+            let e = neighbors(&f.pool, bare, &Open, Budget::default())
+                .await
+                .unwrap_err();
+            assert_eq!(e, WalkError::Refused("name kinds for depth over 3".into()));
+            let mut w = walk(1, 4);
+            w.kinds = vec!["x".into()];
+            assert!(
+                neighbors(&f.pool, w, &Open, Budget::default())
+                    .await
+                    .is_ok()
+            );
+        })
+    }
+
+    #[test]
+    fn answers_capped_at_200() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.ents(1, 301);
+            for n in 2..=301 {
+                f.link(1, "x", n);
+            }
+            let b = Budget {
+                hot_degree: 10_000,
+                ..Budget::default()
+            };
+            let o = neighbors(&f.pool, walk(1, 1), &Open, b).await.unwrap();
+            assert_eq!(o.nodes.len(), 200);
+            assert_eq!(o.truncated, Some(Truncated::Cap));
+            assert!(o.links.len() <= 199);
+        })
+    }
+
+    #[test]
+    fn one_connection_per_level() {
+        // two workers: the spy's check blocks one while the reader runs on the other
+        saman::Executor::new(2).unwrap().block_on(async {
+            let f = fx(1);
+            f.ents(1, 8);
+            for n in 1..8 {
+                f.link(n, "next", n + 1);
+            }
+            // Between level 0 and level 1 (the third scope check) the walker holds no connection, and another reader
+            // (the pool has one) gets it there. The reader runs inside that check, so nothing depends on when a spawned
+            // task is first polled: one spawned at a level once lost the race to the whole walk on a loaded machine.
+            struct Spy {
+                pool: ReadPool,
+                events: Arc<Mutex<Vec<&'static str>>>,
+            }
+            impl Scope for Spy {
+                fn allows(&self, _: Option<i64>) -> Seen {
+                    Seen::Full
                 }
-                true
+                fn valid(&self) -> bool {
+                    let checks = {
+                        let mut ev = saman::lock(&self.events);
+                        ev.push("level");
+                        ev.len()
+                    };
+                    if checks == 3 {
+                        assert_eq!(self.pool.in_use(), 0, "the walker kept its connection");
+                        let (pool, events) = (self.pool.clone(), Arc::clone(&self.events));
+                        tokio::task::block_in_place(move || {
+                            tokio::runtime::Handle::current()
+                                .block_on(pool.with(move |_| saman::lock(&events).push("reader")))
+                                .unwrap();
+                        });
+                    }
+                    true
+                }
             }
-        }
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let spy = Spy {
-            pool: f.pool.clone(),
-            events: Arc::clone(&events),
-        };
-        let o = neighbors(&f.pool, walk(1, 7), &spy, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(o.nodes.len(), 8);
-        let ev = events.lock().unwrap().clone();
-        let at = ev.iter().position(|e| *e == "reader").unwrap();
-        let last = ev.iter().rposition(|e| *e == "level").unwrap();
-        assert!(at < last, "the reader waited for the whole walk: {ev:?}");
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let spy = Spy {
+                pool: f.pool.clone(),
+                events: Arc::clone(&events),
+            };
+            let o = neighbors(&f.pool, walk(1, 7), &spy, Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(o.nodes.len(), 8);
+            let ev = saman::lock(&events).clone();
+            let at = ev.iter().position(|e| *e == "reader").unwrap();
+            let last = ev.iter().rposition(|e| *e == "level").unwrap();
+            assert!(at < last, "the reader waited for the whole walk: {ev:?}");
+        })
     }
 
-    #[tokio::test]
-    async fn a_hot_node_is_not_expanded() {
-        let f = fx(1);
-        f.ents(1, 9);
-        f.link(1, "x", 2);
-        for n in 3..=7 {
-            f.link(2, "x", n);
-        }
-        f.link(7, "x", 8);
-        let b = Budget {
-            hot_degree: 3,
-            ..Budget::default()
-        };
-        let o = neighbors(&f.pool, walk(1, 5), &Open, b).await.unwrap();
-        assert_eq!(ids(&o), vec![1, 2]);
-        let hot = o.nodes.iter().find(|n| n.n == 2).unwrap();
-        assert_eq!(hot.hot, Some(5));
+    #[test]
+    fn a_hot_node_is_not_expanded() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.ents(1, 9);
+            f.link(1, "x", 2);
+            for n in 3..=7 {
+                f.link(2, "x", n);
+            }
+            f.link(7, "x", 8);
+            let b = Budget {
+                hot_degree: 3,
+                ..Budget::default()
+            };
+            let o = neighbors(&f.pool, walk(1, 5), &Open, b).await.unwrap();
+            assert_eq!(ids(&o), vec![1, 2]);
+            let hot = o.nodes.iter().find(|n| n.n == 2).unwrap();
+            assert_eq!(hot.hot, Some(5));
+        })
     }
 
-    #[tokio::test]
-    async fn a_link_out_of_scope_is_counted_never_named() {
-        let f = fx(1);
-        f.ents(1, 2);
-        f.ent(3, Some(2));
-        f.ent(4, Some(1));
-        f.link(1, "x", 2);
-        f.link(1, "x", 3);
-        f.link(3, "x", 4);
-        let o = neighbors(&f.pool, walk(1, 3), &Hides(2), Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&o), vec![1, 2]);
-        assert_eq!(o.hidden, 1);
-        let text = serde_json::to_string(&o).unwrap();
-        assert!(!text.contains("note:3") && !text.contains("t3"), "{text}");
-        assert!(o.links.iter().all(|l| l.src != 3 && l.dst != 3));
+    #[test]
+    fn a_link_out_of_scope_is_counted_never_named() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.ents(1, 2);
+            f.ent(3, Some(2));
+            f.ent(4, Some(1));
+            f.link(1, "x", 2);
+            f.link(1, "x", 3);
+            f.link(3, "x", 4);
+            let o = neighbors(&f.pool, walk(1, 3), &Hides(2), Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(ids(&o), vec![1, 2]);
+            assert_eq!(o.hidden, 1);
+            let text = serde_json::to_string(&o).unwrap();
+            assert!(!text.contains("note:3") && !text.contains("t3"), "{text}");
+            assert!(o.links.iter().all(|l| l.src != 3 && l.dst != 3));
+        })
     }
 
-    #[tokio::test]
-    async fn stubs_show_only_id_kind_title() {
-        let f = fx(1);
-        f.ent(1, Some(1));
-        f.ent(2, None);
-        f.link(1, "x", 2);
-        let o = neighbors(&f.pool, walk(1, 1), &Open, Budget::default())
-            .await
-            .unwrap();
-        let stub = o.nodes.iter().find(|n| n.n == 2).unwrap();
-        assert_eq!(stub.seen, Seen::Stub);
-        assert_eq!(stub.project, None);
-        assert_eq!(stub.id, "note:2");
-        assert_eq!(stub.title.as_deref(), Some("t2"));
+    #[test]
+    fn stubs_show_only_id_kind_title() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.ent(1, Some(1));
+            f.ent(2, None);
+            f.link(1, "x", 2);
+            let o = neighbors(&f.pool, walk(1, 1), &Open, Budget::default())
+                .await
+                .unwrap();
+            let stub = o.nodes.iter().find(|n| n.n == 2).unwrap();
+            assert_eq!(stub.seen, Seen::Stub);
+            assert_eq!(stub.project, None);
+            assert_eq!(stub.id, "note:2");
+            assert_eq!(stub.title.as_deref(), Some("t2"));
+        })
     }
 
-    #[tokio::test]
-    async fn scope_is_rechecked_each_level() {
-        let f = fx(1);
-        f.ents(1, 5);
-        for n in 1..5 {
-            f.link(n, "next", n + 1);
-        }
-        let s = Revoked {
-            calls: AtomicU32::new(0),
-            ok: 3,
-        };
-        let o = neighbors(&f.pool, walk(1, 4), &s, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(o.truncated, Some(Truncated::Scope));
-        assert_eq!(ids(&o), vec![1, 2, 3]);
+    #[test]
+    fn scope_is_rechecked_each_level() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.ents(1, 5);
+            for n in 1..5 {
+                f.link(n, "next", n + 1);
+            }
+            let s = Revoked {
+                calls: AtomicU32::new(0),
+                ok: 3,
+            };
+            let o = neighbors(&f.pool, walk(1, 4), &s, Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(o.truncated, Some(Truncated::Scope));
+            assert_eq!(ids(&o), vec![1, 2, 3]);
+        })
     }
 
-    #[tokio::test]
-    async fn as_of_walk_skips_retired_links() {
-        let f = fx(1);
-        f.ents(1, 3);
-        f.link_at(1, "x", 2, 1, 5);
-        f.link(1, "x", 3);
-        let mut w = walk(1, 1);
-        w.as_of = Some(3);
-        let o = neighbors(&f.pool, w.clone(), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&o), vec![1, 2, 3]);
-        w.as_of = Some(6);
-        let o = neighbors(&f.pool, w, &Open, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&o), vec![1, 3]);
-        let o = neighbors(&f.pool, walk(1, 1), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&o), vec![1, 3]);
+    #[test]
+    fn as_of_walk_skips_retired_links() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.ents(1, 3);
+            f.link_at(1, "x", 2, 1, 5);
+            f.link(1, "x", 3);
+            let mut w = walk(1, 1);
+            w.as_of = Some(3);
+            let o = neighbors(&f.pool, w.clone(), &Open, Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(ids(&o), vec![1, 2, 3]);
+            w.as_of = Some(6);
+            let o = neighbors(&f.pool, w, &Open, Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(ids(&o), vec![1, 3]);
+            let o = neighbors(&f.pool, walk(1, 1), &Open, Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(ids(&o), vec![1, 3]);
+        })
     }
 
-    #[tokio::test]
-    async fn incoming_and_both_directions() {
-        let f = fx(1);
-        f.ents(1, 3);
-        f.link(2, "x", 1);
-        f.link(1, "x", 3);
-        let mut w = walk(1, 1);
-        w.direction = Direction::In;
-        let o = neighbors(&f.pool, w.clone(), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&o), vec![1, 2]);
-        w.direction = Direction::Both;
-        let o = neighbors(&f.pool, w, &Open, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&o), vec![1, 2, 3]);
+    #[test]
+    fn incoming_and_both_directions() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.ents(1, 3);
+            f.link(2, "x", 1);
+            f.link(1, "x", 3);
+            let mut w = walk(1, 1);
+            w.direction = Direction::In;
+            let o = neighbors(&f.pool, w.clone(), &Open, Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(ids(&o), vec![1, 2]);
+            w.direction = Direction::Both;
+            let o = neighbors(&f.pool, w, &Open, Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(ids(&o), vec![1, 2, 3]);
+        })
     }
 
     /// Entity N: version 1 (title OLD) from tx 1 until tx AT, then version 2 written at AT: a new title, or retired.
@@ -1179,75 +1211,79 @@ mod tests {
         o.nodes.iter().find(|x| x.n == n).unwrap().title.clone()
     }
 
-    #[tokio::test]
-    async fn an_as_of_walk_reads_entities_as_they_were() {
-        let f = fx(1);
-        f.ents(1, 3);
-        second_version(&f, 2, 5, false);
-        second_version(&f, 3, 2, true);
-        f.link(1, "x", 2);
-        f.link(1, "x", 3);
-        let mut w = walk(1, 1);
-        w.as_of = Some(1);
-        let o = neighbors(&f.pool, w.clone(), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&o), vec![1, 2, 3], "3 was not retired yet");
-        assert_eq!(title_of(&o, 2).as_deref(), Some("old"));
-        w.as_of = Some(3);
-        let o = neighbors(&f.pool, w, &Open, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&o), vec![1, 2], "3 was retired at tx 2");
-        assert_eq!(title_of(&o, 2).as_deref(), Some("old"));
-        let q = PathQ {
-            from: 1,
-            to: 3,
-            kinds: vec!["x".into()],
-            max_depth: 2,
-            as_of: Some(1),
-        };
-        let o = path(&f.pool, q, &Open, Budget::default()).await.unwrap();
-        assert_eq!(ids(&o), vec![1, 3]);
-        assert_eq!(title_of(&o, 3).as_deref(), Some("old"));
-        let o = neighbors(&f.pool, walk(1, 1), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(title_of(&o, 2).as_deref(), Some("new"));
+    #[test]
+    fn an_as_of_walk_reads_entities_as_they_were() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.ents(1, 3);
+            second_version(&f, 2, 5, false);
+            second_version(&f, 3, 2, true);
+            f.link(1, "x", 2);
+            f.link(1, "x", 3);
+            let mut w = walk(1, 1);
+            w.as_of = Some(1);
+            let o = neighbors(&f.pool, w.clone(), &Open, Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(ids(&o), vec![1, 2, 3], "3 was not retired yet");
+            assert_eq!(title_of(&o, 2).as_deref(), Some("old"));
+            w.as_of = Some(3);
+            let o = neighbors(&f.pool, w, &Open, Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(ids(&o), vec![1, 2], "3 was retired at tx 2");
+            assert_eq!(title_of(&o, 2).as_deref(), Some("old"));
+            let q = PathQ {
+                from: 1,
+                to: 3,
+                kinds: vec!["x".into()],
+                max_depth: 2,
+                as_of: Some(1),
+            };
+            let o = path(&f.pool, q, &Open, Budget::default()).await.unwrap();
+            assert_eq!(ids(&o), vec![1, 3]);
+            assert_eq!(title_of(&o, 3).as_deref(), Some("old"));
+            let o = neighbors(&f.pool, walk(1, 1), &Open, Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(title_of(&o, 2).as_deref(), Some("new"));
+        })
     }
 
-    #[tokio::test]
-    async fn a_current_walk_never_surfaces_a_retired_entity() {
-        let f = fx(1);
-        f.ents(1, 4);
-        second_version(&f, 3, 2, true);
-        f.link(1, "x", 2);
-        f.link(2, "x", 3);
-        f.link(3, "x", 4);
-        let o = neighbors(&f.pool, walk(1, 3), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert_eq!(ids(&o), vec![1, 2]);
-        assert!(o.links.iter().all(|l| l.src != 3 && l.dst != 3));
-        assert_eq!(o.hidden, 0, "retired is gone, not hidden");
-        let o = neighbors(&f.pool, walk(3, 1), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert!(o.nodes.is_empty(), "a retired root answers nothing");
-        let q = |from, to| PathQ {
-            from,
-            to,
-            kinds: vec!["x".into()],
-            max_depth: 4,
-            as_of: None,
-        };
-        let o = path(&f.pool, q(1, 4), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert!(o.nodes.is_empty(), "no path through a retired node");
-        let o = path(&f.pool, q(1, 3), &Open, Budget::default())
-            .await
-            .unwrap();
-        assert!(o.nodes.is_empty(), "no path to a retired node");
+    #[test]
+    fn a_current_walk_never_surfaces_a_retired_entity() {
+        saman::block_on_current(async {
+            let f = fx(1);
+            f.ents(1, 4);
+            second_version(&f, 3, 2, true);
+            f.link(1, "x", 2);
+            f.link(2, "x", 3);
+            f.link(3, "x", 4);
+            let o = neighbors(&f.pool, walk(1, 3), &Open, Budget::default())
+                .await
+                .unwrap();
+            assert_eq!(ids(&o), vec![1, 2]);
+            assert!(o.links.iter().all(|l| l.src != 3 && l.dst != 3));
+            assert_eq!(o.hidden, 0, "retired is gone, not hidden");
+            let o = neighbors(&f.pool, walk(3, 1), &Open, Budget::default())
+                .await
+                .unwrap();
+            assert!(o.nodes.is_empty(), "a retired root answers nothing");
+            let q = |from, to| PathQ {
+                from,
+                to,
+                kinds: vec!["x".into()],
+                max_depth: 4,
+                as_of: None,
+            };
+            let o = path(&f.pool, q(1, 4), &Open, Budget::default())
+                .await
+                .unwrap();
+            assert!(o.nodes.is_empty(), "no path through a retired node");
+            let o = path(&f.pool, q(1, 3), &Open, Budget::default())
+                .await
+                .unwrap();
+            assert!(o.nodes.is_empty(), "no path to a retired node");
+        })
     }
 }

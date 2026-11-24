@@ -215,80 +215,79 @@ mod tests {
             op: &'static str,
             args: Value,
         ) -> BoxFuture<'_, Result<String, String>> {
-            self.0
-                .lock()
-                .unwrap()
-                .push((sid.to_owned(), op.to_owned(), args));
+            saman::lock(&self.0).push((sid.to_owned(), op.to_owned(), args));
             Box::pin(async { Ok("done".to_string()) })
         }
     }
 
     /// Each debugger tool reaches the hub as the calling session, with its name and its arguments; an outside agent
     /// is refused before the hub.
-    #[tokio::test]
-    async fn each_debugger_tool_reaches_the_hub_as_its_session() {
-        let dir = tempfile::tempdir().unwrap();
-        let hub = Arc::new(Calls::default());
-        let coord = Arc::new(Coord::new(
-            CoordDb::spawn(dir.path().join("work.db")),
-            hub.clone(),
-        ));
-        let who = Identity::Session {
-            agent: "ada".into(),
-            sid: "s1".into(),
-            profile: None,
-            job: None,
-            task: None,
-            home: dir.path().to_path_buf(),
-        };
-        let all = tools();
-        let names: Vec<&str> = all.iter().map(|t| t.name()).collect();
-        assert_eq!(
-            names,
-            [
-                "debug_read",
-                "debug_probe",
-                "debug_fork",
-                "debug_live",
-                "debug_hypothesis",
-                "debug_fix"
-            ]
-        );
-        let live = all.iter().find(|t| t.name() == "debug_live").unwrap();
-        let args = serde_json::json!({"debug_session": "d1", "op": "next", "epoch": 3});
-        live.check(&args).unwrap();
-        match live.call(&(coord.clone(), who), args.clone()).await {
-            ToolResult::Ok { .. } => {}
-            _ => panic!("debug_live was not answered"),
-        }
-        assert_eq!(
-            *hub.0.lock().unwrap(),
-            [("s1".to_owned(), "debug_live".to_owned(), args)]
-        );
-        // a step must name the stop it was read at
-        assert!(
-            live.check(&serde_json::json!({"debug_session": "d1", "op": "next"}))
-                .is_err()
-        );
-        let outside = Identity::Outside {
-            id: "ext:x:1".into(),
-            kind: "x".into(),
-            home: None,
-            role: None,
-        };
-        let read = all.iter().find(|t| t.name() == "debug_read").unwrap();
-        // a heap graph: an expression in a stopped session's frame
-        read.check(&serde_json::json!({
-            "what": "heap", "debug_session": "d1", "expr": "ring", "frame": 1000
-        }))
-        .unwrap();
-        match read
-            .call(&(coord, outside), serde_json::json!({"what": "sessions"}))
-            .await
-        {
-            ToolResult::Err(t) => assert!(t.contains("agents drgnx runs"), "{t}"),
-            _ => panic!("an outside agent read the debugger"),
-        }
-        assert_eq!(hub.0.lock().unwrap().len(), 1);
+    #[test]
+    fn each_debugger_tool_reaches_the_hub_as_its_session() {
+        saman::block_on_current(async {
+            let dir = tempfile::tempdir().unwrap();
+            let hub = Arc::new(Calls::default());
+            let coord = Arc::new(Coord::new(
+                CoordDb::spawn(dir.path().join("work.db")),
+                hub.clone(),
+            ));
+            let who = Identity::Session {
+                agent: "ada".into(),
+                sid: "s1".into(),
+                profile: None,
+                job: None,
+                task: None,
+                home: dir.path().to_path_buf(),
+            };
+            let all = tools();
+            let names: Vec<&str> = all.iter().map(|t| t.name()).collect();
+            assert_eq!(
+                names,
+                [
+                    "debug_read",
+                    "debug_probe",
+                    "debug_fork",
+                    "debug_live",
+                    "debug_hypothesis",
+                    "debug_fix"
+                ]
+            );
+            let live = all.iter().find(|t| t.name() == "debug_live").unwrap();
+            let args = serde_json::json!({"debug_session": "d1", "op": "next", "epoch": 3});
+            live.check(&args).unwrap();
+            match live.call(&(coord.clone(), who), args.clone()).await {
+                ToolResult::Ok { .. } => {}
+                _ => panic!("debug_live was not answered"),
+            }
+            assert_eq!(
+                *saman::lock(&hub.0),
+                [("s1".to_owned(), "debug_live".to_owned(), args)]
+            );
+            // a step must name the stop it was read at
+            assert!(
+                live.check(&serde_json::json!({"debug_session": "d1", "op": "next"}))
+                    .is_err()
+            );
+            let outside = Identity::Outside {
+                id: "ext:x:1".into(),
+                kind: "x".into(),
+                home: None,
+                role: None,
+            };
+            let read = all.iter().find(|t| t.name() == "debug_read").unwrap();
+            // a heap graph: an expression in a stopped session's frame
+            read.check(&serde_json::json!({
+                "what": "heap", "debug_session": "d1", "expr": "ring", "frame": 1000
+            }))
+            .unwrap();
+            match read
+                .call(&(coord, outside), serde_json::json!({"what": "sessions"}))
+                .await
+            {
+                ToolResult::Err(t) => assert!(t.contains("agents drgnx runs"), "{t}"),
+                _ => panic!("an outside agent read the debugger"),
+            }
+            assert_eq!(saman::lock(&hub.0).len(), 1);
+        })
     }
 }

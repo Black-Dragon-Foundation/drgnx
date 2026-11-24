@@ -1304,15 +1304,15 @@ pub(super) mod tests {
 
     impl Drop for Mock {
         fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            crate::soft::done(self.child.kill(), "aws");
+            crate::soft::done(self.child.wait(), "aws");
         }
     }
 
     impl Mock {
         pub(in crate::runners::cloud) fn start() -> Mock {
             use std::io::BufRead;
-            let mut child = std::process::Command::new(crate::embed::tests::mock_binary())
+            let mut child = crate::proc::Command::new(crate::embed::tests::mock_binary())
                 .args([
                     "cloud",
                     "--listen",
@@ -1323,9 +1323,11 @@ pub(super) mod tests {
                 .args(["--prefix", "t", "--run", "r1", "--hub", "hub-1"])
                 .arg("--parent")
                 .arg(std::process::id().to_string())
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::piped())
-                .spawn()
+                .spawn(
+                    crate::proc::Io::Null,
+                    crate::proc::Io::Pipe,
+                    crate::proc::Io::Inherit,
+                )
                 .unwrap();
             let mut line = String::new();
             std::io::BufReader::new(child.stdout.take().unwrap())
@@ -1381,90 +1383,94 @@ pub(super) mod tests {
     }
 
     // [B] the mock's virtual clock: a machine boots when the test moves it, never on time
-    #[tokio::test]
-    async fn start_describe_end_round_trip() {
-        let m = Mock::start();
-        let aws = m.client();
-        m.knob("boot-delay", json!({"seconds": 30})).await;
-        let started = aws.start(&req("tok-round", Market::Spot)).await.unwrap();
-        assert!(started.id.starts_with("i-"), "{started:?}");
-        assert_eq!(started.zone, "us-east-1a");
-        let d = aws.describe(&started.id).await.unwrap();
-        assert_eq!(d.state, InstanceState::Pending);
-        assert!(d.spot);
-        assert_eq!(d.tags.get(HUB_TAG).map(String::as_str), Some("hub-1"));
-        assert_eq!(
-            aws.console(&started.id).await.unwrap(),
-            "",
-            "no console before boot"
-        );
-        m.knob("clock", json!({"advance_s": 30})).await;
-        let d = aws.describe(&started.id).await.unwrap();
-        assert_eq!(d.state, InstanceState::Running);
-        assert!(d.address.is_some());
-        assert!(
-            aws.console(&started.id)
-                .await
-                .unwrap()
-                .contains("BEGIN SSH HOST KEY FINGERPRINTS")
-        );
-        let ours = aws.list_ours().await.unwrap();
-        assert_eq!(
-            ours.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
-            [started.id.as_str()]
-        );
-        let prices = aws.prices(&["m7g.large".into()]).await.unwrap();
-        let p = prices.0["m7g.large"];
-        assert!(p.spot.is_some() && p.on_demand.is_some(), "{prices:?}");
-        let checks = aws.preflight().await;
-        assert!(checks.iter().all(|c| c.ok), "{checks:?}");
-        aws.end(&started.id).await.unwrap();
-        let d = aws.describe(&started.id).await.unwrap();
-        assert!(
-            matches!(d.state, InstanceState::Ending | InstanceState::Gone),
-            "{d:?}"
-        );
-        m.knob("clock", json!({"advance_s": 1})).await;
-        assert_eq!(
-            aws.describe(&started.id).await.unwrap().state,
-            InstanceState::Gone
-        );
-        assert!(aws.list_ours().await.unwrap().is_empty());
-        aws.end(&started.id).await.unwrap();
-        // an expired token is a login, never a retry
-        m.knob("expire", json!({})).await;
-        assert!(matches!(
-            aws.describe(&started.id).await,
-            Err(CloudError::NeedsLogin(_))
-        ));
+    #[test]
+    fn start_describe_end_round_trip() {
+        saman::block_on_current(async move {
+            let m = Mock::start();
+            let aws = m.client();
+            m.knob("boot-delay", json!({"seconds": 30})).await;
+            let started = aws.start(&req("tok-round", Market::Spot)).await.unwrap();
+            assert!(started.id.starts_with("i-"), "{started:?}");
+            assert_eq!(started.zone, "us-east-1a");
+            let d = aws.describe(&started.id).await.unwrap();
+            assert_eq!(d.state, InstanceState::Pending);
+            assert!(d.spot);
+            assert_eq!(d.tags.get(HUB_TAG).map(String::as_str), Some("hub-1"));
+            assert_eq!(
+                aws.console(&started.id).await.unwrap(),
+                "",
+                "no console before boot"
+            );
+            m.knob("clock", json!({"advance_s": 30})).await;
+            let d = aws.describe(&started.id).await.unwrap();
+            assert_eq!(d.state, InstanceState::Running);
+            assert!(d.address.is_some());
+            assert!(
+                aws.console(&started.id)
+                    .await
+                    .unwrap()
+                    .contains("BEGIN SSH HOST KEY FINGERPRINTS")
+            );
+            let ours = aws.list_ours().await.unwrap();
+            assert_eq!(
+                ours.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+                [started.id.as_str()]
+            );
+            let prices = aws.prices(&["m7g.large".into()]).await.unwrap();
+            let p = prices.0["m7g.large"];
+            assert!(p.spot.is_some() && p.on_demand.is_some(), "{prices:?}");
+            let checks = aws.preflight().await;
+            assert!(checks.iter().all(|c| c.ok), "{checks:?}");
+            aws.end(&started.id).await.unwrap();
+            let d = aws.describe(&started.id).await.unwrap();
+            assert!(
+                matches!(d.state, InstanceState::Ending | InstanceState::Gone),
+                "{d:?}"
+            );
+            m.knob("clock", json!({"advance_s": 1})).await;
+            assert_eq!(
+                aws.describe(&started.id).await.unwrap().state,
+                InstanceState::Gone
+            );
+            assert!(aws.list_ours().await.unwrap().is_empty());
+            aws.end(&started.id).await.unwrap();
+            // an expired token is a login, never a retry
+            m.knob("expire", json!({})).await;
+            assert!(matches!(
+                aws.describe(&started.id).await,
+                Err(CloudError::NeedsLogin(_))
+            ));
+        })
     }
 
     // [B] the mock's virtual clock
-    #[tokio::test]
-    async fn a_retry_after_a_crash_returns_the_same_instance() {
-        let m = Mock::start();
-        let first = m
-            .client()
-            .start(&req("tok-crash", Market::OnDemand))
-            .await
-            .unwrap();
-        // the hub dies before it records the machine; the next hub retries the same start with a client of its own
-        let again = m
-            .client()
-            .start(&req("tok-crash", Market::OnDemand))
-            .await
-            .unwrap();
-        assert_eq!(again.id, first.id);
-        assert_eq!(
-            m.client().list_ours().await.unwrap().len(),
-            1,
-            "one machine, not two"
-        );
-        let other = m
-            .client()
-            .start(&req("tok-other", Market::OnDemand))
-            .await
-            .unwrap();
-        assert_ne!(other.id, first.id);
+    #[test]
+    fn a_retry_after_a_crash_returns_the_same_instance() {
+        saman::block_on_current(async move {
+            let m = Mock::start();
+            let first = m
+                .client()
+                .start(&req("tok-crash", Market::OnDemand))
+                .await
+                .unwrap();
+            // the hub dies before it records the machine; the next hub retries the same start with a client of its own
+            let again = m
+                .client()
+                .start(&req("tok-crash", Market::OnDemand))
+                .await
+                .unwrap();
+            assert_eq!(again.id, first.id);
+            assert_eq!(
+                m.client().list_ours().await.unwrap().len(),
+                1,
+                "one machine, not two"
+            );
+            let other = m
+                .client()
+                .start(&req("tok-other", Market::OnDemand))
+                .await
+                .unwrap();
+            assert_ne!(other.id, first.id);
+        })
     }
 }

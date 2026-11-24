@@ -137,8 +137,8 @@ enum Plan {
     Snapshot,
 }
 
-fn refused(e: String) -> verdandi::Error {
-    verdandi::Error::Refused(e)
+fn refused(e: villa::Error) -> verdandi::Error {
+    verdandi::Error::Refused(e.message().to_owned())
 }
 
 /// The changes that turn OLD into NEW, ascending, each in the coordinates the document has after the earlier ones.
@@ -279,7 +279,7 @@ impl Inner {
             .activate(doc, branch, || Ok(base_text(tree, rel).unwrap_or_default()))?
             .text();
         // the line authors, in step before the operations (each one keeps them in step)
-        let _ = self.kept_ranges(doc, branch);
+        crate::soft::done(self.kept_ranges(doc, branch), "capture");
         let mut ad = self.h.activate(doc, branch, || Ok(String::new()))?;
         let mut spans = Vec::new();
         // a key in the file is stored as stars (the file keeps it, and the next look at it is no new version)

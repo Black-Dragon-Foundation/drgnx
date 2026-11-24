@@ -12,10 +12,13 @@ default = ["runner"]
 # the wire protocol: pure (serde, and `secrecy` for a key's value)
 proto = ["dep:forseti", "dep:serde_json", "dep:secrecy", "dep:zeroize"]
 # input capture, the hardened git and slots: blocking, no tokio
-sync = ["dep:forseti", "dep:sha2", "dep:sha1", "dep:similar", "dep:rustix", "dep:secrecy"]
+sync = ["dep:forseti", "dep:sha2", "dep:sha1", "dep:similar", "dep:rustix", "dep:secrecy", "std-owners"]
 # the probe, the reservation files and the executor: blocking, std, rustix and serde only, no tokio; the probe's
 # facts are the protocol's
-linux = ["proto", "dep:forseti", "dep:serde_json", "dep:rustix", "dep:libc"]
+linux = ["proto", "dep:forseti", "dep:serde_json", "dep:rustix", "dep:libc", "std-owners"]
+# the standards' owner crates (errors, files, processes, time, threads, output, paths): every blocking module reaches
+# them; the wire protocol and the key line stay pure
+std-owners = ["dep:villa", "dep:eitri", "dep:draugr", "dep:stund", "dep:saman", "dep:annall", "dep:stig", "dep:tracing"]
 # the binary's modes; the job helper's proxy is Gleipnir's, on tokio
 runner = ["proto", "sync", "linux", "dep:gleipnir", "dep:tokio", "dep:ferja", "dep:hlaup"]
 # test-only entry points; compiled away otherwise
@@ -36,6 +39,14 @@ gleipnir = { path = "../gleipnir", version = "0.1.0", optional = true }
 ferja = { path = "../ferja", version = "0.1.0", optional = true }  # the job helper's relay sidecar
 hlaup = { path = "../hlaup", version = "0.1.0", optional = true }  # a job's own drgnx-key copy, never busy (ETXTBSY)
 tokio = { workspace = true, features = ["io-std"], optional = true }  # the relay's log goes to stderr
+villa = { workspace = true, optional = true }
+eitri = { workspace = true, optional = true }
+draugr = { workspace = true, optional = true }
+stund = { workspace = true, optional = true }
+saman = { workspace = true, optional = true }
+annall = { workspace = true, optional = true }
+stig = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 
 # job-exec, the mode a job's unit runs; the runner's other modes join it
 [[bin]]
@@ -43,10 +54,17 @@ name = "sleipnir"
 path = "src/main.rs"
 required-features = ["linux"]
 
-# what a keyed job runs in front of its command: std only, so its static build starts in any image
+# what a keyed job runs in front of its command: villa, annall and draugr only (no tokio), so its static build starts
+# in any image
 [[bin]]
 name = "drgnx-key"
 path = "src/bin/drgnx-key.rs"
+required-features = ["std-owners"]
+
+# `drgnx-key` run on its own against a stand-in helper
+[[test]]
+name = "key_bin"
+required-features = ["std-owners"]
 
 # the job helper's rows inside a fake runner: its keys, its socket, its disk watch, drgnx-key in a container
 [[test]]
@@ -80,7 +98,11 @@ name = "fleet_sync"
 required-features = ["sync"]
 
 [dev-dependencies]
+stund = { workspace = true, features = ["test-hooks"] }   # the loop's timers move when a test says
 hlaup = { path = "../hlaup", version = "0.1.0" }  # stand-in scripts written and run, never busy (ETXTBSY)
 skuld = { path = "../skuld", version = "0.1.0" }
 tempfile.workspace = true
 proptest.workspace = true
+
+[lints]
+workspace = true

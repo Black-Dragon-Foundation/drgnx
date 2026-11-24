@@ -773,7 +773,7 @@ pub mod sexp {
     }
 
     /// Every top-level form of `text`.
-    pub fn read(text: &str) -> Result<Vec<Sexp>, String> {
+    pub fn read(text: &str) -> villa::Result<Vec<Sexp>> {
         let mut stack: Vec<Vec<Sexp>> = vec![Vec::new()];
         let mut cs = text.char_indices().peekable();
         while let Some((at, c)) = cs.next() {
@@ -787,7 +787,7 @@ pub mod sexp {
                     continue;
                 }
                 ')' if stack.len() > 1 => Sexp::List(stack.pop().unwrap_or_default()),
-                ')' => return Err(format!("an unmatched ) at {at}")),
+                ')' => return Err(villa::Error::invalid(format!("an unmatched ) at {at}"))),
                 '"' => Sexp::Str(string(&mut cs, true, at)?),
                 '#' if cs.peek().is_some_and(|&(_, c)| c == '"') => {
                     cs.next();
@@ -812,7 +812,7 @@ pub mod sexp {
         }
         match <[_; 1]>::try_from(stack) {
             Ok([top]) => Ok(top),
-            Err(_) => Err("a list is not closed".into()),
+            Err(_) => Err(villa::Error::invalid("a list is not closed")),
         }
     }
 
@@ -822,15 +822,23 @@ pub mod sexp {
         cs: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
         escapes: bool,
         at: usize,
-    ) -> Result<String, String> {
+    ) -> villa::Result<String> {
         let mut s = String::new();
         loop {
             match cs.next() {
-                None => return Err(format!("the string at {at} is not closed")),
+                None => {
+                    return Err(villa::Error::invalid(format!(
+                        "the string at {at} is not closed"
+                    )));
+                }
                 Some((_, '"')) => return Ok(s),
                 Some((_, '\\')) if escapes => match cs.next() {
                     Some((_, c @ ('"' | '\\'))) => s.push(c),
-                    other => return Err(format!("the escape {other:?} in the string at {at}")),
+                    other => {
+                        return Err(villa::Error::invalid(format!(
+                            "the escape {other:?} in the string at {at}"
+                        )));
+                    }
                 },
                 Some((_, c)) => s.push(c),
             }

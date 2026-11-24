@@ -22,7 +22,6 @@ use ratatoskr::runners::transport::OpensshTransport;
 use runstav::methods::runners::AddParams;
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -35,7 +34,7 @@ fn host() -> String {
 
 /// SCRIPT's stdout as the runner account; panics when it fails.
 fn sh(script: &str) -> String {
-    let out = Command::new("ssh")
+    let out = ratatoskr::proc::Command::new("ssh")
         .args(["-o", "BatchMode=yes", &host(), script])
         .output()
         .expect("ssh");
@@ -49,7 +48,7 @@ fn sh(script: &str) -> String {
 
 /// SCRIPT's output as the runner account, whatever its exit (for a report written while a row fails).
 fn sh_lossy(script: &str) -> String {
-    match Command::new("ssh")
+    match ratatoskr::proc::Command::new("ssh")
         .args(["-o", "BatchMode=yes", &host(), script])
         .output()
     {
@@ -77,23 +76,22 @@ impl Drop for Report {
         if !std::thread::panicking() {
             return;
         }
-        eprintln!("==== the report of a failed wait");
-        eprintln!("-- the runner: {:?}", self.q.runner("mac"));
+        ratatoskr::soft::err_line("==== the report of a failed wait");
+        ratatoskr::soft::err_line(&format!("-- the runner: {:?}", self.q.runner("mac")));
         for id in &self.ids {
-            eprintln!("-- {id}: {:?}", self.q.row(id));
-            eprintln!("-- {id}'s hub log: {}", log(&self.dir, id));
+            ratatoskr::soft::err_line(&format!("-- {id}: {:?}", self.q.row(id)));
+            ratatoskr::soft::err_line(&format!("-- {id}'s hub log: {}", log(&self.dir, id)));
         }
-        if let Ok(said) = self.said.lock() {
-            eprintln!("-- the last of what the links and the queue said:");
+        {
+            let said = saman::lock(&self.said);
+            ratatoskr::soft::err_line("-- the last of what the links and the queue said:");
             for s in said.iter().rev().take(60).rev() {
-                eprintln!("   {s}");
+                ratatoskr::soft::err_line(&format!("   {s}"));
             }
         }
         if let Some(root) = &self.root {
-            eprintln!(
-                "{}",
-                sh_lossy(&format!(
-                    "cd '{root}' || exit 0; echo '-- the root'; ls -la . run jobs 2>&1; \
+            ratatoskr::soft::err_line(&sh_lossy(&format!(
+                "cd '{root}' || exit 0; echo '-- the root'; ls -la . run jobs 2>&1; \
                      for d in $(find jobs -mindepth 1 -maxdepth 1 -type d 2>/dev/null); do d=\"$d/\"; \
                        echo \"== $d\"; ls -la \"$d\"; \
                        for f in job-exec.log log result.json meta.json job.json job.sb; do \
@@ -101,10 +99,9 @@ impl Drop for Report {
                      echo '-- other logs'; find . -maxdepth 3 -name '*.log' ! -path './jobs/*' \
                        -exec sh -c 'echo \"== $1\"; tail -c 4000 \"$1\"' _ {{}} \\; ; \
                      echo '-- processes'; ps -axo pid,ppid,pgid,etime,command | grep -E 'sleipnir|sandbox-exec' | grep -v grep"
-                ))
-            );
+            )));
         }
-        eprintln!("==== end of the report");
+        ratatoskr::soft::err_line("==== end of the report");
     }
 }
 
@@ -226,9 +223,7 @@ impl Hub {
             self.said.clone(),
         );
         let note = |s: String| {
-            if let Ok(mut v) = said.lock() {
-                v.push(s.chars().take(600).collect());
-            }
+            saman::lock(&said).push(s.chars().take(600).collect());
         };
         skuld::wait_until_async(what, WAIT, || {
             while let Ok(ev) = events.try_recv() {
@@ -275,7 +270,7 @@ fn project(dir: &Path) -> (PathBuf, PathBuf) {
     let work = dir.join("work");
     std::fs::create_dir_all(&work).unwrap();
     git(&work, &["init", "-q"]);
-    std::fs::write(work.join("hello.txt"), "hello from the hub\n").unwrap();
+    ratatoskr::fsio::write(work.join("hello.txt"), "hello from the hub\n").unwrap();
     git(&work, &["add", "-A"]);
     git(&work, &["commit", "-qm", "hello"]);
     (work, dir.join("blobs"))
@@ -287,7 +282,7 @@ fn freeze(work: &Path, blobs: &Path) -> Frozen {
 
 /// The user's git in DIR: no system or global config, a fixed identity.
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = ratatoskr::proc::Command::new("git")
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -368,7 +363,7 @@ fn job(id: &str, script: &str, frozen: Frozen, mem_mib: u64) -> Submit {
 }
 
 fn log(dir: &Path, id: &str) -> String {
-    std::fs::read_to_string(dir.join("exec").join(id).join("log")).unwrap_or_default()
+    ratatoskr::fsio::read_to_string(dir.join("exec").join(id).join("log")).unwrap_or_default()
 }
 
 /// The account's home, and a root of the row's own under it.
@@ -385,135 +380,142 @@ mod mac_runner {
     /// [C] `runner add` of the Mac (the contract passes, the bundle is copied into its root, `serve` linked) shows it
     /// as macOS; a private host job reads its committed file on Darwin under the build profile and passes; a job's
     /// `brew --prefix` gets the shim's answer; `remove` leaves no root and no process of the hub behind.
-    #[tokio::test]
+    #[test]
     #[ignore = "macos-runner"]
-    async fn add_a_host_job_and_remove() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = root("e2e");
-        let mut hub = Hub::new(dir.path());
-        let view = hub.add("mac", &root).await;
-        assert!(view.to_string().contains("macos"), "{view}");
-        assert!(!sh(&format!("ls '{root}/bin'")).is_empty());
-        let (work, blobs) = project(dir.path());
-        hub.submit(job(
-            "xhello",
-            "uname -s; cat hello.txt; brew --prefix --installed mise",
-            freeze(&work, &blobs),
-            512,
-        ));
-        let r = hub.result("xhello").await;
-        let log = log(dir.path(), "xhello");
-        assert_eq!(r["verdict"], "Pass", "{r} {log}");
-        for want in ["Darwin", "hello from the hub", "/opt/homebrew/opt/mise"] {
-            assert!(log.contains(want), "{want}: {log}");
-        }
-        hub.reg.remove("mac").await.expect("removed");
-        assert_eq!(
-            sh(&format!("test -e '{root}' && echo left || echo gone")),
-            "gone"
-        );
-        // serve ends at its link's end, which remove closed
-        skuld::wait_until_async("no serve or job-exec left", WAIT, || {
-            let left = sh("pgrep -fl 'sleipnir (serve|job-exec)' || true");
-            std::future::ready(left.is_empty().then_some(()))
+    fn add_a_host_job_and_remove() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let root = root("e2e");
+            let mut hub = Hub::new(dir.path());
+            let view = hub.add("mac", &root).await;
+            assert!(view.to_string().contains("macos"), "{view}");
+            assert!(!sh(&format!("ls '{root}/bin'")).is_empty());
+            let (work, blobs) = project(dir.path());
+            hub.submit(job(
+                "xhello",
+                "uname -s; cat hello.txt; brew --prefix --installed mise",
+                freeze(&work, &blobs),
+                512,
+            ));
+            let r = hub.result("xhello").await;
+            let log = log(dir.path(), "xhello");
+            assert_eq!(r["verdict"], "Pass", "{r} {log}");
+            for want in ["Darwin", "hello from the hub", "/opt/homebrew/opt/mise"] {
+                assert!(log.contains(want), "{want}: {log}");
+            }
+            hub.reg.remove("mac").await.expect("removed");
+            assert_eq!(
+                sh(&format!("test -e '{root}' && echo left || echo gone")),
+                "gone"
+            );
+            // serve ends at its link's end, which remove closed
+            skuld::wait_until_async("no serve or job-exec left", WAIT, || {
+                let left = sh("pgrep -fl 'sleipnir (serve|job-exec)' || true");
+                std::future::ready(left.is_empty().then_some(()))
+            })
+            .await;
         })
-        .await;
     }
 
     /// [C] A job past its 512 MiB grant, with a double-forked child holding as much in a session of its own (found by
     /// the attempt's marker alone), is killed by the watchdog: the verdict is `oom` (the job's own, no strike), and
     /// neither process is left.
-    #[tokio::test]
+    #[test]
     #[ignore = "macos-runner"]
-    async fn the_watchdog_kills_a_job_past_its_grant_and_its_escapee() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = root("oom");
-        let mut hub = Hub::new(dir.path());
-        hub.add("mac", &root).await;
-        let (work, blobs) = project(dir.path());
-        let hog = |pre: &str| {
-            format!("/usr/bin/perl -MPOSIX -e '{pre}$x = q(a) x (400*1024*1024); sleep 300'")
-        };
-        let script = format!("( {} & ) ; {}", hog("POSIX::setsid(); "), hog(""));
-        hub.submit(job("xhog", &script, freeze(&work, &blobs), 512));
-        let r = hub.result("xhog").await;
-        assert_eq!(r["verdict"], "Oom", "{r} {}", log(dir.path(), "xhog"));
-        assert_eq!(sh("pgrep -fl 'q\\(a\\) x' || true"), "");
-        hub.reg.remove("mac").await.expect("removed");
+    fn the_watchdog_kills_a_job_past_its_grant_and_its_escapee() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let root = root("oom");
+            let mut hub = Hub::new(dir.path());
+            hub.add("mac", &root).await;
+            let (work, blobs) = project(dir.path());
+            let hog = |pre: &str| {
+                format!("/usr/bin/perl -MPOSIX -e '{pre}$x = q(a) x (400*1024*1024); sleep 300'")
+            };
+            let script = format!("( {} & ) ; {}", hog("POSIX::setsid(); "), hog(""));
+            hub.submit(job("xhog", &script, freeze(&work, &blobs), 512));
+            let r = hub.result("xhog").await;
+            assert_eq!(r["verdict"], "Oom", "{r} {}", log(dir.path(), "xhog"));
+            assert_eq!(sh("pgrep -fl 'q\\(a\\) x' || true"), "");
+            hub.reg.remove("mac").await.expect("removed");
+        })
     }
 
     /// [C] A running job outlives its link: the ssh master killed, then `serve` killed; each time
     /// `runner check` links it again and the job's result arrives, a pass.
-    #[tokio::test]
+    #[test]
     #[ignore = "macos-runner"]
-    async fn a_job_survives_the_link_stopped_and_serve_killed() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = root("link");
-        let mut hub = Hub::new(dir.path());
-        hub.add("mac", &root).await;
-        let (work, blobs) = project(dir.path());
-        // the job runs until the row writes `go` into its TMPDIR (a job writes nothing else of its attempt folder)
-        let script = "touch \"$TMPDIR/started\"; while [ ! -e \"$TMPDIR/go\" ]; do /bin/sleep 0.2; done; echo survived";
-        hub.submit(job("xlink", script, freeze(&work, &blobs), 512));
-        hub.running("xlink", "mac").await;
-        // `find`, not a glob: the account's shell is zsh, where a glob that matches nothing is an error
-        let started = |root: &str| {
-            sh(&format!(
-                "find '{root}/jobs' -path '*/tmp/started' 2>/dev/null | head -n 1"
-            ))
-        };
-        // the queue is driven meanwhile: the job's offer, admission and start go through it
-        hub.drive("the job started", |_, _| {
+    fn a_job_survives_the_link_stopped_and_serve_killed() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let root = root("link");
+            let mut hub = Hub::new(dir.path());
+            hub.add("mac", &root).await;
+            let (work, blobs) = project(dir.path());
+            // the job runs until the row writes `go` into its TMPDIR (a job writes nothing else of its attempt folder)
+            let script = "touch \"$TMPDIR/started\"; while [ ! -e \"$TMPDIR/go\" ]; do /bin/sleep 0.2; done; echo survived";
+            hub.submit(job("xlink", script, freeze(&work, &blobs), 512));
+            hub.running("xlink", "mac").await;
+            // `find`, not a glob: the account's shell is zsh, where a glob that matches nothing is an error
+            let started = |root: &str| {
+                sh(&format!(
+                    "find '{root}/jobs' -path '*/tmp/started' 2>/dev/null | head -n 1"
+                ))
+            };
+            // the queue is driven meanwhile: the job's offer, admission and start go through it
+            hub.drive("the job started", |_, _| {
+                let s = started(&root);
+                (!s.is_empty()).then_some(())
+            })
+            .await;
+
+            // the ssh master killed, as a dropped connection would end it (`-O stop` keeps open sessions by design): the
+            // link is lost, the job runs on
+            let run = dir.path().join("run");
+            let killed = ratatoskr::proc::Command::new("pkill")
+                .args(["-KILL", "-f", &run.display().to_string()])
+                .status()
+                .expect("pkill");
+            assert!(killed.success(), "no ssh master under {}", run.display());
+            hub.drive_lost("the link lost", true, |q, _| {
+                q.runner("mac").filter(|r| r.state != "ready").map(|_| ())
+            })
+            .await;
+            hub.reg.check("mac").await.expect("linked again");
+            hub.running("xlink", "mac").await;
+
+            // serve killed: the link is lost again, the job still runs
+            sh("pkill -f 'sleipnir serve' || true");
+            hub.drive_lost("the link lost again", true, |q, _| {
+                q.runner("mac").filter(|r| r.state != "ready").map(|_| ())
+            })
+            .await;
+            hub.reg.check("mac").await.expect("linked again");
             let s = started(&root);
-            (!s.is_empty()).then_some(())
+            let tmp = Path::new(&s).parent().unwrap().display().to_string();
+            sh(&format!("touch '{tmp}/go'"));
+            let r = hub.result("xlink").await;
+            let log = log(dir.path(), "xlink");
+            assert_eq!(r["verdict"], "Pass", "{r} {log}");
+            assert!(log.contains("survived"), "{log}");
+            hub.reg.remove("mac").await.expect("removed");
         })
-        .await;
-
-        // the ssh master killed, as a dropped connection would end it (`-O stop` keeps open sessions by design): the
-        // link is lost, the job runs on
-        let run = dir.path().join("run");
-        let killed = std::process::Command::new("pkill")
-            .args(["-KILL", "-f", &run.display().to_string()])
-            .status()
-            .expect("pkill");
-        assert!(killed.success(), "no ssh master under {}", run.display());
-        hub.drive_lost("the link lost", true, |q, _| {
-            q.runner("mac").filter(|r| r.state != "ready").map(|_| ())
-        })
-        .await;
-        hub.reg.check("mac").await.expect("linked again");
-        hub.running("xlink", "mac").await;
-
-        // serve killed: the link is lost again, the job still runs
-        sh("pkill -f 'sleipnir serve' || true");
-        hub.drive_lost("the link lost again", true, |q, _| {
-            q.runner("mac").filter(|r| r.state != "ready").map(|_| ())
-        })
-        .await;
-        hub.reg.check("mac").await.expect("linked again");
-        let s = started(&root);
-        let tmp = Path::new(&s).parent().unwrap().display().to_string();
-        sh(&format!("touch '{tmp}/go'"));
-        let r = hub.result("xlink").await;
-        let log = log(dir.path(), "xlink");
-        assert_eq!(r["verdict"], "Pass", "{r} {log}");
-        assert!(log.contains("survived"), "{log}");
-        hub.reg.remove("mac").await.expect("removed");
     }
 
     /// [C] A job granted a host reaches it through its proxy (the port its proxy variables name), and only it: another
     /// host is refused by the proxy, and a direct connection by the sandbox.
-    #[tokio::test]
+    #[test]
     #[ignore = "macos-runner"]
-    async fn a_networked_job_reaches_only_its_hosts() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = root("net");
-        let mut hub = Hub::new(dir.path());
-        hub.add("mac", &root).await;
-        let (work, blobs) = project(dir.path());
-        // a /bin/sh here-document in a job that doesn't write its tree: bash 3.2 makes it in /tmp (the build addition's
-        // `sh-thd*` rule)
-        let script = r#"/usr/bin/perl - github.com:443 example.org:443 <<'EOF'
+    fn a_networked_job_reaches_only_its_hosts() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let root = root("net");
+            let mut hub = Hub::new(dir.path());
+            hub.add("mac", &root).await;
+            let (work, blobs) = project(dir.path());
+            // a /bin/sh here-document in a job that doesn't write its tree: bash 3.2 makes it in /tmp (the build addition's
+            // `sh-thd*` rule)
+            let script = r#"/usr/bin/perl - github.com:443 example.org:443 <<'EOF'
 use IO::Socket::INET;
 my ($h, $p) = $ENV{HTTPS_PROXY} =~ m{//([^:/]+):(\d+)} or die "no HTTPS_PROXY\n";
 for my $t (@ARGV) {
@@ -526,19 +528,20 @@ for my $t (@ARGV) {
 my $d = IO::Socket::INET->new(PeerAddr => "1.1.1.1", PeerPort => 443, Timeout => 10);
 print $d ? "direct: open\n" : "direct: refused\n";
 EOF"#;
-        let mut s = job("xnet", script, freeze(&work, &blobs), 512);
-        s.place.net_hosts = vec!["github.com:443".into()];
-        hub.submit(s);
-        let r = hub.result("xnet").await;
-        let log = log(dir.path(), "xnet");
-        assert_eq!(r["verdict"], "Pass", "{r} {log}");
-        for want in [
-            "github.com:443: HTTP/1.1 200",
-            "example.org:443: HTTP/1.1 403",
-            "direct: refused",
-        ] {
-            assert!(log.contains(want), "{want}: {log}");
-        }
-        hub.reg.remove("mac").await.expect("removed");
+            let mut s = job("xnet", script, freeze(&work, &blobs), 512);
+            s.place.net_hosts = vec!["github.com:443".into()];
+            hub.submit(s);
+            let r = hub.result("xnet").await;
+            let log = log(dir.path(), "xnet");
+            assert_eq!(r["verdict"], "Pass", "{r} {log}");
+            for want in [
+                "github.com:443: HTTP/1.1 200",
+                "example.org:443: HTTP/1.1 403",
+                "direct: refused",
+            ] {
+                assert!(log.contains(want), "{want}: {log}");
+            }
+            hub.reg.remove("mac").await.expect("removed");
+        })
     }
 }

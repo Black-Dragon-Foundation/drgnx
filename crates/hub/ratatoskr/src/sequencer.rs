@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 use tokio::sync::{Notify, mpsc, oneshot};
 
@@ -37,7 +37,7 @@ pub fn install() {
     let seq = Arc::new(Sequencer::new());
     if GLOBAL.set(seq.clone()).is_ok() {
         // not a clock task: a barrier's advance runs inside it, and must not wait for the task it runs in
-        tokio::spawn(SERVING.scope((), seq.run()));
+        crate::clock::spawn_untracked(module_path!(), SERVING.scope((), seq.run()));
     }
 }
 
@@ -56,7 +56,7 @@ pub(crate) async fn in_serving_step<F: Future>(f: F) -> F::Output {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }
 
 /// A line a client sent, `__seq` taken out.
@@ -108,7 +108,7 @@ impl Line {
 
 /// Where a pending line stands: sequenced lines by N (then read order), then the others in read order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Key {
+enum Rank {
     Seq(u64, u64),
     Read(u64),
 }
@@ -119,7 +119,7 @@ type HeldKey = (u64, String, u64, u64);
 /// The order, without I/O: the lines read and not served, which one is next, and the held writes.
 pub(crate) struct Order<L> {
     /// Each with its connection and the drain that read it.
-    pending: BTreeMap<Key, (u64, u64, L)>,
+    pending: BTreeMap<Rank, (u64, u64, L)>,
     reads: u64,
     /// The N after the highest served.
     next: u64,
@@ -158,8 +158,8 @@ impl<L> Order<L> {
     pub(crate) fn read(&mut self, conn: u64, seq: Option<u64>, line: L) {
         self.reads += 1;
         let key = match seq {
-            Some(n) => Key::Seq(n, self.reads),
-            None => Key::Read(self.reads),
+            Some(n) => Rank::Seq(n, self.reads),
+            None => Rank::Read(self.reads),
         };
         self.pending.insert(key, (conn, self.round, line));
     }
@@ -201,7 +201,7 @@ impl<L> Order<L> {
     /// sequencer drains again at once rather than waiting for a socket to become readable.
     pub(crate) fn wants_drain(&self) -> bool {
         match self.pending.first_key_value() {
-            Some((Key::Seq(n, _), (_, round, _))) => {
+            Some((Rank::Seq(n, _), (_, round, _))) => {
                 *n > self.next && self.partial.is_empty() && self.drained <= *round
             }
             _ => false,
@@ -215,7 +215,7 @@ impl<L> Order<L> {
     /// connection that closed).
     pub(crate) fn next(&mut self) -> Option<(u64, L)> {
         let (&key, &(_, round, _)) = self.pending.first_key_value()?;
-        if let Key::Seq(n, _) = key {
+        if let Rank::Seq(n, _) = key {
             if n > self.next && (!self.partial.is_empty() || self.drained <= round) {
                 return None;
             }
@@ -452,7 +452,7 @@ impl Sequencer {
         let Some(mail) = mail else { return };
         let (tx, rx) = oneshot::channel();
         if mail.send(Msg::Serve(text, tx)).is_ok() {
-            let _ = rx.await;
+            crate::soft::done(rx.await, "sequencer");
         }
     }
 
@@ -465,7 +465,7 @@ impl Sequencer {
             }
             let mail = lock(&self.conns).get(&conn).map(|h| h.mail.clone());
             if let Some(mail) = mail {
-                let _ = mail.send(Msg::Finish);
+                crate::soft::done(mail.send(Msg::Finish), "mail send");
             }
             lock(&self.eof).remove(&conn);
         }

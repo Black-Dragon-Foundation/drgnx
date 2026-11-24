@@ -22,7 +22,7 @@ pub const RESERVED_DESTS: &[&str] = &["/run/gleipnir"];
 pub const BASE_ENV_DENY: &[&str] = &[
     "SSH_AUTH_SOCK",
     "DBUS_SESSION_BUS_ADDRESS",
-    "XDG_RUNTIME_DIR",
+    stig::SYSTEM_RUNTIME_VAR,
     "DISPLAY",
     "WAYLAND_DISPLAY",
     "XAUTHORITY",

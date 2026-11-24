@@ -146,7 +146,7 @@ mod tests {
     fn cap_of(hex: &str) -> Cap {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("hub-x.cap");
-        std::fs::write(&f, hex).unwrap();
+        crate::testfs::write(&f, hex).unwrap();
         Cap::read(&f).unwrap()
     }
 
@@ -228,7 +228,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("hub-x.cap");
         let good = "0123456789abcdef".repeat(4);
-        std::fs::write(&f, &good).unwrap();
+        crate::testfs::write(&f, &good).unwrap();
         assert_eq!(Cap::read(&f).unwrap().expose(), good);
         for bad in [
             good.to_uppercase(),
@@ -239,7 +239,7 @@ mod tests {
             String::new(),
             "a".repeat(257),
         ] {
-            std::fs::write(&f, &bad).unwrap();
+            crate::testfs::write(&f, &bad).unwrap();
             assert!(Cap::read(&f).is_err(), "{bad:?}");
         }
         assert!(Cap::read(&dir.path().join("missing")).is_err());

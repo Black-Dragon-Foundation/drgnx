@@ -12,14 +12,14 @@
 use crate::fixture::{Canary, Fixture};
 use crate::row::{After, KillWho, Layer, Need, Platform, Raw, Row, Setup, TierName};
 use crate::{ProbeLine, errno_from_name};
+use saman::lock;
 use serde_json::Value;
 use std::fmt;
 use std::io::{BufRead, Read};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The files `ratatoskr` and the probe live in.
 #[derive(Debug, Clone)]
@@ -140,13 +140,16 @@ pub fn skip_reason(row: &Row, host: &Host) -> Option<Skip> {
     None
 }
 
+/// How long one of the host detection's programs may take.
+const DETECT_DEADLINE: Duration = Duration::from_secs(30);
+
 pub fn detect_host(probe: &Path) -> Host {
     let probe_one = |args: &[&str]| -> Option<ProbeLine> {
-        let out = Command::new(probe)
-            .args(args)
-            .stdin(Stdio::null())
-            .output()
-            .ok()?;
+        let spec = crate::fixture::program(
+            &probe.to_string_lossy(),
+            args.iter().map(Into::into).collect(),
+        );
+        let out = draugr::run(spec, DETECT_DEADLINE).ok()?;
         serde_json::from_slice(out.stdout.split(|b| *b == b'\n').next()?).ok()
     };
     let landlock_abi = probe_one(&["landlock-abi"])
@@ -158,13 +161,11 @@ pub fn detect_host(probe: &Path) -> Host {
         .iter()
         .all(|p| probe_one(&["syscall", p]).is_some_and(|l| l.result == "reached"));
     let root = rustix::process::geteuid().is_root()
-        || Command::new("sudo")
-            .args(["-n", "true"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success());
+        || draugr::run(
+            crate::fixture::program("sudo", vec!["-n".into(), "true".into()]),
+            DETECT_DEADLINE,
+        )
+        .is_ok_and(|o| o.status.success());
     Host {
         in_container: Path::new("/run/.containerenv").exists() || Path::new("/.dockerenv").exists(),
         root,
@@ -198,41 +199,45 @@ fn show(l: &ProbeLine) -> String {
 }
 
 /// The lines against the expectations, one to one. More lines than expectations are not looked at.
-pub fn judge_lines(expect: &[crate::row::Expect], lines: &[ProbeLine]) -> Result<(), String> {
+pub fn judge_lines(expect: &[crate::row::Expect], lines: &[ProbeLine]) -> villa::Result<()> {
     for (i, e) in expect.iter().enumerate() {
         let l = lines
             .get(i)
-            .ok_or_else(|| format!("probe {} printed no line", i + 1))?;
+            .ok_or_else(|| villa::Error::invalid(format!("probe {} printed no line", i + 1)))?;
         let want = match e.result {
             crate::row::ResultKind::Reached => "reached",
             crate::row::ResultKind::Blocked => "blocked",
         };
         if l.result != want {
-            return Err(format!("probe {}: wanted {want}, got {}", i + 1, show(l)));
+            return Err(villa::Error::invalid(format!(
+                "probe {}: wanted {want}, got {}",
+                i + 1,
+                show(l)
+            )));
         }
         if want == "blocked" && !e.errno.is_empty() && !errno_in(l, &e.errno) {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "probe {}: wanted errno in {:?}, got {}",
                 i + 1,
                 e.errno,
                 show(l)
-            ));
+            )));
         }
         if let Some(d) = &e.detail
             && l.detail.as_deref() != Some(d.as_str())
         {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "probe {}: wanted detail {d:?}, got {}",
                 i + 1,
                 show(l)
-            ));
+            )));
         }
     }
     Ok(())
 }
 
 /// The control run: every probe gives its unfiltered result (`reached`, or the row's `control_expect`).
-pub fn judge_control(row: &Row, lines: &[ProbeLine]) -> Result<(), String> {
+pub fn judge_control(row: &Row, lines: &[ProbeLine]) -> villa::Result<()> {
     let default: Vec<crate::row::Expect>;
     let want = match &row.control_expect {
         Some(c) => c.as_slice(),
@@ -250,31 +255,34 @@ pub fn judge_control(row: &Row, lines: &[ProbeLine]) -> Result<(), String> {
         }
     };
     if lines.len() != row.probes.len() {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "control did not reach: {} lines for {} probes",
             lines.len(),
             row.probes.len()
-        ));
+        )));
     }
-    judge_lines(want, lines).map_err(|e| format!("control did not reach: {e}"))
+    judge_lines(want, lines)
+        .map_err(|e| villa::Error::invalid(format!("control did not reach: {e}")))
 }
 
 /// `want` is contained in `actual`: objects key by key, other values equal. A key `NAME_contains` asks that the
 /// string at `NAME` contain the text. A wanted object needs an object (even `{}`: `{"refused": {}}` against a
 /// `refused` of `null` fails, gate review S12).
-pub fn subset(actual: &Value, want: &Value) -> Result<(), String> {
-    fn go(path: &str, a: &Value, w: &Value) -> Result<(), String> {
+pub fn subset(actual: &Value, want: &Value) -> villa::Result<()> {
+    fn go(path: &str, a: &Value, w: &Value) -> villa::Result<()> {
         match (a, w) {
-            (a, Value::Object(_)) if !a.is_object() => {
-                Err(format!("{path}: wanted an object, got {a}"))
-            }
+            (a, Value::Object(_)) if !a.is_object() => Err(villa::Error::invalid(format!(
+                "{path}: wanted an object, got {a}"
+            ))),
             (_, Value::Object(wm)) => {
                 for (k, wv) in wm {
                     if let Some(base) = k.strip_suffix("_contains") {
                         let text = a.get(base).and_then(Value::as_str).unwrap_or("");
                         let needle = wv.as_str().unwrap_or("");
                         if !text.contains(needle) {
-                            return Err(format!("{path}.{base}: {text:?} lacks {needle:?}"));
+                            return Err(villa::Error::invalid(format!(
+                                "{path}.{base}: {text:?} lacks {needle:?}"
+                            )));
                         }
                         continue;
                     }
@@ -283,7 +291,9 @@ pub fn subset(actual: &Value, want: &Value) -> Result<(), String> {
                 Ok(())
             }
             (a, w) if a == w => Ok(()),
-            (a, w) => Err(format!("{path}: wanted {w}, got {a}")),
+            (a, w) => Err(villa::Error::invalid(format!(
+                "{path}: wanted {w}, got {a}"
+            ))),
         }
     }
     go("$", actual, want)
@@ -318,12 +328,17 @@ pub fn leaked<'a>(canaries: &'a [Canary], haystacks: &[&str]) -> Option<&'a Cana
         .find(|c| haystacks.iter().any(|h| h.contains(&c.text)))
 }
 
-pub fn judge_run(row: &Row, d: &RunData, canaries: &[Canary]) -> Result<(), String> {
+pub fn judge_run(row: &Row, d: &RunData, canaries: &[Canary]) -> villa::Result<()> {
     if let Some(c) = leaked(canaries, &[&d.stdout, &d.stderr, &d.result_text]) {
-        return Err(format!("canary text ({}) appeared in the output", c.name));
+        return Err(villa::Error::invalid(format!(
+            "canary text ({}) appeared in the output",
+            c.name
+        )));
     }
     if let Some(bad) = d.bad_lines.first() {
-        return Err(format!("an output line is not a probe line: {bad:?}"));
+        return Err(villa::Error::invalid(format!(
+            "an output line is not a probe line: {bad:?}"
+        )));
     }
     if let Some(raw) = &row.raw {
         return judge_raw(raw, d);
@@ -331,95 +346,103 @@ pub fn judge_run(row: &Row, d: &RunData, canaries: &[Canary]) -> Result<(), Stri
     // A row that kills the `sandbox run` process itself leaves no result file to judge.
     let run_killed = row.after.as_ref().is_some_and(|a| a.kill == KillWho::Run);
     if !d.direct && !run_killed {
-        let r = d
-            .result_file
-            .as_ref()
-            .ok_or_else(|| format!("no result file; stderr: {}", tail(&d.stderr)))?;
+        let r = d.result_file.as_ref().ok_or_else(|| {
+            villa::Error::invalid(format!("no result file; stderr: {}", tail(&d.stderr)))
+        })?;
         match &row.result {
             Some(want) => {
-                subset(r, want).map_err(|e| format!("result: {e}"))?;
+                subset(r, want).map_err(|e| villa::Error::invalid(format!("result: {e}")))?;
                 // A refused row expects no line: the program never ran, so it printed nothing (gate review S12).
                 if row.expect.is_empty() && !d.stdout.trim().is_empty() {
-                    return Err(format!(
+                    return Err(villa::Error::invalid(format!(
                         "the run was to print nothing, yet it printed: {}",
                         tail(&d.stdout)
-                    ));
+                    )));
                 }
             }
             None if row.after.is_some() => {}
             None => {
                 if !r["refused"].is_null() {
-                    return Err(format!(
+                    return Err(villa::Error::invalid(format!(
                         "the sandbox refused the run: {}; stderr: {}",
                         r["refused"],
                         tail(&d.stderr)
-                    ));
+                    )));
                 }
                 if r["exit"] != 0 {
-                    return Err(format!(
+                    return Err(villa::Error::invalid(format!(
                         "the run exited {}; stderr: {}",
                         r["exit"],
                         tail(&d.stderr)
-                    ));
+                    )));
                 }
                 if d.lines.len() != row.probes.len() {
-                    return Err(format!(
+                    return Err(villa::Error::invalid(format!(
                         "{} lines for {} probes",
                         d.lines.len(),
                         row.probes.len()
-                    ));
+                    )));
                 }
             }
         }
     } else if d.direct && d.lines.len() != row.probes.len() {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "{} lines for {} probes",
             d.lines.len(),
             row.probes.len()
-        ));
+        )));
     }
     judge_lines(&row.expect, &d.lines)?;
     if let Some((name, n)) = d.silent.iter().find(|(_, n)| *n > 0) {
-        return Err(format!("listener {name} saw {n} connection(s)"));
+        return Err(villa::Error::invalid(format!(
+            "listener {name} saw {n} connection(s)"
+        )));
     }
     if let Some(want) = d.events_wanted.as_ref().or(row.proxy_events.as_ref()) {
         let mut want = want.clone();
         want.sort();
         if d.events != want {
-            return Err(format!("proxy events: wanted {want:?}, got {:?}", d.events));
+            return Err(villa::Error::invalid(format!(
+                "proxy events: wanted {want:?}, got {:?}",
+                d.events
+            )));
         }
     }
     if let Some(p) = d.present.first() {
-        return Err(format!("{p} exists after the run"));
+        return Err(villa::Error::invalid(format!("{p} exists after the run")));
     }
     if let Some(g) = &d.gone_failure {
-        return Err(g.clone());
+        return Err(villa::Error::invalid(g.clone()));
     }
     Ok(())
 }
 
-fn judge_raw(raw: &Raw, d: &RunData) -> Result<(), String> {
+fn judge_raw(raw: &Raw, d: &RunData) -> villa::Result<()> {
     if let Some(code) = raw.exit
         && d.exit != Some(code)
     {
-        return Err(format!(
+        return Err(villa::Error::invalid(format!(
             "exit {:?}, wanted {code}; stderr: {}",
             d.exit,
             tail(&d.stderr)
-        ));
+        )));
     }
     for s in &raw.stdout_contains {
         if !d.stdout.contains(s) {
-            return Err(format!("stdout lacks {s:?}: {}", tail(&d.stdout)));
+            return Err(villa::Error::invalid(format!(
+                "stdout lacks {s:?}: {}",
+                tail(&d.stdout)
+            )));
         }
     }
     if let Some(want) = &raw.json {
-        let got: Value = serde_json::from_str(&d.stdout)
-            .map_err(|e| format!("stdout is not JSON ({e}): {}", tail(&d.stdout)))?;
-        subset(&got, want).map_err(|e| format!("stdout JSON: {e}"))?;
+        let got: Value = serde_json::from_str(&d.stdout).map_err(|e| {
+            villa::Error::invalid(format!("stdout is not JSON ({e}): {}", tail(&d.stdout)))
+        })?;
+        subset(&got, want).map_err(|e| villa::Error::invalid(format!("stdout JSON: {e}")))?;
     }
     if let Some(p) = d.present.first() {
-        return Err(format!("{p} exists after the run"));
+        return Err(villa::Error::invalid(format!("{p} exists after the run")));
     }
     Ok(())
 }
@@ -447,7 +470,7 @@ fn probe_args(probes: &[Vec<String>]) -> Vec<String> {
     out
 }
 
-fn expand_all(fx: &Fixture, v: &Value) -> Result<Value, String> {
+fn expand_all(fx: &Fixture, v: &Value) -> villa::Result<Value> {
     Ok(match v {
         Value::String(s) => Value::String(fx.expand(s)?),
         Value::Array(a) => Value::Array(
@@ -458,23 +481,23 @@ fn expand_all(fx: &Fixture, v: &Value) -> Result<Value, String> {
         Value::Object(o) => Value::Object(
             o.iter()
                 .map(|(k, x)| Ok((k.clone(), expand_all(fx, x)?)))
-                .collect::<Result<_, String>>()?,
+                .collect::<villa::Result<_>>()?,
         ),
         other => other.clone(),
     })
 }
 
 /// The row's spec with the harness's defaults, placeholders filled. `bin` (the probe's directory) joins `read`.
-pub fn build_spec(fx: &Fixture, row: &Row, bin: &Path) -> Result<Value, String> {
+pub fn build_spec(fx: &Fixture, row: &Row, bin: &Path) -> villa::Result<Value> {
     build_spec_for(fx, row, bin, cfg!(target_os = "linux"))
 }
 
 /// [`build_spec`] for a Linux or a macOS target, so the macOS defaults are tested on Linux too.
-pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> Result<Value, String> {
+pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> villa::Result<Value> {
     let mut spec = match &row.spec {
         Value::Null => serde_json::json!({}),
         v @ Value::Object(_) => v.clone(),
-        _ => return Err("spec must be an object".into()),
+        _ => return Err(villa::Error::invalid("spec must be an object")),
     };
     let reduced = row.tier == TierName::Reduced;
     {
@@ -506,7 +529,7 @@ pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> Resul
             };
             if linux {
                 let port = gleipnir::backend::relay_ports(tier, &[wanted])
-                    .map_err(|e| format!("relay port: {e}"))?[0];
+                    .map_err(|e| villa::Error::invalid(format!("relay port: {e}")))?[0];
                 fx.set_relay_port(port);
                 m.insert(
                     "net".into(),
@@ -543,7 +566,7 @@ pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> Resul
                 .get_mut("net")
                 .and_then(|n| n.get_mut("isolated"))
                 .and_then(|i| i.as_object_mut())
-                .ok_or("a loopback row's net is isolated")?;
+                .ok_or_else(|| villa::Error::invalid("a loopback row's net is isolated"))?;
             iso.insert("loopback".into(), true.into());
             if !linux {
                 iso.insert(
@@ -629,7 +652,7 @@ fn browser_layer_argv(
     probe: &Path,
     probes: Vec<String>,
     control: bool,
-) -> Result<(Vec<String>, Vec<String>), String> {
+) -> villa::Result<(Vec<String>, Vec<String>)> {
     let p = probe.to_string_lossy().into_owned();
     let dir = gleipnir::BROWSER_DIR_FULL.to_string();
     let mut browser = vec![p.clone(), "--as-browser".into(), dir.clone()];
@@ -645,6 +668,9 @@ fn browser_layer_argv(
     Ok((browser, agent))
 }
 
+/// The most a `/proc/<pid>/stat` read takes.
+const PROC_FILE_CAP: u64 = 1 << 16;
+
 fn find_children(pid: u32) -> Vec<u32> {
     let Ok(dir) = std::fs::read_dir("/proc") else {
         return vec![];
@@ -654,7 +680,7 @@ fn find_children(pid: u32) -> Vec<u32> {
         let Some(child) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else {
             continue;
         };
-        let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else {
+        let Ok(stat) = eitri::read_string(&e.path().join("stat"), PROC_FILE_CAP) else {
             continue;
         };
         // "pid (comm) S ppid …": the comm may hold spaces and parentheses, so cut at the last ')'.
@@ -708,12 +734,13 @@ fn act(after: &After, child: &Child) -> Option<String> {
     // SAFETY: kill(2) with plain integers.
     unsafe { libc::kill(target, after.signal) };
     let g = after.gone.as_ref()?;
-    let end = Instant::now() + Duration::from_millis(g.within_ms);
-    while Instant::now() < end {
+    // the processes are the kernel's: real time, not the installed clock
+    let end = stund::real::instant() + Duration::from_millis(g.within_ms);
+    while stund::real::instant() < end {
         if !cmdline_matches(&g.matching) {
             return None;
         }
-        std::thread::sleep(Duration::from_millis(20));
+        stund::real::sleep_blocking(Duration::from_millis(20));
     }
     Some(format!(
         "a process matching {:?} was still there {} ms after the kill",
@@ -723,15 +750,23 @@ fn act(after: &After, child: &Child) -> Option<String> {
 
 /// The `--pause-before-spawn` dance: wait for `opened`, run the swaps, answer with a line. Non-blocking opens, so a
 /// `ratatoskr` that refuses before it gets there cannot hang the harness.
-fn pause_dance(fifo: &Path, swaps: &[(PathBuf, PathBuf)], child: &mut Child) -> Result<(), String> {
+fn pause_dance(
+    fifo: &Path,
+    swaps: &[(PathBuf, PathBuf)],
+    exited: &mut dyn FnMut() -> bool,
+) -> villa::Result<()> {
     use std::os::unix::ffi::OsStrExt;
-    let c = std::ffi::CString::new(fifo.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let c = std::ffi::CString::new(fifo.as_os_str().as_bytes())
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let deadline = stund::real::instant() + Duration::from_secs(30);
     // SAFETY: plain open/read/write/close on a path we made.
     unsafe {
         let r = libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK);
         if r < 0 {
-            return Err(format!("open fifo: {}", std::io::Error::last_os_error()));
+            return Err(villa::Error::invalid(format!(
+                "open fifo: {}",
+                std::io::Error::last_os_error()
+            )));
         }
         let mut got = Vec::new();
         let mut buf = [0u8; 64];
@@ -741,23 +776,30 @@ fn pause_dance(fifo: &Path, swaps: &[(PathBuf, PathBuf)], child: &mut Child) -> 
                 got.extend_from_slice(&buf[..n as usize]);
                 continue;
             }
-            if matches!(child.try_wait(), Ok(Some(_))) {
+            if exited() {
                 libc::close(r);
                 return Ok(()); // refused before the pause: the result file says why
             }
-            if Instant::now() > deadline {
+            if stund::real::instant() > deadline {
                 libc::close(r);
-                return Err("ratatoskr never reached --pause-before-spawn".into());
+                return Err(villa::Error::invalid(
+                    "ratatoskr never reached --pause-before-spawn",
+                ));
             }
-            std::thread::sleep(Duration::from_millis(10));
+            stund::real::sleep_blocking(Duration::from_millis(10));
         }
         libc::close(r);
         for (path, target) in swaps {
             let mut aside = path.clone().into_os_string();
             aside.push(".orig");
-            std::fs::rename(path, &aside).map_err(|e| format!("swap {}: {e}", path.display()))?;
+            let renamed = if path.is_dir() {
+                eitri::rename_dir(path, Path::new(&aside))
+            } else {
+                eitri::rename_file(path, Path::new(&aside))
+            };
+            renamed.map_err(|e| villa::Error::invalid(format!("swap {}: {e}", path.display())))?;
             std::os::unix::fs::symlink(target, path)
-                .map_err(|e| format!("swap {}: {e}", path.display()))?;
+                .map_err(|e| villa::Error::invalid(format!("swap {}: {e}", path.display())))?;
         }
         loop {
             let w = libc::open(c.as_ptr(), libc::O_WRONLY | libc::O_NONBLOCK);
@@ -766,11 +808,23 @@ fn pause_dance(fifo: &Path, swaps: &[(PathBuf, PathBuf)], child: &mut Child) -> 
                 libc::close(w);
                 return Ok(());
             }
-            if matches!(child.try_wait(), Ok(Some(_))) || Instant::now() > deadline {
-                return Err("ratatoskr stopped waiting at --pause-before-spawn".into());
+            if exited() || stund::real::instant() > deadline {
+                return Err(villa::Error::invalid(
+                    "ratatoskr stopped waiting at --pause-before-spawn",
+                ));
             }
-            std::thread::sleep(Duration::from_millis(10));
+            stund::real::sleep_blocking(Duration::from_millis(10));
         }
+    }
+}
+
+/// Ends and reaps a child the harness gives up on; one that is gone already is no trouble.
+fn end_child(child: &mut Child) {
+    if let Err(e) = child.kill() {
+        tracing::debug!(error = %e, "the child was gone already");
+    }
+    if let Err(e) = child.wait() {
+        tracing::debug!(error = %e, "the child was not reaped");
     }
 }
 
@@ -781,46 +835,98 @@ struct Driven {
     gone_failure: Option<String>,
 }
 
+/// A child to start through draugr, built as `std`'s command is: its environment is exactly what `envs` gives.
+struct Cmd {
+    spec: draugr::Spec,
+    opts: draugr::Opts,
+}
+
+impl Cmd {
+    fn new(program: impl AsRef<std::ffi::OsStr>) -> Cmd {
+        Cmd {
+            spec: draugr::Spec {
+                program: program.as_ref().into(),
+                args: Vec::new(),
+                env: Vec::new(),
+                cwd: None,
+                stdin_null: true,
+                pass_fds: Vec::new(),
+                new_session: false,
+            },
+            opts: draugr::Opts::default(),
+        }
+    }
+
+    fn arg(&mut self, a: impl AsRef<std::ffi::OsStr>) -> &mut Cmd {
+        self.spec.args.push(a.as_ref().to_owned());
+        self
+    }
+
+    fn args<I, S>(&mut self, args: I) -> &mut Cmd
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        self.spec
+            .args
+            .extend(args.into_iter().map(|a| a.as_ref().to_owned()));
+        self
+    }
+
+    fn envs<I, K, V>(&mut self, vars: I) -> &mut Cmd
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        self.spec.env.extend(
+            vars.into_iter()
+                .map(|(k, v)| (k.as_ref().to_owned(), v.as_ref().to_owned())),
+        );
+        self
+    }
+
+    fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Cmd {
+        self.spec.cwd = Some(dir.as_ref().to_owned());
+        self
+    }
+}
+
 /// Start `cmd`, stream its stdout lines, act on `after`, and wait (at most a minute).
 fn drive(
-    mut cmd: Command,
+    cmd: Cmd,
     after: Option<&After>,
     pause: Option<(&Path, &[(PathBuf, PathBuf)])>,
-) -> Result<Driven, String> {
+) -> villa::Result<Driven> {
     use std::os::unix::process::ExitStatusExt;
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("cannot start {:?}: {e}", cmd.get_program()))?;
+    // its stdin is closed, its stdout and stderr are pipes this function reads
+    let mut child = draugr::spawn_std(&cmd.spec, &cmd.opts)
+        .map_err(|e| villa::Error::invalid(format!("cannot start {:?}: {e}", cmd.spec.program)))?;
     let (tx, rx) = mpsc::channel::<String>();
     let out = child.stdout.take().expect("piped");
-    std::thread::spawn(move || {
+    // a reader of the child's pipe, blocking on the kernel; it ends when the pipe closes or the harness stops listening
+    drop(saman::spawn_thread("drive-stdout", move || {
         for l in std::io::BufReader::new(out).lines().map_while(Result::ok) {
             if tx.send(l).is_err() {
                 return;
             }
         }
-    });
+    })?);
     let err = Arc::new(Mutex::new(String::new()));
     let (err2, mut errp) = (err.clone(), child.stderr.take().expect("piped"));
-    std::thread::spawn(move || {
+    drop(saman::spawn_thread("drive-stderr", move || {
         let mut buf = [0u8; 4096];
         while let Ok(n @ 1..) = errp.read(&mut buf) {
-            err2.lock()
-                .unwrap()
-                .push_str(&String::from_utf8_lossy(&buf[..n]));
+            lock(&err2).push_str(&String::from_utf8_lossy(&buf[..n]));
         }
-    });
+    })?);
     if let Some((fifo, swaps)) = pause
-        && let Err(e) = pause_dance(fifo, swaps, &mut child)
+        && let Err(e) = pause_dance(fifo, swaps, &mut || matches!(child.try_wait(), Ok(Some(_))))
     {
-        let _ = child.kill();
-        let _ = child.wait();
+        end_child(&mut child);
         return Err(e);
     }
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = stund::real::instant() + Duration::from_secs(60);
     let mut lines = Vec::new();
     let mut acted = false;
     let mut gone_failure = None;
@@ -838,23 +944,23 @@ fn drive(
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                std::thread::sleep(Duration::from_millis(20))
+                stund::real::sleep_blocking(Duration::from_millis(20))
             }
         }
         if let Ok(Some(st)) = child.try_wait() {
             break st;
         }
-        if Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("timed out after 60 s".into());
+        if stund::real::instant() > deadline {
+            end_child(&mut child);
+            return Err(villa::Error::invalid("timed out after 60 s"));
         }
     };
     while let Ok(l) = rx.recv_timeout(Duration::from_millis(300)) {
         lines.push(l);
     }
-    std::thread::sleep(Duration::from_millis(50));
-    let stderr = err.lock().unwrap().clone();
+    // the stderr reader's last chunk: the pipe is the kernel's, so real time
+    stund::real::sleep_blocking(Duration::from_millis(50));
+    let stderr = lock(&err).clone();
     Ok(Driven {
         stdout_lines: lines,
         stderr,
@@ -882,32 +988,38 @@ struct Prepared {
     swaps: Vec<(PathBuf, PathBuf)>,
 }
 
-fn sudo(args: &[&str]) -> Result<(), String> {
-    let mut cmd = if rustix::process::geteuid().is_root() {
-        let mut c = Command::new(args[0]);
-        c.args(&args[1..]);
-        c
+/// How long a command the setup runs as root may take.
+const ROOT_DEADLINE: Duration = Duration::from_secs(60);
+
+/// `args` run to their end as root: by `sudo -n` unless this process is root already. What it printed, or why not.
+fn as_root(args: &[&str]) -> villa::Result<draugr::Output> {
+    let spec = if rustix::process::geteuid().is_root() {
+        crate::fixture::program(args[0], args[1..].iter().map(Into::into).collect())
     } else {
-        let mut c = Command::new("sudo");
-        c.arg("-n").args(args);
-        c
+        crate::fixture::program("sudo", ["-n"].iter().chain(args).map(Into::into).collect())
     };
-    let out = cmd
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("{}: {e}", args[0]))?;
+    draugr::run(spec, ROOT_DEADLINE).map_err(|e| villa::Error::invalid(format!("{}: {e}", args[0])))
+}
+
+fn sudo(args: &[&str]) -> villa::Result<()> {
+    let out = as_root(args)?;
     if out.status.success() {
         Ok(())
     } else {
-        Err(format!(
+        Err(villa::Error::invalid(format!(
             "{} failed: {}",
             args.join(" "),
-            tail(&String::from_utf8_lossy(&out.stderr))
-        ))
+            tail(&out.stderr)
+        )))
     }
 }
 
-fn setup(fx: &mut Fixture, row: &Row, control: bool) -> Result<Prepared, String> {
+/// TEXT as the file at PATH.
+fn put(path: &Path, text: &str) -> villa::Result<()> {
+    Ok(eitri::replace_file(path, text.as_bytes())?)
+}
+
+fn setup(fx: &mut Fixture, row: &Row, control: bool) -> villa::Result<Prepared> {
     let mut p = Prepared::default();
     if let Some(web) = row.web {
         let grants = row
@@ -915,32 +1027,39 @@ fn setup(fx: &mut Fixture, row: &Row, control: bool) -> Result<Prepared, String>
             .iter()
             .map(|g| {
                 let g = expand_all(fx, g)?;
-                serde_json::from_value(g.clone()).map_err(|e| format!("grant {g}: {e}"))
+                serde_json::from_value(g.clone())
+                    .map_err(|e| villa::Error::invalid(format!("grant {g}: {e}")))
             })
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<villa::Result<Vec<_>>>()?;
         fx.use_web_proxy(web, grants, &row.dns)?;
     }
     for step in &row.setup {
         match step {
-            Setup::StartSleep {} => fx.start_sleep().map_err(|e| format!("start-sleep: {e}"))?,
+            Setup::StartSleep {} => fx
+                .start_sleep()
+                .map_err(|e| villa::Error::invalid(format!("start-sleep: {e}")))?,
             Setup::PlantLink { path, target } => {
                 let (path, target) = (fx.expand(path)?, fx.expand(target)?);
                 if let Some(parent) = Path::new(&path).parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| format!("plant-link: {e}"))?;
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| villa::Error::invalid(format!("plant-link: {e}")))?;
                 }
                 std::os::unix::fs::symlink(&target, &path)
-                    .map_err(|e| format!("plant-link {path}: {e}"))?;
+                    .map_err(|e| villa::Error::invalid(format!("plant-link {path}: {e}")))?;
             }
             Setup::MakeDir { path } => {
                 let path = fx.expand(path)?;
-                std::fs::create_dir_all(&path).map_err(|e| format!("make-dir {path}: {e}"))?;
+                std::fs::create_dir_all(&path)
+                    .map_err(|e| villa::Error::invalid(format!("make-dir {path}: {e}")))?;
             }
             Setup::MakeFile { path, text } => {
                 let (path, text) = (fx.expand(path)?, fx.expand(text)?);
                 if let Some(parent) = Path::new(&path).parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| format!("make-file: {e}"))?;
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| villa::Error::invalid(format!("make-file: {e}")))?;
                 }
-                std::fs::write(&path, text).map_err(|e| format!("make-file {path}: {e}"))?;
+                put(Path::new(&path), &text)
+                    .map_err(|e| villa::Error::invalid(format!("make-file {path}: {e}")))?;
             }
             // Applied to the command itself, in both runs ([`controlling_tty`]).
             Setup::ControllingTty {} => {}
@@ -952,49 +1071,38 @@ fn setup(fx: &mut Fixture, row: &Row, control: bool) -> Result<Prepared, String>
             Setup::CanaryFd { n } => p.canary_fds.push(*n),
             Setup::PathBwrap { name } => {
                 let dir = fx.path("pathbin");
-                std::fs::create_dir_all(&dir).map_err(|e| format!("path-bwrap: {e}"))?;
+                std::fs::create_dir_all(&dir)
+                    .map_err(|e| villa::Error::invalid(format!("path-bwrap: {e}")))?;
                 let script = dir.join(name.as_deref().unwrap_or("bwrap"));
                 let marker = fx.value("MARKER")?;
-                std::fs::write(
+                put(
                     &script,
-                    format!("#!/bin/sh\necho called > '{marker}'\nexit 0\n"),
-                )
-                .map_err(|e| e.to_string())?;
+                    &format!("#!/bin/sh\necho called > '{marker}'\nexit 0\n"),
+                )?;
                 set_mode(&script, 0o755)?;
                 p.path_dir = Some(dir);
             }
             Setup::FakeBwrap { version } => {
                 let marker = fx.value("MARKER")?;
                 let tmpl = "/var/lib/glp-XXXXXX";
-                let out = {
-                    let mut c = if rustix::process::geteuid().is_root() {
-                        Command::new("mktemp")
-                    } else {
-                        let mut c = Command::new("sudo");
-                        c.args(["-n", "mktemp"]);
-                        c
-                    };
-                    c.args(["-d", tmpl])
-                        .output()
-                        .map_err(|e| format!("fake-bwrap: {e}"))?
-                };
+                let out = as_root(&["mktemp", "-d", tmpl])
+                    .map_err(|e| villa::Error::invalid(format!("fake-bwrap: {e}")))?;
                 if !out.status.success() {
-                    return Err(format!(
+                    return Err(villa::Error::invalid(format!(
                         "fake-bwrap: mktemp failed: {}",
-                        tail(&String::from_utf8_lossy(&out.stderr))
-                    ));
+                        tail(&out.stderr)
+                    )));
                 }
                 let dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
                 fx.root_dirs.push(dir.clone());
                 let script = fx.path("fake-bwrap.sh");
-                std::fs::write(
+                put(
                     &script,
-                    format!(
+                    &format!(
                         "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"bubblewrap {version}\"; exit 0; fi\n\
                          echo called > '{marker}'\nexit 0\n"
                     ),
-                )
-                .map_err(|e| e.to_string())?;
+                )?;
                 let (d, s) = (
                     dir.to_string_lossy().into_owned(),
                     script.to_string_lossy().into_owned(),
@@ -1011,13 +1119,13 @@ fn setup(fx: &mut Fixture, row: &Row, control: bool) -> Result<Prepared, String>
 /// A pty's two ends, held open until the run has ended (closing the master would hang up the session).
 struct Tty {
     _master: std::os::fd::OwnedFd,
-    _slave: std::os::fd::OwnedFd,
+    _slave: Arc<std::os::fd::OwnedFd>,
 }
 
 /// The `controlling-tty` setup, when the row has it: `cmd` starts in a new session (`setsid`) whose controlling
 /// terminal is a fresh pty's slave (`TIOCSCTTY`); the returned ends must outlive the run.
-fn controlling_tty(row: &Row, cmd: &mut Command) -> Result<Option<Tty>, String> {
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+fn controlling_tty(row: &Row, cmd: &mut Cmd) -> villa::Result<Option<Tty>> {
+    use std::os::fd::{FromRawFd, OwnedFd};
     if !row
         .setup
         .iter()
@@ -1026,10 +1134,10 @@ fn controlling_tty(row: &Row, cmd: &mut Command) -> Result<Option<Tty>, String> 
         return Ok(None);
     }
     let err = |what: &str| {
-        format!(
+        villa::Error::invalid(format!(
             "controlling-tty: {what}: {}",
             std::io::Error::last_os_error()
-        )
+        ))
     };
     // SAFETY: posix_openpt/grantpt/unlockpt/ptsname/open on fds we own; ptsname's static buffer is copied at once,
     // and no other harness thread calls it.
@@ -1060,47 +1168,39 @@ fn controlling_tty(row: &Row, cmd: &mut Command) -> Result<Option<Tty>, String> 
         }
         (master, OwnedFd::from_raw_fd(s))
     };
-    let fd = slave.as_raw_fd();
-    // SAFETY: setsid(2) and ioctl(2) between the fork and the exec; nothing allocates. The slave is still open in
-    // the child here (close-on-exec closes it only at the exec), and the terminal stays its controlling one after.
-    unsafe {
-        cmd.pre_exec(move || {
-            if libc::setsid() < 0 || libc::ioctl(fd, libc::TIOCSCTTY as _, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    let slave = Arc::new(slave);
+    cmd.spec.new_session = true;
+    cmd.opts.controlling_tty = Some(slave.clone());
     Ok(Some(Tty {
         _master: master,
         _slave: slave,
     }))
 }
 
-fn set_mode(p: &Path, mode: u32) -> Result<(), String> {
+fn set_mode(p: &Path, mode: u32) -> villa::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode))
+        .map_err(|e| villa::Error::invalid(e.to_string()))
 }
 
-fn expand_list(fx: &Fixture, v: &[String]) -> Result<Vec<String>, String> {
+fn expand_list(fx: &Fixture, v: &[String]) -> villa::Result<Vec<String>> {
     v.iter().map(|s| fx.expand(s)).collect()
 }
 
 /// The control run, or an unsandboxed row: the probes as a plain child, in a fixture of their own.
-fn run_direct(opts: &Opts, row: &Row) -> Result<(Fixture, RunData), String> {
-    let mut fx = Fixture::new().map_err(|e| format!("fixture: {e}"))?;
+fn run_direct(opts: &Opts, row: &Row) -> villa::Result<(Fixture, RunData)> {
+    let mut fx = Fixture::new().map_err(|e| villa::Error::invalid(format!("fixture: {e}")))?;
     setup(&mut fx, row, true)?;
     let probes = row
         .probes
         .iter()
         .map(|p| expand_list(&fx, p))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut cmd = Command::new(&opts.probe);
+    // 0–2 and nothing the harness inherited: draugr's own rule
+    let mut cmd = Cmd::new(&opts.probe);
     cmd.args(probe_args(&probes))
-        .env_clear()
         .envs(fx.env("/usr/bin:/bin"))
         .current_dir(fx.path("w"));
-    crate::only_stdio(&mut cmd);
     let tty = controlling_tty(row, &mut cmd)?;
     let d = drive(cmd, None, None)?;
     drop(tty);
@@ -1133,33 +1233,35 @@ fn run_direct(opts: &Opts, row: &Row) -> Result<(Fixture, RunData), String> {
 
 /// `ratatoskr sandbox run` (or the raw command) in a fresh fixture. `control`: a layer row's control run, whose
 /// probes the stand-in agent runs (`browser_layer_argv`).
-fn run_sandboxed(opts: &Opts, row: &Row, control: bool) -> Result<(Fixture, RunData), String> {
-    let mut fx = Fixture::new().map_err(|e| format!("fixture: {e}"))?;
+fn run_sandboxed(opts: &Opts, row: &Row, control: bool) -> villa::Result<(Fixture, RunData)> {
+    let mut fx = Fixture::new().map_err(|e| villa::Error::invalid(format!("fixture: {e}")))?;
     if row.layer.is_some() {
         fx.session_sockets()
-            .map_err(|e| format!("the session's sockets: {e}"))?;
+            .map_err(|e| villa::Error::invalid(format!("the session's sockets: {e}")))?;
     }
     let prep = setup(&mut fx, row, false)?;
     let bin = fx.path("bin");
     let probe_copy = bin.join("gleipnir-probe");
     // run at once: copied through hlaup, never held open for writing by another thread's fork
-    hlaup::copy(&opts.probe, &probe_copy).map_err(|e| format!("copy the probe: {e}"))?;
+    hlaup::copy(&opts.probe, &probe_copy)
+        .map_err(|e| villa::Error::invalid(format!("copy the probe: {e}")))?;
     let path = match &prep.path_dir {
         Some(d) => format!("{}:/usr/bin:/bin", d.display()),
         None => "/usr/bin:/bin".to_string(),
     };
 
-    let mut cmd = Command::new(&opts.ratatoskr);
-    cmd.env_clear()
-        .envs(fx.env(&path))
-        .current_dir(fx.path("w"));
+    let mut cmd = Cmd::new(&opts.ratatoskr);
+    cmd.envs(fx.env(&path)).current_dir(fx.path("w"));
+    // the sandboxed runs keep whatever `ratatoskr` inherited on purpose: closing it is the sandbox's job (the
+    // `fds-closed` rows)
+    cmd.opts.inherit_fds = true;
     let fifo = fx.path("pause.fifo");
     let (spec_path, result_path) = (fx.path("spec.json"), fx.path("result.json"));
     if let Some(raw) = &row.raw {
         cmd.args(expand_list(&fx, &raw.args)?);
     } else {
         let spec = build_spec(&fx, row, &bin)?;
-        std::fs::write(&spec_path, spec.to_string()).map_err(|e| e.to_string())?;
+        put(&spec_path, &spec.to_string())?;
         cmd.args(["sandbox", "run", "--tier", row.tier.arg(), "--spec"])
             .arg(&spec_path)
             .arg("--result")
@@ -1169,10 +1271,13 @@ fn run_sandboxed(opts: &Opts, row: &Row, control: bool) -> Result<(Fixture, RunD
         }
         if !prep.swaps.is_empty() {
             let c = std::ffi::CString::new(fifo.to_string_lossy().as_bytes())
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             // SAFETY: mkfifo on a path in our fixture.
             if unsafe { libc::mkfifo(c.as_ptr(), 0o600) } != 0 {
-                return Err(format!("mkfifo: {}", std::io::Error::last_os_error()));
+                return Err(villa::Error::invalid(format!(
+                    "mkfifo: {}",
+                    std::io::Error::last_os_error()
+                )));
             }
             cmd.arg("--pause-before-spawn").arg(&fifo);
         }
@@ -1208,18 +1313,17 @@ fn run_sandboxed(opts: &Opts, row: &Row, control: bool) -> Result<(Fixture, RunD
     let mut canary_file = None;
     if !prep.canary_fds.is_empty() {
         let canary = std::fs::File::open(fx.path("home/canary-dir/canary.txt"))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
         let fds = prep.canary_fds.clone();
-        let src = std::os::fd::AsRawFd::as_raw_fd(&canary);
-        // SAFETY: dup2 between the fork and the exec; it allocates nothing and clears close-on-exec on the copy.
-        unsafe {
-            cmd.pre_exec(move || {
-                for n in &fds {
-                    if libc::dup2(src, *n) < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                }
-                Ok(())
+        let src = Arc::new(std::os::fd::OwnedFd::from(
+            canary
+                .try_clone()
+                .map_err(|e| villa::Error::invalid(e.to_string()))?,
+        ));
+        for n in &fds {
+            cmd.spec.pass_fds.push(draugr::PassFd {
+                fd: src.clone(),
+                target: *n,
             });
         }
         canary_file = Some(canary);
@@ -1244,14 +1348,17 @@ fn run_sandboxed(opts: &Opts, row: &Row, control: bool) -> Result<(Fixture, RunD
     finish(row, fx, d, &result_path)
 }
 
+/// The most the sandbox's result file may hold.
+const RESULT_CAP: u64 = 1 << 24;
+
 fn finish(
     row: &Row,
     fx: Fixture,
-    d: Result<Driven, String>,
+    d: villa::Result<Driven>,
     result_path: &Path,
-) -> Result<(Fixture, RunData), String> {
+) -> villa::Result<(Fixture, RunData)> {
     let d = d?;
-    let result_text = std::fs::read_to_string(result_path).unwrap_or_default();
+    let result_text = eitri::read_string(result_path, RESULT_CAP).unwrap_or_default();
     let (lines, bad) = if row.raw.is_some() {
         (vec![], vec![])
     } else {
@@ -1298,11 +1405,11 @@ pub fn run_row(opts: &Opts, host: &Host, row: &Row) -> Outcome {
     }
     match run_checked(opts, row) {
         Ok(()) => Outcome::Pass,
-        Err(e) => Outcome::Fail(e),
+        Err(e) => Outcome::Fail(e.to_string()),
     }
 }
 
-fn run_checked(opts: &Opts, row: &Row) -> Result<(), String> {
+fn run_checked(opts: &Opts, row: &Row) -> villa::Result<()> {
     if row.unsandboxed {
         let (fx, data) = run_direct(opts, row)?;
         return judge_run(row, &data, &fx.canaries);
@@ -1314,7 +1421,7 @@ fn run_checked(opts: &Opts, row: &Row) -> Result<(), String> {
             Some(_) => run_sandboxed(opts, row, true)?,
         };
         judge_control(row, &data.lines)
-            .map_err(|e| format!("{e}; stderr: {}", tail(&data.stderr)))?;
+            .map_err(|e| villa::Error::invalid(format!("{e}; stderr: {}", tail(&data.stderr))))?;
     }
     let (fx, data) = run_sandboxed(opts, row, false)?;
     judge_run(row, &data, &fx.canaries)

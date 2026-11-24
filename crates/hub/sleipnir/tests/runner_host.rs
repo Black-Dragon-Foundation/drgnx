@@ -12,16 +12,28 @@
 
 use sleipnir::linux::reserve::{self, Reservation, Reservations};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::Child;
 use std::time::Duration;
+
+mod support;
 
 /// Starts this test binary as child ENTRY with ENV.
 fn child(entry: &str, env: &[(&str, &str)]) -> Child {
-    Command::new(std::env::current_exe().unwrap())
-        .args(["--ignored", "--exact", entry, "--test-threads=1", "--quiet"])
-        .envs(env.iter().copied())
-        .spawn()
-        .unwrap()
+    let extra: Vec<(&str, &std::ffi::OsStr)> = env
+        .iter()
+        .map(|(k, v)| (*k, std::ffi::OsStr::new(*v)))
+        .collect();
+    let spec = support::spec(
+        std::env::current_exe().unwrap(),
+        &["--ignored", "--exact", entry, "--test-threads=1", "--quiet"],
+        &extra,
+    );
+    support::start(
+        &spec,
+        false,
+        draugr::Redirect::Inherit,
+        draugr::Redirect::Inherit,
+    )
 }
 
 fn exists(p: &Path) -> Option<()> {
@@ -29,7 +41,7 @@ fn exists(p: &Path) -> Option<()> {
 }
 
 fn boot_id() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+    sleipnir::fsio::read_to_string("/proc/sys/kernel/random/boot_id")
         .unwrap()
         .trim()
         .to_string()
@@ -57,7 +69,7 @@ fn child_admits() {
     let rs = Reservations::at(&dir.join("run"));
     let me = std::process::id();
     let start = reserve::start_time(me).unwrap();
-    let mark = |what: &str| std::fs::write(dir.join(format!("{name}.{what}")), b"").unwrap();
+    let mark = |what: &str| sleipnir::fsio::write(dir.join(format!("{name}.{what}")), b"").unwrap();
     rs.with_admit_lock(|| {
         mark("inside");
         skuld::wait_until("the test's go", 60, || {
@@ -126,12 +138,12 @@ fn two_admissions_in_one_second_cannot_both_fit() {
         !f("sched-b.inside").exists(),
         "b was inside the lock while a held it"
     );
-    std::fs::write(f("sched-a.go"), b"").unwrap();
+    sleipnir::fsio::write(f("sched-a.go"), b"").unwrap();
     skuld::wait_until("a decided", 60, || {
         exists(&f("sched-a.admitted")).or(exists(&f("sched-a.refused")))
     });
     skuld::wait_until("b inside the lock", 60, || exists(&f("sched-b.inside")));
-    std::fs::write(f("sched-b.go"), b"").unwrap();
+    sleipnir::fsio::write(f("sched-b.go"), b"").unwrap();
     skuld::wait_until("b decided", 60, || {
         exists(&f("sched-b.admitted")).or(exists(&f("sched-b.refused")))
     });
@@ -152,7 +164,7 @@ fn two_admissions_in_one_second_cannot_both_fit() {
         .sum();
     assert!(held <= 3000, "{held} MiB admitted against 3000");
     for n in ["sched-a", "sched-b"] {
-        std::fs::write(f(&format!("{n}.exit")), b"").unwrap();
+        sleipnir::fsio::write(f(&format!("{n}.exit")), b"").unwrap();
     }
     assert!(a.wait().unwrap().success() && b.wait().unwrap().success());
 }
@@ -165,10 +177,12 @@ fn a_dead_pids_reservation_is_ignored() {
     let d = tempfile::tempdir().unwrap();
     let rs = Reservations::at(d.path());
     // a real process that parks on its stdin
-    let mut p = Command::new("cat")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut p = support::start(
+        &support::spec("cat", &[] as &[&str], &[]),
+        true,
+        draugr::Redirect::Inherit,
+        draugr::Redirect::Inherit,
+    );
     let pid = p.id();
     let start = reserve::start_time(pid).unwrap();
     let r = |start_time: u64, job: &str| Reservation {
@@ -220,7 +234,7 @@ const PREFIX: &str = "sltest-run";
 
 /// Runs PROGRAM ARGS and answers its stdout; panics with its output when it fails.
 fn run(program: &str, args: &[&str]) -> String {
-    let out = Command::new(program).args(args).output().expect("spawn");
+    let out = sleipnir::tool::limited(Path::new(program), args, &[], TOOL_LIMIT).expect("spawn");
     assert!(
         out.status.success(),
         "{program} {args:?}: {}{}",
@@ -326,10 +340,7 @@ fn job_dir() -> JobDir {
 /// The pid of our container NAME once podman says it runs.
 fn running_pid(name: &str) -> u32 {
     skuld::wait_until(&format!("{name} running"), 120, || {
-        let out = Command::new("podman")
-            .args(["inspect", "-f", "{{.State.Pid}}", name])
-            .output()
-            .ok()?;
+        let out = podman(&["inspect", "-f", "{{.State.Pid}}", name])?;
         String::from_utf8_lossy(&out.stdout)
             .trim()
             .parse::<u32>()
@@ -339,7 +350,7 @@ fn running_pid(name: &str) -> u32 {
 }
 
 fn proc_file(pid: u32, f: &str) -> String {
-    std::fs::read_to_string(format!("/proc/{pid}/{f}")).unwrap_or_default()
+    sleipnir::fsio::read_to_string(format!("/proc/{pid}/{f}")).unwrap_or_default()
 }
 
 fn cgroup_of(pid: u32) -> String {
@@ -372,24 +383,25 @@ fn main_pid(unit: &str) -> u32 {
 /// and the exited container is the runner's cleanup to remove); the test removes it.
 fn stopped_with_its_slice(name: &str) {
     skuld::wait_until(&format!("{name} stopped with its slice"), 120, || {
-        let out = Command::new("podman")
-            .args(["inspect", "-f", "{{.State.Running}}", name])
-            .output()
-            .ok()?;
+        let out = podman(&["inspect", "-f", "{{.State.Running}}", name])?;
         let running = String::from_utf8_lossy(&out.stdout).trim() == "true";
         (!running).then_some(())
     });
-    let _ = Command::new("podman")
-        .args(["rm", "-f", "-t", "0", name])
-        .output();
+    // the container may already be gone: the wait below says so
+    drop(podman(&["rm", "-f", "-t", "0", name]));
     skuld::wait_until(&format!("{name} removed"), 120, || gone(name));
 }
 
+/// How long one tool call of these rows may take.
+const TOOL_LIMIT: Duration = Duration::from_secs(120);
+
+/// `podman ARGS`, its output (none when it could not run).
+fn podman(args: &[&str]) -> Option<sleipnir::tool::Output> {
+    sleipnir::tool::limited(Path::new("podman"), args, &[], TOOL_LIMIT).ok()
+}
+
 fn gone(name: &str) -> Option<()> {
-    let out = Command::new("podman")
-        .args(["container", "exists", name])
-        .output()
-        .ok()?;
+    let out = podman(&["container", "exists", name])?;
     (!out.status.success()).then_some(())
 }
 
@@ -476,7 +488,7 @@ fn slice_tree_takes_the_container() {
     let p = probe();
     let root_dir = p.slice_dir(&format!("{ROOT}.slice"));
     assert_eq!(
-        std::fs::read_to_string(root_dir.join("cpu.weight"))
+        sleipnir::fsio::read_to_string(root_dir.join("cpu.weight"))
             .unwrap()
             .trim(),
         "20"
@@ -499,7 +511,7 @@ fn slice_tree_takes_the_container() {
     );
     // 3. the root's cap
     assert_eq!(
-        std::fs::read_to_string(root_dir.join("memory.max"))
+        sleipnir::fsio::read_to_string(root_dir.join("memory.max"))
             .unwrap()
             .trim(),
         "1073741824"
@@ -582,7 +594,7 @@ fn the_island_moves_running_work_and_back() {
     );
     let timing = p.slice_dir(&slices::timing_slice(ROOT, &island).unwrap());
     assert_eq!(
-        std::fs::read_to_string(timing.join("cpuset.cpus.effective"))
+        sleipnir::fsio::read_to_string(timing.join("cpuset.cpus.effective"))
             .unwrap()
             .trim(),
         island
@@ -678,9 +690,7 @@ fn throttle_stays_below_oomd() {
     slices::stop(&js).unwrap();
     // after the kernel's OOM under the root's cap podman kept reporting the container as running for minutes, so it
     // is removed by force here rather than waited on
-    let _ = Command::new("podman")
-        .args(["rm", "-f", "-t", "0", "sltest-run-s3"])
-        .output();
+    drop(podman(&["rm", "-f", "-t", "0", "sltest-run-s3"]));
     skuld::wait_until("sltest-run-s3 removed", 120, || gone("sltest-run-s3"));
 }
 
@@ -724,11 +734,11 @@ fn a_job_runs_in_its_own_slice_with_its_containers() {
         cgroup_of(pid)
     );
     assert_eq!(proc_file(pid, "oom_score_adj").trim(), "1000");
-    std::fs::write(j.source.join("go"), b"").unwrap();
+    sleipnir::fsio::write(j.source.join("go"), b"").unwrap();
     let r = result_of(&j);
     assert_eq!(r.verdict, forseti::Verdict::Pass, "{r:?}");
     assert!(
-        std::fs::read_to_string(&s.log)
+        sleipnir::fsio::read_to_string(&s.log)
             .unwrap()
             .contains("the job ran")
     );
@@ -789,14 +799,24 @@ fn a_container_job_lands_in_its_slice() {
         .into_iter()
         .map(|s| s.into_string().unwrap())
         .collect();
-    let mut scope = Command::new("systemd-run")
-        .args(["--user", "--scope", "--quiet", "--collect"])
-        .arg(format!("--slice={slice}"))
-        .arg("--unit=drgnx-job-h1")
-        .arg("podman")
-        .args(&argv)
-        .spawn()
-        .unwrap();
+    let mut args: Vec<String> = [
+        "--user",
+        "--scope",
+        "--quiet",
+        "--collect",
+        &format!("--slice={slice}"),
+        "--unit=drgnx-job-h1",
+        "podman",
+    ]
+    .map(String::from)
+    .into();
+    args.extend(argv);
+    let mut scope = support::start(
+        &support::spec("systemd-run", &args, &[]),
+        false,
+        draugr::Redirect::Inherit,
+        draugr::Redirect::Inherit,
+    );
     let pid = running_pid("drgnx-job-h1");
     let cg = cgroup_of(pid);
     assert!(cg.contains(&format!("/{slice}/libpod-")), "{cg}");
@@ -807,7 +827,8 @@ fn a_container_job_lands_in_its_slice() {
         cgroup_of(client)
     );
     slices::stop(slice).unwrap();
-    let _ = scope.wait();
+    // the scope ends with its slice; its status is not what this row checks
+    drop(scope.wait());
     stopped_with_its_slice("drgnx-job-h1");
 }
 
@@ -831,7 +852,7 @@ fn stopped_as_stuck(name: &str, s: &JobExec, j: &JobDir, rule: &str) {
         r.infra.as_deref(),
         Some(format!("infra: stuck ({rule})").as_str())
     );
-    let report = std::fs::read_to_string(j.dir.join("stuck.txt")).unwrap();
+    let report = sleipnir::fsio::read_to_string(j.dir.join("stuck.txt")).unwrap();
     assert!(
         report.starts_with(&format!("stuck ({rule}): no progress for ")),
         "{report}"
@@ -844,7 +865,7 @@ fn stopped_as_stuck(name: &str, s: &JobExec, j: &JobDir, rule: &str) {
     ] {
         assert!(report.contains(section), "{section}: {report}");
     }
-    let log = std::fs::read_to_string(&s.log).unwrap();
+    let log = sleipnir::fsio::read_to_string(&s.log).unwrap();
     assert!(
         log.lines().last().is_some_and(|l| l
             .starts_with(&format!("=== stopped as stuck ({rule}, "))
@@ -908,7 +929,7 @@ fn progress_slow_but_printing_is_not_stopped() {
     let r = result_of(&j);
     assert_eq!(r.verdict, forseti::Verdict::Pass, "{r:?}");
     assert!(!j.dir.join("stuck.txt").exists());
-    let log = std::fs::read_to_string(&s.log).unwrap();
+    let log = sleipnir::fsio::read_to_string(&s.log).unwrap();
     let deadline: u64 = log
         .lines()
         .find_map(|l| l.strip_prefix("deadline="))
@@ -972,7 +993,7 @@ fn child_starts_a_job() {
         vec![sleipnir_bin(), "job-exec".into(), dir.display().to_string()],
     ))
     .unwrap();
-    std::fs::write(dir.join("started"), b"").unwrap();
+    sleipnir::fsio::write(dir.join("started"), b"").unwrap();
     skuld::wait_until("the test kills the starter", 600, || None::<()>);
 }
 
@@ -1001,11 +1022,11 @@ fn a_job_survives_its_starter() {
         unit::active("sltest-v1-1.service"),
         "the job died with its starter"
     );
-    std::fs::write(&go, b"").unwrap();
+    sleipnir::fsio::write(&go, b"").unwrap();
     let r = result_of(&j);
     assert_eq!(r.verdict, forseti::Verdict::Pass, "{r:?}");
     assert!(
-        std::fs::read_to_string(&s.log)
+        sleipnir::fsio::read_to_string(&s.log)
             .unwrap()
             .contains("finished")
     );
@@ -1019,8 +1040,8 @@ fn a_job_survives_its_starter() {
 fn check_limits_passes_inside_a_fake_runner() {
     let env: Vec<(std::ffi::OsString, std::ffi::OsString)> = [
         "PATH",
-        "HOME",
-        "XDG_RUNTIME_DIR",
+        stig::HOME_VAR,
+        stig::SYSTEM_RUNTIME_VAR,
         "DBUS_SESSION_BUS_ADDRESS",
     ]
     .iter()
@@ -1113,7 +1134,7 @@ fn linger_keeps_a_unit_after_the_session_ends() {
 #[test]
 #[ignore = "runner-host"]
 fn bench_runs_capped_and_under_2_minutes() {
-    let d = tempfile::tempdir_in(std::env::var("HOME").unwrap()).unwrap();
+    let d = tempfile::tempdir_in(std::env::var(stig::HOME_VAR).unwrap()).unwrap();
     let (result, t) = sleipnir::bench::run(d.path(), &base_ref()).unwrap();
     assert_eq!(
         (t.memory_max.as_str(), t.cpu_max.as_str()),
@@ -1176,7 +1197,7 @@ fn grow_reaches_the_container() {
     let name = "sltest-run-g1";
     running_pid(name);
     skuld::wait_until("the container's fill", 120, || {
-        std::fs::read_to_string(&log)
+        sleipnir::fsio::read_to_string(&log)
             .ok()
             .filter(|l| l.contains("filled"))
             .map(|_| ())
@@ -1201,7 +1222,7 @@ fn grow_reaches_the_container() {
     let scope = resize::scope_of(&cg).expect("the container's scope");
     let bytes = |mib: u64| (mib * 1024 * 1024).to_string();
     let read = |f: &str| {
-        std::fs::read_to_string(cg.join(f))
+        sleipnir::fsio::read_to_string(cg.join(f))
             .unwrap()
             .trim()
             .to_string()

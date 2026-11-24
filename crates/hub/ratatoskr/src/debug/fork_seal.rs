@@ -59,12 +59,15 @@ pub fn sweep(root: &Path) {
         return;
     }
     let aside = root.with_extension(format!("swept-{}", std::process::id()));
-    if let Err(e) = std::fs::rename(root, &aside) {
+    if let Err(e) = crate::fsio::rename(root, &aside) {
         tracing::warn!(target: "drgnx::debug", "the forks' folder {} stays: {e}", root.display());
         return;
     }
     crate::clock::spawn("debug:fork-sweep", async move {
-        let _ = crate::clock::blocking(move || std::fs::remove_dir_all(aside)).await;
+        crate::soft::done(
+            crate::clock::blocking(move || std::fs::remove_dir_all(aside)).await,
+            "crate::clock::blocking",
+        );
     });
 }
 
@@ -124,16 +127,19 @@ pub fn differ(a: &BTreeMap<String, u64>, b: &BTreeMap<String, u64>) -> Vec<Strin
 }
 
 impl Trees for DirTrees {
-    fn make<'a>(&'a self, run: &'a RunInfo, id: &'a str) -> BoxFut<'a, Result<PathBuf, String>> {
+    fn make<'a>(&'a self, run: &'a RunInfo, id: &'a str) -> BoxFut<'a, villa::Result<PathBuf>> {
         Box::pin(async move {
             let snap = run
                 .snapshot
                 .clone()
-                .ok_or("the run has no launch snapshot")?;
+                .ok_or("the run has no launch snapshot")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let dir = self.root.join(id);
             let (w, tmp) = (dir.join("w"), dir.join("tmp"));
             for d in [&w, &tmp] {
-                std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+                std::fs::create_dir_all(d)
+                    .map_err(|e| format!("{}: {e}", d.display()))
+                    .map_err(|e| villa::Error::invalid(e.to_string()))?;
             }
             let target = w.clone();
             let r = crate::clock::blocking(move || {
@@ -147,31 +153,22 @@ impl Trees for DirTrees {
                 )
             })
             .await
-            .map_err(|e| e.to_string())??;
+            .map_err(|e| villa::Error::invalid(e.to_string()))??;
             if !r.skipped.is_empty() {
                 tracing::info!(target: "drgnx::debug", fork = id, skipped = ?r.skipped, "the fork's tree leaves paths out");
             }
             let at = w.clone();
             let m = crate::clock::blocking(move || manifest(&at))
                 .await
-                .map_err(|e| e.to_string())?;
-            self.made
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(w.clone(), m);
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            saman::lock(&self.made).insert(w.clone(), m);
             Ok(w)
         })
     }
 
     fn changed<'a>(&'a self, tree: &'a Path) -> BoxFut<'a, Vec<String>> {
         Box::pin(async move {
-            let Some(before) = self
-                .made
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(tree)
-                .cloned()
-            else {
+            let Some(before) = saman::lock(&self.made).get(tree).cloned() else {
                 return vec![];
             };
             let at = tree.to_path_buf();
@@ -181,25 +178,26 @@ impl Trees for DirTrees {
         })
     }
 
-    fn scratch(&self, id: &str) -> Result<PathBuf, String> {
+    fn scratch(&self, id: &str) -> villa::Result<PathBuf> {
         let tmp = self.root.join(id).join("tmp");
-        std::fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::create_dir_all(&tmp)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", tmp.display())))?;
         Ok(tmp)
     }
 
     fn remove<'a>(&'a self, tree: &'a Path) -> BoxFut<'a, ()> {
         Box::pin(async move {
-            self.made
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(tree);
+            saman::lock(&self.made).remove(tree);
             // the fork's own folder (the tree's parent), never anything outside the forks' root
             if let Some(dir) = tree
                 .parent()
                 .filter(|d| d.starts_with(&self.root) && *d != self.root)
             {
                 let dir = dir.to_path_buf();
-                let _ = crate::clock::blocking(move || std::fs::remove_dir_all(dir)).await;
+                crate::soft::done(
+                    crate::clock::blocking(move || std::fs::remove_dir_all(dir)).await,
+                    "crate::clock::blocking",
+                );
             }
         })
     }
@@ -296,7 +294,7 @@ pub fn spec(s: &Shape<'_>, target: Target) -> Spec {
         run: None,
         env: vec![
             ("PATH".into(), s.path.clone()),
-            ("HOME".into(), tmp.clone()),
+            (stig::HOME_VAR.into(), tmp.clone()),
             ("TMPDIR".into(), tmp),
             ("PYTHONDONTWRITEBYTECODE".into(), "1".into()),
         ],
@@ -341,19 +339,25 @@ pub fn mac_spec(s: &Shape<'_>, ports: &[u16]) -> Spec {
 
 /// Each `.env` file's place in the tree a link to it (macOS: read where it is, never copied). A link already there
 /// stays; anything else at that place in the tree is replaced by the link.
-pub fn link_env_files(files: &[(PathBuf, PathBuf)]) -> Result<(), String> {
+pub fn link_env_files(files: &[(PathBuf, PathBuf)]) -> villa::Result<()> {
     for (src, dst) in files {
         let shown = |e: std::io::Error| format!("{}: {e}", dst.display());
         if let Ok(m) = std::fs::symlink_metadata(dst) {
             if m.file_type().is_symlink() && std::fs::read_link(dst).is_ok_and(|t| &t == src) {
                 continue;
             }
-            std::fs::remove_file(dst).map_err(shown)?;
+            std::fs::remove_file(dst)
+                .map_err(shown)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
         }
         if let Some(dir) = dst.parent() {
-            std::fs::create_dir_all(dir).map_err(shown)?;
+            std::fs::create_dir_all(dir)
+                .map_err(shown)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
         }
-        std::os::unix::fs::symlink(src, dst).map_err(shown)?;
+        std::os::unix::fs::symlink(src, dst)
+            .map_err(shown)
+            .map_err(|e| villa::Error::invalid(e.to_string()))?;
     }
     Ok(())
 }
@@ -367,8 +371,12 @@ fn seatbelt(spec: Spec, ctx: gleipnir::Context) -> super::blocked::Seal {
         Box::pin(async move {
             let sb = crate::agents::launch::detect()
                 .await
-                .map_err(|r| r.message)?;
-            let target = sb.target().ok_or("no sandbox here")?;
+                .map_err(|r| r.message)
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
+            let target = sb
+                .target()
+                .ok_or("no sandbox here")
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let mut s = (*spec).clone();
             s.env = d
                 .env
@@ -384,7 +392,8 @@ fn seatbelt(spec: Spec, ctx: gleipnir::Context) -> super::blocked::Seal {
                 s.chdir = cwd.clone();
             }
             let valid = gleipnir::validate(s, &ctx, target)
-                .map_err(|r| format!("the fork's sandbox: {}", r.message))?;
+                .map_err(|r| format!("the fork's sandbox: {}", r.message))
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let mut argv = vec![d.program.display().to_string()];
             argv.extend(d.args.iter().map(|a| a.to_string_lossy().into_owned()));
             let prepared = sb
@@ -395,7 +404,8 @@ fn seatbelt(spec: Spec, ctx: gleipnir::Context) -> super::blocked::Seal {
                     #[cfg(feature = "test-hooks")]
                     gleipnir::TestHooks::default(),
                 )
-                .map_err(|r| format!("the fork's sandbox: {}", r.message))?;
+                .map_err(|r| format!("the fork's sandbox: {}", r.message))
+                .map_err(|e| villa::Error::invalid(e.to_string()))?;
             Ok(crate::sandbox::to_draugr(prepared.invocation))
         })
     })
@@ -422,25 +432,27 @@ impl Sealer for Sealed {
         tree: &Path,
         config: &Value,
         tmp: &Path,
-    ) -> Result<Arc<dyn Launcher>, String> {
+    ) -> villa::Result<Arc<dyn Launcher>> {
         let table = Table::builtin();
         let a = table
             .0
             .iter()
             .find(|a| a.id == adapter)
-            .ok_or_else(|| format!("no adapter {adapter}"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("no adapter {adapter}")))?;
         let env = adapters::Env {
             path: self.path.clone(),
             tools: self.tools.clone(),
         };
-        let found =
-            adapters::find(a, &env).ok_or_else(|| format!("{} is not installed", a.name))?;
-        std::fs::create_dir_all(tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        let found = adapters::find(a, &env)
+            .ok_or_else(|| villa::Error::invalid(format!("{} is not installed", a.name)))?;
+        std::fs::create_dir_all(tmp)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", tmp.display())))?;
         let mut read = vec![];
         let argv: Vec<String> = match (adapter, &found) {
             ("debugpy", Found::Python(py)) => {
                 let shim = tmp.join("drgnx-debug-fork-shim.py");
-                std::fs::write(&shim, SHIM_PY).map_err(|e| format!("{}: {e}", shim.display()))?;
+                crate::fsio::write(&shim, SHIM_PY)
+                    .map_err(|e| villa::Error::io(format!("{}: {e}", shim.display())))?;
                 read.extend(prefix_of(py));
                 // the venv itself (its site-packages), besides the Python it links to
                 read.extend(py.parent().and_then(Path::parent).map(Path::to_path_buf));
@@ -454,9 +466,10 @@ impl Sealer for Sealed {
                     .iter()
                     .map(|d| d.join("node"))
                     .find(|p| p.is_file())
-                    .ok_or("node is not on PATH")?;
+                    .ok_or_else(|| villa::Error::invalid("node is not on PATH"))?;
                 let shim = tmp.join("drgnx-debug-fork-shim.js");
-                std::fs::write(&shim, SHIM_JS).map_err(|e| format!("{}: {e}", shim.display()))?;
+                crate::fsio::write(&shim, SHIM_JS)
+                    .map_err(|e| villa::Error::io(format!("{}: {e}", shim.display())))?;
                 read.extend(prefix_of(&node));
                 // js-debug's whole release (src/ and its dependencies)
                 read.extend(
@@ -471,7 +484,11 @@ impl Sealer for Sealed {
                     server.display().to_string(),
                 ]
             }
-            _ => return Err(format!("{adapter} does not run in a fork")),
+            _ => {
+                return Err(villa::Error::invalid(format!(
+                    "{adapter} does not run in a fork"
+                )));
+            }
         };
         let cwd = config
             .get("cwd")
@@ -505,7 +522,8 @@ impl Sealer for Sealed {
         // empty files for the binds to land on (the tree never holds their text)
         for (_, dst) in &env_files {
             if !dst.exists() {
-                std::fs::write(dst, b"").map_err(|e| format!("{}: {e}", dst.display()))?;
+                crate::fsio::write(dst, b"")
+                    .map_err(|e| villa::Error::io(format!("{}: {e}", dst.display())))?;
             }
         }
         let shape = Shape {
@@ -538,12 +556,12 @@ impl Sealed {
         found: &Found,
         config: &Value,
         shape: &Shape<'_>,
-    ) -> Result<Arc<dyn Launcher>, String> {
+    ) -> villa::Result<Arc<dyn Launcher>> {
         let block = super::ports::machine().claim()?;
         let ports = block.ports();
         let preload = shape.tmp.join(super::blocked::PRELOAD_NAME);
-        std::fs::write(&preload, super::blocked::PRELOAD)
-            .map_err(|e| format!("{}: {e}", preload.display()))?;
+        crate::fsio::write(&preload, super::blocked::PRELOAD)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", preload.display())))?;
         let env = adapters::Env {
             path: self.path.clone(),
             tools: self.tools.clone(),
@@ -581,20 +599,21 @@ impl SealedLauncher {
 }
 
 impl Launcher for SealedLauncher {
-    fn connect(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn connect(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
             let sb = crate::agents::launch::detect()
                 .await
-                .map_err(|r| r.message)?;
+                .map_err(|r| villa::Error::unavailable(r.message))?;
             if sb.tier() != gleipnir::Tier::Full {
-                return Err(
-                    "a fork needs Gleipnir's full tier (a network namespace of its own); this host runs the reduced tier"
-                        .into(),
-                );
+                return Err(villa::Error::unavailable(
+                    "a fork needs Gleipnir's full tier (a network namespace of its own); this host runs the reduced tier",
+                ));
             }
-            let target = sb.target().ok_or("no sandbox here")?;
+            let target = sb
+                .target()
+                .ok_or_else(|| villa::Error::unavailable("no sandbox here"))?;
             let valid = gleipnir::validate(self.spec.clone(), &self.ctx, target)
-                .map_err(|r| format!("the fork's sandbox: {}", r.message))?;
+                .map_err(|r| villa::Error::invalid(format!("the fork's sandbox: {}", r.message)))?;
             let prepared = sb
                 .prepare(
                     valid,
@@ -603,34 +622,34 @@ impl Launcher for SealedLauncher {
                     #[cfg(feature = "test-hooks")]
                     gleipnir::TestHooks::default(),
                 )
-                .map_err(|r| format!("the fork's sandbox: {}", r.message))?;
+                .map_err(|r| villa::Error::invalid(format!("the fork's sandbox: {}", r.message)))?;
             let mut spec = crate::sandbox::to_draugr(prepared.invocation);
             spec.stdin_null = false;
-            let mut child = draugr::spawn_pinned(spec)
-                .await
-                .map_err(|e| format!("the fork's sandbox did not start: {e}"))?;
+            let mut child = draugr::spawn_pinned(spec).await.map_err(|e| {
+                villa::Error::unavailable(format!("the fork's sandbox did not start: {e}"))
+            })?;
             if let Some(fd) = prepared.status {
                 let r = crate::clock::blocking(move || {
                     gleipnir::inner::read_status_for(fd, &String::new, STATUS_WITHIN, false)
                 })
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| villa::Error::internal(e.to_string()))?;
                 if let Err(r) = r {
                     let tail = child.stderr_tail();
                     super::session::Proc::signal(&mut child, super::session::Sig::Kill);
-                    let _ = child.wait().await;
-                    return Err(format!(
+                    crate::soft::done(child.wait().await, "fork_seal");
+                    return Err(villa::Error::unavailable(format!(
                         "the fork's sandbox did not start: {} {tail}",
                         r.message
-                    ));
+                    )));
                 }
             }
             let (Some(stdin), Some(stdout)) = (child.take_stdin(), child.take_stdout()) else {
-                return Err("the fork's sandbox has no stdio".into());
+                return Err(villa::Error::unavailable("the fork's sandbox has no stdio"));
             };
             let mux = Mux::new(stdout, stdin);
             let (client, incoming) = Self::open(&mux);
-            *self.mux.lock().unwrap_or_else(|e| e.into_inner()) = Some(mux);
+            *saman::lock(&self.mux) = Some(mux);
             Ok(Connected {
                 client,
                 incoming,
@@ -639,14 +658,11 @@ impl Launcher for SealedLauncher {
         })
     }
 
-    fn child(&self) -> BoxFut<'_, Result<Connected, String>> {
+    fn child(&self) -> BoxFut<'_, villa::Result<Connected>> {
         Box::pin(async move {
-            let mux = self
-                .mux
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
+            let mux = saman::lock(&self.mux)
                 .clone()
-                .ok_or("the fork's sandbox is not running")?;
+                .ok_or_else(|| villa::Error::unavailable("the fork's sandbox is not running"))?;
             let (client, incoming) = Self::open(&mux);
             Ok(Connected {
                 client,

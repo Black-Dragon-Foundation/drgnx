@@ -25,7 +25,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[allow(
-    clippy::all,
     dead_code,
     unused_imports,
     unused_unsafe,
@@ -92,13 +91,24 @@ pub struct Extras {
     session_log: Vec<Value>,
 }
 
+/// The largest session store read.
+const STORE_CAP: u64 = 1 << 24;
+
 impl Extras {
     /// Use `path` as the session store: what it holds is loaded, and every change is written back.
-    pub fn use_store(&mut self, path: PathBuf) -> Result<(), String> {
+    pub fn use_store(&mut self, path: PathBuf) -> villa::Result<()> {
         if path.exists() {
-            let fail = |e: String| format!("{}: {e}", path.display());
-            let text = std::fs::read_to_string(&path).map_err(|e| fail(e.to_string()))?;
-            self.store = serde_json::from_str(&text).map_err(|e| fail(e.to_string()))?;
+            let at = || format!("reading the session store {}", path.display());
+            let text = eitri::read_string(&path, STORE_CAP).map_err(|e| {
+                villa::Error::invalid("The session store can't be read.")
+                    .with_detail(at())
+                    .with_source(e)
+            })?;
+            self.store = serde_json::from_str(&text).map_err(|e| {
+                villa::Error::invalid("The session store is not valid.")
+                    .with_detail(at())
+                    .with_source(e)
+            })?;
         }
         self.store_path = Some(path);
         Ok(())
@@ -116,7 +126,12 @@ impl Extras {
     fn save(&self) {
         if let Some(path) = &self.store_path {
             if let Ok(text) = serde_json::to_string(&self.store) {
-                let _ = std::fs::write(path, text);
+                if let Err(e) = eitri::replace_file(path, text.as_bytes()) {
+                    annall::log_error(
+                        &villa::Error::new(villa::Kind::Io, "The session store can't be saved.")
+                            .with_source(e),
+                    );
+                }
             }
         }
     }

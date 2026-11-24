@@ -29,10 +29,10 @@ One Cargo workspace:
 | Path | What it holds |
 |---|---|
 | `crates/core` | text and models: the row and patch format (`rodd`), the line model (`hlidskjalf`), the settings data reader (`huginn`) |
-| `crates/ui` | drawing and the native shell: the compositor library (`glitnir`), the Wayland and macOS shell (`skel`), the view model (`sja`), the workbench model (`smidja`), a recording test compositor (`recorder`) |
+| `crates/ui` | drawing and the native shell: the compositor library (`glitnir`), the Wayland and macOS shell (`skel`), the view model (`sja`), the reactive engine (`tafl`, [develop/engine.md](develop/engine.md)), the workbench model (`smidja`), a recording test compositor (`recorder`) |
 | `crates/hub` | the hub (`ratatoskr`) and its services: the sandbox (`gleipnir`), code search (`hrafn`), the model gateway (`bifrost`), the MCP server (`mimir`), the ACP client (`hermod`), the runners (`sleipnir`), storage (`urdr`), and the rest |
 | `crates/ext` | the extension API (WIT) and its hosts (to come) |
-| `crates/std` | the standards (to come) |
+| `crates/std` | the standards: errors (`villa`), logging (`annall`), paths (`stig`), the test sandbox (`raun`), concurrency (`saman`), secrets (`hulda`), resource budgets (`vag`); the table and the rules are in [`develop/standards/`](develop/standards/README.md) |
 | `app/` | the editor binary |
 | `xtask/` | repository tasks |
 
@@ -40,7 +40,7 @@ Developer notes for the hub's crates are in [`develop/`](develop/runtime.md), ca
 some of them still describe that version's Emacs side, and they are revised as the new editor replaces it.
 
 User guides: [agents outside drgnx](guide/outside-agents.md) (Claude Code, Codex… joining the work, and binding them
-to a role).
+to a role); [search](guide/search.md) (the engine per GPU, the download and its total, your CPU, memory and GPU limits).
 
 ## Licences
 

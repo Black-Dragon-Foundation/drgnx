@@ -170,15 +170,9 @@ check_cache() {
   jf=$(jobs_file "$1") || { say 3 FAIL "the jobs of run $1 could not be read"; return; }
   while IFS=$'\t' read -r id concl labels name; do
     [ "$concl" != skipped ] || continue
-    # a build job is a row with `any`, or any job that prints a cache-primary-key (cargo-target does, in every job that
-    # restores a target cache: the old layout's escape legs still build for themselves, under a consumer's row)
-    row=$(budget_of "$name") || row=""
-    if [ "${row#* }" = any ]; then
-      log=$(log_file "$id") || { fail="$fail; $name: no log"; continue; }
-    else
-      log=$(log_file "$id") || continue
-      grep -q 'cache-primary-key: cargo-' "$log" || continue
-    fi
+    row=$(budget_of "$name") || continue          # check 2 reports it
+    [ "${row#* }" = any ] || continue
+    log=$(log_file "$id") || { fail="$fail; $name: no log"; continue; }
     restored=$(grep -oE 'Cache restored from key: cargo-[^ ]+' "$log" | grep -v ': cargo-registry-' | head -1)
     restored=${restored#Cache restored from key: }
     primary=$(grep -oE 'cache-primary-key: cargo-[^ ]+' "$log" | head -1)
@@ -488,9 +482,6 @@ GH
   expect FAIL 3 cache 112
   expect PASS 3 cache 102
   expect FAIL 3 cache 114
-  # a job with a consumer's budget row that restores a cache is a build job too (cache-primary-key): the same toolchain; another
-  expect PASS 3 cache 115
-  expect FAIL 3 cache 116
   # 4: 10.2 GiB; a main entry gone; under the limit with main's entries there
   printf '{"active_caches_size_in_bytes": %s, "active_caches_count": 9}\n' $((102 * GIB / 10)) > "$ST/usage.json"
   expect FAIL 4 budget

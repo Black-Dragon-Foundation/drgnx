@@ -10,7 +10,16 @@ publish = false
 # Crates name it under [dev-dependencies] only; it never reaches a shipped binary.
 [dependencies]
 proptest.workspace = true
+villa.workspace = true
+stig.workspace = true
+saman.workspace = true
+draugr.workspace = true
+stund.workspace = true
 tokio = { workspace = true, features = ["time"] }   # wait_until_async's pause between looks
 
 [dev-dependencies]
+eitri.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+# A fixture workspace for xtask/tests/standards.rs: never built, only read (cargo metadata --no-deps, the scanner).
+[workspace]
+members = [
+    "crates/app",
+    "crates/bad",
+    "crates/glitnir",
+    "crates/owner",
+    "crates/reactive",
+    "crates/ui/canvas",
+    "crates/uiapp",
+    "crates/villa",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+let_underscore_must_use = "deny"
+print_stdout = "deny"

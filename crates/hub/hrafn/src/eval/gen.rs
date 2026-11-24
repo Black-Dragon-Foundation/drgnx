@@ -16,7 +16,7 @@ use crate::chunk::{BUDGET, chunk_file};
 use crate::files::{Class, Commit, Git, Lang, classify};
 use crate::store::CodeStore;
 use std::collections::{BTreeSet, HashMap};
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead};
 use std::path::Path;
 
 /// How many commits the generator looks at.
@@ -253,11 +253,11 @@ pub async fn generate(
     repo: &Path,
     git: &dyn Git,
     store: &CodeStore,
-) -> Result<Vec<EvalRow>, String> {
+) -> villa::Result<Vec<EvalRow>> {
     let history = git
         .history(repo, HISTORY_LIMIT)
-        .map_err(|e| format!("git history: {e}"))?;
-    let head = head_of(store).await?;
+        .map_err(|e| villa::Error::io(format!("git history: {e}")))?;
+    let head = head_of(store).await.map_err(villa::Error::unavailable)?;
     let newest = history.iter().map(|c| c.time).max().unwrap_or(0);
     let mut rows = Vec::new();
     for c in &history {
@@ -295,19 +295,20 @@ pub fn write_sets(dir: &Path, rows: &[EvalRow]) -> io::Result<()> {
     std::fs::create_dir_all(dir)?;
     for half in ["dev", "test"] {
         let path = dir.join(format!("{half}.jsonl"));
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|e| {
-                io::Error::new(
-                    e.kind(),
-                    format!("{}: {e} (the sets are frozen)", path.display()),
-                )
-            })?;
+        let mut text = String::new();
         for r in rows.iter().filter(|r| r.half == half) {
-            writeln!(f, "{}", serde_json::to_string(r).map_err(io::Error::other)?)?;
+            text.push_str(&serde_json::to_string(r).map_err(io::Error::other)?);
+            text.push('\n');
         }
+        let frozen =
+            |e: String| io::Error::other(format!("{}: {e} (the sets are frozen)", path.display()));
+        if !eitri::create_new(&path, 0o666).map_err(|e| frozen(e.to_string()))? {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{}: it exists (the sets are frozen)", path.display()),
+            ));
+        }
+        eitri::replace_file(&path, text.as_bytes()).map_err(io::Error::other)?;
     }
     Ok(())
 }

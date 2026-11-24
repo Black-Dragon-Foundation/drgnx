@@ -339,7 +339,7 @@ pub struct Runs {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(m)
 }
 
 impl Runs {
@@ -359,11 +359,11 @@ impl Runs {
 
     /// The git of the runner (Task 17 gives `HubGit`); until then [`tick::BasicGit`] makes worktrees only.
     pub fn set_git(&self, git: Arc<dyn RunGit>) {
-        let _ = self.git.set(git);
+        crate::soft::done(self.git.set(git), "mod");
     }
 
     pub fn set_hooks(&self, hooks: Arc<dyn Hooks>) {
-        let _ = self.hooks.set(hooks);
+        crate::soft::done(self.hooks.set(hooks), "mod");
     }
 
     pub fn git(&self) -> Arc<dyn RunGit> {
@@ -600,18 +600,18 @@ pub(crate) fn now() -> f64 {
     crate::clock::wall_secs()
 }
 
-pub(crate) fn invalid(message: impl Into<String>) -> Error {
+pub(crate) fn invalid(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::InvalidParams,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
 
-pub(crate) fn internal(message: impl Into<String>) -> Error {
+pub(crate) fn internal(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
@@ -1588,10 +1588,10 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         };
         let verdict = match &forecast {
             Some(f) => crate::say::may_start_alone(front, f, tasks.len(), ctx).await,
-            None => Err("no forecast".to_owned()),
+            None => Err(villa::Error::unavailable("no forecast")),
         };
         if let Err(why) = &verdict {
-            data["waits"] = json!(why);
+            data["waits"] = json!(why.message());
         }
         verdict.is_ok()
     } else {
@@ -1901,7 +1901,7 @@ pub async fn stop(front: &Front, caller: &Caller, p: ById) -> Result<JobSummary,
     if let Some(h) = front.core.runs.hooks() {
         // the hooks take the shared front; the handler has a reference, the server an Arc: 16b's merges end on the
         // next tick, which sees the job stopped
-        let _ = h;
+        let _only_when_used_elsewhere = &h;
     }
     changed(front, id).await;
     summary(front, id, false).await
@@ -1913,7 +1913,7 @@ pub(crate) async fn end_sessions(front: &Front, id: &str) {
         if s.job.as_deref() == Some(id)
             && s.status != Some(runstav::methods::agents::SessionStatus::Exited)
         {
-            let _ = front.core.agents.kill(&s.id).await;
+            crate::soft::done(front.core.agents.kill(&s.id).await, "mod");
         }
     }
 }
@@ -2025,7 +2025,12 @@ pub async fn order(front: &Front, caller: &Caller, p: OrderParams) -> Result<Job
         .collect();
     let open: Vec<String> = ordered(&l.tasks, &data)
         .iter()
-        .filter(|t| !matches!(t.row.status.as_deref(), Some("done" | "dropped")))
+        .filter(|t| {
+            !matches!(
+                t.row.status.as_deref(),
+                Some("done" | "dropped" | "accepted" | "parked" | "superseded")
+            )
+        })
         .map(|t| t.row.id.clone())
         .collect();
     let at = open.iter().position(|x| *x == tid).unwrap_or(0) as i64;
@@ -2336,57 +2341,61 @@ mod price_tests {
     }
 
     /// Pure (D): a temp store.  One forecast row per task and one for the plan are written with the job.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn every_forecast_made_is_recorded() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let rows = vec![
-            made("J", "J#1", 10.0),
-            made("J", "J#2", 20.0),
-            made("J", "J", 30.0),
-        ];
-        f.writer
-            .write(&user(), "coord/job-create", move |tx| {
-                create_with_forecast(tx, new_job("J"), &rows, 1.0)
-            })
-            .await
-            .unwrap();
-        let n = f
-            .writer
-            .db
-            .read(|c| {
-                Ok(c.query_row(
-                    "select count(*) from forecast_made where job = 'J'",
-                    [],
-                    |r| r.get::<_, i64>(0),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(n, 3);
+    #[test]
+    fn every_forecast_made_is_recorded() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let rows = vec![
+                made("J", "J#1", 10.0),
+                made("J", "J#2", 20.0),
+                made("J", "J", 30.0),
+            ];
+            f.writer
+                .write(&user(), "coord/job-create", move |tx| {
+                    create_with_forecast(tx, new_job("J"), &rows, 1.0)
+                })
+                .await
+                .unwrap();
+            let n = f
+                .writer
+                .db
+                .read(|c| {
+                    Ok(c.query_row(
+                        "select count(*) from forecast_made where job = 'J'",
+                        [],
+                        |r| r.get::<_, i64>(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(n, 3);
+        })
     }
 
     /// Pure (D): when the forecast rows do not write, the job is not made either.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_job_and_its_forecast_are_one_write() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        f.writer
-            .write(&user(), "coord/job-create", |tx| {
-                create_with_forecast(tx, new_job("K"), &[], 1.0)
-            })
-            .await
-            .unwrap();
-        // a NaN is stored as NULL, which the not-null column refuses
-        let bad = vec![made("J", "J#1", f64::NAN)];
-        let got = f
-            .writer
-            .write(&user(), "coord/job-create", move |tx| {
-                create_with_forecast(tx, new_job("J"), &bad, 1.0)
-            })
-            .await;
-        assert!(got.is_err());
-        assert!(load(&f, "J", false).await.unwrap().is_none());
+    #[test]
+    fn the_job_and_its_forecast_are_one_write() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            f.writer
+                .write(&user(), "coord/job-create", |tx| {
+                    create_with_forecast(tx, new_job("K"), &[], 1.0)
+                })
+                .await
+                .unwrap();
+            // a NaN is stored as NULL, which the not-null column refuses
+            let bad = vec![made("J", "J#1", f64::NAN)];
+            let got = f
+                .writer
+                .write(&user(), "coord/job-create", move |tx| {
+                    create_with_forecast(tx, new_job("J"), &bad, 1.0)
+                })
+                .await;
+            assert!(got.is_err());
+            assert!(load(&f, "J", false).await.unwrap().is_none());
+        })
     }
 }
 
@@ -2444,37 +2453,40 @@ pub(crate) mod graph_plan_tests {
 
     /// Pure (D): a temp store.  A plan that names no pack carries the one drgnx ships in its proposal, and its
     /// approval records it as the job's `rule_pack`, which the gates read from then on.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_approved_proposals_pack_is_the_jobs() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let (id, data) = proposed(
-            &f,
-            dir.path(),
-            json!([{"number": "1", "title": "a", "body": "x"}]),
-        )
-        .await;
-        assert_eq!(data["pack"]["name"], json!("drgnx-default"));
-        let jid = id.clone();
-        let read = |f: &Front| {
-            let jid = jid.clone();
-            let db = f.writer.db.clone();
-            async move {
-                db.read(move |c| norn::read::evidence::pack_of_job(c, &jid))
-                    .await
-                    .unwrap()
-            }
-        };
-        assert_eq!(read(&f).await, None, "nothing before the approval");
-        approve_job(&f, &user(), &id, None).await.unwrap();
-        assert_eq!(read(&f).await, Some(crate::orch::policy::default_pack()));
+    #[test]
+    fn the_approved_proposals_pack_is_the_jobs() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let (id, data) = proposed(
+                &f,
+                dir.path(),
+                json!([{"number": "1", "title": "a", "body": "x"}]),
+            )
+            .await;
+            assert_eq!(data["pack"]["name"], json!("drgnx-default"));
+            let jid = id.clone();
+            let read = |f: &Front| {
+                let jid = jid.clone();
+                let db = f.writer.db.clone();
+                async move {
+                    db.read(move |c| norn::read::evidence::pack_of_job(c, &jid))
+                        .await
+                        .unwrap()
+                }
+            };
+            assert_eq!(read(&f).await, None, "nothing before the approval");
+            approve_job(&f, &user(), &id, None).await.unwrap();
+            assert_eq!(read(&f).await, Some(crate::orch::policy::default_pack()));
+        })
     }
 
     /// Pure (D): a temp store.  A plan under a pack with `:models` and `:procedures`: the procedures' text is read
     /// beside the pack and frozen in the proposal; a task runs on its role's (and its paths') first profile; a plan
     /// line's `**Profile:**` narrows that, and one outside the role's profiles is refused.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_pack_routes_roles_and_carries_its_procedures() {
+    #[test]
+    fn the_pack_routes_roles_and_carries_its_procedures() {
+        saman::Executor::new(2).unwrap().block_on(async move {
         let dir = tempfile::tempdir().unwrap();
         let f = front(dir.path());
         set_profiles(
@@ -2483,12 +2495,12 @@ pub(crate) mod graph_plan_tests {
         )
         .await;
         std::fs::create_dir(dir.path().join("procedures")).unwrap();
-        std::fs::write(
+        crate::fsio::write(
             dir.path().join("procedures/red-first.md"),
             "Write the failing test first.\n",
         )
         .unwrap();
-        std::fs::write(
+        crate::fsio::write(
             dir.path().join("pack.eld"),
             "(:name \"t\" :version 1 :rules ((:id \"red-first\" :kind \"enforced\" :doc \"d\"))
               :models ((:role \"implement\" :profiles (\"sonnet\" \"opus\"))
@@ -2507,7 +2519,7 @@ pub(crate) mod graph_plan_tests {
             let dir = dir.path().to_owned();
             async move {
                 let file = dir.join("plan.md");
-                std::fs::write(&file, text).unwrap();
+                crate::fsio::write(&file, text).unwrap();
                 let p: ProposeParams = serde_json::from_value(
                     json!({"plan": file.to_string_lossy(), "repo": dir.to_string_lossy()}),
                 )
@@ -2534,11 +2546,13 @@ pub(crate) mod graph_plan_tests {
         };
         assert_eq!(profile_of(&f, &data, task(1)), "sonnet");
         assert_eq!(profile_of(&f, &data, task(2)), "opus");
+})
     }
 
     /// Pure (D): a temp store.  A task's named profile is the job's reassignment for it, which `profile_of` answers.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_proposed_task_runs_on_its_named_profile() {
+    #[test]
+    fn a_proposed_task_runs_on_its_named_profile() {
+        saman::Executor::new(2).unwrap().block_on(async move {
         let dir = tempfile::tempdir().unwrap();
         let f = front(dir.path());
         set_profiles(&f, json!({"opus": {"command": ["claude-agent-acp"]}})).await;
@@ -2562,12 +2576,14 @@ pub(crate) mod graph_plan_tests {
             .unwrap();
         assert_eq!(t2.row.role.as_deref(), Some("review"));
         assert_eq!(profile_of(&f, &data, t2), "opus");
+})
     }
 
     /// Pure (D): a temp store.  A model beside a profile is not what runs: the profile does, and the proposal says
     /// the model was ignored.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_task_with_model_and_profile_runs_on_the_profile() {
+    #[test]
+    fn a_task_with_model_and_profile_runs_on_the_profile() {
+        saman::Executor::new(2).unwrap().block_on(async move {
         let dir = tempfile::tempdir().unwrap();
         let f = front(dir.path());
         set_profiles(
@@ -2601,6 +2617,7 @@ pub(crate) mod graph_plan_tests {
         let wants = crate::forecast::wants_from(&f, &id, &data);
         assert_eq!(wants[0].profile, "opus");
         assert_eq!(wants[0].model.as_deref(), Some("claude-opus-5-5"));
+})
     }
 
     /// A graph plan of TASKS proposed by the user for REPO: the job's summary, or why it was refused.
@@ -2620,42 +2637,45 @@ pub(crate) mod graph_plan_tests {
     /// Pure (D): a temp store.  A plan an agent wrote names the profile a task runs on: one a job may not run on
     /// (Codex, whose lock is not proven) or one that is not there is refused at the proposal, as `job/reassign` and
     /// Say refuse it, and no job is made.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_plan_tasks_profile_goes_through_the_jobs_refusal() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        set_profiles(&f, json!({"codex": {"command": ["codex-acp"]}})).await;
-        for (profile, why) in [
-            ("codex", "lock is not proven"),
-            ("nope", "no agent profile"),
-        ] {
-            let e = try_propose(
-                &f,
-                dir.path(),
-                json!([{"number": "1", "title": "a", "body": "x"},
+    #[test]
+    fn a_plan_tasks_profile_goes_through_the_jobs_refusal() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            set_profiles(&f, json!({"codex": {"command": ["codex-acp"]}})).await;
+            for (profile, why) in [
+                ("codex", "lock is not proven"),
+                ("nope", "no agent profile"),
+            ] {
+                let e = try_propose(
+                    &f,
+                    dir.path(),
+                    json!([{"number": "1", "title": "a", "body": "x"},
                        {"number": "3", "title": "c", "profile": profile, "body": "z"}]),
-            )
-            .await
-            .unwrap_err();
-            assert!(
-                e.message.contains("task 3") && e.message.contains(why),
-                "{}",
-                e.message
-            );
-        }
-        let jobs = f
-            .writer
-            .db
-            .read(|c| read_jobs::jobs(c, None))
-            .await
-            .unwrap();
-        assert!(jobs.is_empty(), "{jobs:?}");
+                )
+                .await
+                .unwrap_err();
+                assert!(
+                    e.message.contains("task 3") && e.message.contains(why),
+                    "{}",
+                    e.message
+                );
+            }
+            let jobs = f
+                .writer
+                .db
+                .read(|c| read_jobs::jobs(c, None))
+                .await
+                .unwrap();
+            assert!(jobs.is_empty(), "{jobs:?}");
+        })
     }
 
     /// Pure (D): a temp store.  A task that runs on a profile other than its role's route says so on the proposal,
     /// where the user reads it before the OK; a task on its route's profile adds nothing.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_tasks_own_profile_is_shown_beside_its_routes() {
+    #[test]
+    fn a_tasks_own_profile_is_shown_beside_its_routes() {
+        saman::Executor::new(2).unwrap().block_on(async move {
         let dir = tempfile::tempdir().unwrap();
         let f = front(dir.path());
         set_profiles(&f, json!({"opus": {"command": ["claude-agent-acp"]}})).await;
@@ -2680,13 +2700,15 @@ pub(crate) mod graph_plan_tests {
             !warnings.iter().any(|w| w.starts_with("task 1 ")),
             "{warnings:?}"
         );
+})
     }
 
     /// Pure (D): a temp store.  "$20" on a plan with a subscription profile and a gateway one: what the gateway
     /// measured and what the subscription's agent estimated count together, so $19 of each reaches the limit (and the
     /// gateway may spend nothing more); the limit reached says it is an estimate.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_dollar_budget_on_a_mixed_plan_binds_the_sum() {
+    #[test]
+    fn a_dollar_budget_on_a_mixed_plan_binds_the_sum() {
+        saman::Executor::new(2).unwrap().block_on(async move {
         let dir = tempfile::tempdir().unwrap();
         let f = front(dir.path());
         let (id, _) = proposed(
@@ -2718,106 +2740,113 @@ pub(crate) mod graph_plan_tests {
         assert_eq!(b.usd_left(&id), Some(0.0));
         // one card for the plan, not one per unit
         assert!(b.spend(&scope, Unit::UsdEst, 1.0).is_empty());
+})
     }
 
     /// Pure (D): a temp store.  A job approved with a limit by unit has that limit on its plan's scope as given: a share
     /// of the week is no dollar limit.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn approve_sets_limit_share_on_the_plan_scope() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let (id, _) = proposed(
-            &f,
-            dir.path(),
-            json!([{"number": "1", "title": "a", "body": "x"}]),
-        )
-        .await;
-        let p: WithLimits = serde_json::from_value(
-            json!({"id": id, "limits": [{"amount": 0.15, "unit": "limit-share"}]}),
-        )
-        .unwrap();
-        approve(&f, &user(), p).await.unwrap();
-        let l = load(&f, &id, false).await.unwrap().unwrap();
-        let scope = plan_scope(&l.job).unwrap();
-        assert_eq!(
-            f.core.budgets.limits(&scope),
-            [Limit {
-                amount: 0.15,
-                unit: Unit::LimitShare
-            }]
-        );
-        assert!(
-            f.core
-                .budgets
-                .limits(&scope)
-                .iter()
-                .all(|l| l.unit != Unit::Usd),
-            "no dollar limit is made"
-        );
-        let s = summary(&f, &id, false).await.unwrap();
-        assert_eq!(s.limits.len(), 1);
+    #[test]
+    fn approve_sets_limit_share_on_the_plan_scope() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let (id, _) = proposed(
+                &f,
+                dir.path(),
+                json!([{"number": "1", "title": "a", "body": "x"}]),
+            )
+            .await;
+            let p: WithLimits = serde_json::from_value(
+                json!({"id": id, "limits": [{"amount": 0.15, "unit": "limit-share"}]}),
+            )
+            .unwrap();
+            approve(&f, &user(), p).await.unwrap();
+            let l = load(&f, &id, false).await.unwrap().unwrap();
+            let scope = plan_scope(&l.job).unwrap();
+            assert_eq!(
+                f.core.budgets.limits(&scope),
+                [Limit {
+                    amount: 0.15,
+                    unit: Unit::LimitShare
+                }]
+            );
+            assert!(
+                f.core
+                    .budgets
+                    .limits(&scope)
+                    .iter()
+                    .all(|l| l.unit != Unit::Usd),
+                "no dollar limit is made"
+            );
+            let s = summary(&f, &id, false).await.unwrap();
+            assert_eq!(s.limits.len(), 1);
+        })
     }
 
     /// Pure (D): a temp store.  A resume without limits leaves the plan's as they are; an empty list clears them.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn resume_without_limits_keeps_them_and_empty_limits_clear() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let (id, _) = proposed(
-            &f,
-            dir.path(),
-            json!([{"number": "1", "title": "a", "body": "x"}]),
-        )
-        .await;
-        let with = |v: Value| -> WithLimits { serde_json::from_value(v).unwrap() };
-        approve(
-            &f,
-            &user(),
-            with(json!({"id": id, "limits": [{"amount": 7.0, "unit": "usd"}]})),
-        )
-        .await
-        .unwrap();
-        let l = load(&f, &id, false).await.unwrap().unwrap();
-        let scope = plan_scope(&l.job).unwrap();
-        // the plan has a subscription profile: the dollars bind the estimate too (joint)
-        let want = [
-            Limit {
-                amount: 7.0,
-                unit: Unit::Usd,
-            },
-            Limit {
-                amount: 7.0,
-                unit: Unit::UsdEst,
-            },
-        ];
-        assert_eq!(f.core.budgets.limits(&scope), want);
-        // stop, then resume with no limits: untouched
-        let me: ById = serde_json::from_value(json!({"id": id})).unwrap();
-        stop(&f, &user(), me.clone()).await.unwrap();
-        resume(&f, &user(), with(json!({"id": id}))).await.unwrap();
-        assert_eq!(f.core.budgets.limits(&scope), want);
-        // empty limits: cleared
-        stop(&f, &user(), me).await.unwrap();
-        resume(&f, &user(), with(json!({"id": id, "limits": []})))
+    #[test]
+    fn resume_without_limits_keeps_them_and_empty_limits_clear() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let (id, _) = proposed(
+                &f,
+                dir.path(),
+                json!([{"number": "1", "title": "a", "body": "x"}]),
+            )
+            .await;
+            let with = |v: Value| -> WithLimits { serde_json::from_value(v).unwrap() };
+            approve(
+                &f,
+                &user(),
+                with(json!({"id": id, "limits": [{"amount": 7.0, "unit": "usd"}]})),
+            )
             .await
             .unwrap();
-        assert!(f.core.budgets.limits(&scope).is_empty());
+            let l = load(&f, &id, false).await.unwrap().unwrap();
+            let scope = plan_scope(&l.job).unwrap();
+            // the plan has a subscription profile: the dollars bind the estimate too (joint)
+            let want = [
+                Limit {
+                    amount: 7.0,
+                    unit: Unit::Usd,
+                },
+                Limit {
+                    amount: 7.0,
+                    unit: Unit::UsdEst,
+                },
+            ];
+            assert_eq!(f.core.budgets.limits(&scope), want);
+            // stop, then resume with no limits: untouched
+            let me: ById = serde_json::from_value(json!({"id": id})).unwrap();
+            stop(&f, &user(), me.clone()).await.unwrap();
+            resume(&f, &user(), with(json!({"id": id}))).await.unwrap();
+            assert_eq!(f.core.budgets.limits(&scope), want);
+            // empty limits: cleared
+            stop(&f, &user(), me).await.unwrap();
+            resume(&f, &user(), with(json!({"id": id, "limits": []})))
+                .await
+                .unwrap();
+            assert!(f.core.budgets.limits(&scope).is_empty());
+        })
     }
 
     /// Pure (D): a temp store.  With no profile named, the task's model is what the forecast prices.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_model_without_a_profile_is_the_forecasts_model() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let (id, data) = proposed(
-            &f,
-            dir.path(),
-            json!([{"number": "1", "title": "a", "model": "claude-haiku-5-5", "body": "x"}]),
-        )
-        .await;
-        assert_eq!(data_for(&data, "profiles", &format!("{id}#1")), None);
-        let wants = crate::forecast::wants_from(&f, &id, &data);
-        assert_eq!(wants[0].model.as_deref(), Some("claude-haiku-5-5"));
+    #[test]
+    fn a_model_without_a_profile_is_the_forecasts_model() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let (id, data) = proposed(
+                &f,
+                dir.path(),
+                json!([{"number": "1", "title": "a", "model": "claude-haiku-5-5", "body": "x"}]),
+            )
+            .await;
+            assert_eq!(data_for(&data, "profiles", &format!("{id}#1")), None);
+            let wants = crate::forecast::wants_from(&f, &id, &data);
+            assert_eq!(wants[0].model.as_deref(), Some("claude-haiku-5-5"));
+        })
     }
 }
 
@@ -2881,86 +2910,96 @@ mod resume_tests {
         l.job.status.unwrap_or_default()
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_rejected_proposal_does_not_resume() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let c = user();
-        propose(&f, &c).await;
-        stop(&f, &c, by_id()).await.unwrap();
-        assert_eq!(status_of(&f).await, "stopped");
-        let e = resume(&f, &c, with_budget()).await.unwrap_err();
-        assert!(e.message.contains("was never approved"), "{}", e.message);
-        assert_eq!(status_of(&f).await, "stopped");
+    #[test]
+    fn a_rejected_proposal_does_not_resume() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let c = user();
+            propose(&f, &c).await;
+            stop(&f, &c, by_id()).await.unwrap();
+            assert_eq!(status_of(&f).await, "stopped");
+            let e = resume(&f, &c, with_budget()).await.unwrap_err();
+            assert!(e.message.contains("was never approved"), "{}", e.message);
+            assert_eq!(status_of(&f).await, "stopped");
+        })
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_stopped_approved_job_resumes() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = front(dir.path());
-        let c = user();
-        propose(&f, &c).await;
-        approve_job(&f, &c, JOB, None).await.unwrap();
-        stop(&f, &c, by_id()).await.unwrap();
-        assert_eq!(status_of(&f).await, "stopped");
-        resume(&f, &c, with_budget()).await.unwrap();
-        assert_eq!(status_of(&f).await, "running");
+    #[test]
+    fn a_stopped_approved_job_resumes() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = front(dir.path());
+            let c = user();
+            propose(&f, &c).await;
+            approve_job(&f, &c, JOB, None).await.unwrap();
+            stop(&f, &c, by_id()).await.unwrap();
+            assert_eq!(status_of(&f).await, "stopped");
+            resume(&f, &c, with_budget()).await.unwrap();
+            assert_eq!(status_of(&f).await, "running");
+        })
     }
 
     /// [D] A stop answers only once the job's work in flight ended: a task still starting (its tree being written)
     /// keeps its mark until its own work clears it, and `job/stop` waits for that, so nothing of the job writes after
     /// the answer (say-test's teardown removed a tree the start was still writing).
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_stop_waits_for_the_jobs_work_in_flight() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = Arc::new(front(dir.path()));
-        let c = user();
-        propose(&f, &c).await;
-        approve_job(&f, &c, JOB, None).await.unwrap();
-        let task = format!("{JOB}#1");
-        f.core.runs.set_busy(&task, Some("starting"));
-        let (f2, c2) = (f.clone(), c.clone());
-        let stopping = tokio::spawn(async move { stop(&f2, &c2, by_id()).await });
-        // the stop's write lands; then it has every chance to answer early (counted yields, no clock)
-        while status_of(&f).await != "stopped" {
-            tokio::task::yield_now().await;
-        }
-        for _ in 0..10_000 {
-            if stopping.is_finished() {
-                break;
+    #[test]
+    fn a_stop_waits_for_the_jobs_work_in_flight() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = Arc::new(front(dir.path()));
+            let c = user();
+            propose(&f, &c).await;
+            approve_job(&f, &c, JOB, None).await.unwrap();
+            let task = format!("{JOB}#1");
+            f.core.runs.set_busy(&task, Some("starting"));
+            let (f2, c2) = (f.clone(), c.clone());
+            let stopping = crate::clock::spawn_untracked(module_path!(), async move {
+                stop(&f2, &c2, by_id()).await
+            });
+            // the stop's write lands; then it has every chance to answer early (counted yields, no clock)
+            while status_of(&f).await != "stopped" {
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
-        assert!(
-            !stopping.is_finished(),
-            "the stop answered while the task was still starting"
-        );
-        assert_eq!(
-            f.core.runs.busy_of(&task),
-            Some("starting"),
-            "the start's own mark stays"
-        );
-        // the start ends: the stop answers
-        f.core.runs.set_busy(&task, None);
-        stopping.await.unwrap().unwrap();
+            for _ in 0..10_000 {
+                if stopping.is_finished() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                !stopping.is_finished(),
+                "the stop answered while the task was still starting"
+            );
+            assert_eq!(
+                f.core.runs.busy_of(&task),
+                Some("starting"),
+                "the start's own mark stays"
+            );
+            // the start ends: the stop answers
+            f.core.runs.set_busy(&task, None);
+            stopping.await.unwrap().unwrap();
+        })
     }
 
     /// A start or merge that panics still clears its mark (`BusyMark` drops on the unwind), so `job/stop` answers
     /// instead of waiting for a mark no one will clear.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_mark_whose_work_panicked_is_cleared() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = Arc::new(front(dir.path()));
-        let task = format!("{JOB}#1");
-        let mark = BusyMark::set(&f, &task, "merging");
-        assert_eq!(f.core.runs.busy_of(&task), Some("merging"));
-        let died = tokio::spawn(async move {
-            let _mark = mark;
-            panic!("a merge that panics");
+    #[test]
+    fn a_mark_whose_work_panicked_is_cleared() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = Arc::new(front(dir.path()));
+            let task = format!("{JOB}#1");
+            let mark = BusyMark::set(&f, &task, "merging");
+            assert_eq!(f.core.runs.busy_of(&task), Some("merging"));
+            let died = crate::clock::spawn_untracked(module_path!(), async move {
+                let _mark = mark;
+                panic!("a merge that panics");
+            })
+            .await;
+            assert!(died.is_err());
+            assert_eq!(f.core.runs.busy_of(&task), None);
+            f.core.runs.settled(JOB).await;
         })
-        .await;
-        assert!(died.is_err());
-        assert_eq!(f.core.runs.busy_of(&task), None);
-        f.core.runs.settled(JOB).await;
     }
 }

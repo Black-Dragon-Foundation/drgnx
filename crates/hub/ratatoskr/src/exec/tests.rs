@@ -134,63 +134,69 @@ fn open(root: &Path) -> Runner {
     r
 }
 
-#[tokio::test]
-async fn a_job_runs_logs_and_summarises() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    let s = spec(
-        Starter::User,
-        d.path(),
-        "echo one; echo two; exit 3",
-        Duration::from_secs(30),
-    );
-    let id = r.start(s).await.unwrap();
-    let row = ended(&r, &id).await;
-    assert_eq!(row.status, ExecStatus::Done);
-    let sum = row.summary.unwrap();
-    assert_eq!(sum.exit, Some(3));
-    assert_eq!(sum.lines, vec!["one".to_string(), "two".to_string()]);
-    assert_eq!(r.log_slice(&id, 1, 5), vec!["two".to_string()]);
-    assert_eq!(r.list(None, false).len(), 1);
-    assert!(r.list(None, true).is_empty());
-    assert!(r.list(Some("nobody"), false).is_empty());
-}
-
-#[tokio::test]
-async fn exec_timebox_ends_it() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    let id = r
-        .start(spec(
+#[test]
+fn a_job_runs_logs_and_summarises() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let s = spec(
             Starter::User,
             d.path(),
-            "sleep 60",
-            Duration::from_millis(400),
-        ))
-        .await
-        .unwrap();
-    let row = ended(&r, &id).await;
-    assert_eq!(row.status, ExecStatus::TimedOut);
+            "echo one; echo two; exit 3",
+            Duration::from_secs(30),
+        );
+        let id = r.start(s).await.unwrap();
+        let row = ended(&r, &id).await;
+        assert_eq!(row.status, ExecStatus::Done);
+        let sum = row.summary.unwrap();
+        assert_eq!(sum.exit, Some(3));
+        assert_eq!(sum.lines, vec!["one".to_string(), "two".to_string()]);
+        assert_eq!(r.log_slice(&id, 1, 5), vec!["two".to_string()]);
+        assert_eq!(r.list(None, false).len(), 1);
+        assert!(r.list(None, true).is_empty());
+        assert!(r.list(Some("nobody"), false).is_empty());
+    })
 }
 
-#[tokio::test]
-async fn stop_ends_a_running_job() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    let id = r
-        .start(spec(
-            Starter::User,
-            d.path(),
-            "sleep 60",
-            Duration::from_secs(60),
-        ))
-        .await
-        .unwrap();
-    let row = r.stop(&id).await.unwrap();
-    assert_eq!(row.status, ExecStatus::Stopped);
-    // A second stop changes nothing.
-    assert_eq!(r.stop(&id).await.unwrap().status, ExecStatus::Stopped);
-    assert!(r.stop("nope").await.is_err());
+#[test]
+fn exec_timebox_ends_it() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let id = r
+            .start(spec(
+                Starter::User,
+                d.path(),
+                "sleep 60",
+                Duration::from_millis(400),
+            ))
+            .await
+            .unwrap();
+        let row = ended(&r, &id).await;
+        assert_eq!(row.status, ExecStatus::TimedOut);
+    })
+}
+
+#[test]
+fn stop_ends_a_running_job() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let id = r
+            .start(spec(
+                Starter::User,
+                d.path(),
+                "sleep 60",
+                Duration::from_secs(60),
+            ))
+            .await
+            .unwrap();
+        let row = r.stop(&id).await.unwrap();
+        assert_eq!(row.status, ExecStatus::Stopped);
+        // A second stop changes nothing.
+        assert_eq!(r.stop(&id).await.unwrap().status, ExecStatus::Stopped);
+        assert!(r.stop("nope").await.is_err());
+    })
 }
 
 /// On the test clock a stop whose first look finds no end still answers once the end is recorded, with no advance:
@@ -207,8 +213,8 @@ fn a_stop_on_the_test_clock_answers_an_end_recorded_after_its_first_look() {
         s.user.no_timebox = true;
         let id = r.start(s).await.unwrap();
         let inner = r.inner.get().unwrap().clone();
-        inner.finishing.lock().unwrap().insert(id.clone());
-        let stop = tokio::spawn({
+        saman::lock(&inner.finishing).insert(id.clone());
+        let stop = crate::clock::spawn_untracked(module_path!(), {
             let (inner, id) = (inner.clone(), id.clone());
             async move { inner.stop(&id).await }
         });
@@ -216,7 +222,7 @@ fn a_stop_on_the_test_clock_answers_an_end_recorded_after_its_first_look() {
             (crate::clock::sleepers() > 0).then_some(())
         })
         .await;
-        inner.finishing.lock().unwrap().remove(&id);
+        saman::lock(&inner.finishing).remove(&id);
         inner.finish(&id).await;
         let row = tokio::time::timeout(Duration::from_secs(10), stop)
             .await
@@ -239,7 +245,7 @@ fn a_stop_on_the_test_clock_whose_end_never_comes_fails_naming_the_job() {
         s.user.no_timebox = true;
         let id = r.start(s).await.unwrap();
         let inner = r.inner.get().unwrap().clone();
-        inner.finishing.lock().unwrap().insert(id.clone());
+        saman::lock(&inner.finishing).insert(id.clone());
         let answer = tokio::time::timeout(Duration::from_secs(20), inner.clone().stop(&id))
             .await
             .expect("the stop answers once its real-time bound runs out");
@@ -248,28 +254,30 @@ fn a_stop_on_the_test_clock_whose_end_never_comes_fails_naming_the_job() {
     });
 }
 
-#[tokio::test]
-async fn bad_jobs_are_refused() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    let mut s = spec(Starter::User, d.path(), "true", Duration::from_secs(5));
-    s.argv.clear();
-    assert!(r.start(s).await.is_err());
-    let missing = d.path().join("missing");
-    assert!(
-        r.start(spec(
-            Starter::User,
-            &missing,
-            "true",
-            Duration::from_secs(5)
-        ))
-        .await
-        .is_err()
-    );
-    assert!(
-        r.list(None, false).is_empty(),
-        "a refused job leaves no folder"
-    );
+#[test]
+fn bad_jobs_are_refused() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let mut s = spec(Starter::User, d.path(), "true", Duration::from_secs(5));
+        s.argv.clear();
+        assert!(r.start(s).await.is_err());
+        let missing = d.path().join("missing");
+        assert!(
+            r.start(spec(
+                Starter::User,
+                &missing,
+                "true",
+                Duration::from_secs(5)
+            ))
+            .await
+            .is_err()
+        );
+        assert!(
+            r.list(None, false).is_empty(),
+            "a refused job leaves no folder"
+        );
+    })
 }
 
 /// A job whose start time cannot be read is refused: the restart path tells a live job from a reused pid by that time,
@@ -314,7 +322,7 @@ fn exec_survives_a_hub_restart() {
         let r = open(d.path());
         assert_eq!(r.get(&id).unwrap().status, ExecStatus::Running);
         // opens the pipe once the job's shell is reading it
-        std::fs::write(&go, "go\n").unwrap();
+        crate::fsio::write_pipe(&go, "go\n").unwrap();
         let row = ended(&r, &id).await;
         assert_eq!(row.status, ExecStatus::Done);
         assert_eq!(row.summary.unwrap().lines, vec!["survived".to_string()]);
@@ -347,7 +355,7 @@ fn a_job_whose_process_is_gone_is_lost() {
         relay: None,
         keyed: false,
     };
-    std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+    crate::fsio::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         let r = open(d.path());
@@ -364,23 +372,25 @@ fn start_params(machine: Option<&str>) -> StartParams {
 }
 
 /// [D] `machine`: none or `auto`, `local`, or a runner the hub knows; any other name is refused before anything starts.
-#[tokio::test]
-async fn a_machine_the_hub_does_not_know_is_refused() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    let q = &r.inner.get().unwrap().queue;
-    assert_eq!(machine(&start_params(None), q).unwrap(), Machine::Auto);
-    assert_eq!(
-        machine(&start_params(Some("auto")), q).unwrap(),
-        Machine::Auto
-    );
-    assert_eq!(
-        machine(&start_params(Some("local")), q).unwrap(),
-        Machine::Local
-    );
-    let e = machine(&start_params(Some("desktop")), q).unwrap_err();
-    assert_eq!(e.code, ErrorCode::InvalidParams);
-    assert!(e.message.contains("no runner desktop"), "{}", e.message);
+#[test]
+fn a_machine_the_hub_does_not_know_is_refused() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let q = &r.inner.get().unwrap().queue;
+        assert_eq!(machine(&start_params(None), q).unwrap(), Machine::Auto);
+        assert_eq!(
+            machine(&start_params(Some("auto")), q).unwrap(),
+            Machine::Auto
+        );
+        assert_eq!(
+            machine(&start_params(Some("local")), q).unwrap(),
+            Machine::Local
+        );
+        let e = machine(&start_params(Some("desktop")), q).unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidParams);
+        assert!(e.message.contains("no runner desktop"), "{}", e.message);
+    })
 }
 
 /// [D] pure: a container job granted a network reaches its cell's hosts (the settings' list), here and on a runner;
@@ -570,26 +580,28 @@ fn a_job_without_a_time_box_has_no_deadline() {
     assert_eq!((m.timebox_s, m.deadline), (Some(60), Some(61.0)));
 }
 
-#[tokio::test]
-async fn a_user_job_without_a_time_box_is_recorded_without_one_and_stop_ends_it() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    let gate = d.path().join("gate");
-    fifo(&gate);
-    // a one millisecond box that must not apply: with the timer armed the job would end `TimedOut` at once
-    let mut s = spec(
-        Starter::User,
-        d.path(),
-        &format!("read x < {}", gate.display()),
-        Duration::from_millis(1),
-    );
-    s.user.no_timebox = true;
-    let id = r.start(s).await.unwrap();
-    let row = r.get(&id).unwrap();
-    assert_eq!(row.timebox_s, None);
-    assert_eq!(r.inner.get().unwrap().meta(&id).unwrap().deadline, None);
-    assert_eq!(r.stop(&id).await.unwrap().status, ExecStatus::Stopped);
-    assert_eq!(ended(&r, &id).await.status, ExecStatus::Stopped);
+#[test]
+fn a_user_job_without_a_time_box_is_recorded_without_one_and_stop_ends_it() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let gate = d.path().join("gate");
+        fifo(&gate);
+        // a one millisecond box that must not apply: with the timer armed the job would end `TimedOut` at once
+        let mut s = spec(
+            Starter::User,
+            d.path(),
+            &format!("read x < {}", gate.display()),
+            Duration::from_millis(1),
+        );
+        s.user.no_timebox = true;
+        let id = r.start(s).await.unwrap();
+        let row = r.get(&id).unwrap();
+        assert_eq!(row.timebox_s, None);
+        assert_eq!(r.inner.get().unwrap().meta(&id).unwrap().deadline, None);
+        assert_eq!(r.stop(&id).await.unwrap().status, ExecStatus::Stopped);
+        assert_eq!(ended(&r, &id).await.status, ExecStatus::Stopped);
+    })
 }
 
 #[test]
@@ -643,85 +655,89 @@ fn unit_has_memory_max_and_nice() {
     assert_eq!(args[at..], ["nice", "-n", "7", "echo", "a"]);
 }
 
-#[tokio::test]
-async fn a_user_job_gets_its_name_env_and_nice() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    let mut s = spec(
-        Starter::User,
-        d.path(),
-        // the shell's niceness, from `ps`: a bare `nice` prints it only with GNU's (BSD's needs a utility)
-        "echo \"$JOB_VAR\"; echo $(ps -o nice= -p $$)",
-        Duration::from_secs(30),
-    );
-    s.user = UserJob {
-        name: Some("grammars".into()),
-        env: vec![("JOB_VAR".into(), "from-the-request".into())],
-        memory_max: None,
-        nice: Some(7),
-        no_timebox: false,
-        stall_s: None,
-        silent_s: None,
-    };
-    let id = r.start(s).await.unwrap();
-    let row = ended(&r, &id).await;
-    assert_eq!(row.name.as_deref(), Some("grammars"));
-    // `nice -n` adds to the hub's own niceness
-    // SAFETY: getpriority(2) reads this process's niceness.
-    let base = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
-    assert_eq!(
-        row.summary.unwrap().lines,
-        vec![
-            "from-the-request".to_string(),
-            (base + 7).min(19).to_string()
-        ]
-    );
-    assert_eq!(r.list(None, false)[0].name.as_deref(), Some("grammars"));
+#[test]
+fn a_user_job_gets_its_name_env_and_nice() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let mut s = spec(
+            Starter::User,
+            d.path(),
+            // the shell's niceness, from `ps`: a bare `nice` prints it only with GNU's (BSD's needs a utility)
+            "echo \"$JOB_VAR\"; echo $(ps -o nice= -p $$)",
+            Duration::from_secs(30),
+        );
+        s.user = UserJob {
+            name: Some("grammars".into()),
+            env: vec![("JOB_VAR".into(), "from-the-request".into())],
+            memory_max: None,
+            nice: Some(7),
+            no_timebox: false,
+            stall_s: None,
+            silent_s: None,
+        };
+        let id = r.start(s).await.unwrap();
+        let row = ended(&r, &id).await;
+        assert_eq!(row.name.as_deref(), Some("grammars"));
+        // `nice -n` adds to the hub's own niceness
+        // SAFETY: getpriority(2) reads this process's niceness.
+        let base = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+        assert_eq!(
+            row.summary.unwrap().lines,
+            vec![
+                "from-the-request".to_string(),
+                (base + 7).min(19).to_string()
+            ]
+        );
+        assert_eq!(r.list(None, false)[0].name.as_deref(), Some("grammars"));
+    })
 }
 
 /// A user's job starts from the hub's whole environment with the login shell's overlay (a variable outside the agents'
 /// list reaches it), less a provider's key variable; an agent's job keeps the short list.
-#[tokio::test]
-async fn a_user_job_gets_the_shells_environment_and_an_agents_the_list() {
-    let d = tempfile::tempdir().unwrap();
-    let shell = crate::shell_env::ShellEnv::default();
-    shell.set(
-        vec![
-            ("OLLAMA_MODELS".into(), "/models/here".into()),
-            ("ACME_ACCESS".into(), "leak".into()),
-        ],
-        &[],
-    );
-    let r = Runner::default();
-    r.open(
-        d.path().join("exec"),
-        Hooks {
-            shell_env: shell,
-            key_envs: Arc::new(|| vec!["ACME_ACCESS".to_string()]),
-            plain_sessions: true,
-            ..hooks()
-        },
-    );
-    let script = "echo \"models=${OLLAMA_MODELS-unset} access=${ACME_ACCESS-unset}\"";
-    let user = r
-        .start(spec(
-            Starter::User,
-            d.path(),
-            script,
-            Duration::from_secs(30),
-        ))
-        .await
-        .unwrap();
-    let agent = r.start(agents(d.path(), script)).await.unwrap();
-    let lines = |row: ExecRow| row.summary.unwrap().lines;
-    assert_eq!(
-        lines(ended(&r, &user).await),
-        ["models=/models/here access=unset"]
-    );
-    assert_eq!(
-        lines(ended(&r, &agent).await),
-        ["models=unset access=unset"]
-    );
+#[test]
+fn a_user_job_gets_the_shells_environment_and_an_agents_the_list() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let shell = crate::shell_env::ShellEnv::default();
+        shell.set(
+            vec![
+                ("OLLAMA_MODELS".into(), "/models/here".into()),
+                ("ACME_ACCESS".into(), "leak".into()),
+            ],
+            &[],
+        );
+        let r = Runner::default();
+        r.open(
+            d.path().join("exec"),
+            Hooks {
+                shell_env: shell,
+                key_envs: Arc::new(|| vec!["ACME_ACCESS".to_string()]),
+                plain_sessions: true,
+                ..hooks()
+            },
+        );
+        let script = "echo \"models=${OLLAMA_MODELS-unset} access=${ACME_ACCESS-unset}\"";
+        let user = r
+            .start(spec(
+                Starter::User,
+                d.path(),
+                script,
+                Duration::from_secs(30),
+            ))
+            .await
+            .unwrap();
+        let agent = r.start(agents(d.path(), script)).await.unwrap();
+        let lines = |row: ExecRow| row.summary.unwrap().lines;
+        assert_eq!(
+            lines(ended(&r, &user).await),
+            ["models=/models/here access=unset"]
+        );
+        assert_eq!(
+            lines(ended(&r, &agent).await),
+            ["models=unset access=unset"]
+        );
+    })
 }
 
 /// The user's base environment drops what looks like a key, a provider's key variable and a name that is not text.
@@ -748,54 +764,55 @@ fn a_user_jobs_base_environment_has_no_keys() {
 
 /// The row `exec/runs-in-the-starters-sandbox`: needs the real sandbox's bwrap tier, which the build container lacks
 /// (run it on a host with bwrap or in GitHub CI: `cargo test -p ratatoskr exec::tests -- --ignored`).
-#[tokio::test]
+#[test]
 #[ignore = "needs bwrap (the real sandbox): a host with bwrap or the GitHub CI lane"]
-async fn exec_runs_in_the_starters_sandbox() {
-    // The sandbox's helper is the process's own binary, here the test harness: the hub binary the same build made
-    // (`<target>/<profile>/ratatoskr`, skuld::profile_dir) takes its place.
-    let hub = skuld::workspace_bin("ratatoskr", None, None);
-    assert!(
-        hub.is_file(),
-        "{} is not built (cargo test builds it with the package's tests)",
-        hub.display()
-    );
-    crate::idle::pin_exe_for_test(std::fs::canonicalize(&hub).unwrap());
-    let d = tempfile::tempdir_in("/tmp").unwrap();
-    let wt = d.path().join("wt");
-    std::fs::create_dir_all(&wt).unwrap();
-    // the hub's dirs (state, runtime, tmp) are the tempdir's, never $HOME's; the session dir is made the way a
-    // session start makes it. The `--ignored` lane runs one test at a time (`--test-threads 1`), so nothing reads
-    // the environment meanwhile; the tests after this one in the same process read it again, so the guard puts the
-    // three variables back when the test ends, a panic included (a TMPDIR left naming the removed tempdir made every
-    // later `tempfile::tempdir()` of the lane fail)
-    struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            for (k, v) in &self.0 {
-                unsafe {
-                    match v {
-                        Some(v) => std::env::set_var(k, v),
-                        None => std::env::remove_var(k),
+fn exec_runs_in_the_starters_sandbox() {
+    saman::block_on_current(async move {
+        // The sandbox's helper is the process's own binary, here the test harness: the hub binary the same build made
+        // (`<target>/<profile>/ratatoskr`, skuld::profile_dir) takes its place.
+        let hub = skuld::workspace_bin("ratatoskr", None, None);
+        assert!(
+            hub.is_file(),
+            "{} is not built (cargo test builds it with the package's tests)",
+            hub.display()
+        );
+        crate::idle::pin_exe_for_test(std::fs::canonicalize(&hub).unwrap());
+        let d = tempfile::tempdir_in("/tmp").unwrap();
+        let wt = d.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        // the hub's dirs (state, runtime, tmp) are the tempdir's, never $HOME's; the session dir is made the way a
+        // session start makes it. The `--ignored` lane runs one test at a time (`--test-threads 1`), so nothing reads
+        // the environment meanwhile; the tests after this one in the same process read it again, so the guard puts the
+        // three variables back when the test ends, a panic included (a TMPDIR left naming the removed tempdir made every
+        // later `tempfile::tempdir()` of the lane fail)
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (k, v) in &self.0 {
+                    unsafe {
+                        match v {
+                            Some(v) => std::env::set_var(k, v),
+                            None => std::env::remove_var(k),
+                        }
                     }
                 }
             }
         }
-    }
-    let _restore = Restore(
-        ["XDG_STATE_HOME", "TMPDIR", "XDG_RUNTIME_DIR"]
-            .into_iter()
-            .map(|k| (k, std::env::var_os(k)))
-            .collect(),
-    );
-    unsafe {
-        std::env::set_var("XDG_STATE_HOME", d.path().join("state"));
-        std::env::set_var("TMPDIR", d.path());
-        std::env::remove_var("XDG_RUNTIME_DIR");
-    }
-    let env = runstav::paths::Env::process();
-    runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), "s1").unwrap();
-    let r = open(d.path());
-    let id = r
+        let _restore = Restore(
+            [stig::Xdg::State.var(), "TMPDIR", stig::SYSTEM_RUNTIME_VAR]
+                .into_iter()
+                .map(|k| (k, std::env::var_os(k)))
+                .collect(),
+        );
+        unsafe {
+            std::env::set_var(stig::Xdg::State.var(), d.path().join("state"));
+            std::env::set_var("TMPDIR", d.path());
+            std::env::remove_var(stig::SYSTEM_RUNTIME_VAR);
+        }
+        let env = runstav::paths::Env::process();
+        runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), "s1").unwrap();
+        let r = open(d.path());
+        let id = r
         .start(spec(
             Starter::Session("s1".into()),
             &wt,
@@ -804,12 +821,13 @@ async fn exec_runs_in_the_starters_sandbox() {
         ))
         .await
         .unwrap();
-    let row = ended(&r, &id).await;
-    assert_eq!(row.status, ExecStatus::Done);
-    let lines = row.summary.unwrap().lines;
-    assert!(lines.contains(&"wrote-inside".to_string()), "{lines:?}");
-    assert!(lines.contains(&"denied-outside".to_string()), "{lines:?}");
-    assert!(wt.join("inside").exists());
+        let row = ended(&r, &id).await;
+        assert_eq!(row.status, ExecStatus::Done);
+        let lines = row.summary.unwrap().lines;
+        assert!(lines.contains(&"wrote-inside".to_string()), "{lines:?}");
+        assert!(lines.contains(&"denied-outside".to_string()), "{lines:?}");
+        assert!(wt.join("inside").exists());
+    })
 }
 
 const REF: &str = "registry.example/tools@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -843,20 +861,22 @@ fn container_spec(cwd: &Path) -> ExecSpec {
     }
 }
 
-#[tokio::test]
-async fn container_jobs_without_podman_are_refused_with_a_doctor_hint() {
-    let d = tempfile::tempdir().unwrap();
-    let r = Runner::default();
-    r.open(
-        d.path().join("exec"),
-        Hooks {
-            podman: None,
-            ..hooks()
-        },
-    );
-    let e = r.start(container_spec(d.path())).await.unwrap_err();
-    assert!(e.message.contains("drgnx doctor"), "{}", e.message);
-    assert!(r.list(None, false).is_empty());
+#[test]
+fn container_jobs_without_podman_are_refused_with_a_doctor_hint() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = Runner::default();
+        r.open(
+            d.path().join("exec"),
+            Hooks {
+                podman: None,
+                ..hooks()
+            },
+        );
+        let e = r.start(container_spec(d.path())).await.unwrap_err();
+        assert!(e.message.contains("drgnx doctor"), "{}", e.message);
+        assert!(r.list(None, false).is_empty());
+    })
 }
 
 /// A fake podman's answer to `podman info`: cgroup v2, the systemd manager, the caps' controllers.
@@ -865,12 +885,13 @@ const INFO_ENFORCES: &str = "if [ \"$1\" = info ]; then echo '{\"host\":{\"cgrou
 
 /// A podman that cannot enforce the caps (rootless, no systemd user session: cgroupfs) refuses the job, and nothing
 /// is pulled or run.
-#[tokio::test]
-async fn a_container_job_whose_caps_podman_cannot_enforce_is_refused() {
-    let d = tempfile::tempdir().unwrap();
-    let fake = d.path().join("podman");
-    let ran = d.path().join("ran");
-    hlaup::write(
+#[test]
+fn a_container_job_whose_caps_podman_cannot_enforce_is_refused() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let fake = d.path().join("podman");
+        let ran = d.path().join("ran");
+        hlaup::write(
         &fake,
         format!(
             "#!/bin/sh\nif [ \"$1\" = info ]; then echo '{{\"host\":{{\"cgroupVersion\":\"v2\",\
@@ -880,44 +901,47 @@ async fn a_container_job_whose_caps_podman_cannot_enforce_is_refused() {
         ),
     )
     .unwrap();
-    let r = Runner::default();
-    r.open(
-        d.path().join("exec"),
-        Hooks {
-            podman: Some(fake),
-            ..hooks()
-        },
-    );
-    let e = r.start(container_spec(d.path())).await.unwrap_err();
-    assert!(e.message.contains("cgroupfs"), "{}", e.message);
-    assert!(!ran.exists(), "podman was asked to pull or run");
+        let r = Runner::default();
+        r.open(
+            d.path().join("exec"),
+            Hooks {
+                podman: Some(fake),
+                ..hooks()
+            },
+        );
+        let e = r.start(container_spec(d.path())).await.unwrap_err();
+        assert!(e.message.contains("cgroupfs"), "{}", e.message);
+        assert!(!ran.exists(), "podman was asked to pull or run");
+    })
 }
 
-#[tokio::test]
-async fn a_container_job_runs_the_fixed_podman_line() {
-    let d = tempfile::tempdir().unwrap();
-    // a stand-in for podman: it enforces limits, the image is "present", and `run` prints the line it was given
-    let fake = d.path().join("podman");
-    hlaup::write(&fake,
+#[test]
+fn a_container_job_runs_the_fixed_podman_line() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        // a stand-in for podman: it enforces limits, the image is "present", and `run` prints the line it was given
+        let fake = d.path().join("podman");
+        hlaup::write(&fake,
         format!("#!/bin/sh\n{INFO_ENFORCES}if [ \"$1\" = image ]; then exit 0; fi\nprintf '%s\\n' \"$@\"\n"),
     ).unwrap();
-    let r = Runner::default();
-    r.open(
-        d.path().join("exec"),
-        Hooks {
-            podman: Some(fake),
-            ..hooks()
-        },
-    );
-    let id = r.start(container_spec(d.path())).await.unwrap();
-    let row = ended(&r, &id).await;
-    assert_eq!(row.status, ExecStatus::Done);
-    assert_eq!(row.kind, ExecKind::Container);
-    assert_eq!(row.image.as_deref(), Some("tools"));
-    let log = r.log_slice(&id, 0, 100);
-    assert_eq!(log.first().map(String::as_str), Some("run"));
-    assert!(log.contains(&"--network=none".to_string()));
-    assert_eq!(&log[log.len() - 3..], [REF, "make", "test"]);
+        let r = Runner::default();
+        r.open(
+            d.path().join("exec"),
+            Hooks {
+                podman: Some(fake),
+                ..hooks()
+            },
+        );
+        let id = r.start(container_spec(d.path())).await.unwrap();
+        let row = ended(&r, &id).await;
+        assert_eq!(row.status, ExecStatus::Done);
+        assert_eq!(row.kind, ExecKind::Container);
+        assert_eq!(row.image.as_deref(), Some("tools"));
+        let log = r.log_slice(&id, 0, 100);
+        assert_eq!(log.first().map(String::as_str), Some("run"));
+        assert!(log.contains(&"--network=none".to_string()));
+        assert_eq!(&log[log.len() - 3..], [REF, "make", "test"]);
+    })
 }
 
 /// A runner whose sessions' jobs run unsandboxed (as the conformance lane's do).
@@ -950,108 +974,112 @@ fn agents(d: &Path, script: &str) -> ExecSpec {
 
 /// The machine's slots are the agents': four of the editor's servers (no time box) run, and an agent's job still starts
 /// at once, as does a fifth job of the user's.
-#[tokio::test]
-async fn the_users_servers_leave_the_agents_slots_free() {
-    let d = tempfile::tempdir().unwrap();
-    let r = plain(d.path(), 4);
-    let mut servers = Vec::new();
-    for _ in 0..4 {
-        let mut s = spec(
-            Starter::User,
-            d.path(),
-            "exec sleep 600",
-            Duration::from_secs(30),
+#[test]
+fn the_users_servers_leave_the_agents_slots_free() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = plain(d.path(), 4);
+        let mut servers = Vec::new();
+        for _ in 0..4 {
+            let mut s = spec(
+                Starter::User,
+                d.path(),
+                "exec sleep 600",
+                Duration::from_secs(30),
+            );
+            s.user.no_timebox = true;
+            let id = r.start(s).await.unwrap();
+            assert!(!r.is_queued(&id));
+            servers.push(id);
+        }
+        let agent = r.start(agents(d.path(), "echo agent")).await.unwrap();
+        assert!(
+            !r.is_queued(&agent),
+            "the agent's job waits behind the user's servers"
         );
-        s.user.no_timebox = true;
-        let id = r.start(s).await.unwrap();
-        assert!(!r.is_queued(&id));
-        servers.push(id);
-    }
-    let agent = r.start(agents(d.path(), "echo agent")).await.unwrap();
-    assert!(
-        !r.is_queued(&agent),
-        "the agent's job waits behind the user's servers"
-    );
-    let fifth = r
-        .start(spec(
-            Starter::User,
-            d.path(),
-            "echo fifth",
-            Duration::from_secs(30),
-        ))
-        .await
-        .unwrap();
-    assert!(!r.is_queued(&fifth));
-    assert_eq!(ended(&r, &agent).await.status, ExecStatus::Done);
-    assert_eq!(ended(&r, &fifth).await.status, ExecStatus::Done);
-    for id in servers {
-        assert_eq!(r.stop(&id).await.unwrap().status, ExecStatus::Stopped);
-    }
+        let fifth = r
+            .start(spec(
+                Starter::User,
+                d.path(),
+                "echo fifth",
+                Duration::from_secs(30),
+            ))
+            .await
+            .unwrap();
+        assert!(!r.is_queued(&fifth));
+        assert_eq!(ended(&r, &agent).await.status, ExecStatus::Done);
+        assert_eq!(ended(&r, &fifth).await.status, ExecStatus::Done);
+        for id in servers {
+            assert_eq!(r.stop(&id).await.unwrap().status, ExecStatus::Stopped);
+        }
+    })
 }
 
 /// B1: a session's job runs in its worktree or inside it; any other folder is refused before anything starts.
-#[tokio::test]
-async fn a_session_job_outside_its_worktree_is_refused() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    let (wt, inside, outside) = (
-        d.path().join("wt"),
-        d.path().join("wt/sub"),
-        d.path().join("other"),
-    );
-    for p in [&inside, &outside] {
-        std::fs::create_dir_all(p).unwrap();
-    }
-    std::os::unix::fs::symlink(&outside, wt.join("escape")).unwrap();
-    let session = || Starter::Session("S1".into());
-    let mut s = spec(session(), &outside, "true", Duration::from_secs(30));
-    s.worktree = Some(wt.clone());
-    let e = r.start(s).await.unwrap_err();
-    assert!(e.message.contains("outside your worktree"), "{}", e.message);
-    // a link out of the worktree is resolved first
-    let mut s = spec(
-        session(),
-        &wt.join("escape"),
-        "true",
-        Duration::from_secs(30),
-    );
-    s.worktree = Some(wt.clone());
-    assert!(
-        r.start(s)
-            .await
-            .unwrap_err()
-            .message
-            .contains("outside your worktree")
-    );
-    // a `..` out of it too
-    let mut s = spec(
-        session(),
-        &inside.join("../../other"),
-        "true",
-        Duration::from_secs(30),
-    );
-    s.worktree = Some(wt.clone());
-    assert!(
-        r.start(s)
-            .await
-            .unwrap_err()
-            .message
-            .contains("outside your worktree")
-    );
-    // no worktree, no job
-    let mut s = spec(session(), &inside, "true", Duration::from_secs(30));
-    s.worktree = None;
-    assert!(
-        r.start(s)
-            .await
-            .unwrap_err()
-            .message
-            .contains("needs its worktree")
-    );
-    assert!(
-        r.list(None, false).is_empty(),
-        "a refused job leaves nothing"
-    );
+#[test]
+fn a_session_job_outside_its_worktree_is_refused() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let (wt, inside, outside) = (
+            d.path().join("wt"),
+            d.path().join("wt/sub"),
+            d.path().join("other"),
+        );
+        for p in [&inside, &outside] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        std::os::unix::fs::symlink(&outside, wt.join("escape")).unwrap();
+        let session = || Starter::Session("S1".into());
+        let mut s = spec(session(), &outside, "true", Duration::from_secs(30));
+        s.worktree = Some(wt.clone());
+        let e = r.start(s).await.unwrap_err();
+        assert!(e.message.contains("outside your worktree"), "{}", e.message);
+        // a link out of the worktree is resolved first
+        let mut s = spec(
+            session(),
+            &wt.join("escape"),
+            "true",
+            Duration::from_secs(30),
+        );
+        s.worktree = Some(wt.clone());
+        assert!(
+            r.start(s)
+                .await
+                .unwrap_err()
+                .message
+                .contains("outside your worktree")
+        );
+        // a `..` out of it too
+        let mut s = spec(
+            session(),
+            &inside.join("../../other"),
+            "true",
+            Duration::from_secs(30),
+        );
+        s.worktree = Some(wt.clone());
+        assert!(
+            r.start(s)
+                .await
+                .unwrap_err()
+                .message
+                .contains("outside your worktree")
+        );
+        // no worktree, no job
+        let mut s = spec(session(), &inside, "true", Duration::from_secs(30));
+        s.worktree = None;
+        assert!(
+            r.start(s)
+                .await
+                .unwrap_err()
+                .message
+                .contains("needs its worktree")
+        );
+        assert!(
+            r.list(None, false).is_empty(),
+            "a refused job leaves nothing"
+        );
+    })
 }
 
 /// B1: a container job mounts the session's worktree, never the folder the request names, and works in the subfolder.
@@ -1097,316 +1125,332 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
 
 /// S6: an agent's job that finds the machine full is recorded as queued and answered at once; it starts when the slot
 /// frees.
-#[tokio::test]
-async fn a_job_on_a_full_machine_is_queued_and_starts_when_a_slot_frees() {
-    let d = tempfile::tempdir().unwrap();
-    let r = one_slot(d.path());
-    let gate = d.path().join("gate");
-    let first = r
-        .start(agents(
-            d.path(),
-            &format!("while [ ! -e {} ]; do sleep 0.05; done", gate.display()),
-        ))
+#[test]
+fn a_job_on_a_full_machine_is_queued_and_starts_when_a_slot_frees() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = one_slot(d.path());
+        let gate = d.path().join("gate");
+        let first = r
+            .start(agents(
+                d.path(),
+                &format!("while [ ! -e {} ]; do sleep 0.05; done", gate.display()),
+            ))
+            .await
+            .unwrap();
+        // the first job holds the only slot until the gate is written, below: a start that waited for the slot would wait
+        // for ever (the deadline only bounds that failure)
+        let second = tokio::time::timeout(
+            Duration::from_secs(30),
+            r.start(agents(d.path(), "echo second")),
+        )
         .await
+        .expect("the start blocked")
         .unwrap();
-    // the first job holds the only slot until the gate is written, below: a start that waited for the slot would wait
-    // for ever (the deadline only bounds that failure)
-    let second = tokio::time::timeout(
-        Duration::from_secs(30),
-        r.start(agents(d.path(), "echo second")),
-    )
-    .await
-    .expect("the start blocked")
-    .unwrap();
-    assert!(r.is_queued(&second) && !r.is_queued(&first));
-    assert_eq!(r.get(&second).unwrap().status, ExecStatus::Queued);
-    assert_eq!(r.get(&first).unwrap().status, ExecStatus::Running);
-    assert_eq!(r.list(None, true).len(), 2, "queued counts as live");
-    assert_eq!(r.live().ids("S1").len(), 2);
-    std::fs::write(&gate, "").unwrap();
-    assert_eq!(ended(&r, &first).await.status, ExecStatus::Done);
-    let row = ended(&r, &second).await;
-    assert_eq!(row.status, ExecStatus::Done);
-    assert_eq!(row.summary.unwrap().lines, vec!["second".to_string()]);
-    assert!(!r.is_queued(&second));
+        assert!(r.is_queued(&second) && !r.is_queued(&first));
+        assert_eq!(r.get(&second).unwrap().status, ExecStatus::Queued);
+        assert_eq!(r.get(&first).unwrap().status, ExecStatus::Running);
+        assert_eq!(r.list(None, true).len(), 2, "queued counts as live");
+        assert_eq!(r.live().ids("S1").len(), 2);
+        crate::fsio::write(&gate, "").unwrap();
+        assert_eq!(ended(&r, &first).await.status, ExecStatus::Done);
+        let row = ended(&r, &second).await;
+        assert_eq!(row.status, ExecStatus::Done);
+        assert_eq!(row.summary.unwrap().lines, vec!["second".to_string()]);
+        assert!(!r.is_queued(&second));
+    })
 }
 
 /// S6: a queued job stopped while it waits never starts; one queued when the hub went away starts under the next.
-#[tokio::test]
-async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
-    let d = tempfile::tempdir().unwrap();
-    let r = one_slot(d.path());
-    let gate = d.path().join("gate");
-    let first = r
-        .start(agents(
+#[test]
+fn a_queued_job_can_be_stopped_and_survives_a_restart() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = one_slot(d.path());
+        let gate = d.path().join("gate");
+        let first = r
+            .start(agents(
+                d.path(),
+                &format!("while [ ! -e {} ]; do sleep 0.05; done", gate.display()),
+            ))
+            .await
+            .unwrap();
+        let stopped = r
+            .start(agents(d.path(), "touch ran-stopped"))
+            .await
+            .unwrap();
+        let kept = r.start(agents(d.path(), "echo kept")).await.unwrap();
+        assert_eq!(r.stop(&stopped).await.unwrap().status, ExecStatus::Stopped);
+        // the next hub: its own runner on the same folder, the first job's slot free again
+        crate::fsio::write(&gate, "").unwrap();
+        assert_eq!(ended(&r, &first).await.status, ExecStatus::Done);
+        assert_eq!(ended(&r, &kept).await.status, ExecStatus::Done);
+        assert!(!d.path().join("ran-stopped").exists());
+        // a queued job on disk with no hub running it: a runner opened on the folder starts it
+        let dir = d.path().join("exec/xwaiting");
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = now();
+        let meta = Meta {
+            id: "xwaiting".into(),
+            session: None,
+            kind: "other".into(),
+            argv: vec!["echo".into(), "late".into()],
+            cwd: d.path().display().to_string(),
+            started: now,
+            timebox_s: Some(30),
+            deadline: Some(now + 30.0),
+            unit: None,
+            pid: None,
+            start_time: None,
+            entity: None,
+            image: None,
+            name: None,
+            queued: true,
+            machine: None,
+            priority: None,
+            relay: None,
+            keyed: false,
+        };
+        crate::fsio::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+        let pending = Pending::of(&spec(
+            Starter::User,
             d.path(),
-            &format!("while [ ! -e {} ]; do sleep 0.05; done", gate.display()),
-        ))
-        .await
+            "echo late",
+            Duration::from_secs(30),
+        ));
+        crate::fsio::write(
+            dir.join("pending.json"),
+            serde_json::to_vec(&pending).unwrap(),
+        )
         .unwrap();
-    let stopped = r
-        .start(agents(d.path(), "touch ran-stopped"))
-        .await
-        .unwrap();
-    let kept = r.start(agents(d.path(), "echo kept")).await.unwrap();
-    assert_eq!(r.stop(&stopped).await.unwrap().status, ExecStatus::Stopped);
-    // the next hub: its own runner on the same folder, the first job's slot free again
-    std::fs::write(&gate, "").unwrap();
-    assert_eq!(ended(&r, &first).await.status, ExecStatus::Done);
-    assert_eq!(ended(&r, &kept).await.status, ExecStatus::Done);
-    assert!(!d.path().join("ran-stopped").exists());
-    // a queued job on disk with no hub running it: a runner opened on the folder starts it
-    let dir = d.path().join("exec/xwaiting");
-    std::fs::create_dir_all(&dir).unwrap();
-    let now = now();
-    let meta = Meta {
-        id: "xwaiting".into(),
-        session: None,
-        kind: "other".into(),
-        argv: vec!["echo".into(), "late".into()],
-        cwd: d.path().display().to_string(),
-        started: now,
-        timebox_s: Some(30),
-        deadline: Some(now + 30.0),
-        unit: None,
-        pid: None,
-        start_time: None,
-        entity: None,
-        image: None,
-        name: None,
-        queued: true,
-        machine: None,
-        priority: None,
-        relay: None,
-        keyed: false,
-    };
-    std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
-    let pending = Pending::of(&spec(
-        Starter::User,
-        d.path(),
-        "echo late",
-        Duration::from_secs(30),
-    ));
-    std::fs::write(
-        dir.join("pending.json"),
-        serde_json::to_vec(&pending).unwrap(),
-    )
-    .unwrap();
-    let next = open(d.path());
-    let row = ended(&next, "xwaiting").await;
-    assert_eq!(row.status, ExecStatus::Done);
-    assert_eq!(row.summary.unwrap().lines, vec!["late".to_string()]);
+        let next = open(d.path());
+        let row = ended(&next, "xwaiting").await;
+        assert_eq!(row.status, ExecStatus::Done);
+        assert_eq!(row.summary.unwrap().lines, vec!["late".to_string()]);
+    })
 }
 
 /// [D] (files): a runner's verdict for a job that ran on a `shared` runner reaches the job's summary, and so its
 /// starter's wake, labelled ("output from runner uni-box (shared)"), and the job never counts for a gate; a verdict
 /// from a runner of yours has no label and counts. No slot here (fixed 0): both jobs stay queued until their verdicts.
-#[tokio::test]
-async fn a_shared_runners_result_is_labelled_and_never_counts_for_a_gate() {
-    let d = tempfile::tempdir().unwrap();
-    let r = plain(d.path(), 0);
-    let shared = r.start(agents(d.path(), "true")).await.unwrap();
-    let mine = r.start(agents(d.path(), "true")).await.unwrap();
-    assert_eq!(r.get(&shared).unwrap().status, ExecStatus::Queued);
-    let done = |id: &str, shared: Option<&str>| Outcome::Done {
-        id: id.into(),
-        attempt: 1,
-        result: json!({"verdict": "Pass"}),
-        shared: shared.map(String::from),
-        machine: Some(shared.unwrap_or("desk").into()),
-        back: None,
-    };
-    r.inner
-        .get()
-        .unwrap()
-        .outcomes(vec![done(&shared, Some("uni-box")), done(&mine, None)]);
-    let label = "output from runner uni-box (shared)";
-    let row = ended(&r, &shared).await;
-    assert_eq!(row.status, ExecStatus::Done);
-    let lines = row.summary.unwrap().lines;
-    assert_eq!(lines.first().map(String::as_str), Some(label), "{lines:?}");
-    let wake = crate::agents::wake::wake_text(&r.done(&shared).unwrap());
-    assert!(wake.contains(label), "{wake}");
-    assert!(!r.counts_for_gates(&shared));
-    let row = ended(&r, &mine).await;
-    assert_eq!(row.status, ExecStatus::Done);
-    assert!(
-        !row.summary
+#[test]
+fn a_shared_runners_result_is_labelled_and_never_counts_for_a_gate() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = plain(d.path(), 0);
+        let shared = r.start(agents(d.path(), "true")).await.unwrap();
+        let mine = r.start(agents(d.path(), "true")).await.unwrap();
+        assert_eq!(r.get(&shared).unwrap().status, ExecStatus::Queued);
+        let done = |id: &str, shared: Option<&str>| Outcome::Done {
+            id: id.into(),
+            attempt: 1,
+            result: json!({"verdict": "Pass"}),
+            shared: shared.map(String::from),
+            machine: Some(shared.unwrap_or("desk").into()),
+            back: None,
+        };
+        r.inner
+            .get()
             .unwrap()
-            .lines
-            .iter()
-            .any(|l| l.contains("(shared)"))
-    );
-    assert!(r.counts_for_gates(&mine));
-    assert!(!r.counts_for_gates("xunknown"));
-    // a done row still names the runner it ran on, once the queue has forgotten the job
-    assert_eq!(r.get(&mine).unwrap().machine.as_deref(), Some("desk"));
-    assert_eq!(r.get(&shared).unwrap().machine.as_deref(), Some("uni-box"));
+            .outcomes(vec![done(&shared, Some("uni-box")), done(&mine, None)]);
+        let label = "output from runner uni-box (shared)";
+        let row = ended(&r, &shared).await;
+        assert_eq!(row.status, ExecStatus::Done);
+        let lines = row.summary.unwrap().lines;
+        assert_eq!(lines.first().map(String::as_str), Some(label), "{lines:?}");
+        let wake = crate::agents::wake::wake_text(&r.done(&shared).unwrap());
+        assert!(wake.contains(label), "{wake}");
+        assert!(!r.counts_for_gates(&shared));
+        let row = ended(&r, &mine).await;
+        assert_eq!(row.status, ExecStatus::Done);
+        assert!(
+            !row.summary
+                .unwrap()
+                .lines
+                .iter()
+                .any(|l| l.contains("(shared)"))
+        );
+        assert!(r.counts_for_gates(&mine));
+        assert!(!r.counts_for_gates("xunknown"));
+        // a done row still names the runner it ran on, once the queue has forgotten the job
+        assert_eq!(r.get(&mine).unwrap().machine.as_deref(), Some("desk"));
+        assert_eq!(r.get(&shared).unwrap().machine.as_deref(), Some("uni-box"));
+    })
 }
 
 /// [D] (files and a store): a queued job an older hub left as `pending.json` is read into `rq_job` once, its file
 /// then gone, and a second open (the next hub) reads nothing twice. No slot here (fixed 0), so it stays queued.
-#[tokio::test]
-async fn a_queued_pending_json_is_read_once() {
-    let d = tempfile::tempdir().unwrap();
-    let dir = d.path().join("exec/xolder");
-    std::fs::create_dir_all(&dir).unwrap();
-    let now = now();
-    let meta = Meta {
-        id: "xolder".into(),
-        session: Some("S1".into()),
-        kind: "other".into(),
-        argv: vec!["echo".into(), "older".into()],
-        cwd: d.path().display().to_string(),
-        started: now,
-        timebox_s: Some(30),
-        deadline: Some(now + 30.0),
-        unit: None,
-        pid: None,
-        start_time: None,
-        entity: None,
-        image: None,
-        name: None,
-        queued: true,
-        machine: None,
-        priority: None,
-        relay: None,
-        keyed: false,
-    };
-    std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
-    let pending = Pending::of(&agents(d.path(), "echo older"));
-    std::fs::write(
-        dir.join("pending.json"),
-        serde_json::to_vec(&pending).unwrap(),
-    )
-    .unwrap();
-    let (_store, db) = crate::runtime_db::open(d.path()).unwrap();
-    let rows = || {
-        let db = db.clone();
-        async move {
-            db.read(|c| {
-                let mut st = c.prepare("select id, own, state, spec from rq_job")?;
-                let rows = st
-                    .query_map([], |r| {
-                        Ok((
-                            r.get::<_, String>(0)?,
-                            r.get::<_, i64>(1)?,
-                            r.get::<_, String>(2)?,
-                            r.get::<_, String>(3)?,
-                        ))
-                    })?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(rows)
-            })
-            .await
-            .unwrap()
-        }
-    };
-    let opened = |db: urdr::Handle| {
-        let r = Runner::default();
-        r.open(
-            d.path().join("exec"),
-            Hooks {
-                runtime: Some(db),
-                admission: crate::runners::local::Admission::Fixed(0),
-                plain_sessions: true,
-                ..hooks()
-            },
-        );
-        r
-    };
-    let first = opened(db.clone());
-    let got = skuld::wait_until_async("the pending job in rq_job", 30, || {
-        let rows = rows();
-        async move { Some(rows.await).filter(|r| !r.is_empty()) }
+#[test]
+fn a_queued_pending_json_is_read_once() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("exec/xolder");
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = now();
+        let meta = Meta {
+            id: "xolder".into(),
+            session: Some("S1".into()),
+            kind: "other".into(),
+            argv: vec!["echo".into(), "older".into()],
+            cwd: d.path().display().to_string(),
+            started: now,
+            timebox_s: Some(30),
+            deadline: Some(now + 30.0),
+            unit: None,
+            pid: None,
+            start_time: None,
+            entity: None,
+            image: None,
+            name: None,
+            queued: true,
+            machine: None,
+            priority: None,
+            relay: None,
+            keyed: false,
+        };
+        crate::fsio::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+        let pending = Pending::of(&agents(d.path(), "echo older"));
+        crate::fsio::write(
+            dir.join("pending.json"),
+            serde_json::to_vec(&pending).unwrap(),
+        )
+        .unwrap();
+        let (_store, db) = crate::runtime_db::open(d.path()).unwrap();
+        let rows = || {
+            let db = db.clone();
+            async move {
+                db.read(|c| {
+                    let mut st = c.prepare("select id, own, state, spec from rq_job")?;
+                    let rows = st
+                        .query_map([], |r| {
+                            Ok((
+                                r.get::<_, String>(0)?,
+                                r.get::<_, i64>(1)?,
+                                r.get::<_, String>(2)?,
+                                r.get::<_, String>(3)?,
+                            ))
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(rows)
+                })
+                .await
+                .unwrap()
+            }
+        };
+        let opened = |db: urdr::Handle| {
+            let r = Runner::default();
+            r.open(
+                d.path().join("exec"),
+                Hooks {
+                    runtime: Some(db),
+                    admission: crate::runners::local::Admission::Fixed(0),
+                    plain_sessions: true,
+                    ..hooks()
+                },
+            );
+            r
+        };
+        let first = opened(db.clone());
+        let got = skuld::wait_until_async("the pending job in rq_job", 30, || {
+            let rows = rows();
+            async move { Some(rows.await).filter(|r| !r.is_empty()) }
+        })
+        .await;
+        assert_eq!(got.len(), 1, "{got:?}");
+        let (id, own, state, spec) = &got[0];
+        assert_eq!((id.as_str(), *own, state.as_str()), ("xolder", 3, "queued"));
+        assert!(spec.contains("echo older"), "{spec}");
+        skuld::wait_until_async("pending.json to go", 30, || {
+            std::future::ready((!dir.join("pending.json").exists()).then_some(()))
+        })
+        .await;
+        assert_eq!(first.get("xolder").unwrap().status, ExecStatus::Queued);
+        drop(first);
+        let second = opened(db.clone());
+        // its queue holds it again (from rq_job: the file is gone), and says why it waits
+        let row = skuld::wait_until_async("the next hub's queue to hold it", 30, || {
+            std::future::ready(second.get("xolder").filter(|r| r.waiting.is_some()))
+        })
+        .await;
+        assert_eq!(row.status, ExecStatus::Queued);
+        assert_eq!(row.priority, Some(3));
+        assert_eq!(rows().await.len(), 1);
+        drop(second);
     })
-    .await;
-    assert_eq!(got.len(), 1, "{got:?}");
-    let (id, own, state, spec) = &got[0];
-    assert_eq!((id.as_str(), *own, state.as_str()), ("xolder", 3, "queued"));
-    assert!(spec.contains("echo older"), "{spec}");
-    skuld::wait_until_async("pending.json to go", 30, || {
-        std::future::ready((!dir.join("pending.json").exists()).then_some(()))
-    })
-    .await;
-    assert_eq!(first.get("xolder").unwrap().status, ExecStatus::Queued);
-    drop(first);
-    let second = opened(db.clone());
-    // its queue holds it again (from rq_job: the file is gone), and says why it waits
-    let row = skuld::wait_until_async("the next hub's queue to hold it", 30, || {
-        std::future::ready(second.get("xolder").filter(|r| r.waiting.is_some()))
-    })
-    .await;
-    assert_eq!(row.status, ExecStatus::Queued);
-    assert_eq!(row.priority, Some(3));
-    assert_eq!(rows().await.len(), 1);
-    drop(second);
 }
 
 /// S7: finished job folders past the retention are removed (the newest kept, a fresh one never), running ones stay.
-#[tokio::test]
-async fn finished_job_folders_past_the_retention_are_pruned() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    let root = d.path().join("exec");
-    let ago = |secs: u64| skuld::host_now() - Duration::from_secs(secs);
-    let make = |name: &str, age: u64| {
-        let dir = root.join(name);
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = std::fs::File::create(dir.join("result.json")).unwrap();
-        f.set_modified(ago(age)).unwrap();
-    };
-    for i in 0..(KEEP_JOBS + 5) {
-        make(&format!("xold{i:03}"), 7200 + i as u64);
-    }
-    make("xancient", (KEEP_DAYS * 86400.0) as u64 + 100);
-    make("xfresh", 5);
-    std::fs::create_dir_all(root.join("xrunning")).unwrap();
-    r.inner.get().unwrap().prune();
-    let left: Vec<String> = std::fs::read_dir(&root)
-        .unwrap()
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(left.len(), KEEP_JOBS + 1, "{} left", left.len());
-    assert!(left.contains(&"xfresh".to_string()) && left.contains(&"xrunning".to_string()));
-    assert!(!left.contains(&"xancient".to_string()));
-    assert!(!left.contains(&format!("xold{:03}", KEEP_JOBS + 4)));
-    assert!(left.contains(&"xold000".to_string()));
+#[test]
+fn finished_job_folders_past_the_retention_are_pruned() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let root = d.path().join("exec");
+        let ago = |secs: u64| skuld::host_now() - Duration::from_secs(secs);
+        let make = |name: &str, age: u64| {
+            let dir = root.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            let f = eitri::create_exclusive(&dir.join("result.json"), 0o666)
+                .map_err(std::io::Error::from)
+                .unwrap();
+            f.set_modified(ago(age)).unwrap();
+        };
+        for i in 0..(KEEP_JOBS + 5) {
+            make(&format!("xold{i:03}"), 7200 + i as u64);
+        }
+        make("xancient", (KEEP_DAYS * 86400.0) as u64 + 100);
+        make("xfresh", 5);
+        std::fs::create_dir_all(root.join("xrunning")).unwrap();
+        r.inner.get().unwrap().prune();
+        let left: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left.len(), KEEP_JOBS + 1, "{} left", left.len());
+        assert!(left.contains(&"xfresh".to_string()) && left.contains(&"xrunning".to_string()));
+        assert!(!left.contains(&"xancient".to_string()));
+        assert!(!left.contains(&format!("xold{:03}", KEEP_JOBS + 4)));
+        assert!(left.contains(&"xold000".to_string()));
+    })
 }
 
 /// A log with bytes that are not UTF-8 is read with replacement characters, never as nothing.
-#[tokio::test]
-async fn a_log_that_is_not_text_is_read_with_replacements() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    let dir = d.path().join("exec/xbytes");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("log"), b"one\n\xff two\nthree\n").unwrap();
-    assert_eq!(r.log_slice("xbytes", 1, 5), ["\u{fffd} two", "three"]);
-    assert_eq!(r.log_slice("xbytes", 0, 1), ["one"]);
-    // its end too
-    assert_eq!(r.log_tail("xbytes", 100), ["one", "\u{fffd} two", "three"]);
+#[test]
+fn a_log_that_is_not_text_is_read_with_replacements() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let dir = d.path().join("exec/xbytes");
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::fsio::write(dir.join("log"), b"one\n\xff two\nthree\n").unwrap();
+        assert_eq!(r.log_slice("xbytes", 1, 5), ["\u{fffd} two", "three"]);
+        assert_eq!(r.log_slice("xbytes", 0, 1), ["one"]);
+        // its end too
+        assert_eq!(r.log_tail("xbytes", 100), ["one", "\u{fffd} two", "three"]);
+    })
 }
 
 /// The end of a log: its last bytes as lines, a character the cut began inside dropped, the whole log when it is
 /// shorter, nothing for a job without a log.
-#[tokio::test]
-async fn the_end_of_a_log_is_its_last_bytes() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    let dir = d.path().join("exec/xtail");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("log"), "one\ntwo\nthree\nh\u{e9}llo\n").unwrap();
-    assert_eq!(
-        r.log_tail("xtail", 1000),
-        ["one", "two", "three", "h\u{e9}llo"]
-    );
-    assert_eq!(r.log_tail("xtail", 13), ["three", "h\u{e9}llo"]);
-    assert_eq!(r.log_tail("xtail", 12), ["hree", "h\u{e9}llo"]);
-    // "\u{e9}" is two bytes: a cut after its first leaves its second, which is dropped
-    assert_eq!(r.log_tail("xtail", 5), ["llo"]);
-    assert!(r.log_tail("xnone", 100).is_empty());
+#[test]
+fn the_end_of_a_log_is_its_last_bytes() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let dir = d.path().join("exec/xtail");
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::fsio::write(dir.join("log"), "one\ntwo\nthree\nh\u{e9}llo\n").unwrap();
+        assert_eq!(
+            r.log_tail("xtail", 1000),
+            ["one", "two", "three", "h\u{e9}llo"]
+        );
+        assert_eq!(r.log_tail("xtail", 13), ["three", "h\u{e9}llo"]);
+        assert_eq!(r.log_tail("xtail", 12), ["hree", "h\u{e9}llo"]);
+        // "\u{e9}" is two bytes: a cut after its first leaves its second, which is dropped
+        assert_eq!(r.log_tail("xtail", 5), ["llo"]);
+        assert!(r.log_tail("xnone", 100).is_empty());
+    })
 }
 
 #[test]
@@ -1424,33 +1468,39 @@ fn a_tail_takes_no_slice_and_a_bounded_size() {
 }
 
 /// N7: a re-attached job is waited on by the process's end, not by polling for it.
-#[tokio::test]
-async fn waiting_for_a_process_ends_with_the_process() {
-    let mut child = std::process::Command::new("sleep")
-        .arg("30")
-        .spawn()
-        .unwrap();
-    let pid = child.id() as i32;
-    let start = draugr::start_time(pid).unwrap();
-    let waiter = tokio::spawn(wait_gone(pid, start));
-    // The waiter runs, on this single-threaded runtime, as soon as this task waits, up to its first wait: the process's
-    // end (everything before that is synchronous). So after a yield it is waiting, and the process is alive.
-    tokio::task::yield_now().await;
-    assert!(!waiter.is_finished());
-    child.kill().unwrap();
-    child.wait().unwrap();
-    // the deadlines here only bound a failure
-    tokio::time::timeout(Duration::from_secs(30), waiter)
+#[test]
+fn waiting_for_a_process_ends_with_the_process() {
+    saman::block_on_current(async move {
+        let mut child = crate::proc::Command::new("sleep")
+            .arg("30")
+            .spawn(
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+                crate::proc::Io::Inherit,
+            )
+            .unwrap();
+        let pid = child.id() as i32;
+        let start = draugr::start_time(pid).unwrap();
+        let waiter = crate::clock::spawn_untracked(module_path!(), wait_gone(pid, start));
+        // The waiter runs, on this single-threaded runtime, as soon as this task waits, up to its first wait: the process's
+        // end (everything before that is synchronous). So after a yield it is waiting, and the process is alive.
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        // the deadlines here only bound a failure
+        tokio::time::timeout(Duration::from_secs(30), waiter)
+            .await
+            .expect("the wait ended with the process")
+            .unwrap();
+        // a pid that is not that process (reused) is not waited on
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            wait_gone(std::process::id() as i32, 1),
+        )
         .await
-        .expect("the wait ended with the process")
-        .unwrap();
-    // a pid that is not that process (reused) is not waited on
-    tokio::time::timeout(
-        Duration::from_secs(30),
-        wait_gone(std::process::id() as i32, 1),
-    )
-    .await
-    .expect("a reused pid is gone at once");
+        .expect("a reused pid is gone at once");
+    })
 }
 
 // ---- networked container jobs: the relay sidecar (container-net, Task 8) ----
@@ -1470,11 +1520,11 @@ fn info_net(version: &str, rootless: bool) -> String {
 fn net_hooks(d: &Path, info: &str) -> Hooks {
     let mut ready = Vec::new();
     ferja::frame::encode(&ferja::frame::Frame::ready(net::LISTEN), &mut ready);
-    std::fs::write(d.join("ready"), ready).unwrap();
+    crate::fsio::write(d.join("ready"), ready).unwrap();
     let px = d.join("px");
     std::fs::create_dir_all(&px).unwrap();
     for arch in ["amd64", "arm64"] {
-        std::fs::write(ferja::image::binary_for(&px, arch), b"px").unwrap();
+        crate::fsio::write(ferja::image::binary_for(&px, arch), b"px").unwrap();
     }
     let fake = d.join("podman");
     let d = d.display();
@@ -1501,7 +1551,7 @@ fn net_spec(cwd: &Path) -> ExecSpec {
 }
 
 fn ran(d: &Path) -> Vec<String> {
-    std::fs::read_to_string(d.join("ran"))
+    crate::fsio::read_to_string(d.join("ran"))
         .unwrap_or_default()
         .lines()
         .map(str::to_string)
@@ -1510,74 +1560,81 @@ fn ran(d: &Path) -> Vec<String> {
 
 /// S9: a graceful stop ends the networked job `infra: proxy` ("the hub stopped"), its container removed before its
 /// sidecar; the plain job runs on.
-#[tokio::test]
-async fn a_graceful_stop_ends_networked_jobs() {
-    let d = tempfile::tempdir().unwrap();
-    let r = Runner::default();
-    r.open(
-        d.path().join("exec"),
-        net_hooks(d.path(), &info_net("5.4.2", true)),
-    );
-    let networked = r.start(net_spec(d.path())).await.unwrap();
-    let plain = r.start(container_spec(d.path())).await.unwrap();
-    let relay = r.inner.get().unwrap().meta(&networked).unwrap().relay;
-    let sidecar = relay.expect("the networked job's meta names its sidecar");
-    assert!(r.inner.get().unwrap().meta(&plain).unwrap().relay.is_none());
-    r.end_networked().await;
-    let row = ended(&r, &networked).await;
-    assert_eq!(row.status, ExecStatus::Infra);
-    let log = std::fs::read_to_string(d.path().join("exec").join(&networked).join("log")).unwrap();
-    assert!(log.contains("infra: proxy: the hub stopped"), "{log}");
-    let job = container::name_of(&networked).unwrap();
-    let rm = ran(d.path());
-    let (j, s) = (
-        rm.iter().position(|l| *l == format!("rm {job}")),
-        rm.iter().position(|l| *l == format!("rm {sidecar}")),
-    );
-    assert!(
-        j.is_some() && s.is_some() && j < s,
-        "the job's container goes first: {rm:?}"
-    );
-    assert_eq!(r.get(&plain).unwrap().status, ExecStatus::Running);
-    assert!(!rm.iter().any(|l| l.ends_with(&plain)), "{rm:?}");
-    r.stop(&plain).await.unwrap();
+#[test]
+fn a_graceful_stop_ends_networked_jobs() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = Runner::default();
+        r.open(
+            d.path().join("exec"),
+            net_hooks(d.path(), &info_net("5.4.2", true)),
+        );
+        let networked = r.start(net_spec(d.path())).await.unwrap();
+        let plain = r.start(container_spec(d.path())).await.unwrap();
+        let relay = r.inner.get().unwrap().meta(&networked).unwrap().relay;
+        let sidecar = relay.expect("the networked job's meta names its sidecar");
+        assert!(r.inner.get().unwrap().meta(&plain).unwrap().relay.is_none());
+        r.end_networked().await;
+        let row = ended(&r, &networked).await;
+        assert_eq!(row.status, ExecStatus::Infra);
+        let log = crate::fsio::read_to_string(d.path().join("exec").join(&networked).join("log"))
+            .unwrap();
+        assert!(log.contains("infra: proxy: the hub stopped"), "{log}");
+        let job = container::name_of(&networked).unwrap();
+        let rm = ran(d.path());
+        let (j, s) = (
+            rm.iter().position(|l| *l == format!("rm {job}")),
+            rm.iter().position(|l| *l == format!("rm {sidecar}")),
+        );
+        assert!(
+            j.is_some() && s.is_some() && j < s,
+            "the job's container goes first: {rm:?}"
+        );
+        assert_eq!(r.get(&plain).unwrap().status, ExecStatus::Running);
+        assert!(!rm.iter().any(|l| l.ends_with(&plain)), "{rm:?}");
+        r.stop(&plain).await.unwrap();
+    })
 }
 
 /// N3: a sidecar that exits ends its job `infra: proxy`, the text naming its exit code, its meaning and its stderr.
-#[tokio::test]
-async fn a_sidecar_exit_ends_the_job_infra() {
-    let d = tempfile::tempdir().unwrap();
-    std::fs::write(d.path().join("die"), "").unwrap();
-    let r = Runner::default();
-    r.open(
-        d.path().join("exec"),
-        net_hooks(d.path(), &info_net("5.4.2", true)),
-    );
-    let id = r.start(net_spec(d.path())).await.unwrap();
-    let row = ended(&r, &id).await;
-    assert_eq!(row.status, ExecStatus::Infra);
-    let log = std::fs::read_to_string(d.path().join("exec").join(&id).join("log")).unwrap();
-    assert!(log.contains("exited 4: the channel broke a rule"), "{log}");
-    assert!(log.contains("bad frame"), "{log}");
+#[test]
+fn a_sidecar_exit_ends_the_job_infra() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        crate::fsio::write(d.path().join("die"), "").unwrap();
+        let r = Runner::default();
+        r.open(
+            d.path().join("exec"),
+            net_hooks(d.path(), &info_net("5.4.2", true)),
+        );
+        let id = r.start(net_spec(d.path())).await.unwrap();
+        let row = ended(&r, &id).await;
+        assert_eq!(row.status, ExecStatus::Infra);
+        let log = crate::fsio::read_to_string(d.path().join("exec").join(&id).join("log")).unwrap();
+        assert!(log.contains("exited 4: the channel broke a rule"), "{log}");
+        assert!(log.contains("bad frame"), "{log}");
+    })
 }
 
 /// Design §6 through the job's start: a podman before 5.0 and (on Linux) a rootful one each refuse with the fix, and
 /// no job runs.  On a Mac `podman info` is the machine's, reached through the rootless connection the hub chose
 /// (`net::rootless_connection`, which refuses a machine without one), so its `rootless` is not judged there.
-#[tokio::test]
-async fn a_refused_check_names_the_fix() {
-    let mut cases = vec![(info_net("4.9.3", true), "podman 5.0 or newer")];
-    if cfg!(not(target_os = "macos")) {
-        cases.push((info_net("5.4.2", false), "this podman is rootful"));
-    }
-    for (info, want) in cases {
-        let d = tempfile::tempdir().unwrap();
-        let r = Runner::default();
-        r.open(d.path().join("exec"), net_hooks(d.path(), &info));
-        let e = r.start(net_spec(d.path())).await.unwrap_err();
-        assert!(e.message.contains(want), "{}", e.message);
-        assert!(r.list(None, true).is_empty());
-    }
+#[test]
+fn a_refused_check_names_the_fix() {
+    saman::block_on_current(async move {
+        let mut cases = vec![(info_net("4.9.3", true), "podman 5.0 or newer")];
+        if cfg!(not(target_os = "macos")) {
+            cases.push((info_net("5.4.2", false), "this podman is rootful"));
+        }
+        for (info, want) in cases {
+            let d = tempfile::tempdir().unwrap();
+            let r = Runner::default();
+            r.open(d.path().join("exec"), net_hooks(d.path(), &info));
+            let e = r.start(net_spec(d.path())).await.unwrap_err();
+            assert!(e.message.contains(want), "{}", e.message);
+            assert!(r.list(None, true).is_empty());
+        }
+    })
 }
 
 fn running_meta(id: &str, relay: Option<&str>, pid: i32, start_time: Option<u64>) -> Meta {
@@ -1610,9 +1667,13 @@ fn running_meta(id: &str, relay: Option<&str>, pid: i32, start_time: Option<u64>
 fn reattach_ends_a_networked_job() {
     let d = tempfile::tempdir().unwrap();
     let hooks = net_hooks(d.path(), &info_net("5.4.2", true));
-    let mut adopted = std::process::Command::new("sleep")
+    let mut adopted = crate::proc::Command::new("sleep")
         .arg("30")
-        .spawn()
+        .spawn(
+            crate::proc::Io::Inherit,
+            crate::proc::Io::Inherit,
+            crate::proc::Io::Inherit,
+        )
         .unwrap();
     let pid = adopted.id() as i32;
     let start = draugr::start_time(pid).ok();
@@ -1622,7 +1683,7 @@ fn reattach_ends_a_networked_job() {
     ] {
         let dir = d.path().join("exec").join(&m.id);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        crate::fsio::write(dir.join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
     }
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -1630,7 +1691,7 @@ fn reattach_ends_a_networked_job() {
         r.open(d.path().join("exec"), hooks);
         let row = ended(&r, "xnet").await;
         assert_eq!(row.status, ExecStatus::Infra);
-        let log = std::fs::read_to_string(d.path().join("exec/xnet/log")).unwrap_or_default();
+        let log = crate::fsio::read_to_string(d.path().join("exec/xnet/log")).unwrap_or_default();
         assert!(log.contains(net::HUB_RESTARTED), "{log}");
         assert!(
             ran(d.path()).contains(&"rm drgnx-job-xnet".to_string()),
@@ -1639,8 +1700,8 @@ fn reattach_ends_a_networked_job() {
         );
         assert_eq!(r.get("xplain").unwrap().status, ExecStatus::Running);
     });
-    let _ = adopted.kill();
-    let _ = adopted.wait();
+    crate::soft::done(adopted.kill(), "tests");
+    crate::soft::done(adopted.wait(), "tests");
 }
 
 /// A meta written before `relay` existed reads, as a job without one.
@@ -1654,140 +1715,144 @@ fn meta_without_relay_still_reads() {
 
 /// [D] A project's own runner settings (the set the editor sends for it: your W2 file's `drgnx-runners-shared-overlay`)
 /// reach its jobs' placement, under the project's slug or id; another project's job keeps the global value.
-#[tokio::test]
-async fn a_projects_own_runner_settings_reach_its_jobs_only() {
-    let d = tempfile::tempdir().unwrap();
-    let f = crate::front::Front::new(
-        runstav::proof::Cap::generate().unwrap(),
-        d.path().join("hub-x.sock"),
-        crate::store::WorkDb::spawn(d.path().join("work.db")).unwrap(),
-        norn::store::CoordDb::spawn(d.path().join("work.db")),
-    );
-    for p in ["alpha", "beta"] {
-        let at = d.path().join(p);
-        std::fs::create_dir(&at).unwrap();
-        let ok = std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(&at)
-            .status()
-            .unwrap();
-        assert!(ok.success());
-    }
-    f.settings
-        .set_overrides(
-            Some("alpha"),
-            vec![crate::settings::overrides::Override {
-                name: "drgnx-runners-shared-overlay".into(),
-                value: json!(true),
-                source: "workspace".into(),
-            }],
-        )
-        .await
-        .unwrap();
-    let c = Caller {
-        class: runstav::registry::Class::User,
-        sid: None,
-        job: None,
-        conn_id: 0,
-    };
-    let overlay = async |p: &str| {
-        let cwd = d.path().join(p).join("");
-        let p = params(json!({"cwd": cwd.to_str().unwrap()}));
-        placement(&f, &c, &p, Machine::Auto, false)
+#[test]
+fn a_projects_own_runner_settings_reach_its_jobs_only() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let f = crate::front::Front::new(
+            runstav::proof::Cap::generate().unwrap(),
+            d.path().join("hub-x.sock"),
+            crate::store::WorkDb::spawn(d.path().join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(d.path().join("work.db")),
+        );
+        for p in ["alpha", "beta"] {
+            let at = d.path().join(p);
+            std::fs::create_dir(&at).unwrap();
+            let ok = crate::proc::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&at)
+                .status()
+                .unwrap();
+            assert!(ok.success());
+        }
+        f.settings
+            .set_overrides(
+                Some("alpha"),
+                vec![crate::settings::overrides::Override {
+                    name: "drgnx-runners-shared-overlay".into(),
+                    value: json!(true),
+                    source: "workspace".into(),
+                }],
+            )
             .await
-            .unwrap()
-            .shared_overlay
-    };
-    assert!(overlay("alpha").await);
-    assert!(!overlay("beta").await);
+            .unwrap();
+        let c = Caller {
+            class: runstav::registry::Class::User,
+            sid: None,
+            job: None,
+            conn_id: 0,
+        };
+        let overlay = async |p: &str| {
+            let cwd = d.path().join(p).join("");
+            let p = params(json!({"cwd": cwd.to_str().unwrap()}));
+            placement(&f, &c, &p, Machine::Auto, false)
+                .await
+                .unwrap()
+                .shared_overlay
+        };
+        assert!(overlay("alpha").await);
+        assert!(!overlay("beta").await);
+    })
 }
 
 /// [D] A Mac job (`os: macos`) needs the Command Line Tools, its project's Homebrew packages
 /// (`drgnx-runners-mac-tools`) and its toolchains (`drgnx-runners-mac-toolchains`) as features, and counts as heavy (it can't run here); a Linux job needs none of them.
 /// The spec the queue places carries both.
-#[tokio::test]
-async fn a_mac_job_needs_its_projects_homebrew_packages() {
-    let d = tempfile::tempdir().unwrap();
-    let f = crate::front::Front::new(
-        runstav::proof::Cap::generate().unwrap(),
-        d.path().join("hub-x.sock"),
-        crate::store::WorkDb::spawn(d.path().join("work.db")).unwrap(),
-        norn::store::CoordDb::spawn(d.path().join("work.db")),
-    );
-    let at = d.path().join("alpha");
-    std::fs::create_dir(&at).unwrap();
-    let ok = std::process::Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&at)
-        .status()
-        .unwrap();
-    assert!(ok.success());
-    f.settings
-        .set_overrides(
-            Some("alpha"),
-            vec![
-                crate::settings::overrides::Override {
-                    name: "drgnx-runners-mac-tools".into(),
-                    value: json!(["cmake", "ninja"]),
-                    source: "workspace".into(),
-                },
-                crate::settings::overrides::Override {
-                    name: "drgnx-runners-mac-toolchains".into(),
-                    value: json!(["rust@1.95"]),
-                    source: "workspace".into(),
-                },
-            ],
+#[test]
+fn a_mac_job_needs_its_projects_homebrew_packages() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let f = crate::front::Front::new(
+            runstav::proof::Cap::generate().unwrap(),
+            d.path().join("hub-x.sock"),
+            crate::store::WorkDb::spawn(d.path().join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(d.path().join("work.db")),
+        );
+        let at = d.path().join("alpha");
+        std::fs::create_dir(&at).unwrap();
+        let ok = crate::proc::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&at)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+        f.settings
+            .set_overrides(
+                Some("alpha"),
+                vec![
+                    crate::settings::overrides::Override {
+                        name: "drgnx-runners-mac-tools".into(),
+                        value: json!(["cmake", "ninja"]),
+                        source: "workspace".into(),
+                    },
+                    crate::settings::overrides::Override {
+                        name: "drgnx-runners-mac-toolchains".into(),
+                        value: json!(["rust@1.95"]),
+                        source: "workspace".into(),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+        let c = Caller {
+            class: runstav::registry::Class::User,
+            sid: None,
+            job: None,
+            conn_id: 0,
+        };
+        let cwd = at.join("");
+        let mac = placement(
+            &f,
+            &c,
+            &params(json!({"cwd": cwd.to_str().unwrap(), "os": "macos"})),
+            Machine::Auto,
+            true,
         )
         .await
         .unwrap();
-    let c = Caller {
-        class: runstav::registry::Class::User,
-        sid: None,
-        job: None,
-        conn_id: 0,
-    };
-    let cwd = at.join("");
-    let mac = placement(
-        &f,
-        &c,
-        &params(json!({"cwd": cwd.to_str().unwrap(), "os": "macos"})),
-        Machine::Auto,
-        true,
-    )
-    .await
-    .unwrap();
-    assert_eq!(mac.os, forseti::Os::Macos);
-    assert_eq!(
-        mac.features,
-        ["xcode-clt", "brew:cmake", "brew:ninja", "tool:rust@1.95"]
-    );
-    assert!(mac.heavy);
-    let mut job = spec(Starter::User, &at, "true", Duration::from_secs(5));
-    job.place = mac;
-    let s = job.forseti_spec("x1", "1G");
-    assert_eq!(s.os, forseti::Os::Macos);
-    assert_eq!(
-        s.features,
-        ["xcode-clt", "brew:cmake", "brew:ninja", "tool:rust@1.95"]
-    );
+        assert_eq!(mac.os, forseti::Os::Macos);
+        assert_eq!(
+            mac.features,
+            ["xcode-clt", "brew:cmake", "brew:ninja", "tool:rust@1.95"]
+        );
+        assert!(mac.heavy);
+        let mut job = spec(Starter::User, &at, "true", Duration::from_secs(5));
+        job.place = mac;
+        let s = job.forseti_spec("x1", "1G");
+        assert_eq!(s.os, forseti::Os::Macos);
+        assert_eq!(
+            s.features,
+            ["xcode-clt", "brew:cmake", "brew:ninja", "tool:rust@1.95"]
+        );
 
-    let linux = placement(
-        &f,
-        &c,
-        &params(json!({"cwd": cwd.to_str().unwrap()})),
-        Machine::Auto,
-        true,
-    )
-    .await
-    .unwrap();
-    assert_eq!(linux.os, forseti::Os::Linux);
-    assert!(linux.features.is_empty());
-    assert!(!linux.heavy);
+        let linux = placement(
+            &f,
+            &c,
+            &params(json!({"cwd": cwd.to_str().unwrap()})),
+            Machine::Auto,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(linux.os, forseti::Os::Linux);
+        assert!(linux.features.is_empty());
+        assert!(!linux.heavy);
+    })
 }
 
 /// The rows a job's `result.json` keeps, as JSON (`[{name, verdict, class?, symbols?}]`).
 fn result_rows(root: &Path, id: &str) -> Vec<serde_json::Value> {
-    let text = std::fs::read_to_string(root.join("exec").join(id).join("result.json")).unwrap();
+    let text = crate::fsio::read_to_string(root.join("exec").join(id).join("result.json")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     v["rows"].as_array().cloned().unwrap_or_default()
 }
@@ -1817,159 +1882,167 @@ fn row_of(rows: &[serde_json::Value], name: &str) -> (String, String, Vec<String
 /// `assert`, a compile error names the missing symbols as a `build` row; an ERT `should` is `assert`, a void function
 /// a `build` row naming it; a job that ran out of time gets a `timeout` row, a script that failed without rows an
 /// `error` row.
-#[tokio::test]
-async fn a_jobs_result_keeps_classified_rows() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    let cargo = "printf '%s\\n' 'running 3 tests' 'test a::ok ... ok' 'test a::bad ... FAILED' 'test a::later ... ignored' \
+#[test]
+fn a_jobs_result_keeps_classified_rows() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        let cargo = "printf '%s\\n' 'running 3 tests' 'test a::ok ... ok' 'test a::bad ... FAILED' 'test a::later ... ignored' \
                  'error[E0425]: cannot find function `added_fn` in this scope' \
                  'error: could not compile `demo` (lib test) due to 1 previous error'; exit 101";
-    let mut s = spec(Starter::User, d.path(), cargo, Duration::from_secs(30));
-    s.kind = CheckKind::Cargo;
-    let id = r.start(s).await.unwrap();
-    ended(&r, &id).await;
-    let rows = result_rows(d.path(), &id);
-    assert_eq!(row_of(&rows, "a::ok").0, "pass");
-    assert_eq!(
-        row_of(&rows, "a::bad"),
-        ("fail".into(), "assert".into(), vec![])
-    );
-    assert_eq!(row_of(&rows, "a::later").0, "skip");
-    assert_eq!(
-        row_of(&rows, "build:demo (lib test)"),
-        ("fail".into(), "build".into(), vec!["added_fn".into()])
-    );
+        let mut s = spec(Starter::User, d.path(), cargo, Duration::from_secs(30));
+        s.kind = CheckKind::Cargo;
+        let id = r.start(s).await.unwrap();
+        ended(&r, &id).await;
+        let rows = result_rows(d.path(), &id);
+        assert_eq!(row_of(&rows, "a::ok").0, "pass");
+        assert_eq!(
+            row_of(&rows, "a::bad"),
+            ("fail".into(), "assert".into(), vec![])
+        );
+        assert_eq!(row_of(&rows, "a::later").0, "skip");
+        assert_eq!(
+            row_of(&rows, "build:demo (lib test)"),
+            ("fail".into(), "build".into(), vec!["added_fn".into()])
+        );
 
-    let ert = "printf '%s\\n' 'Test t-two condition:' '    (ert-test-failed' '     ((should (= 1 2))))' \
+        let ert = "printf '%s\\n' 'Test t-two condition:' '    (ert-test-failed' '     ((should (= 1 2))))' \
                '   passed  1/3  t-one (0.001 sec)' '   FAILED  2/3  t-two (0.001 sec) at x-test.el:3' \
                'Test t-three condition:' '    (void-function drgnx-new-thing)' \
                '   FAILED  3/3  t-three (0.001 sec) at x-test.el:9'; exit 1";
-    let mut s = spec(Starter::User, d.path(), ert, Duration::from_secs(30));
-    s.kind = CheckKind::Ert;
-    let id = r.start(s).await.unwrap();
-    ended(&r, &id).await;
-    let rows = result_rows(d.path(), &id);
-    assert_eq!(row_of(&rows, "t-one").0, "pass");
-    assert_eq!(
-        row_of(&rows, "t-two"),
-        ("fail".into(), "assert".into(), vec![])
-    );
-    assert_eq!(
-        row_of(&rows, "t-three"),
-        (
-            "fail".into(),
-            "build".into(),
-            vec!["drgnx-new-thing".into()]
-        )
-    );
+        let mut s = spec(Starter::User, d.path(), ert, Duration::from_secs(30));
+        s.kind = CheckKind::Ert;
+        let id = r.start(s).await.unwrap();
+        ended(&r, &id).await;
+        let rows = result_rows(d.path(), &id);
+        assert_eq!(row_of(&rows, "t-one").0, "pass");
+        assert_eq!(
+            row_of(&rows, "t-two"),
+            ("fail".into(), "assert".into(), vec![])
+        );
+        assert_eq!(
+            row_of(&rows, "t-three"),
+            (
+                "fail".into(),
+                "build".into(),
+                vec!["drgnx-new-thing".into()]
+            )
+        );
 
-    let id = r
-        .start(spec(
-            Starter::User,
-            d.path(),
-            "sleep 60",
-            Duration::from_millis(400),
-        ))
-        .await
-        .unwrap();
-    ended(&r, &id).await;
-    assert_eq!(row_of(&result_rows(d.path(), &id), "(job)").1, "timeout");
+        let id = r
+            .start(spec(
+                Starter::User,
+                d.path(),
+                "sleep 60",
+                Duration::from_millis(400),
+            ))
+            .await
+            .unwrap();
+        ended(&r, &id).await;
+        assert_eq!(row_of(&result_rows(d.path(), &id), "(job)").1, "timeout");
 
-    let id = r
-        .start(spec(
-            Starter::User,
-            d.path(),
-            "echo nothing to read; exit 2",
-            Duration::from_secs(30),
-        ))
-        .await
-        .unwrap();
-    ended(&r, &id).await;
-    assert_eq!(row_of(&result_rows(d.path(), &id), "(job)").1, "error");
+        let id = r
+            .start(spec(
+                Starter::User,
+                d.path(),
+                "echo nothing to read; exit 2",
+                Duration::from_secs(30),
+            ))
+            .await
+            .unwrap();
+        ended(&r, &id).await;
+        assert_eq!(row_of(&result_rows(d.path(), &id), "(job)").1, "error");
+    })
 }
 
 /// A job ran on whatever its tree held while it ran: when the tree's key at its end isn't the key at its submit (a
 /// commit while it waited or ran), its facts go, so it is no one's evidence and is never reused.
-#[tokio::test]
-async fn a_job_whose_tree_moved_under_it_keeps_no_facts() {
-    let d = tempfile::tempdir().unwrap();
-    let w = d.path().join("w");
-    repo_with_a_commit(&w);
-    let r = open(d.path());
-    let moved = spec(
-        Starter::User,
-        &w,
-        "echo 'test a ... ok'; echo b > b.txt; git add b.txt; \
+#[test]
+fn a_job_whose_tree_moved_under_it_keeps_no_facts() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path().join("w");
+        repo_with_a_commit(&w);
+        let r = open(d.path());
+        let moved = spec(
+            Starter::User,
+            &w,
+            "echo 'test a ... ok'; echo b > b.txt; git add b.txt; \
          git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qm two",
-        Duration::from_secs(30),
-    );
-    let (a, _) = r.start_or_reuse(moved.clone()).await.unwrap();
-    let row = ended(&r, &a).await;
-    assert_eq!(row.status, ExecStatus::Done);
-    assert_eq!(r.facts(&a), None, "the tree moved: no facts");
-    let (b, reused) = r.start_or_reuse(moved).await.unwrap();
-    assert!(!reused && b != a);
-    ended(&r, &b).await;
+            Duration::from_secs(30),
+        );
+        let (a, _) = r.start_or_reuse(moved.clone()).await.unwrap();
+        let row = ended(&r, &a).await;
+        assert_eq!(row.status, ExecStatus::Done);
+        assert_eq!(r.facts(&a), None, "the tree moved: no facts");
+        let (b, reused) = r.start_or_reuse(moved).await.unwrap();
+        assert!(!reused && b != a);
+        ended(&r, &b).await;
+    })
 }
 
-#[tokio::test]
-async fn an_edit_left_uncommitted_while_a_job_ran_moves_its_tree() {
-    let d = tempfile::tempdir().unwrap();
-    let w = d.path().join("w");
-    repo_with_a_commit(&w);
-    let r = open(d.path());
-    let edited = spec(
-        Starter::User,
-        &w,
-        "echo 'test a ... ok'; echo changed > a.txt",
-        Duration::from_secs(30),
-    );
-    let (a, _) = r.start_or_reuse(edited).await.unwrap();
-    let row = ended(&r, &a).await;
-    assert_eq!(row.status, ExecStatus::Done);
-    assert_eq!(
-        r.facts(&a),
-        None,
-        "a tracked file changed while it ran: no facts"
-    );
+#[test]
+fn an_edit_left_uncommitted_while_a_job_ran_moves_its_tree() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path().join("w");
+        repo_with_a_commit(&w);
+        let r = open(d.path());
+        let edited = spec(
+            Starter::User,
+            &w,
+            "echo 'test a ... ok'; echo changed > a.txt",
+            Duration::from_secs(30),
+        );
+        let (a, _) = r.start_or_reuse(edited).await.unwrap();
+        let row = ended(&r, &a).await;
+        assert_eq!(row.status, ExecStatus::Done);
+        assert_eq!(
+            r.facts(&a),
+            None,
+            "a tracked file changed while it ran: no facts"
+        );
+    })
 }
 
 /// A job whose run writes files git doesn't ignore keeps no facts, and its result names them, so the user sees what
 /// belongs in .gitignore; the facts it had at submit stay for the gate's note.
-#[tokio::test]
-async fn a_moved_job_names_the_files_that_changed() {
-    let d = tempfile::tempdir().unwrap();
-    let w = d.path().join("w");
-    repo_with_a_commit(&w);
-    std::fs::write(w.join("a.txt"), "uncommitted\n").unwrap();
-    let r = open(d.path());
-    let writes = spec(
-        Starter::User,
-        &w,
-        "echo 'test a ... ok'; for n in 1 2 3 4 5 6; do echo x > out$n.log; done; rm a.txt",
-        Duration::from_secs(30),
-    );
-    let (a, _) = r.start_or_reuse(writes).await.unwrap();
-    ended(&r, &a).await;
-    assert_eq!(r.facts(&a), None);
-    let (files, facts) = r.moved(&a).expect("its tree moved");
-    assert_eq!(
-        files,
-        [
-            "a.txt", "out1.log", "out2.log", "out3.log", "out4.log", "out5.log", "out6.log"
-        ]
-    );
-    assert!(facts.tree_key.contains('+'), "{}", facts.tree_key);
-    let line = "its tree moved while it ran (a.txt, out1.log, out2.log, out3.log, out4.log and 2 more): no facts \
+#[test]
+fn a_moved_job_names_the_files_that_changed() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path().join("w");
+        repo_with_a_commit(&w);
+        crate::fsio::write(w.join("a.txt"), "uncommitted\n").unwrap();
+        let r = open(d.path());
+        let writes = spec(
+            Starter::User,
+            &w,
+            "echo 'test a ... ok'; for n in 1 2 3 4 5 6; do echo x > out$n.log; done; rm a.txt",
+            Duration::from_secs(30),
+        );
+        let (a, _) = r.start_or_reuse(writes).await.unwrap();
+        ended(&r, &a).await;
+        assert_eq!(r.facts(&a), None);
+        let (files, facts) = r.moved(&a).expect("its tree moved");
+        assert_eq!(
+            files,
+            [
+                "a.txt", "out1.log", "out2.log", "out3.log", "out4.log", "out5.log", "out6.log"
+            ]
+        );
+        assert!(facts.tree_key.contains('+'), "{}", facts.tree_key);
+        let line = "its tree moved while it ran (a.txt, out1.log, out2.log, out3.log, out4.log and 2 more): no facts \
                 kept; a file a run writes belongs in .gitignore";
-    let lines = r.done(&a).expect("ended").summary.lines;
-    assert!(lines.iter().any(|l| l == line), "{lines:?}");
+        let lines = r.done(&a).expect("ended").summary.lines;
+        assert!(lines.iter().any(|l| l == line), "{lines:?}");
+    })
 }
 
 /// A git repository at DIR with one commit; answers its tree id.
 fn repo_with_a_commit(dir: &Path) -> String {
     let git = |args: &[&str]| {
-        let o = std::process::Command::new("git")
+        let o = crate::proc::Command::new("git")
             .args([
                 "-c",
                 "user.name=t",
@@ -1991,7 +2064,7 @@ fn repo_with_a_commit(dir: &Path) -> String {
     };
     std::fs::create_dir_all(dir).unwrap();
     git(&["init", "-q"]);
-    std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+    crate::fsio::write(dir.join("a.txt"), "a\n").unwrap();
     git(&["add", "a.txt"]);
     git(&["commit", "-q", "-m", "one"]);
     git(&["rev-parse", "HEAD^{tree}"])
@@ -1999,139 +2072,143 @@ fn repo_with_a_commit(dir: &Path) -> String {
 
 /// Every job records what it ran on (tree key, env stamp, platform, selector); a green job with the same facts is
 /// reused, a red one never is, a change to the tree is a new key, and a selector the pack marks `no-cache` always runs.
-#[tokio::test]
-async fn a_green_job_is_reused_and_a_red_one_never() {
-    let d = tempfile::tempdir().unwrap();
-    let w = d.path().join("w");
-    let tree = repo_with_a_commit(&w);
-    let r = open(d.path());
-    let green = spec(
-        Starter::User,
-        &w,
-        "echo 'test a ... ok'",
-        Duration::from_secs(30),
-    );
-    let (a, reused) = r.start_or_reuse(green.clone()).await.unwrap();
-    assert!(!reused);
-    ended(&r, &a).await;
-    let f = r.facts(&a).expect("the job's facts");
-    assert_eq!(f.tree_key, tree);
-    assert!(
-        f.platform.starts_with(std::env::consts::OS),
-        "{}",
-        f.platform
-    );
-    assert!(
-        f.selector.contains("echo 'test a ... ok'"),
-        "{}",
-        f.selector
-    );
-    assert!(!f.env_stamp.is_empty());
-    assert_eq!(
-        r.start_or_reuse(green.clone()).await.unwrap(),
-        (a.clone(), true)
-    );
+#[test]
+fn a_green_job_is_reused_and_a_red_one_never() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path().join("w");
+        let tree = repo_with_a_commit(&w);
+        let r = open(d.path());
+        let green = spec(
+            Starter::User,
+            &w,
+            "echo 'test a ... ok'",
+            Duration::from_secs(30),
+        );
+        let (a, reused) = r.start_or_reuse(green.clone()).await.unwrap();
+        assert!(!reused);
+        ended(&r, &a).await;
+        let f = r.facts(&a).expect("the job's facts");
+        assert_eq!(f.tree_key, tree);
+        assert!(
+            f.platform.starts_with(std::env::consts::OS),
+            "{}",
+            f.platform
+        );
+        assert!(
+            f.selector.contains("echo 'test a ... ok'"),
+            "{}",
+            f.selector
+        );
+        assert!(!f.env_stamp.is_empty());
+        assert_eq!(
+            r.start_or_reuse(green.clone()).await.unwrap(),
+            (a.clone(), true)
+        );
 
-    let red = spec(
-        Starter::User,
-        &w,
-        "echo 'test b ... FAILED'; exit 101",
-        Duration::from_secs(30),
-    );
-    let (b, reused) = r.start_or_reuse(red.clone()).await.unwrap();
-    assert!(!reused);
-    ended(&r, &b).await;
-    let (b2, reused) = r.start_or_reuse(red).await.unwrap();
-    assert!(!reused && b2 != b);
-    ended(&r, &b2).await;
+        let red = spec(
+            Starter::User,
+            &w,
+            "echo 'test b ... FAILED'; exit 101",
+            Duration::from_secs(30),
+        );
+        let (b, reused) = r.start_or_reuse(red.clone()).await.unwrap();
+        assert!(!reused);
+        ended(&r, &b).await;
+        let (b2, reused) = r.start_or_reuse(red).await.unwrap();
+        assert!(!reused && b2 != b);
+        ended(&r, &b2).await;
 
-    // uncommitted work is another tree key
-    std::fs::write(w.join("a.txt"), "changed\n").unwrap();
-    let (c, reused) = r.start_or_reuse(green.clone()).await.unwrap();
-    assert!(!reused && c != a);
-    ended(&r, &c).await;
-    assert!(
-        r.facts(&c)
-            .unwrap()
-            .tree_key
-            .starts_with(&format!("{tree}+"))
-    );
+        // uncommitted work is another tree key
+        crate::fsio::write(w.join("a.txt"), "changed\n").unwrap();
+        let (c, reused) = r.start_or_reuse(green.clone()).await.unwrap();
+        assert!(!reused && c != a);
+        ended(&r, &c).await;
+        assert!(
+            r.facts(&c)
+                .unwrap()
+                .tree_key
+                .starts_with(&format!("{tree}+"))
+        );
 
-    // a no-cache selector runs every time
-    r.set_no_cache(vec!["test a".into()]);
-    let (e, reused) = r.start_or_reuse(green).await.unwrap();
-    assert!(!reused && e != c);
-    ended(&r, &e).await;
+        // a no-cache selector runs every time
+        r.set_no_cache(vec!["test a".into()]);
+        let (e, reused) = r.start_or_reuse(green).await.unwrap();
+        assert!(!reused && e != c);
+        ended(&r, &e).await;
+    })
 }
 
 /// A task's job that ended is evidence for the task: `red` with its failing rows and their classes, or `green`, on the
 /// job's facts; written to the graph and read back by task.  A job outside a git tree is no evidence.
-#[tokio::test]
-async fn a_tasks_jobs_are_its_evidence() {
-    let d = tempfile::tempdir().unwrap();
-    let w = d.path().join("w");
-    let tree = repo_with_a_commit(&w);
-    let r = open(d.path());
-    let red = spec(
-        Starter::User,
-        &w,
-        "printf '%s\\n' 'test a ... ok' 'test b ... FAILED'; exit 101",
-        Duration::from_secs(30),
-    );
-    let id = r.start(red).await.unwrap();
-    ended(&r, &id).await;
-    let ev = crate::orch::evidence::of_job(&r, &id, "task:J#1").expect("evidence");
-    assert_eq!(
-        (ev.kind.as_str(), ev.task.as_str(), ev.job.as_str()),
-        ("red", "task:J#1", id.as_str())
-    );
-    assert_eq!(ev.facts.tree_key, tree);
-    let failed: Vec<_> = ev
-        .rows
-        .iter()
-        .filter(|r| r.verdict == vordr::rows::Verdict::Fail)
-        .map(|r| r.name.as_str())
-        .collect();
-    assert_eq!(failed, vec!["b"]);
+#[test]
+fn a_tasks_jobs_are_its_evidence() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path().join("w");
+        let tree = repo_with_a_commit(&w);
+        let r = open(d.path());
+        let red = spec(
+            Starter::User,
+            &w,
+            "printf '%s\\n' 'test a ... ok' 'test b ... FAILED'; exit 101",
+            Duration::from_secs(30),
+        );
+        let id = r.start(red).await.unwrap();
+        ended(&r, &id).await;
+        let ev = crate::orch::evidence::of_job(&r, &id, "task:J#1").expect("evidence");
+        assert_eq!(
+            (ev.kind.as_str(), ev.task.as_str(), ev.job.as_str()),
+            ("red", "task:J#1", id.as_str())
+        );
+        assert_eq!(ev.facts.tree_key, tree);
+        let failed: Vec<_> = ev
+            .rows
+            .iter()
+            .filter(|r| r.verdict == vordr::rows::Verdict::Fail)
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(failed, vec!["b"]);
 
-    let green = spec(
-        Starter::User,
-        &w,
-        "echo 'test a ... ok'",
-        Duration::from_secs(30),
-    );
-    let gid = r.start(green).await.unwrap();
-    ended(&r, &gid).await;
-    let gev = crate::orch::evidence::of_job(&r, &gid, "task:J#1").unwrap();
-    assert_eq!(gev.kind, "green");
+        let green = spec(
+            Starter::User,
+            &w,
+            "echo 'test a ... ok'",
+            Duration::from_secs(30),
+        );
+        let gid = r.start(green).await.unwrap();
+        ended(&r, &gid).await;
+        let gev = crate::orch::evidence::of_job(&r, &gid, "task:J#1").unwrap();
+        assert_eq!(gev.kind, "green");
 
-    // written and read back by task
-    let db = norn::store::CoordDb::spawn(d.path().join("work.db"));
-    for e in [ev.clone(), gev] {
-        let tx = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "evidence");
-        db.write(tx, move |tx| norn::write::evidence::record(tx, &e, None))
+        // written and read back by task
+        let db = norn::store::CoordDb::spawn(d.path().join("work.db"));
+        for e in [ev.clone(), gev] {
+            let tx = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "evidence");
+            db.write(tx, move |tx| norn::write::evidence::record(tx, &e, None))
+                .await
+                .unwrap();
+        }
+        let back = db
+            .read(|c| norn::read::evidence::of_task(c, "task:J#1"))
             .await
             .unwrap();
-    }
-    let back = db
-        .read(|c| norn::read::evidence::of_task(c, "task:J#1"))
-        .await
-        .unwrap();
-    assert_eq!(
-        back.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
-        vec!["red", "green"]
-    );
-    assert_eq!(back[0], ev);
-    let none = db
-        .read(|c| norn::read::evidence::of_task(c, "task:J#2"))
-        .await
-        .unwrap();
-    assert!(none.is_empty());
+        assert_eq!(
+            back.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
+            vec!["red", "green"]
+        );
+        assert_eq!(back[0], ev);
+        let none = db
+            .read(|c| norn::read::evidence::of_task(c, "task:J#2"))
+            .await
+            .unwrap();
+        assert!(none.is_empty());
 
-    let off = spec(Starter::User, d.path(), "true", Duration::from_secs(30));
-    let oid = r.start(off).await.unwrap();
-    ended(&r, &oid).await;
-    assert!(crate::orch::evidence::of_job(&r, &oid, "task:J#1").is_none());
+        let off = spec(Starter::User, d.path(), "true", Duration::from_secs(30));
+        let oid = r.start(off).await.unwrap();
+        ended(&r, &oid).await;
+        assert!(crate::orch::evidence::of_job(&r, &oid, "task:J#1").is_none());
+    })
 }
 
 /// A stand-in for `drgnx-key` at D/fake-key: `exec NAME=VAR… -- CMD…` runs CMD with TOKEN set to VALUE (what the
@@ -2149,191 +2226,202 @@ fn fake_key(d: &Path, value: &str) -> PathBuf {
 /// [D] A keyed job runs here through drgnx-key with its key socket in DRGNX_KEY_SOCK; whatever it prints of its key
 /// (on stdout or stderr, whole or split across writes) reaches its log, its result and its rows only masked; the
 /// socket is gone once it ended.
-#[tokio::test]
-async fn a_keyed_jobs_output_reaches_its_log_only_redacted() {
-    let d = tempfile::tempdir().unwrap();
-    let value = "kv-Zr81q3";
-    let r = Runner::default();
-    r.open(
-        d.path().join("exec"),
-        Hooks {
-            key_bin: Some(fake_key(d.path(), value)),
-            ..hooks()
-        },
-    );
-    r.queue().unwrap().keys().take([(
-        "TOKEN".to_string(),
-        secrecy::SecretString::from(value.to_string()),
-    )]);
-    let mut s = spec(
-        Starter::User,
-        d.path(),
-        "echo \"out=$TOKEN.\"; echo \"err=$TOKEN.\" >&2; printf 'split=%s' \"${TOKEN%???}\"; sleep 0.2; \
+#[test]
+fn a_keyed_jobs_output_reaches_its_log_only_redacted() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let value = "kv-Zr81q3";
+        let r = Runner::default();
+        r.open(
+            d.path().join("exec"),
+            Hooks {
+                key_bin: Some(fake_key(d.path(), value)),
+                ..hooks()
+            },
+        );
+        r.queue().unwrap().keys().take([(
+            "TOKEN".to_string(),
+            secrecy::SecretString::from(value.to_string()),
+        )]);
+        let mut s = spec(
+            Starter::User,
+            d.path(),
+            "echo \"out=$TOKEN.\"; echo \"err=$TOKEN.\" >&2; printf 'split=%s' \"${TOKEN%???}\"; sleep 0.2; \
          printf '%s.\\n' \"${TOKEN#??????}\"; echo end",
-        Duration::from_secs(30),
-    );
-    s.place.keys = vec!["TOKEN".into()];
-    let id = r.start(s).await.unwrap();
-    let row = ended(&r, &id).await;
-    assert_eq!(row.status, ExecStatus::Done);
-    let log = std::fs::read_to_string(d.path().join("exec").join(&id).join("log")).unwrap();
-    let mask = "*".repeat(value.len());
-    assert!(log.contains("socket-there"), "{log}");
-    assert!(!log.contains(value), "{log}");
-    for line in [
-        format!("out={mask}."),
-        format!("err={mask}."),
-        format!("split={mask}."),
-    ] {
-        assert!(log.contains(&line), "{line} in {log}");
-    }
-    assert!(log.ends_with("end\n"), "{log}");
-    let result =
-        std::fs::read_to_string(d.path().join("exec").join(&id).join("result.json")).unwrap();
-    assert!(
-        !result.contains(value) && result.contains(&mask),
-        "{result}"
-    );
-    let dir = d.path().join("exec").join(&id);
-    assert!(!dir.join("key.sock").exists());
+            Duration::from_secs(30),
+        );
+        s.place.keys = vec!["TOKEN".into()];
+        let id = r.start(s).await.unwrap();
+        let row = ended(&r, &id).await;
+        assert_eq!(row.status, ExecStatus::Done);
+        let log = crate::fsio::read_to_string(d.path().join("exec").join(&id).join("log")).unwrap();
+        let mask = "*".repeat(value.len());
+        assert!(log.contains("socket-there"), "{log}");
+        assert!(!log.contains(value), "{log}");
+        for line in [
+            format!("out={mask}."),
+            format!("err={mask}."),
+            format!("split={mask}."),
+        ] {
+            assert!(log.contains(&line), "{line} in {log}");
+        }
+        assert!(log.ends_with("end\n"), "{log}");
+        let result =
+            crate::fsio::read_to_string(d.path().join("exec").join(&id).join("result.json"))
+                .unwrap();
+        assert!(
+            !result.contains(value) && result.contains(&mask),
+            "{result}"
+        );
+        let dir = d.path().join("exec").join(&id);
+        assert!(!dir.join("key.sock").exists());
+    })
 }
 
 /// [D] A keyed job is refused at start when drgnx-key isn't next to the hub, saying so.
-#[tokio::test]
-async fn a_keyed_job_without_drgnx_key_is_refused() {
-    let d = tempfile::tempdir().unwrap();
-    let r = Runner::default();
-    r.open(
-        d.path().join("exec"),
-        Hooks {
-            key_bin: Some(d.path().join("nowhere")),
-            ..hooks()
-        },
-    );
-    let mut s = spec(Starter::User, d.path(), "true", Duration::from_secs(30));
-    s.place.keys = vec!["TOKEN".into()];
-    let e = match r.start(s).await {
-        Err(e) => e.message,
-        Ok(id) => {
-            let row = ended(&r, &id).await;
-            r.log_slice(&id, 0, 5).join("\n") + &format!(" {:?}", row.status)
-        }
-    };
-    assert!(e.contains("drgnx-key was not found"), "{e}");
+#[test]
+fn a_keyed_job_without_drgnx_key_is_refused() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = Runner::default();
+        r.open(
+            d.path().join("exec"),
+            Hooks {
+                key_bin: Some(d.path().join("nowhere")),
+                ..hooks()
+            },
+        );
+        let mut s = spec(Starter::User, d.path(), "true", Duration::from_secs(30));
+        s.place.keys = vec!["TOKEN".into()];
+        let e = match r.start(s).await {
+            Err(e) => e.message,
+            Ok(id) => {
+                let row = ended(&r, &id).await;
+                r.log_slice(&id, 0, 5).join("\n") + &format!(" {:?}", row.status)
+            }
+        };
+        assert!(e.contains("drgnx-key was not found"), "{e}");
+    })
 }
 
 /// A keyed container job runs here as on a runner: with no network granted it still gets its own sidecar, which takes
 /// its keys' listener (`--keys drgnx-key`); the job runs its own copy of the static drgnx-key (from its folder,
 /// read-only) as the entrypoint with the names only, and no proxy variables.  Without the static drgnx-key next to
 /// the hub the job is refused.
-#[tokio::test]
-async fn a_keyed_container_job_reads_its_keys_through_its_sidecar() {
-    let d = tempfile::tempdir().unwrap();
-    let h = net_hooks(d.path(), &info_net("5.4.2", true));
-    // podman's arguments recorded, then the stand-in
-    std::fs::rename(d.path().join("podman"), d.path().join("podman-real")).unwrap();
-    let rec = d.path().join("podman");
-    hlaup::write(
-        &rec,
-        format!(
-            "#!/bin/sh\necho \"$*\" >> {0}/args\nexec {0}/podman-real \"$@\"\n",
-            d.path().display()
-        ),
-    )
-    .unwrap();
-    let px = h.px_dir.clone().unwrap();
-    let r = Runner::default();
-    r.open(d.path().join("exec"), h);
-    let keyed = || {
-        let mut s = container_spec(d.path());
-        s.place.keys = vec!["CANARY_TOKEN".into()];
-        s
-    };
-    let e = r.start(keyed()).await.unwrap_err();
-    assert!(e.message.contains("static drgnx-key"), "{}", e.message);
-    for arch in ["amd64", "arm64"] {
-        std::fs::write(px.join(keys::static_key_name(arch)), b"key").unwrap();
-    }
-    let id = r.start(keyed()).await.unwrap();
-    let dir = d.path().join("exec").join(&id);
-    assert_eq!(std::fs::read(dir.join("drgnx-key")).unwrap(), b"key");
-    let args = std::fs::read_to_string(d.path().join("args")).unwrap();
-    let sidecar = args
-        .lines()
-        .find(|l| l.starts_with("run -i"))
-        .expect("the job's sidecar");
-    assert!(sidecar.ends_with("--keys drgnx-key"), "{sidecar}");
-    // the job's own run comes from its wrapper's shell, after start answers
-    let name = container::name_of(&id).unwrap();
-    let job = skuld::wait_until_async("the job's run", 30, || {
-        let args = std::fs::read_to_string(d.path().join("args")).unwrap_or_default();
-        std::future::ready(
-            args.lines()
-                .find(|l| l.contains(&name) && l.starts_with("run "))
-                .map(str::to_string),
+#[test]
+fn a_keyed_container_job_reads_its_keys_through_its_sidecar() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let h = net_hooks(d.path(), &info_net("5.4.2", true));
+        // podman's arguments recorded, then the stand-in
+        crate::fsio::rename(d.path().join("podman"), d.path().join("podman-real")).unwrap();
+        let rec = d.path().join("podman");
+        hlaup::write(
+            &rec,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> {0}/args\nexec {0}/podman-real \"$@\"\n",
+                d.path().display()
+            ),
         )
+        .unwrap();
+        let px = h.px_dir.clone().unwrap();
+        let r = Runner::default();
+        r.open(d.path().join("exec"), h);
+        let keyed = || {
+            let mut s = container_spec(d.path());
+            s.place.keys = vec!["CANARY_TOKEN".into()];
+            s
+        };
+        let e = r.start(keyed()).await.unwrap_err();
+        assert!(e.message.contains("static drgnx-key"), "{}", e.message);
+        for arch in ["amd64", "arm64"] {
+            crate::fsio::write(px.join(keys::static_key_name(arch)), b"key").unwrap();
+        }
+        let id = r.start(keyed()).await.unwrap();
+        let dir = d.path().join("exec").join(&id);
+        assert_eq!(std::fs::read(dir.join("drgnx-key")).unwrap(), b"key");
+        let args = crate::fsio::read_to_string(d.path().join("args")).unwrap();
+        let sidecar = args
+            .lines()
+            .find(|l| l.starts_with("run -i"))
+            .expect("the job's sidecar");
+        assert!(sidecar.ends_with("--keys drgnx-key"), "{sidecar}");
+        // the job's own run comes from its wrapper's shell, after start answers
+        let name = container::name_of(&id).unwrap();
+        let job = skuld::wait_until_async("the job's run", 30, || {
+            let args = crate::fsio::read_to_string(d.path().join("args")).unwrap_or_default();
+            std::future::ready(
+                args.lines()
+                    .find(|l| l.contains(&name) && l.starts_with("run "))
+                    .map(str::to_string),
+            )
+        })
+        .await;
+        let mount = format!("{}:/run/drgnx/key:ro,Z", dir.join("drgnx-key").display());
+        assert!(job.contains(&mount), "{job}");
+        assert!(
+            job.contains("--entrypoint /run/drgnx/key")
+                && job.ends_with("exec CANARY_TOKEN=CANARY_TOKEN -- make test"),
+            "{job}"
+        );
+        assert!(!job.contains("PROXY"), "{job}");
+        assert!(r.inner.get().unwrap().meta(&id).unwrap().keyed);
+        r.stop(&id).await.unwrap();
     })
-    .await;
-    let mount = format!("{}:/run/drgnx/key:ro,Z", dir.join("drgnx-key").display());
-    assert!(job.contains(&mount), "{job}");
-    assert!(
-        job.contains("--entrypoint /run/drgnx/key")
-            && job.ends_with("exec CANARY_TOKEN=CANARY_TOKEN -- make test"),
-        "{job}"
-    );
-    assert!(!job.contains("PROXY"), "{job}");
-    assert!(r.inner.get().unwrap().meta(&id).unwrap().keyed);
-    r.stop(&id).await.unwrap();
 }
 
 /// A job this machine admits at once is launched before `start` answers: the queue's own tick (woken by the job
 /// entering it) never takes it first.  It did, now and then: `start` answered while the launch ran on another task,
 /// so a refused launch was not the start's answer, and a hub stopped at that moment left the job queued.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_job_admitted_at_once_is_launched_before_start_answers() {
-    for i in 0..2000 {
-        let d = tempfile::tempdir().unwrap();
-        let r = open(d.path());
-        let id = r
-            .start(spec(
-                Starter::User,
-                d.path(),
-                "true",
-                Duration::from_secs(30),
-            ))
-            .await
-            .unwrap();
-        let m = r.inner.get().unwrap().meta(&id).unwrap();
-        assert!(
-            !m.queued && m.pid.is_some(),
-            "start {i} answered before its launch: {m:?}"
-        );
-    }
+#[test]
+fn a_job_admitted_at_once_is_launched_before_start_answers() {
+    saman::Executor::new(4).unwrap().block_on(async move {
+        for i in 0..2000 {
+            let d = tempfile::tempdir().unwrap();
+            let r = open(d.path());
+            let id = r
+                .start(spec(
+                    Starter::User,
+                    d.path(),
+                    "true",
+                    Duration::from_secs(30),
+                ))
+                .await
+                .unwrap();
+            let m = r.inner.get().unwrap().meta(&id).unwrap();
+            assert!(
+                !m.queued && m.pid.is_some(),
+                "start {i} answered before its launch: {m:?}"
+            );
+        }
+    })
 }
 
 /// The queue's own tick running between a start's entering the queue and its own tick (the interval's first tick can
 /// land there) takes the job; the start still launches it before it answers.  Deterministic: the tick is run in the gap.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_job_the_queues_tick_takes_first_is_still_launched_before_start_answers() {
-    for _ in 0..20 {
-        let d = tempfile::tempdir().unwrap();
-        let r = open(d.path());
-        let i = r.inner.get().unwrap().clone();
-        let id = i
-            .clone()
-            .start_gap(
-                spec(Starter::User, d.path(), "true", Duration::from_secs(30)),
-                None,
-                |i| i.pump(),
-            )
-            .await
-            .unwrap();
-        let m = i.meta(&id).unwrap();
-        assert!(
-            !m.queued && m.pid.is_some(),
-            "answered before its launch: {m:?}"
-        );
-    }
+#[test]
+fn a_job_the_queues_tick_takes_first_is_still_launched_before_start_answers() {
+    saman::Executor::new(4).unwrap().block_on(async move {
+        for _ in 0..20 {
+            let d = tempfile::tempdir().unwrap();
+            let r = open(d.path());
+            let i = r.inner.get().unwrap().clone();
+            let id = i
+                .clone()
+                .start_gap(
+                    spec(Starter::User, d.path(), "true", Duration::from_secs(30)),
+                    None,
+                    |i| i.pump(),
+                )
+                .await
+                .unwrap();
+            let m = i.meta(&id).unwrap();
+            assert!(
+                !m.queued && m.pid.is_some(),
+                "answered before its launch: {m:?}"
+            );
+        }
+    })
 }
 
 /// Job SCRIPT run in CWD to its `Done` event (subscribed before the start, so the event is never missed).
@@ -2360,62 +2448,68 @@ async fn run_to_done(r: &Runner, cwd: &Path, script: &str) -> String {
 /// A job that ended is still busy in its tree until the reader of the ends (the gates' evidence) has taken its end: a
 /// gate that looked between the end and its evidence saw no run and held the merge (round 7, macOS: the evidence
 /// landed 0.5 ms after the gate's look).
-#[tokio::test]
-async fn an_ended_job_is_busy_in_its_tree_until_its_end_is_taken() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    r.settling();
-    let tree = d.path().join("tree");
-    std::fs::create_dir_all(tree.join("sub")).unwrap();
-    let id = run_to_done(&r, &tree.join("sub"), "exit 1").await;
-    assert!(
-        r.busy_in_tree(&tree).await,
-        "its end not taken yet: still busy"
-    );
-    assert!(
-        !r.busy_in_tree(&d.path().join("other")).await,
-        "busy only in its own tree"
-    );
-    r.settled(&id);
-    assert!(!r.busy_in_tree(&tree).await, "its end taken");
-    // ends dropped (the reader lagged) are all taken at once
-    run_to_done(&r, &tree, "exit 0").await;
-    assert!(r.busy_in_tree(&tree).await);
-    r.settled_all();
-    assert!(!r.busy_in_tree(&tree).await);
+#[test]
+fn an_ended_job_is_busy_in_its_tree_until_its_end_is_taken() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        r.settling();
+        let tree = d.path().join("tree");
+        std::fs::create_dir_all(tree.join("sub")).unwrap();
+        let id = run_to_done(&r, &tree.join("sub"), "exit 1").await;
+        assert!(
+            r.busy_in_tree(&tree).await,
+            "its end not taken yet: still busy"
+        );
+        assert!(
+            !r.busy_in_tree(&d.path().join("other")).await,
+            "busy only in its own tree"
+        );
+        r.settled(&id);
+        assert!(!r.busy_in_tree(&tree).await, "its end taken");
+        // ends dropped (the reader lagged) are all taken at once
+        run_to_done(&r, &tree, "exit 0").await;
+        assert!(r.busy_in_tree(&tree).await);
+        r.settled_all();
+        assert!(!r.busy_in_tree(&tree).await);
+    })
 }
 
 /// A tree named through a link is the tree its jobs ran in: a job's folder is recorded by its true name, and a tree
 /// asked about by another (macOS's temporary folders are under `/var`, a link to `/private/var`: the test above was
 /// red there) is the same tree.
 #[cfg(unix)]
-#[tokio::test]
-async fn a_tree_named_through_a_link_is_busy_with_its_jobs() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    r.settling();
-    std::fs::create_dir_all(d.path().join("real/tree")).unwrap();
-    std::os::unix::fs::symlink(d.path().join("real"), d.path().join("link")).unwrap();
-    let id = run_to_done(&r, &d.path().join("link/tree"), "exit 1").await;
-    assert!(
-        r.busy_in_tree(&d.path().join("link/tree")).await,
-        "by the link's name"
-    );
-    assert!(
-        r.busy_in_tree(&d.path().join("real/tree")).await,
-        "by its true name"
-    );
-    r.settled(&id);
-    assert!(!r.busy_in_tree(&d.path().join("link/tree")).await);
+#[test]
+fn a_tree_named_through_a_link_is_busy_with_its_jobs() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        r.settling();
+        std::fs::create_dir_all(d.path().join("real/tree")).unwrap();
+        std::os::unix::fs::symlink(d.path().join("real"), d.path().join("link")).unwrap();
+        let id = run_to_done(&r, &d.path().join("link/tree"), "exit 1").await;
+        assert!(
+            r.busy_in_tree(&d.path().join("link/tree")).await,
+            "by the link's name"
+        );
+        assert!(
+            r.busy_in_tree(&d.path().join("real/tree")).await,
+            "by its true name"
+        );
+        r.settled(&id);
+        assert!(!r.busy_in_tree(&d.path().join("link/tree")).await);
+    })
 }
 
 /// Without a reader of the ends ([`Runner::settling`] never called) an ended job is busy nowhere.
-#[tokio::test]
-async fn without_a_reader_an_ended_job_is_busy_nowhere() {
-    let d = tempfile::tempdir().unwrap();
-    let r = open(d.path());
-    run_to_done(&r, d.path(), "exit 0").await;
-    assert!(!r.busy_in(d.path()));
+#[test]
+fn without_a_reader_an_ended_job_is_busy_nowhere() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = open(d.path());
+        run_to_done(&r, d.path(), "exit 0").await;
+        assert!(!r.busy_in(d.path()));
+    })
 }
 
 /// A hub whose jobs' slices are SLICE (a fixture cgroup folder; none: unreadable).
@@ -2441,7 +2535,7 @@ fn idle_slice(root: &Path) -> PathBuf {
         ("io.stat", ""),
         ("memory.events", "oom 0\noom_kill 0\n"),
     ] {
-        std::fs::write(s.join(f), t).unwrap();
+        crate::fsio::write(s.join(f), t).unwrap();
     }
     s
 }
@@ -2459,12 +2553,12 @@ fn local_stuck(root: &Path, row: &ExecRow, id: &str, rule: &str) {
     assert_eq!(row.status, ExecStatus::Infra, "{row:?}");
     let dir = root.join("exec").join(id);
     assert_eq!(
-        std::fs::read_to_string(dir.join("why")).unwrap(),
+        crate::fsio::read_to_string(dir.join("why")).unwrap(),
         format!("infra: stuck ({rule})")
     );
-    let report = std::fs::read_to_string(dir.join("stuck.txt")).unwrap();
+    let report = crate::fsio::read_to_string(dir.join("stuck.txt")).unwrap();
     assert!(report.starts_with(&format!("stuck ({rule}): ")), "{report}");
-    let log = std::fs::read_to_string(dir.join("log")).unwrap();
+    let log = crate::fsio::read_to_string(dir.join("log")).unwrap();
     assert!(
         log.lines()
             .last()
@@ -2475,28 +2569,32 @@ fn local_stuck(root: &Path, row: &ExecRow, id: &str, rule: &str) {
 
 /// [C] The hub's own job that sleeps (its slice shows no CPU, no IO, and it prints nothing) stops at stall, as
 /// `infra: stuck (stall)`, with its report.
-#[tokio::test]
-async fn progress_local_idle_job_stops_at_stall() {
-    let d = tempfile::tempdir().unwrap();
-    let r = guard_open(d.path(), Some(idle_slice(d.path())));
-    let id = r.start(guarded_spec(d.path(), "sleep 60")).await.unwrap();
-    // ended before the job's own 60 s: the stall rule stopped it (the row says so)
-    let row = ended(&r, &id).await;
-    local_stuck(d.path(), &row, &id, "stall");
+#[test]
+fn progress_local_idle_job_stops_at_stall() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = guard_open(d.path(), Some(idle_slice(d.path())));
+        let id = r.start(guarded_spec(d.path(), "sleep 60")).await.unwrap();
+        // ended before the job's own 60 s: the stall rule stopped it (the row says so)
+        let row = ended(&r, &id).await;
+        local_stuck(d.path(), &row, &id, "stall");
+    })
 }
 
 /// [C] A busy loop that prints nothing stops at silent; a slice the hub can't read never stalls (an unknown is no
 /// proof of idleness).
-#[tokio::test]
-async fn progress_local_busy_job_stops_at_silent() {
-    let d = tempfile::tempdir().unwrap();
-    let r = guard_open(d.path(), None);
-    let id = r
-        .start(guarded_spec(d.path(), "while :; do :; done"))
-        .await
-        .unwrap();
-    let row = ended(&r, &id).await;
-    local_stuck(d.path(), &row, &id, "silent");
+#[test]
+fn progress_local_busy_job_stops_at_silent() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = guard_open(d.path(), None);
+        let id = r
+            .start(guarded_spec(d.path(), "while :; do :; done"))
+            .await
+            .unwrap();
+        let row = ended(&r, &id).await;
+        local_stuck(d.path(), &row, &id, "silent");
+    })
 }
 
 /// A guard whose readings the test paces.  With MORE_OUTPUT, after each reading the guard waits until the job's log has
@@ -2519,12 +2617,15 @@ fn paced_guard(root: &Path, more_output: bool) -> Runner {
                     let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
                     let at = len(&log);
                     // on a blocking thread: the wait is a poll on the log's size, and the runtime keeps running
-                    let _ = tokio::task::spawn_blocking(move || {
-                        skuld::wait_until("the job's next output", 60, || {
-                            (len(&log) > at).then_some(())
+                    crate::soft::done(
+                        crate::clock::blocking(move || {
+                            skuld::wait_until("the job's next output", 60, || {
+                                (len(&log) > at).then_some(())
+                            })
                         })
-                    })
-                    .await;
+                        .await,
+                        "tokio::task::spawn_blocking",
+                    );
                 })
             })),
             ..hooks()
@@ -2537,50 +2638,54 @@ fn paced_guard(root: &Path, more_output: bool) -> Runner {
 /// job with no limits named, no container and no test suite is not guarded.  Order forced, not timed: after each
 /// reading the guard waits until the job has printed one more dot, so every reading window holds output however slow
 /// the machine is (stall 2 s, read every second: a loaded host once starved the job through two readings).
-#[tokio::test]
-async fn progress_local_printing_job_is_not_stopped() {
-    let d = tempfile::tempdir().unwrap();
-    let r = paced_guard(d.path(), true);
-    let start = now();
-    let script = "echo deadline=$DRGNX_JOB_DEADLINE; i=0; while [ $i -lt 14 ]; do echo .; sleep 0.5; i=$((i+1)); done";
-    let id = r.start(guarded_spec(d.path(), script)).await.unwrap();
-    let row = ended(&r, &id).await;
-    assert_eq!(row.status, ExecStatus::Done, "{row:?}");
-    assert_eq!(row.summary.unwrap().exit, Some(0));
-    let dir = d.path().join("exec").join(&id);
-    assert!(!dir.join("stuck.txt").exists());
-    let log = std::fs::read_to_string(dir.join("log")).unwrap();
-    let deadline: f64 = log
-        .lines()
-        .find_map(|l| l.strip_prefix("deadline="))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| panic!("no deadline: {log}"));
-    assert!(
-        (start + 59.0..=start + 62.0).contains(&deadline),
-        "{deadline} vs {start}"
-    );
-    // unguarded: the same idle job without limits runs to its end
-    let mut plain = spec(Starter::User, d.path(), "sleep 5", Duration::from_secs(60));
-    plain.user.stall_s = None;
-    let id = r.start(plain).await.unwrap();
-    assert_eq!(ended(&r, &id).await.status, ExecStatus::Done);
+#[test]
+fn progress_local_printing_job_is_not_stopped() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        let r = paced_guard(d.path(), true);
+        let start = now();
+        let script = "echo deadline=$DRGNX_JOB_DEADLINE; i=0; while [ $i -lt 14 ]; do echo .; sleep 0.5; i=$((i+1)); done";
+        let id = r.start(guarded_spec(d.path(), script)).await.unwrap();
+        let row = ended(&r, &id).await;
+        assert_eq!(row.status, ExecStatus::Done, "{row:?}");
+        assert_eq!(row.summary.unwrap().exit, Some(0));
+        let dir = d.path().join("exec").join(&id);
+        assert!(!dir.join("stuck.txt").exists());
+        let log = crate::fsio::read_to_string(dir.join("log")).unwrap();
+        let deadline: f64 = log
+            .lines()
+            .find_map(|l| l.strip_prefix("deadline="))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("no deadline: {log}"));
+        assert!(
+            (start + 59.0..=start + 62.0).contains(&deadline),
+            "{deadline} vs {start}"
+        );
+        // unguarded: the same idle job without limits runs to its end
+        let mut plain = spec(Starter::User, d.path(), "sleep 5", Duration::from_secs(60));
+        plain.user.stall_s = None;
+        let id = r.start(plain).await.unwrap();
+        assert_eq!(ended(&r, &id).await.status, ExecStatus::Done);
+    })
 }
 
 /// [I] The order the flake had, forced: the guard's second reading comes before the job prints again, so two readings
 /// in a row see no output and the stall rule stops the job (`infra`, never a red).  The same job passes the test above
 /// when the readings wait for its output.
-#[tokio::test]
-async fn two_readings_without_output_stop_a_printing_job_at_stall() {
-    let d = tempfile::tempdir().unwrap();
-    // never held: the guard reads again at once, whatever the job has printed
-    let r = paced_guard(d.path(), false);
-    // one dot, then nothing for as long as the job lives
-    let id = r
-        .start(guarded_spec(d.path(), "echo .; sleep 30"))
-        .await
-        .unwrap();
-    let row = ended(&r, &id).await;
-    local_stuck(d.path(), &row, &id, "stall");
+#[test]
+fn two_readings_without_output_stop_a_printing_job_at_stall() {
+    saman::block_on_current(async move {
+        let d = tempfile::tempdir().unwrap();
+        // never held: the guard reads again at once, whatever the job has printed
+        let r = paced_guard(d.path(), false);
+        // one dot, then nothing for as long as the job lives
+        let id = r
+            .start(guarded_spec(d.path(), "echo .; sleep 30"))
+            .await
+            .unwrap();
+        let row = ended(&r, &id).await;
+        local_stuck(d.path(), &row, &id, "stall");
+    })
 }
 
 /// [D] `stall_s` and `silent_s` on `exec/start` (1 to 86400 each) reach the job and, for a runner, its spec.

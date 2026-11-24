@@ -45,6 +45,16 @@
 //!   a test swaps the model under one URL; EMBED_DIMS is what every text but the hub's probe text gets, for a server that
 //!   lies about its dimensions).
 //!
+//! - `embed --as llama-server [--log FILE] [--dims N] [--perturb] [--crash-once FILE] LLAMA-SERVER-ARGS...` is llama.cpp's
+//!   `llama-server` as the hub's local engine starts it (a wrapper script execs it under that name): it takes `--port P`
+//!   (0: a free one) and `-c N` from llama-server's own arguments, ignores the rest, logs `{"start": ARGS}`, prints
+//!   llama-server's line `main: server is listening on http://127.0.0.1:PORT - starting the main loop` on stderr, and
+//!   answers `GET /health`, `GET /props`, `POST /tokenize` (one token per byte; logged `{"tokenize": N}`) and `POST
+//!   /v1/embeddings` (logged `{"embed": INPUTS}`; vectors as `embed` makes them). `--perturb` gives other vectors (a GGUF
+//!   whose vectors are off); `--crash-once FILE` exits inside the first embeddings request when FILE does not exist
+//!   yet, and makes it. `--list-devices` (with `--devices FILE`) prints `Available devices:` and FILE's lines, as llama.cpp
+//!   does, logs `{"list": true}` and ends: no server starts.
+//!
 //! `llm` and `embed` end when `--parent` is gone.
 
 #[path = "../mock_acp/mod.rs"]
@@ -78,7 +88,7 @@ fn main() {
         Some("http-serve") => http_serve(&args[1..]),
         Some("cdp-drive") => cdp_drive(&args[1..]),
         _ => die(
-            "usage: ratatoskr-mock embed [--dims N] [--log FILE] [--parent PID] | llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | llm --replay DIR [--speed N] [--misses FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] | cloud --listen ADDR --podman-remote SOCK|none --prefix P --run R [--hub ID] [--image IMG] [--network NET] [--podman PATH] [--log FILE] [--parent PID] | hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range] | http-serve PORT TEXT | cdp-drive URL...",
+            "usage: ratatoskr-mock embed [--dims N] [--log FILE] [--parent PID] | embed --as llama-server [--log FILE] [--dims N] [--perturb] [--crash-once FILE] ARGS... | llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | llm --replay DIR [--speed N] [--misses FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] | cloud --listen ADDR --podman-remote SOCK|none --prefix P --run R [--hub ID] [--image IMG] [--network NET] [--podman PATH] [--log FILE] [--parent PID] | hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range] | http-serve PORT TEXT | cdp-drive URL...",
         ),
     }
 }
@@ -470,7 +480,7 @@ struct Replay {
 
 fn load_replay(dir: &std::path::Path) -> Result<Vec<Recorded>, String> {
     use runstav::recording as rec;
-    let manifest = rec::read_manifest(dir)?;
+    let manifest = rec::read_manifest(dir).map_err(|e| e.to_string())?;
     let live = rec::Roots::from_json(&manifest["roots"]);
     let text = match std::fs::read_to_string(dir.join("llm.jsonl")) {
         Ok(t) => t,
@@ -1072,6 +1082,9 @@ fn embed_serve(
 /// `embed [--dims N] [--log FILE] [--parent PID]`: prints `MOCK-EMBED-PORT N` and serves TEI's and Ollama's embedding
 /// requests on 127.0.0.1 only (a client that resolves `localhost` to `::1` first must fall back).
 fn embed(args: &[String]) {
+    if flag(args, "--as", 1).is_some_and(|a| a[0] == "llama-server") {
+        return llama_server(args);
+    }
     let dims = flag(args, "--dims", 1).map_or(8, |d| {
         d[0].parse()
             .unwrap_or_else(|_| die("--dims is a number of dimensions"))
@@ -1096,6 +1109,113 @@ fn embed(args: &[String]) {
         let (log, model_file) = (log.clone(), model_file.clone());
         std::thread::spawn(move || embed_serve(sock, dims, &model_file, &log));
     }
+}
+
+/// `embed --as llama-server` (the module's doc).
+fn llama_server(args: &[String]) {
+    let value = |names: &[&str]| -> Option<String> {
+        let i = args.iter().position(|a| names.contains(&a.as_str()))?;
+        args.get(i + 1).cloned()
+    };
+    let dims = value(&["--dims"]).map_or(8, |d| {
+        d.parse()
+            .unwrap_or_else(|_| die("--dims is a number of dimensions"))
+    });
+    let port: u16 = value(&["--port"]).map_or(8080, |p| {
+        p.parse().unwrap_or_else(|_| die("--port is a port"))
+    });
+    let ctx: u64 = value(&["-c", "--ctx-size"]).map_or(4096, |c| c.parse().unwrap_or(4096));
+    let perturb = args.iter().any(|a| a == "--perturb");
+    let crash_once = Arc::new(value(&["--crash-once"]));
+    let log = Arc::new(open_log(args));
+    if args.iter().any(|a| a == "--list-devices") {
+        log_line(&log, &json!({"list": true}));
+        println!("Available devices:");
+        if let Some(f) = value(&["--devices"]) {
+            print!("{}", std::fs::read_to_string(f).unwrap_or_default());
+        }
+        return;
+    }
+    log_line(&log, &json!({"start": args}));
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .unwrap_or_else(|e| die(&format!("cannot listen: {e}")));
+    let bound = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+    eprintln!("main: server is listening on http://127.0.0.1:{bound} - starting the main loop");
+    for sock in listener.incoming().flatten() {
+        let (log, crash_once) = (log.clone(), crash_once.clone());
+        std::thread::spawn(move || llama_serve(sock, dims, ctx, perturb, &crash_once, &log));
+    }
+}
+
+/// One request to the llama-server stand-in.
+fn llama_serve(
+    mut sock: TcpStream,
+    dims: usize,
+    ctx: u64,
+    perturb: bool,
+    crash_once: &Option<String>,
+    log: &Option<Mutex<File>>,
+) {
+    let Some(req) = read_request(&mut sock) else {
+        return;
+    };
+    let parsed: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+    let answer = match (req.method.as_str(), req.path.as_str()) {
+        ("GET", "/health") => Some(json!({"status": "ok"})),
+        ("GET", "/props") => Some(json!({
+            "default_generation_settings": {"n_ctx": ctx},
+            "total_slots": 1,
+            "model_path": "mock.gguf",
+            "build_info": "mock",
+        })),
+        ("POST", "/tokenize") => {
+            let n = parsed["content"].as_str().map_or(0, str::len);
+            log_line(log, &json!({"tokenize": n}));
+            Some(json!({"tokens": vec![0; n]}))
+        }
+        ("POST", "/v1/embeddings") => {
+            let inputs: Vec<String> = match &parsed["input"] {
+                Value::String(s) => vec![s.clone()],
+                Value::Array(a) => a
+                    .iter()
+                    .filter_map(|t| t.as_str().map(str::to_owned))
+                    .collect(),
+                _ => vec![],
+            };
+            log_line(log, &json!({"embed": inputs}));
+            if let Some(f) = crash_once
+                && !std::path::Path::new(f).exists()
+            {
+                let _ = std::fs::write(f, b"crashed");
+                std::process::exit(1);
+            }
+            let vector = |t: &str| {
+                let v = embed_vector(t, dims);
+                if !perturb {
+                    return v;
+                }
+                // half of another text's vector added: a cosine to the true one well under 0.99, and over 0
+                let off = embed_vector(&format!("{t}\u{1}perturbed"), dims);
+                v.iter().zip(off).map(|(a, b)| a + 0.5 * b - 0.25).collect()
+            };
+            Some(json!({
+                "object": "list",
+                "data": inputs.iter().enumerate().map(|(i, t)| {
+                    json!({"object": "embedding", "index": i, "embedding": vector(t)})
+                }).collect::<Vec<_>>(),
+            }))
+        }
+        _ => None,
+    };
+    let (status, text) = match answer {
+        Some(v) => (200, v.to_string()),
+        None => (404, "{}".to_string()),
+    };
+    let _ = sock
+        .write_all(head(status, "application/json", Some(text.len()), &[]).as_bytes())
+        .and_then(|()| sock.write_all(text.as_bytes()))
+        .and_then(|()| sock.flush());
+    let _ = sock.shutdown(Shutdown::Write);
 }
 
 fn hf(args: &[String]) {

@@ -126,7 +126,7 @@ fn current_buffer(surface: &WlSurface) -> Option<Buffer> {
     with_states(surface, |s| {
         s.data_map
             .get::<RendererSurfaceStateUserData>()
-            .and_then(|d| d.lock().unwrap().buffer().cloned())
+            .and_then(|d| saman::lock(d).buffer().cloned())
     })
 }
 

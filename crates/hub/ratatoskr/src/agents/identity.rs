@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 /// One live session's identity.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,7 +36,7 @@ pub struct Pool {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+    saman::lock(m)
 }
 
 /// The lowest number from 1 that USED does not hold.

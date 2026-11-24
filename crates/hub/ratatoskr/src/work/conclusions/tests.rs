@@ -385,53 +385,57 @@ mod after_a_step {
         .unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn conclusions_after_use_the_stamped_step() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        let late = db
-            .write(meta(), |tx| {
-                let (a, b, c) = (step(tx, 0), step(tx, 0), step(tx, 0));
-                decision(tx, Some(a));
-                decision(tx, Some(b));
-                let late = decision(tx, Some(c));
-                finding(tx, "note:early", Some(a));
-                finding(tx, "note:late", Some(c));
-                Ok(late)
-            })
-            .await
-            .unwrap();
-        let got = db.read(|c| after(c, "s1", 2)).await.unwrap();
-        assert_eq!(
-            got,
-            [
-                Concluded::Decision(late),
-                Concluded::Finding("note:late".into())
-            ]
-        );
+    #[test]
+    fn conclusions_after_use_the_stamped_step() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            let late = db
+                .write(meta(), |tx| {
+                    let (a, b, c) = (step(tx, 0), step(tx, 0), step(tx, 0));
+                    decision(tx, Some(a));
+                    decision(tx, Some(b));
+                    let late = decision(tx, Some(c));
+                    finding(tx, "note:early", Some(a));
+                    finding(tx, "note:late", Some(c));
+                    Ok(late)
+                })
+                .await
+                .unwrap();
+            let got = db.read(|c| after(c, "s1", 2)).await.unwrap();
+            assert_eq!(
+                got,
+                [
+                    Concluded::Decision(late),
+                    Concluded::Finding("note:late".into())
+                ]
+            );
+        })
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn conclusions_without_a_stamp_fall_back_to_the_log_version() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = CoordDb::spawn(dir.path().join("work.db"));
-        let after_it = db
-            .write(meta(), |tx| {
-                // the target step saw the decision log at version 1; the first decision made it, the second came after
-                let first = decision(tx, None);
-                let _ = step(tx, 0);
-                let target = step(tx, 1);
-                let _ = target;
-                let second = decision(tx, None);
-                finding(tx, "note:unstamped", None);
-                Ok((first, second))
-            })
-            .await
-            .unwrap();
-        let got = db.read(|c| after(c, "s1", 2)).await.unwrap();
-        assert!(got.contains(&Concluded::Decision(after_it.1)), "{got:?}");
-        assert!(!got.contains(&Concluded::Decision(after_it.0)), "{got:?}");
-        assert!(got.contains(&Concluded::Finding("note:unstamped".into())));
+    #[test]
+    fn conclusions_without_a_stamp_fall_back_to_the_log_version() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let db = CoordDb::spawn(dir.path().join("work.db"));
+            let after_it = db
+                .write(meta(), |tx| {
+                    // the target step saw the decision log at version 1; the first decision made it, the second came after
+                    let first = decision(tx, None);
+                    step(tx, 0);
+                    let target = step(tx, 1);
+                    let _only_when_used_elsewhere = &target;
+                    let second = decision(tx, None);
+                    finding(tx, "note:unstamped", None);
+                    Ok((first, second))
+                })
+                .await
+                .unwrap();
+            let got = db.read(|c| after(c, "s1", 2)).await.unwrap();
+            assert!(got.contains(&Concluded::Decision(after_it.1)), "{got:?}");
+            assert!(!got.contains(&Concluded::Decision(after_it.0)), "{got:?}");
+            assert!(got.contains(&Concluded::Finding("note:unstamped".into())));
+        })
     }
 }
 

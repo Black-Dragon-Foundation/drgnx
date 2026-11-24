@@ -48,6 +48,7 @@ use runstav::methods::timeline::AgentStep;
 use runstav::registry::Class;
 use runstav::wire::Error;
 use session::Session;
+pub use session::turn_core::HoldSource;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -75,13 +76,13 @@ pub struct Hub {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(m)
 }
 
 impl Hub {
     /// `runtime.db`, where the sessions are recorded (the server gives it once, after it opened).
     pub fn open_store(&self, db: urdr::Handle) {
-        let _ = self.db.set(db);
+        crate::soft::done(self.db.set(db), "mod");
     }
 
     pub(crate) fn db(&self) -> Option<&urdr::Handle> {
@@ -193,8 +194,15 @@ impl Hub {
     }
 
     /// Pause: cancel the turn once the tool call running now completes, and hold the queue.
-    pub fn cancel_after_tool(&self, id: &str) -> Result<(), Error> {
-        self.find(id)?.pause_after_tool()
+    pub fn cancel_after_tool(&self, id: &str, source: HoldSource) -> Result<(), Error> {
+        self.find(id)?.pause_after_tool(source)
+    }
+
+    /// SOURCE's hold on a turn running lifts, and no other source's: a budget raise lets a turn the budget paused go on
+    /// past its next tool call, while a supervisor's pause on it still stops it there.
+    pub fn clear_hold(&self, id: &str, source: HoldSource) -> Result<(), Error> {
+        self.find(id)?.clear_hold(source);
+        Ok(())
     }
 
     /// Session ID, paused by a reached budget, goes on with the continue ("resumed by you"): false when it is not
@@ -238,10 +246,12 @@ impl Hub {
         let all: Vec<Arc<Session>> = lock(&self.sessions).values().cloned().collect();
         let ends: Vec<_> = all
             .into_iter()
-            .map(|s| tokio::spawn(async move { s.shutdown().await }))
+            .map(|s| {
+                crate::clock::spawn_untracked(module_path!(), async move { s.shutdown().await })
+            })
             .collect();
         for e in ends {
-            let _ = e.await;
+            crate::soft::done(e.await, "mod");
         }
     }
 

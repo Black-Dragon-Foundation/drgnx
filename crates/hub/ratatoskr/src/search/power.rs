@@ -10,6 +10,17 @@ use std::path::Path;
 /// The sysfs root the hub reads.
 pub const SYS: &str = "/sys";
 
+/// The root the hub reads for the battery, the load and the disk floor: [`SYS`], and with `test-hooks` the stand-in
+/// `DRGNX_TEST_POWER_ROOT` names, so a test hub never depends on the build machine (its disk filling past the floor
+/// paused tier 2 in five tests, 2026-11-24).
+pub fn root() -> std::path::PathBuf {
+    #[cfg(feature = "test-hooks")]
+    if let Some(r) = std::env::var_os("DRGNX_TEST_POWER_ROOT") {
+        return std::path::PathBuf::from(r);
+    }
+    std::path::PathBuf::from(SYS)
+}
+
 /// On battery, by this platform's rule. ROOT is the sysfs root. On macOS only [`SYS`] means the machine (`pmset`):
 /// any other ROOT is a test's stand-in sysfs (`--test-power-root`), read by the sysfs rule there too, so the battery
 /// rows hold on a Mac as on Linux.
@@ -19,7 +30,7 @@ pub fn on_battery(root: &Path) -> bool {
         if root != Path::new(SYS) {
             return sysfs_on_battery(root);
         }
-        std::process::Command::new("pmset")
+        crate::proc::Command::new("pmset")
             .args(["-g", "ps"])
             .output()
             .is_ok_and(|o| pmset_on_battery(&String::from_utf8_lossy(&o.stdout)))
@@ -35,7 +46,7 @@ pub fn sysfs_on_battery(root: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(root.join("class/power_supply")) else {
         return false;
     };
-    let read = |p: &Path| std::fs::read_to_string(p).unwrap_or_default();
+    let read = |p: &Path| crate::fsio::read_to_string(p).unwrap_or_default();
     let (mut mains, mut online) = (false, false);
     for e in entries.flatten() {
         let dir = e.path();
@@ -61,9 +72,9 @@ mod tests {
     fn supply(root: &Path, name: &str, ty: &str, online: Option<&str>) {
         let d = root.join("class/power_supply").join(name);
         std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("type"), format!("{ty}\n")).unwrap();
+        crate::fsio::write(d.join("type"), format!("{ty}\n")).unwrap();
         if let Some(o) = online {
-            std::fs::write(d.join("online"), format!("{o}\n")).unwrap();
+            crate::fsio::write(d.join("online"), format!("{o}\n")).unwrap();
         }
     }
 

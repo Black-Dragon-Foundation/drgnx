@@ -13,7 +13,7 @@ use crate::weights::Weights;
 use net::Net;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use wgpu::PollType;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -83,9 +83,8 @@ pub(crate) struct GpuEngine {
 /// Keeps the first fault. Whatever wgpu reports while the embedder runs ends the device for us: our calls are valid by
 /// construction, so the error is the driver's, a dead device's or out-of-memory, and the answer is the same in each case.
 fn record(fault: &Mutex<Option<String>>, value: String) {
-    if let Ok(mut slot) = fault.lock()
-        && slot.is_none()
-    {
+    let mut slot = saman::lock(fault);
+    if slot.is_none() {
         *slot = Some(value);
     }
 }
@@ -150,12 +149,9 @@ impl GpuEngine {
     }
 
     fn check(&self) -> Result<(), EmbedFail> {
-        match self.fault.lock() {
-            Ok(slot) => match &*slot {
-                Some(m) => Err(EmbedFail::DeviceLost(m.clone())),
-                None => Ok(()),
-            },
-            Err(_) => Err(EmbedFail::DeviceLost("the fault record is poisoned".into())),
+        match &*saman::lock(&self.fault) {
+            Some(m) => Err(EmbedFail::DeviceLost(m.clone())),
+            None => Ok(()),
         }
     }
 
@@ -182,7 +178,7 @@ impl GpuEngine {
         let slice = self.net.stage.slice(..bytes);
         let (sent, got) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = sent.send(r);
+            saman::delivered(sent.send(r), "the read-back's receiver");
         });
         self.wait(None)?;
         match got.try_recv() {
@@ -239,7 +235,7 @@ impl Engine for GpuEngine {
                     );
                 }
             }
-            let start = Instant::now();
+            let start = stund::real::instant();
             let index = queue.submit([encoder.finish()]);
             self.wait(Some(index))?;
             worst = worst.max(start.elapsed());

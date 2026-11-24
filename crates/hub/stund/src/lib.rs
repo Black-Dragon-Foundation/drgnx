@@ -24,6 +24,11 @@ pub trait Provider: Send + Sync + 'static {
     fn sleep(&self, d: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>>;
     /// This clock's reading: time since an origin that stays the same for the clock's life (only differences count).
     fn now(&self) -> Duration;
+    /// This clock's time of day. The system's unless a clock says otherwise (a virtual one stands still, so a test
+    /// that compares times of day can name the instant).
+    fn wall(&self) -> std::time::SystemTime {
+        std::time::SystemTime::now()
+    }
 }
 
 static PROVIDER: RwLock<Option<Arc<dyn Provider>>> = RwLock::new(None);
@@ -93,6 +98,139 @@ pub fn now() -> Duration {
             tokio::time::Instant::now()
                 .saturating_duration_since(*ORIGIN.get_or_init(tokio::time::Instant::now))
         }
+    }
+}
+
+/// A point on the installed clock (else tokio's), the stand-in for `std::time::Instant` that follows the clock a test installs.
+/// Only differences between two of them mean anything; `Instant - Instant` panics when the right side is later, like std's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Instant(Duration);
+
+impl Instant {
+    /// The installed clock's reading now (see [`now`]).
+    pub fn now() -> Instant {
+        Instant(now())
+    }
+
+    /// The time since this instant on the clock now.
+    pub fn elapsed(&self) -> Duration {
+        Instant::now().saturating_duration_since(*self)
+    }
+
+    /// The time from EARLIER to this instant; zero when EARLIER is later.
+    pub fn saturating_duration_since(&self, earlier: Instant) -> Duration {
+        self.0.saturating_sub(earlier.0)
+    }
+
+    /// The time from EARLIER to this instant, or `None` when EARLIER is later.
+    pub fn checked_duration_since(&self, earlier: Instant) -> Option<Duration> {
+        self.0.checked_sub(earlier.0)
+    }
+
+    /// The time from EARLIER to this instant; zero when EARLIER is later.
+    pub fn duration_since(&self, earlier: Instant) -> Duration {
+        self.saturating_duration_since(earlier)
+    }
+
+    /// This instant moved on by D, or `None` on overflow.
+    pub fn checked_add(&self, d: Duration) -> Option<Instant> {
+        self.0.checked_add(d).map(Instant)
+    }
+
+    /// This instant moved back by D, or `None` before the clock's origin.
+    pub fn checked_sub(&self, d: Duration) -> Option<Instant> {
+        self.0.checked_sub(d).map(Instant)
+    }
+}
+
+impl std::ops::Add<Duration> for Instant {
+    type Output = Instant;
+    fn add(self, d: Duration) -> Instant {
+        Instant(self.0 + d)
+    }
+}
+
+impl std::ops::AddAssign<Duration> for Instant {
+    fn add_assign(&mut self, d: Duration) {
+        self.0 += d;
+    }
+}
+
+impl std::ops::Sub<Duration> for Instant {
+    type Output = Instant;
+    fn sub(self, d: Duration) -> Instant {
+        Instant(self.0 - d)
+    }
+}
+
+impl std::ops::Sub<Instant> for Instant {
+    type Output = Duration;
+    fn sub(self, earlier: Instant) -> Duration {
+        self.0 - earlier.0
+    }
+}
+
+/// Wait D with the calling thread blocked, on the installed clock, else for real: for code that has no executor (a
+/// thread of the UI crates' tests, a polling loop). A virtual clock decides when it returns, like [`sleep`].
+pub fn sleep_blocking(d: Duration) {
+    match current() {
+        None => std::thread::sleep(d),
+        Some(p) => {
+            struct Unpark(std::thread::Thread);
+            impl std::task::Wake for Unpark {
+                fn wake(self: Arc<Self>) {
+                    self.0.unpark();
+                }
+            }
+            let waker = std::task::Waker::from(Arc::new(Unpark(std::thread::current())));
+            let mut cx = std::task::Context::from_waker(&waker);
+            let mut s = p.sleep(d);
+            while s.as_mut().poll(&mut cx).is_pending() {
+                std::thread::park();
+            }
+        }
+    }
+}
+
+/// The time of day on the installed clock, else the system's: for a stamp written to a file or compared with a time
+/// the OS reports (a file's mtime, a process's start). Never to wait on nor to measure with: [`now`] and [`Instant`]
+/// do that.
+pub fn wall() -> std::time::SystemTime {
+    match current() {
+        Some(p) => p.wall(),
+        None => std::time::SystemTime::now(),
+    }
+}
+
+/// Real time, whatever clock is installed: for the one thing that must not follow a virtual clock, a test's wait for
+/// something outside it (`skuld::wait_until`, whose deadline only bounds a failure), and the origin of a pure core's
+/// std instants. A timer in code under test never uses these: it waits through [`sleep`] and [`timeout`].
+pub mod real {
+    use std::time::Duration;
+
+    /// The system's monotonic clock as a `std::time::Instant`.
+    pub fn instant() -> std::time::Instant {
+        std::time::Instant::now()
+    }
+
+    /// The monotonic time of tokio's own clock: the system's, or the paused one inside a test that paused tokio's time.
+    pub fn tokio_instant() -> tokio::time::Instant {
+        tokio::time::Instant::now()
+    }
+
+    /// The system's time of day, whatever clock is installed: for the base a virtual clock itself starts from.
+    pub fn wall() -> std::time::SystemTime {
+        std::time::SystemTime::now()
+    }
+
+    /// Wait D with the calling thread blocked, for real.
+    pub fn sleep_blocking(d: Duration) {
+        std::thread::sleep(d);
+    }
+
+    /// Wait D on tokio's clock, for real.
+    pub async fn sleep(d: Duration) {
+        tokio::time::sleep(d).await;
     }
 }
 

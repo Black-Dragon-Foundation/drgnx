@@ -40,7 +40,7 @@ pub struct JobKeys {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    saman::lock(m)
 }
 
 /// The `why` of a job whose key never came.
@@ -119,19 +119,21 @@ impl JobKeys {
     fn not_delivered(&self, name: &str) {
         let why = self.dir.join("why");
         if !why.exists() {
-            let _ = std::fs::write(&why, not_delivered());
+            crate::soft::done(
+                crate::fsio::write(&why, not_delivered()),
+                "crate::fsio::write",
+            );
         }
         use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.dir.join("log"))
-        {
-            let _ = writeln!(
-                f,
-                "drgnx: {}: {name} (the hub didn't hold it within {} s)",
-                not_delivered(),
-                self.wait.as_secs()
+        if let Ok(mut f) = crate::fsio::append(self.dir.join("log"), true) {
+            crate::soft::done(
+                writeln!(
+                    f,
+                    "drgnx: {}: {name} (the hub didn't hold it within {} s)",
+                    not_delivered(),
+                    self.wait.as_secs()
+                ),
+                "writeln",
             );
         }
     }
@@ -171,7 +173,7 @@ pub fn static_key_name(podman_arch: &str) -> String {
 /// A job's key socket: removed, and its answers stopped, when dropped.
 pub struct Socket {
     path: PathBuf,
-    task: tokio::task::JoinHandle<()>,
+    task: crate::clock::Spawned<()>,
 }
 
 impl Socket {
@@ -183,7 +185,7 @@ impl Socket {
 impl Drop for Socket {
     fn drop(&mut self) {
         self.task.abort();
-        let _ = std::fs::remove_file(&self.path);
+        crate::soft::done(std::fs::remove_file(&self.path), "std::fs::remove_file");
     }
 }
 
@@ -196,10 +198,10 @@ pub fn serve(path: &Path, keys: Arc<JobKeys>) -> io::Result<Socket> {
     tmp_name.push(path.file_name().unwrap_or_default());
     tmp_name.push(".tmp");
     let tmp = dir.join(tmp_name);
-    let _ = std::fs::remove_file(&tmp);
+    crate::soft::done(std::fs::remove_file(&tmp), "std::fs::remove_file");
     let l = std::os::unix::net::UnixListener::bind(&tmp)?;
     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-    std::fs::rename(&tmp, path)?;
+    crate::fsio::rename(&tmp, path)?;
     l.set_nonblocking(true)?;
     let l = tokio::net::UnixListener::from_std(l)?;
     let task = crate::clock::spawn("exec:key-socket", async move {
@@ -232,8 +234,8 @@ async fn one(s: tokio::net::UnixStream, keys: &JobKeys) {
         return;
     }
     let answer = keys.answer(line.trim_end_matches('\n')).await;
-    let _ = w.write_all(&answer).await;
-    let _ = w.shutdown().await;
+    crate::soft::done(w.write_all(&answer).await, "keys");
+    crate::soft::done(w.shutdown().await, "keys");
 }
 
 /// Copies a keyed job's output OUT into its LOG (appended: a relay's lines may be there already), each chunk through
@@ -244,12 +246,7 @@ pub async fn pump(
     redact: Arc<Mutex<Redactor>>,
 ) {
     use zeroize::Zeroize;
-    let Ok(mut f) = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log)
-        .await
-    else {
+    let Ok(mut f) = crate::fsio::append(&log, true).map(tokio::fs::File::from_std) else {
         return;
     };
     let mut buf = vec![0u8; 16 << 10];
@@ -265,8 +262,8 @@ pub async fn pump(
         }
     }
     let rest = lock(&redact).finish();
-    let _ = f.write_all(&rest).await;
-    let _ = f.flush().await;
+    crate::soft::done(f.write_all(&rest).await, "keys");
+    crate::soft::done(f.flush().await, "keys");
 }
 
 /// The argv that runs ARGV with each of KEYS in the variable of its name, through `drgnx-key` at BIN.
@@ -332,82 +329,86 @@ mod tests {
     /// [D] A job's key socket is its user's alone (0600), answers `get NAME` with the value for a key the job names,
     /// refuses one it doesn't name and a line that isn't a request, records the first hand-out as `key_sent` on
     /// `local`, masks the value in the job's redactor before it leaves, and is gone once dropped.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_key_socket_answers_the_jobs_own_keys_only() {
-        use std::os::unix::fs::PermissionsExt;
-        let d = tempfile::tempdir().unwrap();
-        let keys = held(&[("TOKEN", "v-3q8Zk"), ("OTHER", "o-9")]);
-        let jk = JobKeys::new(
-            "x1",
-            vec!["TOKEN".into()],
-            keys.clone(),
-            d.path(),
-            Duration::from_secs(5),
-        );
-        let path = d.path().join("key.sock");
-        let sock = serve(&path, jk.clone()).unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-        let p = path.clone();
-        let (a, b, c, e) = tokio::task::spawn_blocking(move || {
-            (
-                ask(&p, "get TOKEN"),
-                ask(&p, "get TOKEN"),
-                ask(&p, "get OTHER"),
-                ask(&p, "TOKEN"),
-            )
+    #[test]
+    fn the_key_socket_answers_the_jobs_own_keys_only() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            use std::os::unix::fs::PermissionsExt;
+            let d = tempfile::tempdir().unwrap();
+            let keys = held(&[("TOKEN", "v-3q8Zk"), ("OTHER", "o-9")]);
+            let jk = JobKeys::new(
+                "x1",
+                vec!["TOKEN".into()],
+                keys.clone(),
+                d.path(),
+                Duration::from_secs(5),
+            );
+            let path = d.path().join("key.sock");
+            let sock = serve(&path, jk.clone()).unwrap();
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+            let p = path.clone();
+            let (a, b, c, e) = crate::clock::blocking(move || {
+                (
+                    ask(&p, "get TOKEN"),
+                    ask(&p, "get TOKEN"),
+                    ask(&p, "get OTHER"),
+                    ask(&p, "TOKEN"),
+                )
+            })
+            .await
+            .unwrap();
+            assert_eq!(a, b"ok 7\nv-3q8Zk");
+            assert_eq!(b, a);
+            assert_eq!(c, b"no the job doesn't name the key OTHER\n");
+            assert_eq!(e, b"no not `get NAME`\n");
+            let rows = keys.audit(Some("x1"), None);
+            assert_eq!(rows.len(), 1, "one row for the first hand-out: {rows:?}");
+            assert_eq!(
+                (rows[0].kind, rows[0].key.as_str(), rows[0].runner.as_str()),
+                (AuditKind::Sent, "TOKEN", LOCAL_RUNNER)
+            );
+            let mut r = saman::lock(&jk.redactor()).redact(b"say v-3q8Zk.");
+            r.extend(saman::lock(&jk.redactor()).finish());
+            assert_eq!(r, b"say *******.");
+            drop(sock);
+            assert!(!path.exists());
         })
-        .await
-        .unwrap();
-        assert_eq!(a, b"ok 7\nv-3q8Zk");
-        assert_eq!(b, a);
-        assert_eq!(c, b"no the job doesn't name the key OTHER\n");
-        assert_eq!(e, b"no not `get NAME`\n");
-        let rows = keys.audit(Some("x1"), None);
-        assert_eq!(rows.len(), 1, "one row for the first hand-out: {rows:?}");
-        assert_eq!(
-            (rows[0].kind, rows[0].key.as_str(), rows[0].runner.as_str()),
-            (AuditKind::Sent, "TOKEN", LOCAL_RUNNER)
-        );
-        let mut r = jk.redactor().lock().unwrap().redact(b"say v-3q8Zk.");
-        r.extend(jk.redactor().lock().unwrap().finish());
-        assert_eq!(r, b"say *******.");
-        drop(sock);
-        assert!(!path.exists());
     }
 
     /// [D] A key the hub doesn't hold yet is asked for and handed out when it comes; one that never comes is answered
     /// `timeout`, after the job's `why` says `infra: key not delivered` and its log names the key.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_key_that_comes_late_is_handed_out_and_one_that_never_comes_is_infra() {
-        let d = tempfile::tempdir().unwrap();
-        let keys = Arc::new(Keys::default());
-        let (tx, mut asked) = tokio::sync::mpsc::unbounded_channel();
-        keys.set_tell(move |ev, data| {
-            let _ = tx.send(format!("{ev} {data}"));
-        });
-        let jk = JobKeys::new(
-            "x2",
-            vec!["LATE".into(), "NEVER".into()],
-            keys.clone(),
-            d.path(),
-            Duration::from_secs(2),
-        );
-        let late = tokio::spawn({
-            let jk = jk.clone();
-            async move { jk.answer("get LATE").await }
-        });
-        let first = asked.recv().await.expect("the ask");
-        assert!(first.contains("runners/need-keys"), "{first}");
-        keys.take([("LATE".to_string(), SecretString::from("l-1".to_string()))]);
-        assert_eq!(&late.await.unwrap()[..], b"ok 3\nl-1");
-        assert!(!d.path().join("why").exists());
-        assert_eq!(&jk.answer("get NEVER").await[..], keyline::TIMEOUT);
-        assert_eq!(
-            std::fs::read_to_string(d.path().join("why")).unwrap(),
-            "infra: key not delivered"
-        );
-        let log = std::fs::read_to_string(d.path().join("log")).unwrap();
-        assert!(log.contains("NEVER"), "{log}");
+    #[test]
+    fn a_key_that_comes_late_is_handed_out_and_one_that_never_comes_is_infra() {
+        saman::Executor::new(2).unwrap().block_on(async move {
+            let d = tempfile::tempdir().unwrap();
+            let keys = Arc::new(Keys::default());
+            let (tx, mut asked) = tokio::sync::mpsc::unbounded_channel();
+            keys.set_tell(move |ev, data| {
+                crate::soft::done(tx.send(format!("{ev} {data}")), "tx send");
+            });
+            let jk = JobKeys::new(
+                "x2",
+                vec!["LATE".into(), "NEVER".into()],
+                keys.clone(),
+                d.path(),
+                Duration::from_secs(2),
+            );
+            let late = crate::clock::spawn_untracked(module_path!(), {
+                let jk = jk.clone();
+                async move { jk.answer("get LATE").await }
+            });
+            let first = asked.recv().await.expect("the ask");
+            assert!(first.contains("runners/need-keys"), "{first}");
+            keys.take([("LATE".to_string(), SecretString::from("l-1".to_string()))]);
+            assert_eq!(&late.await.unwrap()[..], b"ok 3\nl-1");
+            assert!(!d.path().join("why").exists());
+            assert_eq!(&jk.answer("get NEVER").await[..], keyline::TIMEOUT);
+            assert_eq!(
+                crate::fsio::read_to_string(d.path().join("why")).unwrap(),
+                "infra: key not delivered"
+            );
+            let log = crate::fsio::read_to_string(d.path().join("log")).unwrap();
+            assert!(log.contains("NEVER"), "{log}");
+        })
     }
 }

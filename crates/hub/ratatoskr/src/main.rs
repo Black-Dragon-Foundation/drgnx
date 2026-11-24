@@ -6,7 +6,6 @@
 use ratatoskr::cli::{self, Command, Supervisor};
 use ratatoskr::{Exit, doctor, idle, server, supervise, version};
 use runstav::paths::Env;
-use std::os::unix::process::CommandExt;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -18,9 +17,12 @@ fn code(c: i32) -> ExitCode {
 /// text; the first miss of each pack is logged. `DRGNX_PACK_LOCK` (a test run's libraries) is left as it is.
 fn install_grammars(env: &Env) {
     if std::env::var_os("DRGNX_PACK_LOCK").is_none() {
-        let _ = skald::registry::install_from(
-            &runstav::paths::config_dir(env).join("drgnx.lock.eld"),
-            &runstav::paths::data_dir(env).join("grammars"),
+        ratatoskr::soft::done(
+            skald::registry::install_from(
+                &runstav::paths::config_dir(env).join("drgnx.lock.eld"),
+                &runstav::paths::data_dir(env).join("grammars"),
+            ),
+            "skald::registry::install_from",
         );
     }
     hrafn::chunk::on_missing(|pack, why| {
@@ -39,19 +41,23 @@ fn main() -> ExitCode {
     let command = match cli::parse(std::env::args_os().skip(1)) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("ratatoskr: {e}\n{}", cli::USAGE);
+            ratatoskr::soft::err_line(&format!("ratatoskr: {e}\n{}", cli::USAGE));
             return ExitCode::from(Exit::Usage as u8);
         }
     };
     install_grammars(&Env::process());
     match command {
-        Command::Version { json: true } => println!("{}", version::json()),
-        Command::Version { json: false } => println!("{}", version::text()),
+        Command::Version { json: true } => {
+            ratatoskr::soft::out_line(&(version::json()).to_string())
+        }
+        Command::Version { json: false } => {
+            ratatoskr::soft::out_line(&(version::text()).to_string())
+        }
         Command::Methods { markdown: false } => {
-            print!("{}", runstav::registry::methods_json_text())
+            ratatoskr::soft::out_text(&runstav::registry::methods_json_text())
         }
         Command::Methods { markdown: true } => {
-            print!("{}", runstav::registry::markdown_table())
+            ratatoskr::soft::out_text(&runstav::registry::markdown_table())
         }
         Command::Ensure { timeout } => return code(supervise::ensure(&Env::process(), timeout)),
         Command::Stop { timeout } => return code(supervise::stop(&Env::process(), timeout)),
@@ -87,6 +93,7 @@ fn main() -> ExitCode {
         Command::Graph(g) => return code(ratatoskr::graph_cli::run(&Env::process(), g)),
         // The same: one call to the running hub.
         Command::Outside(o) => return code(ratatoskr::outside_cli::run(&Env::process(), o)),
+        Command::Door(d) => return code(ratatoskr::door_cli::run(&Env::process(), d)),
         // Its own current-thread runtime for the download; never started but by this command.
         Command::Browser(b) => return code(ratatoskr::browser::run(&Env::process(), b)),
         // No runtime either: the job commands are one call each to the running hub.
@@ -99,6 +106,8 @@ fn main() -> ExitCode {
         Command::Plugins(p) => return code(ratatoskr::plugins_cli::run(&Env::process(), p)),
         // Hrafn from a terminal (and `search mcp`, which builds a runtime of its own).
         Command::Search(s) => return code(ratatoskr::search_cli::run(&Env::process(), s)),
+        // The vector server lives in the hub: one call to it.
+        Command::Embed(c) => return code(ratatoskr::embed_serve::run(&Env::process(), c)),
         // Hrafn's embed worker: threads of its own (stdin, the CPU path's pool), never a tokio runtime.
         // A fetched pack's grammar in its own process: stdin and stdout are the whole interface.
         Command::HrafnParse {
@@ -111,7 +120,7 @@ fn main() -> ExitCode {
                 &grammar,
                 &sha256,
                 &mut std::io::stdin().lock(),
-                &mut std::io::stdout().lock(),
+                &mut annall::raw_out(),
             ));
         }
         Command::EmbedWorker(args) => return code(ratatoskr::search::worker::run(args)),
@@ -132,17 +141,18 @@ fn main() -> ExitCode {
             // the fetched packs' grammars: workers under the sandbox, started on first use
             ratatoskr::parse_worker::install_hub(&Env::process());
             let supervisor = args.supervisor;
-            let mut builder = tokio::runtime::Builder::new_multi_thread();
-            builder.worker_threads(2).enable_all();
-            // the virtual clock's look at the workers: a parked worker holds no deferred wake
-            #[cfg(feature = "test-hooks")]
-            builder
-                .on_thread_park(ratatoskr::clock::worker_parks)
-                .on_thread_unpark(ratatoskr::clock::worker_unparks);
-            let runtime = match builder.build() {
+            let runtime = match saman::Executor::tuned(2, |_builder| {
+                // the virtual clock's look at the workers: a parked worker holds no deferred wake
+                #[cfg(feature = "test-hooks")]
+                _builder
+                    .on_thread_park(ratatoskr::clock::worker_parks)
+                    .on_thread_unpark(ratatoskr::clock::worker_unparks);
+            }) {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("ratatoskr: cannot start: no async runtime: {e}");
+                    ratatoskr::soft::err_line(&format!(
+                        "ratatoskr: cannot start: no async runtime: {e}"
+                    ));
                     return ExitCode::from(Exit::CannotStart as u8);
                 }
             };
@@ -153,10 +163,10 @@ fn main() -> ExitCode {
                 (Exit::Restart, Supervisor::SelfDetached) => reexec(),
                 // launchd restarts on every non-zero exit, so only 75 and a crash may reach it
                 (Exit::CannotStart | Exit::Usage | Exit::AnotherHub, Supervisor::Launchd) => {
-                    eprintln!(
+                    ratatoskr::soft::err_line(&format!(
                         "ratatoskr: exit {} mapped to 0 for launchd (the reason is in the hub's log)",
                         exit as u8
-                    );
+                    ));
                     ExitCode::SUCCESS
                 }
                 _ => ExitCode::from(exit as u8),
@@ -170,13 +180,25 @@ fn main() -> ExitCode {
 /// across this call and goes with the exec (every descriptor is close-on-exec); only a failed exec returns.
 fn reexec() -> ExitCode {
     let Some(exe) = idle::start_exe() else {
-        eprintln!("ratatoskr: cannot restart: no resolved executable path");
+        ratatoskr::soft::err_line("ratatoskr: cannot restart: no resolved executable path");
         return ExitCode::from(Exit::CannotStart as u8);
     };
-    let err = std::process::Command::new(exe)
-        .args(std::env::args_os().skip(1))
-        .env(ratatoskr::lock::RESTARTED, "1")
-        .exec();
-    eprintln!("ratatoskr: cannot execute {} again: {err}", exe.display());
+    let mut env: Vec<_> = std::env::vars_os()
+        .filter(|(k, _)| k != ratatoskr::lock::RESTARTED)
+        .collect();
+    env.push((ratatoskr::lock::RESTARTED.into(), "1".into()));
+    let err = draugr::exec(&draugr::Spec {
+        program: exe.to_path_buf(),
+        args: std::env::args_os().skip(1).collect(),
+        env,
+        cwd: None,
+        stdin_null: false,
+        pass_fds: Vec::new(),
+        new_session: false,
+    });
+    ratatoskr::soft::err_line(&format!(
+        "ratatoskr: cannot execute {} again: {err}",
+        exe.display()
+    ));
     ExitCode::from(Exit::CannotStart as u8)
 }

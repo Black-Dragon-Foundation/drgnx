@@ -821,7 +821,7 @@ mod tests {
         fn file(&self, rel: &str) {
             let path = self.home.join(rel);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, "fixture\n").unwrap();
+            eitri::replace_file(&path, b"fixture\n").unwrap();
         }
 
         fn dir(&self, rel: &str) {
@@ -836,7 +836,7 @@ mod tests {
 
         fn config_file(&self, name: &str, text: &str, mode: u32) {
             let path = self.config.join(name);
-            fs::write(&path, self.sub(text)).unwrap();
+            eitri::replace_file(&path, self.sub(text).as_bytes()).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
         }
 
@@ -856,7 +856,10 @@ mod tests {
     }
 
     fn fixtures() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../test/fixtures")
+        // eitri refuses a link in any component of a path: the checkout's own are resolved first
+        fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
+            .unwrap()
+            .join("../../../test/fixtures")
     }
 
     fn strs<'a>(case: &'a Value, key: &str) -> Vec<&'a str> {
@@ -964,7 +967,7 @@ mod tests {
 
     #[test]
     fn every_case_in_the_shared_table() {
-        let text = fs::read_to_string(fixtures().join("deny-cases.json")).unwrap();
+        let text = eitri::read_string(&fixtures().join("deny-cases.json"), 1 << 20).unwrap();
         let table: Value = serde_json::from_str(&text).unwrap();
         let mut wrong = Vec::new();
         let mut ran = 0;

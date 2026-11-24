@@ -49,7 +49,7 @@ pub static FS_NOTES: [std::sync::atomic::AtomicU32; 7] =
     [const { std::sync::atomic::AtomicU32::new(0) }; 7];
 
 /// The full-screen log: when it started, and its entries.
-type FsLog = (Option<std::time::Instant>, Vec<(usize, u128)>);
+type FsLog = (Option<stund::Instant>, Vec<(usize, u128)>);
 
 thread_local! {
     /// The newest full-screen steps as (STEP, milliseconds since the first), at most 24 (test diagnostics: how long a
@@ -90,11 +90,8 @@ fn own_responder(n: &NSNotification) {
 }
 
 fn key_note(n: &NSNotification, name: &str) {
-    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    let ms = T0
-        .get_or_init(std::time::Instant::now)
-        .elapsed()
-        .as_millis();
+    static T0: std::sync::OnceLock<stund::Instant> = std::sync::OnceLock::new();
+    let ms = T0.get_or_init(stund::Instant::now).elapsed().as_millis();
     let (key, responder) = n
         .object()
         .and_then(|o| o.downcast::<objc2_app_kit::NSWindow>().ok())
@@ -105,9 +102,7 @@ fn key_note(n: &NSNotification, name: &str) {
                     .map_or_else(|| "nil".to_owned(), |r| format!("{:?}", r.class().name())),
             )
         });
-    let mut l = KEY_LOG
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut l = saman::lock(&KEY_LOG);
     if l.len() >= 32 {
         l.remove(0);
     }
@@ -126,7 +121,7 @@ fn fs_note(i: usize) {
 pub fn fs_log(i: usize) {
     FS_LOG.with(|l| {
         let mut l = l.borrow_mut();
-        let t0 = *l.0.get_or_insert_with(std::time::Instant::now);
+        let t0 = *l.0.get_or_insert_with(stund::Instant::now);
         if l.1.len() >= 24 {
             l.1.remove(0);
         }

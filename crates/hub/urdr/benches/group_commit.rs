@@ -6,9 +6,9 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
 
 use rusqlite::params;
+use stund::Instant;
 use urdr::graph::schema::GRAPH_DDL;
 use urdr::graph::writer::{OpenOutcome, OpenRule, Writer, WriterOpts};
 use urdr::graph::{Class, Tx, TxMeta};
@@ -44,7 +44,7 @@ async fn round(secure_delete: bool) {
     let mut jobs = Vec::new();
     for w in 0..WRITERS {
         let h = handle.clone();
-        jobs.push(tokio::spawn(async move {
+        jobs.push(saman::spawn("urdr-bench-writer", async move {
             for i in 0..WRITES {
                 let key = (w * 100 + i % 100) as i64;
                 h.write(
@@ -67,7 +67,7 @@ async fn round(secure_delete: bool) {
     }
     let took = start.elapsed().as_secs_f64();
     let status = handle.status();
-    println!(
+    annall::cli_out(&format!(
         "secure_delete {}: {} writes in {took:.3} s = {:.0} writes/s; {} commits (one fsync each) = {:.0} fsyncs/s; {:.1} writes per commit",
         if secure_delete { "ON " } else { "OFF" },
         status.writes,
@@ -75,17 +75,20 @@ async fn round(secure_delete: bool) {
         status.batches,
         status.batches as f64 / took,
         status.writes as f64 / status.batches as f64,
-    );
-    tokio::task::spawn_blocking(move || writer.shutdown())
+    ))
+    .unwrap();
+    saman::spawn_blocking("urdr-bench-shutdown", move || writer.shutdown())
         .await
         .unwrap();
 }
 
-#[tokio::test]
+#[test]
 #[ignore]
-async fn group_commit_with_and_without_secure_delete() {
-    round(true).await;
-    round(false).await;
-    round(true).await;
-    round(false).await;
+fn group_commit_with_and_without_secure_delete() {
+    saman::block_on_current(async {
+        round(true).await;
+        round(false).await;
+        round(true).await;
+        round(false).await;
+    });
 }

@@ -41,7 +41,7 @@ pub struct SnapState {
 impl SnapState {
     /// The checkpoints' folder, where the markers are (the first one told stays).
     fn attach(&self, root: &Path) {
-        let _ = self.root.set(root.to_path_buf());
+        crate::soft::done(self.root.set(root.to_path_buf()), "timeline");
     }
 
     fn marker(&self, sid: &str) -> Option<PathBuf> {
@@ -50,14 +50,11 @@ impl SnapState {
 
     /// GONE's snapshots were removed at the cap.
     fn pruned(&self, gone: &[String]) {
-        self.pruned
-            .lock()
-            .expect("timeline")
-            .extend(gone.iter().cloned());
+        saman::lock(&self.pruned).extend(gone.iter().cloned());
         for sid in gone {
             if let Some(m) = self.marker(sid) {
                 let made = m.parent().map(std::fs::create_dir_all).transpose();
-                if let Err(e) = made.and_then(|_| std::fs::write(&m, b"")) {
+                if let Err(e) = made.and_then(|_| crate::fsio::write(&m, b"")) {
                     tracing::warn!(sid, "the pruned mark was not kept: {e}");
                 }
             }
@@ -65,8 +62,7 @@ impl SnapState {
     }
 
     fn is_pruned(&self, sid: &str) -> bool {
-        self.pruned.lock().expect("timeline").contains(sid)
-            || self.marker(sid).is_some_and(|m| m.exists())
+        saman::lock(&self.pruned).contains(sid) || self.marker(sid).is_some_and(|m| m.exists())
     }
 }
 
@@ -95,7 +91,7 @@ impl Timeline {
 
     /// SID's task is done: its snapshots may go when the cap needs room.
     pub fn session_finished(&self, sid: &str) {
-        let mut f = self.state.finished.lock().expect("timeline");
+        let mut f = saman::lock(&self.state.finished);
         if !f.iter().any(|s| s == sid) {
             f.push(sid.to_string());
         }
@@ -253,10 +249,7 @@ impl Snap {
         .ok()?;
         drop(held);
         let cap = self.settings.current().loaded.values.agents_checkpoint_cap;
-        let (root, finished) = (
-            self.root.clone(),
-            self.state.finished.lock().expect("timeline").clone(),
-        );
+        let (root, finished) = (self.root.clone(), saman::lock(&self.state.finished).clone());
         let pruned = crate::clock::blocking(move || {
             let repos: Vec<PathBuf> = std::fs::read_dir(&root)
                 .into_iter()

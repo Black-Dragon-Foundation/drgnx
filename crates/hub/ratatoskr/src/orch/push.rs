@@ -190,7 +190,7 @@ async fn judge_ref(
         let tree = git(&d, &["rev-parse", &format!("{head}^{{tree}}")])?
             .trim()
             .to_owned();
-        Ok::<_, String>((top, head, tree))
+        Ok::<_, villa::Error>((top, head, tree))
     })
     .await;
     let (top, head, tree) = match found {

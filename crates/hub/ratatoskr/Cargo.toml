@@ -53,6 +53,7 @@ name = "fleet_cloud"
 required-features = ["fleet", "test-hooks"]
 
 [dependencies]
+hulda.workspace = true
 runstav = { path = "../runstav", version = "0.1.0" }
 # background tasks' problem-matcher patterns (already in the tree)
 regex.workspace = true
@@ -116,6 +117,10 @@ serde_json.workspace = true
 rustix.workspace = true
 libc.workspace = true
 stund = { path = "../stund", version = "0.1.0" }  # the crates' timers read the hub's virtual clock through it
+saman.workspace = true   # tasks, locks and results the hub means to go on past (saman::spawn, saman::delivered)
+villa.workspace = true   # the error type of every public fallible function
+annall.workspace = true  # a command's lines on stdout and stderr (crate::soft)
+stig.workspace = true    # the user's directories, never a HOME read
 hlaup = { path = "../hlaup", version = "0.1.0" }  # files written or copied and then run, never busy (ETXTBSY)
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -131,6 +136,8 @@ http = "1"                # the download's request (already in the tree through 
 rustls.workspace = true
 rustls-platform-verifier.workspace = true
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+# `embed serve`'s self-signed certificate, made once (already in the tree as a dev-dependency for hub_io's tests)
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 zeroize.workspace = true  # the line that carries provider keys to the backend is wiped once written
 secrecy.workspace = true  # job keys held in memory (runners::keys; already in the tree through bifrost and sleipnir)
 # cloud runners over plain HTTPS (runners::cloud): EC2 Query requests signed. `sign-http` alone does not compile in
@@ -168,6 +175,7 @@ urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 # `fixture`: the 30-agent fixture, for the map model's chain golden (work::map::tests)
 vegvisir = { path = "../vegvisir", version = "0.1.0", features = ["fixture"] }
 tokio = { workspace = true, features = ["test-util"] }  # paused time: the pacer's tests take their instants from it
+saman = { workspace = true, features = ["test-util"] }  # block_on_paused: the tests' runtimes start on a paused clock
 vor = { path = "../vor", version = "0.1.0", features = ["mock"] }  # the mock adapter for the debug sessions' tests
 skuld = { path = "../skuld", version = "0.1.0" }  # waits in tests; every order of a pure core (the connection's, a session's turn)
 rmcp = { workspace = true, features = ["client", "transport-async-rw"] }  # the MCP client of tests/search_query.rs (as mimir's interop test)
@@ -175,7 +183,6 @@ tempfile.workspace = true
 proptest.workspace = true  # the shell-command parser never panics and is deterministic (work::shell_read)
 # plugins::hub_io's tests: the fixture plugins, and an in-test TLS server with certificates made at run time
 brokkr = { path = "../brokkr", version = "0.1.0", features = ["test-support"] }
-rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 
 # --- integration tests: one binary (`it`) plus the files that need a process of their own (reason on each) ---
 
@@ -212,3 +219,16 @@ name = "macos"
 # installs the process-wide virtual clock (clock::install_virtual) and a runtime of its own: no other row may run beside it
 [[test]]
 name = "search_index"
+
+# the local engine's rows: the process-wide virtual clock, as search_index
+[[test]]
+name = "search_engine"
+
+# the build script's output (cargo directives) goes through annall, its errors are villa's, its stamp is stund's
+[build-dependencies]
+annall.workspace = true
+villa.workspace = true
+stund = { path = "../stund", version = "0.1.0" }
+
+[lints]
+workspace = true

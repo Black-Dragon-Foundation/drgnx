@@ -62,6 +62,14 @@ privacy deny-list refuses it: a file under `~/org` is read only when the user op
   TOML fails the import before anything is written, with an error naming the file. A file already adopted that the
   list now ignores is forgotten at the next full import, like a deleted one (its pieces are retired).
 
+- **Forgetting moved files.** `ratatoskr graph forget --root DIR [--missing] [--path FILE]... [--dry-run] [--yes]` retires
+  what the scan-era (parsed) sources under DIR still hold when their files are gone: `--missing` takes every source whose
+  file no longer exists, `--path` names one (even a present one; a path the store holds nothing of is reported). It lists
+  the sources (a dry run stops there), asks unless `--yes` (without a terminal it needs `--yes`), then calls
+  `graph/put-parsed {gone}`, 1000 sources a call: the plan, its tasks and steps are retired with their history, a file
+  that is still there is untouched, and a file that comes back is read again by the scan. The listing is the files the
+  store recorded and the sources of live entities under DIR (`graph/sql`).
+
 - **Backup first.** Before anything is imported, every file is copied to `<state>/hub/records-backup/<date>/` (a
   second import on the same day gets `<date>-2`, never overwriting); a file outside DIR (a spec a plan names elsewhere)
   goes under `outside/<its absolute path>`. Every target is checked before the first copy: one outside the backup
@@ -101,7 +109,18 @@ privacy deny-list refuses it: a file under `~/org` is read only when the user op
 - **Statuses.** `saga::status::normalize` maps a file's word to the graph's (`open running needs-input in-review
   blocked waiting done dropped`): a DEFERRED row's or entry's first status word (`saga::status::normalize_deferred`: `open` is open, `fixed closed done decided mitigated` are `done`, `dropped moot` `dropped`, any other word like `moved` or `kept` stays `open`; `fixed in M2` is `done`), an Org keyword (`STARTED`
   is `running`, `CANCELLED` `dropped`; a keyword of the file's own like `BLOCKED` maps by its word), a plan task by
-  its ticks. The raw text stays in the piece's body.
+  its **status line**, else by its ticks. The raw text stays in the piece's body.
+- **The status line.** The graph's statuses are `open running needs-input in-review blocked waiting done dropped
+  accepted parked superseded`: `accepted` is a spike or experiment whose result was taken (it counts as finished),
+  `parked` is the user's own choice to put work off (the matrix refuses it to every agent, grant or not), `superseded`
+  needs a `supersedes` link from the task that replaced it. A plan task says its status in `**Status:** <state> —
+  <reason>`, the first non-blank line under its heading; the line wins over the ticks, and with no line the ticks
+  decide (all steps ticked is `done`). A sync writes the graph's status into the line when a tick cannot say it
+  (anything but `open`, and `done` for a task with no steps), keeping the reason; `open` and `done` with steps go back
+  to the ticks and the line goes. A text nobody changed is rewritten to itself (`render(parse(t)) == t`). A word that is
+  no status stays in the file as text, the ticks decide, and `records/import` lists it in `warnings` (file, task, word).
+  Set it with `ratatoskr plan status PLAN TASK STATUS [--reason TEXT]`, or `plan_write` with `status` and `reason`.
+  `ratatoskr task status ID STATUS [--reason TEXT]` writes the reason as a note on a tracker task.
 - **Keeping in step: `Views::sync(path)`.** One function for both directions, under a lock per file. It first writes
   each piece's graph status into its text (`saga::status::with_status`: a DEFERRED row's status/state cell or an
   entry's `Status:` bullet word, an Org keyword, a plan task's ticks; a text that already says it, a row of several

@@ -39,12 +39,14 @@ pub fn why_outside(p: Provider) -> &'static str {
 }
 
 /// Whether the user may set OPTION to VALUE on a session locked as PROVIDER; the refusal says why.
-pub fn check(provider: Option<Provider>, option: &str, value: &str) -> Result<(), String> {
+pub fn check(provider: Option<Provider>, option: &str, value: &str) -> villa::Result<()> {
     match option {
         "model" => Ok(()),
         "mode" => {
             let Some(p) = provider else {
-                return Err("this agent has no lock, so its mode cannot be switched".into());
+                return Err(villa::Error::invalid(
+                    "this agent has no lock, so its mode cannot be switched",
+                ));
             };
             if allowed_modes(p).contains(&value) {
                 return Ok(());
@@ -55,15 +57,15 @@ pub fn check(provider: Option<Provider>, option: &str, value: &str) -> Result<()
             } else {
                 allowed.join(", ")
             };
-            Err(format!(
+            Err(villa::Error::invalid(format!(
                 "mode `{value}` is outside {}'s lock (allowed: {offered}): {}",
                 provider_name(p),
                 why_outside(p)
-            ))
+            )))
         }
-        other => Err(format!(
+        other => Err(villa::Error::invalid(format!(
             "`{other}` is not a switchable option (mode, model)"
-        )),
+        ))),
     }
 }
 
@@ -99,22 +101,26 @@ mod tests {
         assert!(check(Some(Provider::Claude), "mode", "plan").is_ok());
         let e = check(Some(Provider::Claude), "mode", "bypassPermissions").unwrap_err();
         assert!(
-            e.contains("bypassPermissions") && e.contains("default, plan") && e.contains("matrix"),
+            e.message().contains("bypassPermissions")
+                && e.message().contains("default, plan")
+                && e.message().contains("matrix"),
             "{e}"
         );
         let e = check(Some(Provider::Codex), "mode", "auto").unwrap_err();
         assert!(
-            e.contains("allowed: none") && e.contains("read-only"),
+            e.message().contains("allowed: none") && e.message().contains("read-only"),
             "{e}"
         );
         assert!(
             check(Some(Provider::Kimi), "mode", "plan")
                 .unwrap_err()
+                .message()
                 .contains("plan")
         );
         assert!(
             check(None, "mode", "default")
                 .unwrap_err()
+                .message()
                 .contains("no lock")
         );
         // models are free within the profile, other options are not switchable

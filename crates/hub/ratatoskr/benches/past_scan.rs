@@ -38,13 +38,12 @@ fn write_files(home: &Path) {
                     "message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}),
             );
             let file = dir.join(format!("{id}.jsonl"));
-            std::fs::write(&file, text).unwrap();
+            ratatoskr::fsio::write(&file, text).unwrap();
             // sessions of the past, as most of a real folder is (a file changed within the hour keeps its folder hot)
-            std::fs::File::options()
-                .write(true)
-                .open(&file)
+            eitri::open_existing(&file)
+                .map_err(std::io::Error::from)
                 .unwrap()
-                .set_modified(std::time::SystemTime::now() - Duration::from_secs(86_400))
+                .set_modified(stund::real::wall() - Duration::from_secs(86_400))
                 .unwrap();
         }
     }
@@ -63,10 +62,10 @@ fn past_scan() {
     );
     let t0 = thread_cpu();
     let (n, _) = h.scan_changed().unwrap();
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "past_scan: first scan of {n} sessions: {:?} cpu",
         thread_cpu() - t0
-    );
+    ));
     assert_eq!(n, 5000);
     let reads = h.reads();
     let mut v = Vec::new();
@@ -79,9 +78,9 @@ fn past_scan() {
     assert_eq!(h.reads(), reads, "a warm scan opens no file");
     v.sort();
     let p95 = v[(v.len() * 95).div_ceil(100) - 1];
-    println!(
+    ratatoskr::soft::out_line(&format!(
         "past_scan: warm scans: p95 {p95:?}, max {:?}",
         v[v.len() - 1]
-    );
+    ));
     assert!(p95 < Duration::from_millis(4), "p95 {p95:?} over 4 ms");
 }

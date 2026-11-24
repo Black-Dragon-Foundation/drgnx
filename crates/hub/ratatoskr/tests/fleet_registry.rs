@@ -21,7 +21,6 @@ use ratatoskr::runners::transport::OpensshTransport;
 use runstav::methods::runners::AddParams;
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -29,12 +28,12 @@ use tokio::sync::mpsc::UnboundedReceiver;
 const WAIT: u64 = 180;
 
 fn ssh_config() -> String {
-    format!("{}/.ssh/config", std::env::var("HOME").unwrap())
+    format!("{}/.ssh/config", std::env::var(stig::HOME_VAR).unwrap())
 }
 
 /// SCRIPT's stdout on RUNNER; panics when it fails.
 fn sh(runner: &str, script: &str) -> String {
-    let out = Command::new("ssh")
+    let out = ratatoskr::proc::Command::new("ssh")
         .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
         .arg(script)
         .output()
@@ -49,7 +48,7 @@ fn sh(runner: &str, script: &str) -> String {
 
 /// Whether SCRIPT succeeds on RUNNER.
 fn ok(runner: &str, script: &str) -> bool {
-    Command::new("ssh")
+    ratatoskr::proc::Command::new("ssh")
         .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
         .arg(script)
         .status()
@@ -137,154 +136,162 @@ mod registry {
     /// [C] `add` takes a host through probe and the contract, copies the bundle for its architecture, pulls the image by
     /// digest, benches it, records it and links it: the queue's row says `ready` once its `hello-ok` came. (Warming the
     /// caches needs a project's jobs, which come with the hub's sync.)
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn add_completes_probe_copy_pull_bench() {
-        let img = image("r1");
-        let root = format!("{}/reg-add", home());
-        let mut h = hub("not-this-machine", vec![img.clone()]);
-        let added = h.reg.add(add_params("rone", &root)).await.expect("add");
-        assert_eq!(added.name, "rone");
-        assert_eq!(added.arch, std::env::consts::ARCH);
-        assert!(added.cores > 0 && added.mem_mib > 0, "{added:?}");
-        assert!(added.linger, "the fake runner's user lingers: {added:?}");
-        assert!(added.speed.is_some_and(|s| s > 0.0), "benched: {added:?}");
-        // the bundle is on the runner, in a folder named by its hash, and the image is there
-        assert!(ok("r1", &format!("test -x {root}/bin/*/sleipnir")));
-        assert!(ok("r1", &format!("podman image exists {img}")));
-        // and tagged under the runner's prefix, so a `podman image prune` (an image pulled by digest alone is
-        // dangling) never takes it from under the runner
-        let digest = img.rsplit("@sha256:").next().unwrap();
-        let tag = format!("localhost/drgnx-runner:{}", &digest[..12]);
-        assert!(
-            ok("r1", &format!("podman image exists {tag}")),
-            "{tag} is not among r1's images:\n{}",
-            sh(
-                "r1",
-                "podman images --format '{{.Repository}}:{{.Tag}} {{.ID}} {{.Digest}}'"
-            )
-        );
-        assert_eq!(
-            sh(
-                "r1",
-                &format!("podman image inspect --format '{{{{.Digest}}}}' {tag}")
-            ),
-            format!("sha256:{digest}")
-        );
-        assert_eq!(h.store.list().await.unwrap().len(), 1);
-        // linked: the queue's row is `ready` once hello-ok has been taken in
-        let q = h.queue.clone();
-        let events = &mut h.events;
-        skuld::wait_until_async("the runner ready in the queue", WAIT, || {
-            while let Ok(ev) = events.try_recv() {
-                q.on_link(ev, now());
-            }
-            std::future::ready(q.runner("rone").filter(|r| r.state == "ready"))
+    fn add_completes_probe_copy_pull_bench() {
+        saman::block_on_current(async move {
+            let img = image("r1");
+            let root = format!("{}/reg-add", home());
+            let mut h = hub("not-this-machine", vec![img.clone()]);
+            let added = h.reg.add(add_params("rone", &root)).await.expect("add");
+            assert_eq!(added.name, "rone");
+            assert_eq!(added.arch, std::env::consts::ARCH);
+            assert!(added.cores > 0 && added.mem_mib > 0, "{added:?}");
+            assert!(added.linger, "the fake runner's user lingers: {added:?}");
+            assert!(added.speed.is_some_and(|s| s > 0.0), "benched: {added:?}");
+            // the bundle is on the runner, in a folder named by its hash, and the image is there
+            assert!(ok("r1", &format!("test -x {root}/bin/*/sleipnir")));
+            assert!(ok("r1", &format!("podman image exists {img}")));
+            // and tagged under the runner's prefix, so a `podman image prune` (an image pulled by digest alone is
+            // dangling) never takes it from under the runner
+            let digest = img.rsplit("@sha256:").next().unwrap();
+            let tag = format!("localhost/drgnx-runner:{}", &digest[..12]);
+            assert!(
+                ok("r1", &format!("podman image exists {tag}")),
+                "{tag} is not among r1's images:\n{}",
+                sh(
+                    "r1",
+                    "podman images --format '{{.Repository}}:{{.Tag}} {{.ID}} {{.Digest}}'"
+                )
+            );
+            assert_eq!(
+                sh(
+                    "r1",
+                    &format!("podman image inspect --format '{{{{.Digest}}}}' {tag}")
+                ),
+                format!("sha256:{digest}")
+            );
+            assert_eq!(h.store.list().await.unwrap().len(), 1);
+            // linked: the queue's row is `ready` once hello-ok has been taken in
+            let q = h.queue.clone();
+            let events = &mut h.events;
+            skuld::wait_until_async("the runner ready in the queue", WAIT, || {
+                while let Ok(ev) = events.try_recv() {
+                    q.on_link(ev, now());
+                }
+                std::future::ready(q.runner("rone").filter(|r| r.state == "ready"))
+            })
+            .await;
+            h.reg.remove("rone").await.expect("remove");
+            // `remove` takes our tag back; the image stays while another tag (here the fleet's base) holds it
+            assert!(
+                !ok("r1", &format!("podman image exists {tag}")),
+                "our tag is gone"
+            );
+            assert!(ok("r1", &format!("podman image exists {img}")));
         })
-        .await;
-        h.reg.remove("rone").await.expect("remove");
-        // `remove` takes our tag back; the image stays while another tag (here the fleet's base) holds it
-        assert!(
-            !ok("r1", &format!("podman image exists {tag}")),
-            "our tag is gone"
-        );
-        assert!(ok("r1", &format!("podman image exists {img}")));
     }
 
     /// [C] A host that lacks something of the contract is refused with every missing item and its fix, and nothing is
     /// recorded or linked. The fake runner's podman is put on the cgroupfs manager (its user's own containers.conf),
     /// so it can't cap a container.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn add_refuses_a_host_missing_the_contract_with_the_list() {
-        let conf = "~/.config/containers/containers.conf";
-        sh(
-            "r1",
-            &format!(
-                "mkdir -p ~/.config/containers && printf '[engine]\\ncgroup_manager = \"cgroupfs\"\\n' > {conf}"
-            ),
-        );
-        let root = format!("{}/reg-refuse", home());
-        let h = hub("not-this-machine", vec![]);
-        let refused = h.reg.add(add_params("rone", &root)).await;
-        sh("r1", &format!("rm -f {conf}"));
-        let Err(RegError::Refused(text)) = refused else {
-            panic!("expected a refusal, got {refused:?}");
-        };
-        assert!(text.contains("runner contract"), "{text}");
-        assert!(text.contains("cgroup"), "the missing item: {text}");
-        assert!(text.contains("fix:"), "its fix: {text}");
-        assert!(h.store.list().await.unwrap().is_empty());
-        assert!(!h.queue.has_runner("rone"));
+    fn add_refuses_a_host_missing_the_contract_with_the_list() {
+        saman::block_on_current(async move {
+            let conf = "~/.config/containers/containers.conf";
+            sh(
+                "r1",
+                &format!(
+                    "mkdir -p ~/.config/containers && printf '[engine]\\ncgroup_manager = \"cgroupfs\"\\n' > {conf}"
+                ),
+            );
+            let root = format!("{}/reg-refuse", home());
+            let h = hub("not-this-machine", vec![]);
+            let refused = h.reg.add(add_params("rone", &root)).await;
+            sh("r1", &format!("rm -f {conf}"));
+            let Err(RegError::Refused(text)) = refused else {
+                panic!("expected a refusal, got {refused:?}");
+            };
+            assert!(text.contains("runner contract"), "{text}");
+            assert!(text.contains("cgroup"), "the missing item: {text}");
+            assert!(text.contains("fix:"), "its fix: {text}");
+            assert!(h.store.list().await.unwrap().is_empty());
+            assert!(!h.queue.has_runner("rone"));
+        })
     }
 
     /// [C] Adding the hub's own machine (its boot id is the runner's) is refused, and nothing is recorded or linked.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn add_refuses_the_hubs_own_machine() {
-        let boot = sh("r1", "cat /proc/sys/kernel/random/boot_id");
-        let root = format!("{}/reg-own", home());
-        let h = hub(&boot, vec![]);
-        let refused = h.reg.add(add_params("rone", &root)).await;
-        let Err(RegError::Refused(text)) = refused else {
-            panic!("expected a refusal, got {refused:?}");
-        };
-        assert_eq!(
-            text,
-            "this is the hub's own machine; it already runs jobs as `local`"
-        );
-        assert!(h.store.list().await.unwrap().is_empty());
-        assert!(!h.queue.has_runner("rone"));
+    fn add_refuses_the_hubs_own_machine() {
+        saman::block_on_current(async move {
+            let boot = sh("r1", "cat /proc/sys/kernel/random/boot_id");
+            let root = format!("{}/reg-own", home());
+            let h = hub(&boot, vec![]);
+            let refused = h.reg.add(add_params("rone", &root)).await;
+            let Err(RegError::Refused(text)) = refused else {
+                panic!("expected a refusal, got {refused:?}");
+            };
+            assert_eq!(
+                text,
+                "this is the hub's own machine; it already runs jobs as `local`"
+            );
+            assert!(h.store.list().await.unwrap().is_empty());
+            assert!(!h.queue.has_runner("rone"));
+        })
     }
 
     /// [C] `remove` stops our units and containers on the runner and deletes its folder; a container that isn't ours
     /// stays.
-    #[tokio::test]
+    #[test]
     #[ignore = "fleet"]
-    async fn remove_leaves_nothing_of_ours() {
-        let img = image("r1");
-        let root = format!("{}/reg-remove", home());
-        let h = hub("not-this-machine", vec![]);
-        h.reg.add(add_params("rone", &root)).await.expect("add");
-        // something of ours (our prefix, our label, our unit) is running, and something that isn't
-        sh(
-            "r1",
-            &format!(
-                "podman run -d --pull=never --name drgnx-leftover --label drgnx.runner=hub {img} sleep 600 >/dev/null 2>&1 </dev/null; \
+    fn remove_leaves_nothing_of_ours() {
+        saman::block_on_current(async move {
+            let img = image("r1");
+            let root = format!("{}/reg-remove", home());
+            let h = hub("not-this-machine", vec![]);
+            h.reg.add(add_params("rone", &root)).await.expect("add");
+            // something of ours (our prefix, our label, our unit) is running, and something that isn't
+            sh(
+                "r1",
+                &format!(
+                    "podman run -d --pull=never --name drgnx-leftover --label drgnx.runner=hub {img} sleep 600 >/dev/null 2>&1 </dev/null; \
                  podman run -d --pull=never --name keep-other {img} sleep 600 >/dev/null 2>&1 </dev/null; \
                  systemd-run --user --quiet --unit drgnx-leftover-unit sleep 600 >/dev/null 2>&1 </dev/null"
-            ),
-        );
-        assert!(ok(
-            "r1",
-            "systemctl --user is-active --quiet drgnx-leftover-unit"
-        ));
-        h.reg.remove("rone").await.expect("remove");
-        assert!(!ok("r1", &format!("test -e {root}")), "the folder is gone");
-        assert_eq!(
-            sh(
+                ),
+            );
+            assert!(ok(
                 "r1",
-                "podman ps -a --filter label=drgnx.runner=hub --format '{{.Names}}'"
-            ),
-            ""
-        );
-        assert_eq!(
-            sh(
-                "r1",
-                "systemctl --user list-units --all --plain --no-legend 'drgnx-leftover*'"
-            ),
-            ""
-        );
-        assert_eq!(
-            sh(
-                "r1",
-                "podman ps -a --filter name=keep-other --format '{{.Names}}'"
-            ),
-            "keep-other",
-            "what isn't ours stays"
-        );
-        assert!(h.store.list().await.unwrap().is_empty());
-        assert!(!h.queue.has_runner("rone"));
-        sh("r1", "podman rm -f keep-other >/dev/null");
+                "systemctl --user is-active --quiet drgnx-leftover-unit"
+            ));
+            h.reg.remove("rone").await.expect("remove");
+            assert!(!ok("r1", &format!("test -e {root}")), "the folder is gone");
+            assert_eq!(
+                sh(
+                    "r1",
+                    "podman ps -a --filter label=drgnx.runner=hub --format '{{.Names}}'"
+                ),
+                ""
+            );
+            assert_eq!(
+                sh(
+                    "r1",
+                    "systemctl --user list-units --all --plain --no-legend 'drgnx-leftover*'"
+                ),
+                ""
+            );
+            assert_eq!(
+                sh(
+                    "r1",
+                    "podman ps -a --filter name=keep-other --format '{{.Names}}'"
+                ),
+                "keep-other",
+                "what isn't ours stays"
+            );
+            assert!(h.store.list().await.unwrap().is_empty());
+            assert!(!h.queue.has_runner("rone"));
+            sh("r1", "podman rm -f keep-other >/dev/null");
+        })
     }
 }

@@ -254,7 +254,11 @@ fn kinds(line: &str, bare_thread_sleep: bool) -> Vec<Kind> {
     if line.contains("thread::sleep") {
         out.push(Kind::ThreadSleep);
     }
-    if line.contains("Instant::now") {
+    // stund's own instant follows the installed clock (a virtual one inside a test): not a real-time read
+    if line
+        .replace("stund::Instant::now", "")
+        .contains("Instant::now")
+    {
         out.push(Kind::InstantNow);
     }
     if line.contains("SystemTime::now") {
@@ -420,11 +424,7 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// The helpers allowed to carry the `paused clock` marker: (file suffix, fn name, why). Only ever shrinks.
-const MARKED: &[(&str, &str, &str)] = &[(
-    "mimir/src/bridge.rs",
-    "connect",
-    "the test connector (Fake) dials only inside the module's paused tests",
-)];
+const MARKED: &[(&str, &str, &str)] = &[];
 
 /// The names of the fns in `src` that carry the `paused clock` marker attribute.
 fn marked_fns(src: &str) -> Vec<String> {
@@ -493,7 +493,7 @@ fn find(runtime: &Path) -> Vec<String> {
     let mut test_files: Vec<PathBuf> = Vec::new();
     for f in &files {
         let mut mods = Vec::new();
-        scan(&fs::read_to_string(f).unwrap(), false, &mut mods);
+        scan(&read_text(f).unwrap(), false, &mut mods);
         let dir = f.parent().unwrap();
         let own = f.file_stem().unwrap().to_string_lossy().into_owned();
         let base = if own == "mod" || own == "lib" || own == "main" {
@@ -519,8 +519,8 @@ fn find(runtime: &Path) -> Vec<String> {
             continue;
         }
         let whole = rel.contains("/tests/") || rel.ends_with("/tests.rs") || test_files.contains(f);
-        out.extend(marker_problems(&rel, &fs::read_to_string(f).unwrap()));
-        for (line, kind) in scan(&fs::read_to_string(f).unwrap(), whole, &mut Vec::new()) {
+        out.extend(marker_problems(&rel, &read_text(f).unwrap()));
+        for (line, kind) in scan(&read_text(f).unwrap(), whole, &mut Vec::new()) {
             out.push(format!("{rel}:{line}: {}", kind.name()));
         }
     }
@@ -559,7 +559,7 @@ const TIMING_ROWS_AT_MOST: usize = 38;
 #[test]
 fn the_timing_lane_list_only_shrinks() {
     let list = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../test/timing-rust.txt");
-    let rows = fs::read_to_string(&list)
+    let rows = read_text(&list)
         .unwrap_or_else(|e| panic!("{}: {e}", list.display()))
         .lines()
         .map(|l| l.split('#').next().unwrap_or("").trim())
@@ -692,22 +692,14 @@ fn says(problems: &[String], a: &str, b: &str) -> bool {
 #[test]
 fn the_paused_clock_marker_is_fenced() {
     let marker = "#[doc = \"paused clock: why\"]";
-    // listed, marked: fine
-    let ok = format!("impl X {{\n    {marker}\n    fn connect(&self) {{}}\n}}\n");
-    assert!(marker_problems("crates/mimir/src/bridge.rs", &ok).is_empty());
-    // marked but not listed (another fn, or another file)
-    let other = format!("{marker}\nfn helper() {{}}\n");
-    let p = marker_problems("crates/mimir/src/bridge.rs", &other);
-    assert!(says(&p, "fn helper", "not in MARKED"), "{p:?}");
-    let p = marker_problems("crates/norn/src/x.rs", &ok);
+    // nothing is listed in MARKED now: a marker anywhere fails
+    let marked = format!("impl X {{\n    {marker}\n    fn connect(&self) {{}}\n}}\n");
+    let p = marker_problems("crates/mimir/src/bridge.rs", &marked);
     assert!(says(&p, "fn connect", "not in MARKED"), "{p:?}");
-    // listed but no longer marked
-    let p = marker_problems("crates/mimir/src/bridge.rs", "fn connect(&self) {}\n");
-    assert!(
-        says(&p, "fn connect", "carries no paused-clock marker"),
-        "{p:?}"
-    );
-    // a file that is not listed and has no marker is clean
+    let other = format!("{marker}\nfn helper() {{}}\n");
+    let p = marker_problems("crates/norn/src/x.rs", &other);
+    assert!(says(&p, "fn helper", "not in MARKED"), "{p:?}");
+    // a file with no marker is clean
     assert!(marker_problems("crates/norn/src/x.rs", "fn a() {}\n").is_empty());
 }
 
@@ -716,4 +708,12 @@ fn comments_strings_and_other_names_are_not_calls() {
     let src = "// tokio::time::sleep(d)\nfn a() {\n    let s = \"Instant::now()\";\n    let r = r#\"thread::sleep { \"#;\n    \
                let c = '{';\n    /* SystemTime::now() */\n    fn sleep_for() {}\n    x.sleep(d);\n    fn sleep(d: u8) {}\n}\n";
     assert!(sites_of(src, true).is_empty());
+}
+
+/// A source file or list as text: through eitri, at most 16 MiB.
+fn read_text(path: &Path) -> std::io::Result<String> {
+    eitri::read_string(path, 16 << 20).map_err(|e| match e {
+        eitri::FsError::Io(e) => e,
+        other => std::io::Error::other(other.to_string()),
+    })
 }

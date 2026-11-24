@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct Facts {
     /// The commit's tree id; with uncommitted work, `TREE+OVERLAY` (the input key's first 16 hex digits).
     pub tree_key: String,
-    /// The toolchain and Emacs build the job ran with, one line each.
+    /// The toolchains the job ran with, one line each.
     pub env_stamp: String,
     /// `OS-ARCH/MACHINE` (`linux-x86_64/local`, `macos-aarch64/mac-mini`).
     pub platform: String,

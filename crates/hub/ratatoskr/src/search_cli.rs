@@ -89,38 +89,151 @@ pub enum SearchCommand {
         k: Option<u32>,
         json: bool,
     },
+    /// A vector pack of the repo's vectors (`search/export`).
+    Export {
+        root: PathBuf,
+        out: Option<PathBuf>,
+        branch: Option<String>,
+        all_trees: bool,
+    },
+    /// A vector pack merged into the machine's cache (`search/import`).
+    Import {
+        file: PathBuf,
+        root: Option<PathBuf>,
+        keep_all: bool,
+    },
     /// `eval gen|run|compare` (`crate::eval_cli`): needs no hub.
     Eval(crate::eval_cli::EvalCommand),
+    /// Every root's index (`search/list`).
+    List {
+        json: bool,
+    },
+    /// One root's index (`search/status`), the working folder's without ROOT.
+    Status {
+        root: Option<PathBuf>,
+        json: bool,
+    },
+    /// `pause`, `resume` or `stop` of ROOT's index, or of every root's with `--all`.
+    Manage {
+        verb: Verb,
+        root: Option<PathBuf>,
+        all: bool,
+    },
+    /// `download MODEL --consent-bytes N`: the consent to a model's (or the local engine's) download and the download
+    /// itself (`search/model-download`); N must be the bytes the hub names. Without N (sent as 0) the hub refuses and
+    /// lists each file, its bytes, the total and the command to run.
+    Download {
+        model: String,
+        bytes: u64,
+    },
+    /// ROOT's index removed (`search/delete`); asks first unless YES.
+    Delete {
+        root: PathBuf,
+        yes: bool,
+    },
+}
+
+/// What `search pause|resume|stop` does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verb {
+    Pause,
+    Resume,
+    Stop,
+}
+
+impl Verb {
+    pub fn method(self) -> &'static str {
+        match self {
+            Verb::Pause => "search/pause",
+            Verb::Resume => "search/resume",
+            Verb::Stop => "search/stop",
+        }
+    }
+}
+
+/// Whether `search delete ROOT` goes on: with YES at once; else the question on OUT and a `y` answer from INPUT, which
+/// only a terminal (TTY) can give.
+pub fn confirm_delete(
+    root: &str,
+    yes: bool,
+    tty: bool,
+    input: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> bool {
+    if yes {
+        return true;
+    }
+    if !tty {
+        crate::soft::done(
+            writeln!(
+                out,
+                "search delete {root}: not a terminal to ask; run it with --yes to delete"
+            ),
+            "writeln",
+        );
+        return false;
+    }
+    crate::soft::done(
+        write!(
+            out,
+            "Delete the index of {root} (its store, packs and the vectors no other root holds)? [y/N] "
+        ),
+        "write",
+    );
+    crate::soft::done(out.flush(), "search_cli");
+    let mut answer = String::new();
+    if input.read_line(&mut answer).is_err() {
+        return false;
+    }
+    matches!(answer.trim(), "y" | "Y" | "yes")
 }
 
 /// The arguments after `search`.
-pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, String> {
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<SearchCommand> {
     use lexopt::Arg::{Long, Short, Value as Word};
     use lexopt::ValueExt;
     let mut p = lexopt::Parser::from_args(args);
-    let e = |e: lexopt::Error| e.to_string();
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
     let name = match p.next().map_err(e)? {
         Some(Word(v)) => v.string().map_err(e)?,
-        Some(other) => return Err(other.unexpected().to_string()),
-        None => return Err("search needs a subcommand: index, query, mcp or eval".into()),
+        Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
+        None => {
+            return Err(villa::Error::invalid(
+                "search needs a subcommand: index, query, mcp, export, import or eval",
+            ));
+        }
     };
     if name == "eval" {
         return crate::eval_cli::parse(p.raw_args().map_err(e)?.collect()).map(SearchCommand::Eval);
     }
     if ![
-        "index", "query", "mcp", "symbols", "outline", "why", "map", "usages",
+        "index", "query", "mcp", "symbols", "outline", "why", "map", "usages", "export", "import",
+        "download",
     ]
     .contains(&name.as_str())
     {
-        return Err(format!("unknown search subcommand {name:?}"));
+        return parse_manage(&name, p);
     }
     let (mut rebuild, mut now, mut json, mut scope, mut k) = (false, false, false, None, None);
     let (mut mode, mut kinds, mut glob, mut docs) = (None, Vec::new(), None, true);
     let (mut budget, mut focus, mut names) = (None, Vec::new(), Vec::new());
+    let (mut out, mut branch, mut all_trees, mut keep_all) = (None, None, false, false);
+    let mut consent: Option<u64> = None;
     let asks = matches!(name.as_str(), "query" | "symbols" | "usages");
     let mut words: Vec<String> = Vec::new();
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
+            Long("out") if name == "export" => {
+                out = Some(PathBuf::from(p.value().map_err(e)?));
+            }
+            Long("branch") if name == "export" => {
+                branch = Some(p.value().map_err(e)?.string().map_err(e)?)
+            }
+            Long("all-trees") if name == "export" => all_trees = true,
+            Long("keep-all") if name == "import" => keep_all = true,
+            Long("consent-bytes") if name == "download" => {
+                consent = Some(p.value().map_err(e)?.parse().map_err(e)?);
+            }
             Long("rebuild") if name == "index" => rebuild = true,
             Long("now") if name == "index" => now = true,
             Long("json") if asks || name == "outline" || name == "why" || name == "map" => {
@@ -129,7 +242,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             Long("budget") if name == "map" => {
                 let b: u32 = p.value().map_err(e)?.parse().map_err(e)?;
                 if !(256..=32_000).contains(&b) {
-                    return Err("--budget is 256 to 32000 tokens".into());
+                    return Err(villa::Error::invalid("--budget is 256 to 32000 tokens"));
                 }
                 budget = Some(b);
             }
@@ -140,16 +253,18 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             Long("scope") if name == "map" => {
                 let s = p.value().map_err(e)?.string().map_err(e)?;
                 if !["code", "all"].contains(&s.as_str()) {
-                    return Err(format!("--scope is code or all, not {s:?}"));
+                    return Err(villa::Error::invalid(format!(
+                        "--scope is code or all, not {s:?}"
+                    )));
                 }
                 scope = Some(s);
             }
             Long("match") if name == "symbols" => {
                 let m = p.value().map_err(e)?.string().map_err(e)?;
                 if !["auto", "exact", "prefix", "contains", "regex"].contains(&m.as_str()) {
-                    return Err(format!(
+                    return Err(villa::Error::invalid(format!(
                         "--match is auto, exact, prefix, contains or regex, not {m:?}"
-                    ));
+                    )));
                 }
                 mode = Some(m);
             }
@@ -163,27 +278,33 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             Long("scope") if asks => {
                 let s = p.value().map_err(e)?.string().map_err(e)?;
                 if !["code", "tests", "docs", "all"].contains(&s.as_str()) {
-                    return Err(format!("--scope is code, tests, docs or all, not {s:?}"));
+                    return Err(villa::Error::invalid(format!(
+                        "--scope is code, tests, docs or all, not {s:?}"
+                    )));
                 }
                 scope = Some(s);
             }
             Short('k') if asks => {
                 let n: u32 = p.value().map_err(e)?.parse().map_err(e)?;
                 if !(1..=100).contains(&n) {
-                    return Err("-k is 1 to 100".into());
+                    return Err(villa::Error::invalid("-k is 1 to 100"));
                 }
                 k = Some(n);
             }
             Word(v) => words.push(v.string().map_err(e)?),
-            other => return Err(other.unexpected().to_string()),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
         }
     }
     let mut words = words.into_iter();
     Ok(match name.as_str() {
         "index" => {
-            let root = words.next().ok_or("search index needs a project root")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search index needs a project root"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search index: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search index: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Index {
                 root: root.into(),
@@ -192,10 +313,12 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "query" => {
-            let root = words.next().ok_or("search query needs a project root")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search query needs a project root"))?;
             let text = words.collect::<Vec<_>>().join(" ");
             if text.trim().is_empty() {
-                return Err("search query needs a question".into());
+                return Err(villa::Error::invalid("search query needs a question"));
             }
             SearchCommand::Query {
                 root: root.into(),
@@ -206,10 +329,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "symbols" => {
-            let root = words.next().ok_or("search symbols needs a project root")?;
-            let name = words.next().ok_or("search symbols needs a name")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search symbols needs a project root"))?;
+            let name = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search symbols needs a name"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search symbols: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search symbols: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Symbols {
                 root: root.into(),
@@ -223,10 +352,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "outline" => {
-            let root = words.next().ok_or("search outline needs a project root")?;
-            let path = words.next().ok_or("search outline needs a file")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search outline needs a project root"))?;
+            let path = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search outline needs a file"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search outline: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search outline: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Outline {
                 root: root.into(),
@@ -236,10 +371,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "why" => {
-            let root = words.next().ok_or("search why needs a project root")?;
-            let path = words.next().ok_or("search why needs a file")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search why needs a project root"))?;
+            let path = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search why needs a file"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search why: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search why: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Why {
                 root: root.into(),
@@ -248,9 +389,13 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
             }
         }
         "map" => {
-            let root = words.next().ok_or("search map needs a project root")?;
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search map needs a project root"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search map: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search map: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Map {
                 root: root.into(),
@@ -261,11 +406,67 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
                 json,
             }
         }
-        "usages" => {
-            let root = words.next().ok_or("search usages needs a project root")?;
-            let name = words.next().ok_or("search usages needs a name")?;
+        "export" => {
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search export needs a project root"))?;
             if let Some(extra) = words.next() {
-                return Err(format!("search usages: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search export: unexpected argument {extra:?}"
+                )));
+            }
+            if all_trees && branch.is_some() {
+                return Err(villa::Error::invalid(
+                    "search export: --branch or --all-trees, not both",
+                ));
+            }
+            SearchCommand::Export {
+                root: root.into(),
+                out,
+                branch,
+                all_trees,
+            }
+        }
+        "download" => {
+            let model = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search download needs a model id"))?;
+            // without --consent-bytes the hub answers with what the download fetches, its total and the command
+            let bytes = consent.unwrap_or(0);
+            if let Some(extra) = words.next() {
+                return Err(villa::Error::invalid(format!(
+                    "search download: unexpected argument {extra:?}"
+                )));
+            }
+            SearchCommand::Download { model, bytes }
+        }
+        "import" => {
+            let file = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search import needs a pack file"))?;
+            let root = words.next();
+            if let Some(extra) = words.next() {
+                return Err(villa::Error::invalid(format!(
+                    "search import: unexpected argument {extra:?}"
+                )));
+            }
+            SearchCommand::Import {
+                file: file.into(),
+                root: root.map(PathBuf::from),
+                keep_all,
+            }
+        }
+        "usages" => {
+            let root = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search usages needs a project root"))?;
+            let name = words
+                .next()
+                .ok_or_else(|| villa::Error::invalid("search usages needs a name"))?;
+            if let Some(extra) = words.next() {
+                return Err(villa::Error::invalid(format!(
+                    "search usages: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Usages {
                 root: root.into(),
@@ -278,12 +479,69 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<SearchCommand, 
         _ => {
             let root = words.next();
             if let Some(extra) = words.next() {
-                return Err(format!("search mcp: unexpected argument {extra:?}"));
+                return Err(villa::Error::invalid(format!(
+                    "search mcp: unexpected argument {extra:?}"
+                )));
             }
             SearchCommand::Mcp {
                 root: root.map(PathBuf::from),
             }
         }
+    })
+}
+
+/// `list`, `status`, `pause`, `resume`, `stop` and `delete` (Hrafn redesign §11A).
+fn parse_manage(name: &str, mut p: lexopt::Parser) -> villa::Result<SearchCommand> {
+    use lexopt::Arg::{Long, Value as Word};
+    use lexopt::ValueExt;
+    let verb = match name {
+        "pause" => Some(Verb::Pause),
+        "resume" => Some(Verb::Resume),
+        "stop" => Some(Verb::Stop),
+        "list" | "status" | "delete" => None,
+        _ => {
+            return Err(villa::Error::invalid(format!(
+                "unknown search subcommand {name:?}"
+            )));
+        }
+    };
+    let e = |e: lexopt::Error| villa::Error::invalid(e.to_string());
+    let (mut json, mut all, mut yes, mut words) = (false, false, false, Vec::new());
+    while let Some(arg) = p.next().map_err(e)? {
+        match arg {
+            Long("json") if matches!(name, "list" | "status") => json = true,
+            Long("all") if verb.is_some() => all = true,
+            Long("yes") if name == "delete" => yes = true,
+            Word(v) => words.push(PathBuf::from(v.string().map_err(e)?)),
+            other => return Err(villa::Error::invalid(other.unexpected().to_string())),
+        }
+    }
+    let max = if name == "list" { 0 } else { 1 };
+    if words.len() > max {
+        return Err(villa::Error::invalid(format!(
+            "search {name}: unexpected argument {:?}",
+            words[max]
+        )));
+    }
+    let root = words.pop();
+    Ok(match (name, verb) {
+        ("list", _) => SearchCommand::List { json },
+        ("status", _) => SearchCommand::Status { root, json },
+        ("delete", _) => SearchCommand::Delete {
+            root: root.ok_or_else(|| {
+                villa::Error::invalid("search delete needs a project root (one at a time)")
+            })?,
+            yes,
+        },
+        (_, Some(verb)) => {
+            if root.is_some() == all {
+                return Err(villa::Error::invalid(format!(
+                    "search {name} needs a project root or --all"
+                )));
+            }
+            SearchCommand::Manage { verb, root, all }
+        }
+        _ => unreachable!("every name is matched above"),
     })
 }
 
@@ -315,7 +573,8 @@ impl Backend for ClientBackend {
                     params["k"] = json!(k);
                 }
                 let v = Client::user(&env, Duration::from_secs(5))
-                    .and_then(|mut c| c.call("search/query", params, CALL))?;
+                    .and_then(|mut c| c.call("search/query", params, CALL))
+                    .map_err(|e| e.message().to_owned())?;
                 serde_json::from_value(v).map_err(|e| e.to_string())
             })
             .await
@@ -329,6 +588,9 @@ impl Backend for ClientBackend {
         params: serde_json::Value,
     ) -> mimir::BoxFuture<'a, Result<serde_json::Value, String>> {
         Box::pin(async move {
+            if !crate::search::mcp::mcp_may_call(method) {
+                return Err(crate::search::mcp::not_for_mcp(method));
+            }
             let env = self.env.clone();
             crate::clock::blocking(move || {
                 Client::user(&env, Duration::from_secs(5))
@@ -336,19 +598,17 @@ impl Backend for ClientBackend {
             })
             .await
             .map_err(|e| e.to_string())?
+            .map_err(|e| e.message().to_owned())
         })
     }
 }
 
 /// The MCP `search` tool on stdio, pinned to ROOT.
 fn serve_mcp(env: &Env, root: PathBuf) -> i32 {
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
+    let rt = match saman::Executor::new(1) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("ratatoskr search: no runtime: {e}");
+            crate::soft::err_line(&format!("ratatoskr search: no runtime: {e}"));
             return 1;
         }
     };
@@ -399,6 +659,85 @@ pub fn render_why(a: &w::WhyAnswer) -> String {
     format!("{what}\n")
 }
 
+/// `search/export`'s text answer: the warning first, then where the pack is.
+pub fn render_export(a: &w::ExportAnswer) -> String {
+    format!(
+        "{}\n\n{}\nsha256 {}, {} vectors\n",
+        a.warning,
+        a.path.as_str(),
+        a.sha256,
+        a.keys
+    )
+}
+
+/// Roots, one a line: the state (and why it waits), the counts, the root.
+pub fn render_roots(roots: &[w::RootInfo]) -> String {
+    if roots.is_empty() {
+        return "no index on this machine\n".into();
+    }
+    let mut out = String::new();
+    for r in roots {
+        let why = r
+            .why
+            .as_ref()
+            .map_or_else(String::new, |w| format!(" ({})", w.text));
+        out.push_str(&format!(
+            "{:<8} {:>7} files {:>8} chunks {:>6} MiB  {}{why}\n",
+            r.state,
+            r.files,
+            r.chunks,
+            r.bytes >> 20,
+            r.root
+        ));
+    }
+    out
+}
+
+/// `search/status`'s text answer: the state and why, the counts, tier 2, the lag, the sources.
+pub fn render_status(s: &w::StatusAnswer) -> String {
+    let why = s
+        .why
+        .as_ref()
+        .map_or_else(String::new, |w| format!(": {}", w.text));
+    let mut out = format!(
+        "{}{why}\n{} files, {} chunks; tier 2 {}, {} vectors written since the hub opened it\n",
+        s.state, s.files, s.chunks, s.tier2, s.embedded
+    );
+    for m in &s.models {
+        out.push_str(&format!(
+            "model {} ({}): {} vectors\n",
+            m.label.as_deref().unwrap_or("?"),
+            &m.model[..16.min(m.model.len())],
+            m.vectors
+        ));
+    }
+    for c in &s.sources {
+        for e in &c.entries {
+            let why = e
+                .why
+                .as_ref()
+                .map_or_else(String::new, |w| format!(": {w}"));
+            out.push_str(&format!("source {} ({}): {}{why}\n", e.id, e.kind, e.state));
+        }
+    }
+    out
+}
+
+/// `search/import`'s text answer: what was kept, and of which model.
+pub fn render_import(a: &w::ImportAnswer) -> String {
+    format!(
+        "{} (model {}, fingerprint {})\n",
+        crate::search::packs::summary(
+            a.keys_in_pack,
+            a.kept,
+            a.already_had,
+            a.skipped_unreferenced
+        ),
+        a.label,
+        &a.fingerprint[..16.min(a.fingerprint.len())]
+    )
+}
+
 /// METHOD's answer A as the MCP tool prints it (`search/index`'s as data); PARAMS are the call's.
 fn text(
     method: &str,
@@ -411,6 +750,24 @@ fn text(
         "search/outline" => render_outline(&serde_json::from_value(a)?),
         "search/why" => render_why(&serde_json::from_value(a)?),
         "search/map" => render_map(&serde_json::from_value(a)?),
+        "search/export" => render_export(&serde_json::from_value(a)?),
+        "search/import" => render_import(&serde_json::from_value(a)?),
+        "search/list" => render_roots(&serde_json::from_value::<w::ListAnswer>(a)?.roots),
+        "search/pause" | "search/resume" | "search/stop" => {
+            render_roots(&serde_json::from_value::<w::ManageAnswer>(a)?.roots)
+        }
+        "search/status" => render_status(&serde_json::from_value(a)?),
+        "search/model-download" => {
+            "the download started (or one is already running); `search status` shows the models\n"
+                .into()
+        }
+        "search/delete" => {
+            let d: w::DeleteAnswer = serde_json::from_value(a)?;
+            format!(
+                "deleted the index of {}: {} bytes, {} vectors no other root held, {} packs\n",
+                d.root, d.bytes, d.vectors, d.packs
+            )
+        }
         "search/usages" => render_usages(
             params["name"].as_str().unwrap_or_default(),
             &serde_json::from_value(a)?,
@@ -423,7 +780,7 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("ratatoskr search: no working directory: {e}");
+            crate::soft::err_line(&format!("ratatoskr search: no working directory: {e}"));
             return 1;
         }
     };
@@ -440,6 +797,73 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
             return serve_mcp(env, root);
         }
         SearchCommand::Eval(_) => unreachable!("handled above"),
+        SearchCommand::List { json } => ("search/list", json!({}), *json),
+        SearchCommand::Status { root, json } => {
+            let root = root.as_ref().map_or(cwd.clone(), |r| cwd.join(r));
+            (
+                "search/status",
+                json!({"root": absolute(&cwd, &root)}),
+                *json,
+            )
+        }
+        SearchCommand::Manage { verb, root, all } => {
+            let p = match root {
+                Some(r) => json!({"root": absolute(&cwd, r)}),
+                None => json!({"all": all}),
+            };
+            (verb.method(), p, false)
+        }
+        SearchCommand::Download { model, bytes } => (
+            "search/model-download",
+            json!({"model": model, "consent": {"bytes": bytes}}),
+            false,
+        ),
+        SearchCommand::Delete { root, yes } => {
+            use std::io::IsTerminal as _;
+            let root = absolute(&cwd, root);
+            let tty = std::io::stdin().is_terminal();
+            let (mut input, mut out) = (std::io::stdin().lock(), annall::raw_err());
+            if !confirm_delete(&root, *yes, tty, &mut input, &mut out) {
+                return 1;
+            }
+            (
+                "search/delete",
+                json!({"root": root, "confirm": true}),
+                false,
+            )
+        }
+        SearchCommand::Export {
+            root,
+            out,
+            branch,
+            all_trees,
+        } => {
+            let mut p = json!({"root": absolute(&cwd, root)});
+            if let Some(o) = out {
+                p["out"] = json!(absolute(&cwd, o));
+            }
+            if let Some(b) = branch {
+                p["branch"] = json!(b);
+            }
+            if *all_trees {
+                p["all_trees"] = json!(true);
+            }
+            ("search/export", p, false)
+        }
+        SearchCommand::Import {
+            file,
+            root,
+            keep_all,
+        } => {
+            let mut p = json!({"file": absolute(&cwd, file)});
+            if let Some(r) = root {
+                p["root"] = json!(absolute(&cwd, r));
+            }
+            if *keep_all {
+                p["keep_all"] = json!(true);
+            }
+            ("search/import", p, false)
+        }
         SearchCommand::Index { root, rebuild, now } => {
             let mut p = json!({"root": absolute(&cwd, root)});
             if *rebuild {
@@ -553,21 +977,21 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
         .and_then(|mut c| c.call(method, params.clone(), CALL));
     match answer {
         Ok(a) if json => {
-            println!("{a}");
+            crate::soft::out_line(&a.to_string());
             0
         }
         Ok(a) => match text(method, &params, a) {
             Ok(t) => {
-                print!("{t}");
+                crate::soft::out_text(&t);
                 0
             }
             Err(e) => {
-                eprintln!("ratatoskr search: {e}");
+                crate::soft::err_line(&format!("ratatoskr search: {e}"));
                 1
             }
         },
         Err(e) => {
-            eprintln!("ratatoskr search: {e}");
+            crate::soft::err_line(&format!("ratatoskr search: {e}"));
             1
         }
     }
@@ -577,7 +1001,7 @@ pub fn run(env: &Env, cmd: SearchCommand) -> i32 {
 mod tests {
     use super::*;
 
-    fn p(args: &[&str]) -> Result<SearchCommand, String> {
+    fn p(args: &[&str]) -> villa::Result<SearchCommand> {
         parse(args.iter().map(OsString::from))
     }
 
@@ -686,6 +1110,187 @@ mod tests {
             )),
             "indexed: no rule applies\n"
         );
+    }
+
+    #[test]
+    fn download_parses() {
+        assert_eq!(
+            p(&[
+                "download",
+                "qwen3-embedding-0.6b-q8_0",
+                "--consent-bytes",
+                "7"
+            ])
+            .unwrap(),
+            SearchCommand::Download {
+                model: "qwen3-embedding-0.6b-q8_0".into(),
+                bytes: 7
+            }
+        );
+        assert_eq!(
+            p(&["download", "m"]).unwrap(),
+            SearchCommand::Download {
+                model: "m".into(),
+                bytes: 0
+            },
+            "no consent asks the hub for the list"
+        );
+        assert!(p(&["download", "--consent-bytes", "7"]).is_err());
+        assert!(p(&["download", "m", "--consent-bytes", "x"]).is_err());
+        assert!(p(&["download", "m", "n", "--consent-bytes", "7"]).is_err());
+    }
+
+    #[test]
+    fn export_and_import_parse() {
+        assert_eq!(
+            p(&["export", "/r", "--out", "/o.pack", "--branch", "main"]).unwrap(),
+            SearchCommand::Export {
+                root: "/r".into(),
+                out: Some("/o.pack".into()),
+                branch: Some("main".into()),
+                all_trees: false
+            }
+        );
+        assert_eq!(
+            p(&["export", "/r", "--all-trees"]).unwrap(),
+            SearchCommand::Export {
+                root: "/r".into(),
+                out: None,
+                branch: None,
+                all_trees: true
+            }
+        );
+        assert_eq!(
+            p(&["import", "/f.pack"]).unwrap(),
+            SearchCommand::Import {
+                file: "/f.pack".into(),
+                root: None,
+                keep_all: false
+            }
+        );
+        assert_eq!(
+            p(&["import", "/f.pack", "/r", "--keep-all"]).unwrap(),
+            SearchCommand::Import {
+                file: "/f.pack".into(),
+                root: Some("/r".into()),
+                keep_all: true
+            }
+        );
+        assert!(p(&["export"]).is_err());
+        assert!(p(&["import"]).is_err());
+        assert!(p(&["export", "/r", "--keep-all"]).is_err());
+        assert!(p(&["import", "/f", "--out", "/x"]).is_err());
+        assert!(p(&["export", "/r", "--branch", "a", "--all-trees"]).is_err());
+        assert!(p(&["import", "/f", "/r", "extra"]).is_err());
+    }
+
+    /// Task 23b. `delete` asks unless `--yes`, and only a terminal's `y` goes on; the other verbs take ROOT or `--all`.
+    #[test]
+    fn delete_asks_without_yes() {
+        assert_eq!(
+            p(&["delete", "/r"]).unwrap(),
+            SearchCommand::Delete {
+                root: "/r".into(),
+                yes: false
+            }
+        );
+        assert_eq!(
+            p(&["delete", "/r", "--yes"]).unwrap(),
+            SearchCommand::Delete {
+                root: "/r".into(),
+                yes: true
+            }
+        );
+        assert!(p(&["delete"]).is_err());
+        assert!(p(&["delete", "--all"]).is_err(), "one root at a time");
+        let ask = |yes: bool, tty: bool, answer: &str| {
+            let mut out = Vec::new();
+            let ok = confirm_delete("/r", yes, tty, &mut answer.as_bytes(), &mut out);
+            (ok, String::from_utf8(out).unwrap())
+        };
+        let (ok, question) = ask(false, true, "y\n");
+        assert!(
+            ok && question.contains("/r") && question.contains("[y/N]"),
+            "{question}"
+        );
+        assert!(!ask(false, true, "\n").0, "the default is no");
+        assert!(!ask(false, true, "no\n").0);
+        let (ok, said) = ask(false, false, "y\n");
+        assert!(
+            !ok && said.contains("--yes"),
+            "no terminal: refused, {said}"
+        );
+        assert_eq!(
+            ask(true, false, ""),
+            (true, String::new()),
+            "--yes asks nothing"
+        );
+        assert_eq!(
+            p(&["pause", "--all"]).unwrap(),
+            SearchCommand::Manage {
+                verb: Verb::Pause,
+                root: None,
+                all: true
+            }
+        );
+        assert_eq!(
+            p(&["stop", "/r"]).unwrap(),
+            SearchCommand::Manage {
+                verb: Verb::Stop,
+                root: Some("/r".into()),
+                all: false
+            }
+        );
+        assert!(p(&["resume"]).is_err(), "ROOT or --all");
+        assert!(p(&["pause", "/r", "--all"]).is_err(), "not both");
+        assert_eq!(p(&["list"]).unwrap(), SearchCommand::List { json: false });
+        assert_eq!(
+            p(&["status", "/r", "--json"]).unwrap(),
+            SearchCommand::Status {
+                root: Some("/r".into()),
+                json: true
+            }
+        );
+    }
+
+    /// Task 23b. No MCP tool pauses, resumes, stops or deletes, and neither backend calls those methods for one: an
+    /// agent gets the index's list and status only.
+    #[test]
+    fn mcp_has_no_pause_stop_or_delete() {
+        use crate::search::mcp::{Backend, HubBackend, mcp_may_call, tools};
+        let all = tools();
+        let names: Vec<&str> = all.iter().map(|t| t.name()).collect();
+        for verb in ["pause", "resume", "stop", "delete"] {
+            assert!(names.iter().all(|n| !n.contains(verb)), "{names:?}");
+            assert!(!mcp_may_call(&format!("search/{verb}")), "{verb}");
+        }
+        for ok in [
+            "search/list",
+            "search/status",
+            "search/symbols",
+            "search/usages",
+        ] {
+            assert!(mcp_may_call(ok), "{ok}");
+        }
+        let rt = saman::Executor::new(1).unwrap();
+        let client = ClientBackend {
+            env: Env::new(&[(stig::HOME_VAR, "/nonexistent")], 1),
+        };
+        let hub = HubBackend(std::sync::Weak::new());
+        for method in [
+            "search/pause",
+            "search/resume",
+            "search/stop",
+            "search/delete",
+        ] {
+            for (who, got) in [
+                ("client", rt.block_on(client.call(method, json!({})))),
+                ("hub", rt.block_on(hub.call(method, json!({})))),
+            ] {
+                let e = got.expect_err(method);
+                assert!(e.contains("not for an MCP tool"), "{who} {method}: {e}");
+            }
+        }
     }
 
     #[test]

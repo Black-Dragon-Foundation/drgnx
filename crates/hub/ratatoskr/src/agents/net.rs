@@ -304,9 +304,7 @@ static NOTICED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec:
 #[cfg_attr(any(test, feature = "test-hooks"), allow(dead_code))]
 pub(crate) fn no_browser_notice(front: &crate::front::Front, n: &crate::sandbox::NoBrowser) {
     let first = {
-        let mut seen = NOTICED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut seen = saman::lock(&NOTICED);
         let first = !seen.contains(&n.kind);
         if first {
             seen.push(n.kind);
@@ -375,12 +373,12 @@ impl Drop for SessionNet {
             std::fs::symlink_metadata(p).is_ok_and(|m| (m.dev(), m.ino()) == bound)
         };
         if ours(&self.socket, self.bound) {
-            let _ = std::fs::remove_file(&self.socket);
+            crate::soft::done(std::fs::remove_file(&self.socket), "std::fs::remove_file");
         }
         if let Some((broker, cdp, bound)) = self.broker.take() {
             broker.close();
             if ours(&cdp, bound) {
-                let _ = std::fs::remove_file(&cdp);
+                crate::soft::done(std::fs::remove_file(&cdp), "std::fs::remove_file");
             }
         }
     }

@@ -7,7 +7,7 @@
 //! untrusted text), `resource_link` items for the entities it names, and `_meta["dev.drgnx/notices"]`.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use mimir::{ArgsError, BoxFuture, Tool, ToolResult, typed};
 use schemars::JsonSchema;
@@ -50,13 +50,14 @@ impl Default for ToolSets {
     }
 }
 
-/// The five tools the `tracker` set adds.
-pub const TRACKER_TOOLS: [&str; 5] = [
+/// The six tools the `tracker` set adds.
+pub const TRACKER_TOOLS: [&str; 6] = [
     "task_read",
     "task_write",
     "note_add",
     "graph_read",
     "access_request",
+    "my_grants",
 ];
 
 /// The most rows a list carries.
@@ -259,24 +260,21 @@ pub(super) async fn caller_of(
     who.check()?;
     if let Some(home) = who.home() {
         let home = home.to_path_buf();
-        let known = coord.projects().lock().unwrap().project_n(&home).is_some();
+        let known = saman::lock(coord.projects()).project_n(&home).is_some();
         if !known {
-            let cached = coord.projects().lock().unwrap().get(&home).cloned();
+            let cached = saman::lock(coord.projects()).get(&home).cloned();
             let found = match cached {
                 Some(p) => Some(p),
                 None => {
                     let dir = home.clone();
                     // git that cannot answer is an error here, never "no project" (nothing is kept: the next call
                     // asks again)
-                    let p = tokio::task::spawn_blocking(move || project::resolve(&dir))
-                        .await
-                        .map_err(|e| format!("the project of {}: {e}", home.display()))?
-                        .map_err(|e| format!("the project of {}: {e}", home.display()))?;
-                    coord
-                        .projects()
-                        .lock()
-                        .unwrap()
-                        .insert(home.clone(), p.clone());
+                    let p =
+                        saman::spawn_blocking("project-resolve", move || project::resolve(&dir))
+                            .await
+                            .map_err(|e| format!("the project of {}: {e}", home.display()))?
+                            .map_err(|e| format!("the project of {}: {e}", home.display()))?;
+                    saman::lock(coord.projects()).insert(home.clone(), p.clone());
                     p
                 }
             };
@@ -305,15 +303,12 @@ pub(super) async fn caller_of(
                         .flatten()
                 };
                 if let Some(n) = n {
-                    coord.projects().lock().unwrap().set_registered(&p.id, n);
+                    saman::lock(coord.projects()).set_registered(&p.id, n);
                 }
             }
         }
     }
-    Ok(Caller::from_identity(
-        who,
-        &coord.projects().lock().unwrap(),
-    ))
+    Ok(Caller::from_identity(who, &saman::lock(coord.projects())))
 }
 
 /// The entity `n` as an id string, for an `Authored`'s `project`.
@@ -531,22 +526,30 @@ pub(super) fn page(rows: Vec<(Value, String)>, offset: usize, key: &str) -> Answ
         .iter()
         .filter_map(|(v, _)| v.get("id").and_then(Value::as_str).map(str::to_owned))
         .collect();
-    let mut text: Vec<String> = rows.iter().map(|(_, l)| l.clone()).collect();
-    if text.is_empty() {
-        text.push("nothing".into());
-    }
     let mut structured = json!({});
     structured[key] = Value::Array(rows.iter().map(|(v, _)| v.clone()).collect());
+    let mut next = None;
     if more {
-        let next = format!("o:{}", offset + LIST_MAX);
-        text.push(format!("more: cursor {next}"));
-        structured["next_cursor"] = json!(next);
+        let n = format!("o:{}", offset + LIST_MAX);
+        structured["next_cursor"] = json!(n);
+        next = Some(n);
     }
+    let text = header(key, rows.len(), next.as_deref());
     Answer {
-        text: text.join("\n"),
+        text,
         structured,
         links,
     }
+}
+
+/// The text of a list answer (MP-7 follow-up): how many rows and of what, where they are, and the cursor of the
+/// next page.  The rows themselves are only in `structuredContent`.
+pub(super) fn header(key: &str, n: usize, next: Option<&str>) -> String {
+    let mut text = format!("{n} {key} (rows in the structured result)");
+    if let Some(c) = next {
+        text.push_str(&format!("; more: cursor {c}"));
+    }
+    text
 }
 
 /// The 4th field of a requiring op: its value, or what is missing.
@@ -655,7 +658,7 @@ async fn task_read(coord: &Coord, who: &Identity, a: TaskReadArgs) -> Result<Ans
                 let look = Look::new(c, &caller, now)?;
                 let mut stmt = c.prepare(
                     "select n from entity where kind = 'task' and retired_tx is null \
-                     and (assignee = ?1 or lease_holder = ?1) and coalesce(status, '') not in ('done', 'dropped') \
+                     and (assignee = ?1 or lease_holder = ?1) and coalesce(status, '') not in ('done', 'dropped', 'accepted', 'parked', 'superseded') \
                      order by coalesce(priority, 1000000), n",
                 )?;
                 let ns: Vec<i64> = stmt
@@ -690,7 +693,7 @@ fn cap(mut a: Answer, limit: usize) -> Answer {
             rows.truncate(limit);
         }
         a.links.truncate(limit);
-        a.text = a.text.lines().take(limit).collect::<Vec<_>>().join("\n");
+        a.text = header("tasks", limit, None);
         if let Some(o) = a.structured.as_object_mut() {
             o.remove("next_cursor");
         }
@@ -920,7 +923,7 @@ struct TaskWriteArgs {
     priority: Option<i64>,
     /// create, update: when it is done
     acceptance: Option<String>,
-    /// update: open, running, needs-input, in-review, blocked, done or dropped
+    /// update: open, running, needs-input, in-review, blocked, done, dropped, accepted, superseded (needs a `supersedes` link) or parked (user only)
     status: Option<String>,
     /// create; label uses add, remove
     labels: Option<Vec<String>>,
@@ -1195,7 +1198,7 @@ async fn task_write(coord: &Coord, who: &Identity, a: TaskWriteArgs) -> Result<A
             }
             written.value
         }
-        Err(e) => match kept.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        Err(e) => match saman::lock(&kept).take() {
             Some(answer) => (answer, 0),
             None => return Err(err(e.into())),
         },
@@ -1246,7 +1249,7 @@ impl RichTool for NoteAdd {
 /// answers.
 async fn head_of(home: Option<&Path>) -> Option<String> {
     let dir = home?.to_path_buf();
-    tokio::task::spawn_blocking(move || {
+    saman::spawn_blocking("note-head", move || {
         match project::git(&dir, &["rev-parse", "HEAD"]) {
             Ok(head) => head.map(|s| s.trim().to_owned()),
             // a note goes on without its commit, and the log says why
@@ -1471,7 +1474,7 @@ async fn brief(coord: &Coord, who: &Identity, tasks: bool) -> Result<(String, Va
             if tasks {
                 let mut stmt = c.prepare(
                     "select n from entity where kind = 'task' and retired_tx is null \
-                     and (assignee = ?1 or lease_holder = ?1) and coalesce(status, '') not in ('done', 'dropped') \
+                     and (assignee = ?1 or lease_holder = ?1) and coalesce(status, '') not in ('done', 'dropped', 'accepted', 'parked', 'superseded') \
                      order by coalesce(priority, 1000000), n limit 20",
                 )?;
                 let ns: Vec<i64> = stmt

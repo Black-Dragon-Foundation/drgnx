@@ -47,15 +47,15 @@ pub fn action_of(op: &str, args: &Value) -> Option<Action> {
 
 /// The agent read the session at stop READ; it is at NOW (none: running or gone). The user's step wins: a session
 /// that moved on refuses the agent's.
-pub fn still_at(session: &str, read: u64, now: Option<u64>) -> Result<(), String> {
+pub fn still_at(session: &str, read: u64, now: Option<u64>) -> villa::Result<()> {
     match now {
         Some(e) if e == read => Ok(()),
-        Some(e) => Err(format!(
+        Some(e) => Err(villa::Error::invalid(format!(
             "session {session} moved on since stop {read} (it is at stop {e} now: the user's step wins); read it again"
-        )),
-        None => Err(format!(
+        ))),
+        None => Err(villa::Error::invalid(format!(
             "session {session} is not stopped (the user may have continued it); read it again"
-        )),
+        ))),
     }
 }
 
@@ -68,63 +68,79 @@ pub struct Predicate {
 
 /// `debug_fix`'s predicate: `{exception: "path:line"}` or `{probe: "path:line", expr, not}`, paths relative to the
 /// project.
-pub fn predicate(v: &Value) -> Result<Predicate, String> {
-    let place = |s: &str| -> Result<(String, u32), String> {
+pub fn predicate(v: &Value) -> villa::Result<Predicate> {
+    let place = |s: &str| -> villa::Result<(String, u32)> {
         let (p, l) = s
             .rsplit_once(':')
-            .ok_or_else(|| format!("{s:?} is not path:line"))?;
-        let line = l.parse().map_err(|_| format!("{s:?} is not path:line"))?;
+            .ok_or_else(|| villa::Error::invalid(format!("{s:?} is not path:line")))?;
+        let line = l
+            .parse()
+            .map_err(|_| villa::Error::invalid(format!("{s:?} is not path:line")))?;
         Ok((p.to_owned(), line))
     };
     let text = |k: &str| v.get(k).and_then(Value::as_str);
     if let Some(at) = text("exception") {
-        let (path, line) = place(at)?;
+        let (path, line) = place(at).map_err(|e| villa::Error::invalid(e.to_string()))?;
         return Ok(Predicate {
             watch: Watch::Exception { path, line },
             not: None,
         });
     }
     if let Some(at) = text("probe") {
-        let (path, line) = place(at)?;
+        let (path, line) = place(at).map_err(|e| villa::Error::invalid(e.to_string()))?;
         let expr = text("expr")
-            .ok_or("a probe predicate needs expr")?
+            .ok_or_else(|| villa::Error::invalid("a probe predicate needs expr"))?
             .to_owned();
-        let not = text("not").ok_or("a probe predicate needs not")?.to_owned();
+        let not = text("not")
+            .ok_or_else(|| villa::Error::invalid("a probe predicate needs not"))?
+            .to_owned();
         return Ok(Predicate {
             watch: Watch::Probe { path, line, expr },
             not: Some(not),
         });
     }
-    Err("a predicate is {exception: \"path:line\"} or {probe: \"path:line\", expr, not}".into())
+    Err(villa::Error::invalid(
+        "a predicate is {exception: \"path:line\"} or {probe: \"path:line\", expr, not}",
+    ))
 }
 
 /// Whether END (the fix's run) passes P: it exited 0 in time, the watched exception never came, and the probe never
 /// showed the bad value.  The reason when it does not.
-pub fn passes(p: &Predicate, end: &RunEnd) -> Result<(), String> {
+pub fn passes(p: &Predicate, end: &RunEnd) -> villa::Result<()> {
     if end.timed_out {
-        return Err("the run did not end within its time box".into());
+        return Err(villa::Error::invalid(
+            "the run did not end within its time box",
+        ));
     }
     if let Some((path, line)) = &end.exception_at {
-        return Err(format!("the exception is still raised at {path}:{line}"));
+        return Err(villa::Error::invalid(format!(
+            "the exception is still raised at {path}:{line}"
+        )));
     }
     if let Some(bad) = &p.not
         && end.probe_values.iter().any(|v| v == bad)
     {
-        return Err(format!("the probe still shows {bad}"));
+        return Err(villa::Error::invalid(format!(
+            "the probe still shows {bad}"
+        )));
     }
     match end.exit {
         Some(0) => Ok(()),
-        Some(c) => Err(format!("the program exited with {c}")),
-        None => Err("the program's exit code is unknown".into()),
+        Some(c) => Err(villa::Error::invalid(format!(
+            "the program exited with {c}"
+        ))),
+        None => Err(villa::Error::invalid("the program's exit code is unknown")),
     }
 }
 
 /// Whether session SID may remove a mark whose owner is OWNER (none: the user's): only its own.
-pub fn may_remove(what: &str, owner: Option<&str>, sid: &str) -> Result<(), String> {
+pub fn may_remove(what: &str, owner: Option<&str>, sid: &str) -> villa::Result<()> {
     if owner == Some(sid) {
         Ok(())
     } else {
-        Err(format!("{what} is not yours: only your own are removed"))
+        Err(villa::Error::invalid(format!(
+            "{what} is not yours: only your own are removed"
+        )))
     }
 }
 
@@ -136,7 +152,7 @@ pub fn offer(
     args: &Value,
     root: &str,
     sid: &str,
-) -> Result<Value, String> {
+) -> villa::Result<Value> {
     passes(p, end)?;
     Ok(
         json!({"root": root, "fix": {"hypothesis": args.get("hypothesis"), "run": args.get("run"), "agent": sid,
@@ -144,16 +160,22 @@ pub fn offer(
     )
 }
 
-fn arg<'a>(args: &'a Value, k: &str) -> Result<&'a str, String> {
+fn arg<'a>(args: &'a Value, k: &str) -> villa::Result<&'a str> {
     args.get(k)
         .and_then(Value::as_str)
-        .ok_or_else(|| format!("{k} is needed"))
+        .ok_or_else(|| villa::Error::invalid(format!("{k} is needed")))
 }
 
 /// The hub's side of session SID's debugger tool OP with ARGS.
-pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result<String, String> {
-    let me = f.core.agents.find(sid).map_err(|e| e.message)?;
-    let a = action_of(op, &args).ok_or_else(|| format!("no debugger tool {op}"))?;
+pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> villa::Result<String> {
+    let me = f
+        .core
+        .agents
+        .find(sid)
+        .map_err(|e| e.message)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
+    let a = action_of(op, &args)
+        .ok_or_else(|| villa::Error::invalid(format!("no debugger tool {op}")))?;
     let stages = crate::stages::Stages::new(op, sid);
     let facts = crate::manager::call_facts(op, &args);
     crate::manager::gate(f, sid, &me.who(), a, None, &facts).await?;
@@ -165,14 +187,14 @@ pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result
         "debug_live" => live(f, &args).await?,
         "debug_hypothesis" => hypothesis(f, sid, &args).await?,
         "debug_fix" => fix(f, sid, &args).await?,
-        _ => return Err(format!("no debugger tool {op}")),
+        _ => return Err(villa::Error::invalid(format!("no debugger tool {op}"))),
     };
     stages.at("the tool's work");
     Ok(v.to_string())
 }
 
 /// Params P served by the recorded runs' methods.
-async fn runs(f: &Front, p: Params) -> Result<Value, String> {
+async fn runs(f: &Front, p: Params) -> villa::Result<Value> {
     let caller = crate::dispatch::Caller {
         class: runstav::registry::Class::Agent,
         sid: None,
@@ -180,12 +202,12 @@ async fn runs(f: &Front, p: Params) -> Result<Value, String> {
         conn_id: 0,
     };
     match super::runs_wire::serve(f, &caller, p).await {
-        Ok(r) => r.map_err(|e| e.message),
-        Err(_) => Err("not a recorded runs' method".into()),
+        Ok(r) => r.map_err(|e| villa::Error::invalid(e.message)),
+        Err(_) => Err(villa::Error::invalid("not a recorded runs' method")),
     }
 }
 
-async fn read(f: &Front, args: &Value) -> Result<Value, String> {
+async fn read(f: &Front, args: &Value) -> villa::Result<Value> {
     let d = f.debug.debug(f);
     match arg(args, "what")? {
         "sessions" => Ok(json!({"sessions": d.list().into_iter().map(|(id, parent)| {
@@ -225,7 +247,7 @@ async fn read(f: &Front, args: &Value) -> Result<Value, String> {
                     stop: args
                         .get("stop")
                         .and_then(Value::as_u64)
-                        .ok_or("stop is needed")?,
+                        .ok_or_else(|| villa::Error::invalid("stop is needed"))?,
                     file: None,
                 }),
             )
@@ -246,24 +268,26 @@ async fn read(f: &Front, args: &Value) -> Result<Value, String> {
             .await?;
             Ok(json!({"debug_session": session, "epoch": epoch, "graph": g}))
         }
-        w => Err(format!(
+        w => Err(villa::Error::invalid(format!(
             "debug_read reads sessions, runs, run, stop, fork or heap, not {w}"
-        )),
+        ))),
     }
 }
 
-async fn probe(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
+async fn probe(f: &Front, sid: &str, args: &Value) -> villa::Result<Value> {
     let d = f.debug.debug(f);
     let root = arg(args, "root")?;
     let line = || {
         args.get("line")
             .and_then(Value::as_u64)
             .and_then(|l| u32::try_from(l).ok())
-            .ok_or("line is needed")
+            .ok_or_else(|| villa::Error::invalid("line is needed"))
     };
     match arg(args, "op")? {
         "probe" => {
-            let rec = d.records().ok_or("runs are not recorded")?;
+            let rec = d
+                .records()
+                .ok_or_else(|| villa::Error::invalid("runs are not recorded"))?;
             let (path, line, expr) = (arg(args, "path")?.to_owned(), line()?, arg(args, "expr")?);
             let (path, id) = rec.probes(root, |s| {
                 let (path, id) = s.apply(super::probes::Op::Add {
@@ -271,9 +295,9 @@ async fn probe(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
                     line,
                     expr: expr.to_owned(),
                 })?;
-                let id = id.ok_or("no probe was added")?;
+                let id = id.ok_or_else(|| villa::Error::invalid("no probe was added"))?;
                 s.mark(&id, sid)?;
-                Ok::<_, String>((path, id))
+                Ok::<_, villa::Error>((path, id))
             })?;
             d.probes_changed(root, &path).await;
             probes_event(f, root);
@@ -298,7 +322,7 @@ async fn probe(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
             let id = v
                 .get("added")
                 .and_then(Value::as_u64)
-                .ok_or("that line has a breakpoint already")?;
+                .ok_or_else(|| villa::Error::invalid("that line has a breakpoint already"))?;
             d.mark_breakpoint(root, id, sid);
             Ok(json!({"breakpoint": format!("b{id}")}))
         }
@@ -314,7 +338,9 @@ async fn probe(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
                     .await;
                 return Ok(json!({"removed": id}));
             }
-            let rec = d.records().ok_or("runs are not recorded")?;
+            let rec = d
+                .records()
+                .ok_or_else(|| villa::Error::invalid("runs are not recorded"))?;
             let path = rec.probes(root, |s| {
                 may_remove(
                     &format!("probe {id}"),
@@ -331,9 +357,9 @@ async fn probe(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
             probes_event(f, root);
             Ok(json!({"removed": id}))
         }
-        o => Err(format!(
+        o => Err(villa::Error::invalid(format!(
             "debug_probe does probe, breakpoint or remove, not {o}"
-        )),
+        ))),
     }
 }
 
@@ -352,18 +378,26 @@ fn probes_event(f: &Front, root: &str) {
         .broadcast("debug-probes", json!({"root": root, "probes": probes}));
 }
 
-async fn fork(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
+async fn fork(f: &Front, sid: &str, args: &Value) -> villa::Result<Value> {
     let at: DebugForkAt = serde_json::from_value(args.get("at").cloned().unwrap_or(Value::Null))
-        .map_err(|e| format!("at: {e}"))?;
+        .map_err(|e| villa::Error::invalid(format!("at: {e}")))?;
     let change: Option<DebugForkChange> = match args.get("change") {
-        Some(c) => Some(serde_json::from_value(c.clone()).map_err(|e| format!("change: {e}"))?),
+        Some(c) => Some(
+            serde_json::from_value(c.clone())
+                .map_err(|e| villa::Error::invalid(format!("change: {e}")))?,
+        ),
         None => None,
     };
     if change.as_ref().is_some_and(|c| c.code) {
-        return Err("an agent's code what-if is a fix: debug_fix".into());
+        return Err(villa::Error::invalid(
+            "an agent's code what-if is a fix: debug_fix",
+        ));
     }
     let until: Option<DebugForkUntil> = match args.get("until") {
-        Some(u) => Some(serde_json::from_value(u.clone()).map_err(|e| format!("until: {e}"))?),
+        Some(u) => Some(
+            serde_json::from_value(u.clone())
+                .map_err(|e| villa::Error::invalid(format!("until: {e}")))?,
+        ),
         None => None,
     };
     let p = DebugFork {
@@ -377,7 +411,8 @@ async fn fork(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
     };
     let v = super::fork_wire::serve(f, Params::DebugFork(p))
         .await
-        .map_err(|e| e.message)?;
+        .map_err(|e| e.message)
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     if let Some(id) = v.get("fork").and_then(Value::as_str) {
         forks(f).mark(id, sid);
         return Ok(
@@ -385,25 +420,31 @@ async fn fork(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
         );
     }
     if let Some(q) = v.get("ask").and_then(Value::as_str) {
-        return Err(format!("{q}: only the user can say yes to that"));
+        return Err(villa::Error::invalid(format!(
+            "{q}: only the user can say yes to that"
+        )));
     }
-    Err("the run's configuration needs an input or trust only the user can give".into())
+    Err(villa::Error::invalid(
+        "the run's configuration needs an input or trust only the user can give",
+    ))
 }
 
-async fn live(f: &Front, args: &Value) -> Result<Value, String> {
+async fn live(f: &Front, args: &Value) -> villa::Result<Value> {
     let d = f.debug.debug(f);
     let session = arg(args, "debug_session")?;
     let read = args
         .get("epoch")
         .and_then(Value::as_u64)
-        .ok_or("epoch is needed")?;
+        .ok_or_else(|| villa::Error::invalid("epoch is needed"))?;
     let stop = d.stop_of(session);
     still_at(session, read, stop.as_ref().map(|s| s.epoch))?;
-    let stop = stop.ok_or("not stopped")?;
+    let stop = stop.ok_or_else(|| villa::Error::invalid("not stopped"))?;
     let t = Some(stop.thread);
     let op = match arg(args, "op")? {
         "evaluate" => {
-            let h = d.session(session).ok_or("no such session")?;
+            let h = d
+                .session(session)
+                .ok_or_else(|| villa::Error::invalid("no such session"))?;
             let r = h
                 .request(
                     "evaluate",
@@ -417,9 +458,9 @@ async fn live(f: &Front, args: &Value) -> Result<Value, String> {
         "step-in" => super::session::Op::StepIn { thread: t },
         "step-out" => super::session::Op::StepOut { thread: t },
         o => {
-            return Err(format!(
+            return Err(villa::Error::invalid(format!(
                 "debug_live does evaluate, continue, next, step-in or step-out, not {o}"
-            ));
+            )));
         }
     };
     // checked again at the last moment: a step of the user's in between wins
@@ -428,7 +469,7 @@ async fn live(f: &Front, args: &Value) -> Result<Value, String> {
     Ok(json!({"done": true}))
 }
 
-async fn hypothesis(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
+async fn hypothesis(f: &Front, sid: &str, args: &Value) -> villa::Result<Value> {
     let root = arg(args, "root")?.to_owned();
     let title = arg(args, "title")?.to_owned();
     let state = arg(args, "state")?.to_owned();
@@ -469,7 +510,7 @@ async fn hypothesis(f: &Front, sid: &str, args: &Value) -> Result<Value, String>
             norn::write::debug::hypothesis(tx, &i, &s, &r, &t, &st, &ev, None)
         })
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     f.editors.broadcast(
         "debug-investigation",
         json!({"root": root, "hypothesis": {"id": id, "record": eid, "title": title, "state": state,
@@ -478,7 +519,7 @@ async fn hypothesis(f: &Front, sid: &str, args: &Value) -> Result<Value, String>
     Ok(json!({"hypothesis": id}))
 }
 
-async fn fix(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
+async fn fix(f: &Front, sid: &str, args: &Value) -> villa::Result<Value> {
     arg(args, "hypothesis")?;
     let run = arg(args, "run")?.to_owned();
     let p = predicate(args.get("predicate").unwrap_or(&Value::Null))?;
@@ -495,18 +536,19 @@ async fn fix(f: &Front, sid: &str, args: &Value) -> Result<Value, String> {
         })
         .collect();
     if files.is_empty() {
-        return Err("a fix changes at least one file".into());
+        return Err(villa::Error::invalid("a fix changes at least one file"));
     }
     let info = forks(f)
         .recorded(&run)
-        .ok_or_else(|| format!("no recorded run {run}"))?;
+        .ok_or_else(|| villa::Error::invalid(format!("no recorded run {run}")))?;
     let resolved = super::fork_wire::resolved_for(f, &info)?;
     let end = forks(f)
         .check_fix(&run, resolved, &files, p.watch.clone(), FIX_LIMIT)
-        .await?;
+        .await
+        .map_err(|e| villa::Error::invalid(e.to_string()))?;
     // only a fix that passed in a fresh fork is offered: the editor shows it as a card
     match offer(&p, &end, args, &info.root, sid) {
-        Err(why) => Ok(json!({"passed": false, "why": why, "offered": false})),
+        Err(why) => Ok(json!({"passed": false, "why": why.message(), "offered": false})),
         Ok(data) => {
             f.editors.broadcast("debug-investigation", data);
             Ok(json!({"passed": true, "offered": true}))

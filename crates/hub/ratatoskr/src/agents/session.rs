@@ -58,7 +58,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
-use turn_core::{KillWhy, QueueEdit, TurnCore, TurnEffect, TurnEvent};
+use turn_core::{HoldSource, KillWhy, QueueEdit, TurnCore, TurnEffect, TurnEvent};
 
 /// Events about one session come at most this often.
 const EMIT_EVERY: Duration = Duration::from_millis(50);
@@ -72,7 +72,7 @@ pub(crate) const SESSION_NET: launch::NetCell = launch::NetCell::ProviderOnly;
 const WHEEL_SAVE_WAIT: Duration = Duration::from_secs(5);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    saman::lock(m)
 }
 
 fn now() -> f64 {
@@ -96,18 +96,18 @@ pub(crate) fn no_session(id: &str) -> Error {
     invalid("id", format!("no session {id}"))
 }
 
-pub(crate) fn invalid(path: &str, message: impl Into<String>) -> Error {
+pub(crate) fn invalid(path: &str, message: impl ToString) -> Error {
     Error {
         code: ErrorCode::InvalidParams,
-        message: message.into(),
+        message: message.to_string(),
         path: Some(path.into()),
     }
 }
 
-pub(crate) fn internal(message: impl Into<String>) -> Error {
+pub(crate) fn internal(message: impl ToString) -> Error {
     Error {
         code: ErrorCode::Internal,
-        message: message.into(),
+        message: message.to_string(),
         path: None,
     }
 }
@@ -1475,11 +1475,11 @@ fn answer_read(resp: hermod::Responder<ReadTextFileResponse>, got: Result<String
             if let Ok(r) =
                 serde_json::from_value::<ReadTextFileResponse>(json!({"content": content}))
             {
-                let _ = resp.respond(r);
+                crate::soft::done(resp.respond(r), "session");
             }
         }
         Err(m) => {
-            let _ = resp.fail(-32602, &m);
+            crate::soft::done(resp.fail(-32602, &m), "session");
         }
     }
 }
@@ -1616,9 +1616,10 @@ async fn spawn_spec(
     // the lock's files where the sandbox would show them; Codex's /etc ones have no place outside a sandbox
     for (path, bytes) in plan.ro_files.iter().filter(|(p, _)| !p.starts_with("/etc")) {
         if let Some(d) = path.parent() {
-            let _ = std::fs::create_dir_all(d);
+            crate::soft::done(std::fs::create_dir_all(d), "std::fs::create_dir_all");
         }
-        std::fs::write(path, bytes).map_err(|e| internal(format!("{}: {e}", path.display())))?;
+        crate::fsio::write(path, bytes)
+            .map_err(|e| internal(format!("{}: {e}", path.display())))?;
     }
     let mut pairs: Vec<(String, std::ffi::OsString)> = p
         .env
@@ -1634,7 +1635,7 @@ async fn spawn_spec(
             .map_err(|e| internal(format!("session dir: {e}")))?;
         let link = run.join(gleipnir::trace::WRAPPER_NAME);
         let exe = std::env::current_exe().map_err(|e| internal(e.to_string()))?;
-        let _ = std::fs::remove_file(&link);
+        crate::soft::done(std::fs::remove_file(&link), "std::fs::remove_file");
         std::os::unix::fs::symlink(&exe, &link)
             .map_err(|e| internal(format!("{}: {e}", link.display())))?;
         pairs.push(("CLAUDE_CODE_SHELL_PREFIX".into(), link.into()));
@@ -1647,7 +1648,7 @@ async fn spawn_spec(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_os_str()))
         .collect();
-    let env = shell.build(&["PATH", "HOME", "LANG", "TMPDIR"], &[], &set);
+    let env = shell.build(&["PATH", stig::HOME_VAR, "LANG", "TMPDIR"], &[], &set);
     let spec = draugr::Spec {
         program: PathBuf::from(prog),
         args: args.to_vec(),
@@ -1897,7 +1898,7 @@ pub(super) async fn prepare(
         .map_err(|e| internal(format!("the matrix: {e:?}")))?;
     let mut plan = plock::plan(profile, role, &eff);
     if profile.provider() == Some(crate::settings::profiles::Provider::Claude)
-        && let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty())
+        && let Some(home) = std::env::var_os(stig::HOME_VAR).filter(|h| !h.is_empty())
     {
         let (deny, ask) = plock::claude_deny_ask(&PathBuf::from(home).join(".claude"), cwd);
         plan = plan.with_claude_rules(deny, ask);
@@ -2388,7 +2389,7 @@ async fn launch_once(
     )
     .await;
     if out.is_err() && opened {
-        let _ = front.mcp.close(sid).await;
+        crate::soft::done(front.mcp.close(sid).await, "session");
     }
     out
 }
@@ -2869,7 +2870,7 @@ async fn restart_manager_from_graph(hub: &super::Hub, front: &Front, row: &Row) 
     front.mcp.mark_manager(&row.0);
     let first = crate::manager::restart_prompt(front, &row.0).await;
     // an open socket from before has the plain tool list
-    let _ = front.mcp.close(&row.0).await;
+    crate::soft::done(front.mcp.close(&row.0).await, "session");
     resume_row_with(hub, front, row.clone(), Some(first)).await
 }
 
@@ -2891,7 +2892,7 @@ pub(crate) async fn rotate(hub: &super::Hub, front: &Front, sid: &str, first: St
 pub(crate) async fn close_for_swap(front: &Front, old: &Session) {
     old.close_now().await;
     gateway_gone(front, &old.id).await;
-    let _ = front.mcp.close(&old.id).await;
+    crate::soft::done(front.mcp.close(&old.id).await, "session");
 }
 
 /// Session SID's recorded role is now ROLE (the user made it a manager).
@@ -3095,7 +3096,7 @@ impl Session {
     /// problem with the file is said once per change to every editor.
     fn cwd_trusted(&self) -> bool {
         let env = runstav::paths::Env::process();
-        let Some(home) = env.vars.get("HOME") else {
+        let Some(home) = env.vars.get(stig::HOME_VAR) else {
             return false;
         };
         let file = runstav::paths::state_dir(&env).join("trusted-folders.eld");
@@ -3416,6 +3417,15 @@ pub(crate) async fn relaunch(
         if waiting {
             st.step_begin(StepClass::JobWait, None);
         }
+    }
+    // `RATATOSKR_TEST_RESUME_INSERT_DELAY_MS` (test-hooks): the session is back in the hub's table that late after its
+    // agent has resumed or loaded, as when the machine is loaded (a restart serves while it brings the sessions back)
+    #[cfg(feature = "test-hooks")]
+    if let Some(ms) = std::env::var("RATATOSKR_TEST_RESUME_INSERT_DELAY_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        crate::clock::sleep(Duration::from_millis(ms)).await;
     }
     hub.insert(s.clone());
     crate::stall::spawn("session:run", s.clone().run(rx, done));
@@ -3869,7 +3879,7 @@ async fn write_steps(
                 step,
             };
             sink.editors.broadcast("agent-step", json!(ev));
-            let _ = sink.bus.send(ev);
+            crate::soft::done(sink.bus.send(ev), "bus send");
         }
     }
     // no more rows will come: whoever waits for one stops waiting
@@ -4284,7 +4294,7 @@ impl Session {
             self.flow.sent.fetch_add(1, Ordering::SeqCst);
             // counted before the call is let go, so the hold never lapses between the call's end and the step's claim
             flight.sent.fetch_add(1, Ordering::SeqCst);
-            let _ = self.steps.send(c);
+            crate::soft::done(self.steps.send(c), "steps send");
         }
         flight.call.store(call, Ordering::SeqCst);
     }
@@ -4293,12 +4303,14 @@ impl Session {
     pub(crate) async fn steps_written(&self) {
         self.drain_steps();
         let target = self.flow.sent.load(Ordering::SeqCst);
-        let _ = self
-            .flow
-            .written
-            .subscribe()
-            .wait_for(|w| *w >= target)
-            .await;
+        crate::soft::done(
+            self.flow
+                .written
+                .subscribe()
+                .wait_for(|w| *w >= target)
+                .await,
+            "session",
+        );
     }
 
     /// The entries not yet in the transcript file, written (redacted) next, off the hub's workers ([`crate::disk`]); a turn
@@ -4372,7 +4384,7 @@ impl Session {
             match e {
                 TurnEffect::StartTurn { turn, item } => self.start_turn(turn, item),
                 TurnEffect::CancelTurn => {
-                    let _ = self.conn.cancel(&self.acp);
+                    crate::soft::done(self.conn.cancel(&self.acp), "session");
                 }
                 TurnEffect::ArmStopDeadline { turn } => self.stop_deadline(turn),
                 TurnEffect::EndTurn { waiting: true, .. } => self.close_when_idle(),
@@ -4892,11 +4904,11 @@ impl Session {
                             if let Ok(r) = serde_json::from_value::<ReadTextFileResponse>(
                                 json!({"content": content}),
                             ) {
-                                let _ = resp.respond(r);
+                                crate::soft::done(resp.respond(r), "session");
                             }
                         }
                         Err(m) => {
-                            let _ = resp.fail(-32602, &m);
+                            crate::soft::done(resp.fail(-32602, &m), "session");
                         }
                     }
                 }
@@ -4921,11 +4933,11 @@ impl Session {
                                     if let Ok(ok) =
                                         serde_json::from_value::<WriteTextFileResponse>(json!({}))
                                     {
-                                        let _ = resp.respond(ok);
+                                        crate::soft::done(resp.respond(ok), "session");
                                     }
                                 }
                                 Err(m) => {
-                                    let _ = resp.fail(-32602, &m);
+                                    crate::soft::done(resp.fail(-32602, &m), "session");
                                 }
                             }
                         });
@@ -4940,11 +4952,11 @@ impl Session {
                                 if let Ok(r) =
                                     serde_json::from_value::<WriteTextFileResponse>(json!({}))
                                 {
-                                    let _ = resp.respond(r);
+                                    crate::soft::done(resp.respond(r), "session");
                                 }
                             }
                             Err((code, m)) => {
-                                let _ = resp.fail(code, &m);
+                                crate::soft::done(resp.fail(code, &m), "session");
                             }
                         }
                     });
@@ -5316,13 +5328,15 @@ impl Session {
         };
         let name = g.id.strip_prefix("always:").unwrap_or(&g.id).to_owned();
         let meta = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "agents/grants");
-        let _ = self
-            .writer
-            .db
-            .write(meta, move |tx| {
-                norn::write::always::put(tx, &name, data).map(|_| ())
-            })
-            .await;
+        crate::soft::done(
+            self.writer
+                .db
+                .write(meta, move |tx| {
+                    norn::write::always::put(tx, &name, data).map(|_| ())
+                })
+                .await,
+            "session",
+        );
     }
 
     /// The Always grants of this session, revoked ones too.
@@ -5593,7 +5607,7 @@ impl Session {
     /// instead: the prompt waits at the front of the held queue, and nothing is sent.
     pub(crate) fn stop_turn(self: &Arc<Self>) -> bool {
         !self
-            .turn_event(TurnEvent::Stop { after_tool: false })
+            .turn_event(TurnEvent::Stop)
             .contains(&TurnEffect::NotRunning)
     }
 
@@ -5613,14 +5627,19 @@ impl Session {
 
     /// Pause: cancel once the tool call running now completes and hold the queue; with no turn running, hold the
     /// queue.
-    pub(crate) fn pause_after_tool(self: &Arc<Self>) -> Result<(), Error> {
+    pub(crate) fn pause_after_tool(self: &Arc<Self>, source: HoldSource) -> Result<(), Error> {
         if self
-            .turn_event(TurnEvent::Stop { after_tool: true })
+            .turn_event(TurnEvent::PauseAfterTool { source })
             .contains(&TurnEffect::Exited)
         {
             return Err(invalid("id", "the session has exited"));
         }
         Ok(())
+    }
+
+    /// SOURCE's hold on the turn running lifts ([`TurnEvent::ClearHold`]).
+    pub(crate) fn clear_hold(self: &Arc<Self>, source: HoldSource) {
+        self.turn_event(TurnEvent::ClearHold { source });
     }
 
     /// A budget's pause lifts ([`super::Agents::resume_paused`]): "Continue." goes first, labelled "resumed by you"
@@ -5893,7 +5912,7 @@ impl Session {
                     Some(p) => Some(p),
                     None => crate::graph::project_of(&self.cwd).await?.map(|r| r.id),
                 };
-                let _ = self.project.set(p.clone());
+                crate::soft::done(self.project.set(p.clone()), "session");
                 p
             }
         };
@@ -6183,7 +6202,7 @@ impl Session {
         self.persist_queue();
         // landed before the session that follows (a rewind's, a rotation's) reads them
         self.disk.written().await;
-        let _ = self.conn.close_session(&self.acp).await;
+        crate::soft::done(self.conn.close_session(&self.acp).await, "session");
         draugr::kill_group(self.conn.pid(), STOP_GRACE, &draugr::RealSignaller).await;
     }
 
@@ -6491,7 +6510,7 @@ impl Session {
         }
         // the edit history records what is written: the content after the hooks' change, never a refused write
         self.record_write(&real, &content).await;
-        tokio::fs::write(&real, content)
+        write_whole(real, content)
             .await
             .map_err(|e| (-32602, format!("{path}: {e}")))
     }
@@ -6641,7 +6660,7 @@ impl Session {
         self.withdraw_cards(cards).await;
         // a message the store gave this session and that never ran waits in the store again, for its next session
         super::deliver::put_back(&self.writer, &dropped).await;
-        let _ = self.conn.cancel(&self.acp);
+        crate::soft::done(self.conn.cancel(&self.acp), "session");
         let grace = if kill { Duration::ZERO } else { STOP_GRACE };
         draugr::kill_group(self.conn.pid(), grace, &draugr::RealSignaller).await;
         // the session is gone for good (its runtime.db rows go next): so is what a manager delegated to it
@@ -6779,7 +6798,7 @@ impl Session {
             Err(e) => Err(e),
         };
         // the reader task ends the turn, after the updates the agent sent before its answer
-        let _ = self.done.send(TurnEnd(turn, out));
+        crate::soft::done(self.done.send(TurnEnd(turn, out)), "done send");
     }
 
     fn finish_turn(self: &Arc<Self>, end: TurnEnd) {
@@ -7103,7 +7122,7 @@ fn reply(resp: hermod::Responder<RequestPermissionResponse>, option: Option<Stri
         None => json!({"outcome": {"outcome": "cancelled"}}),
     };
     if let Ok(r) = serde_json::from_value::<RequestPermissionResponse>(outcome) {
-        let _ = resp.respond(r);
+        crate::soft::done(resp.respond(r), "session");
     }
 }
 
@@ -7129,6 +7148,86 @@ pub(crate) fn text_for_intent(text: &str, intent: Option<SendIntent>) -> String 
     match intent {
         Some(SendIntent::Ask) => format!("{ASK_INSTRUCTION}\n\n{text}"),
         _ => text.to_string(),
+    }
+}
+
+/// CONTENT as the whole of the file REAL: written to a temporary file in its folder and renamed over it (its mode
+/// kept, 0o644 for a new file), so the file is never seen empty or half written.  A step's claim, the watcher and a
+/// rescan read the file while the write is under way (the history recorded it first); an in-place truncating write
+/// let one read it empty, which the history recorded as an outside change that emptied the file, and the version that
+/// refilled it then took the lines from the agent's write and the reason that went with them.
+async fn write_whole(real: PathBuf, content: String) -> std::io::Result<()> {
+    let joined = crate::clock::blocking(move || {
+        let (Some(parent), Some(name)) = (real.parent(), real.file_name()) else {
+            return Err(std::io::Error::other("the path names no file"));
+        };
+        let dir = std::fs::File::open(parent)?;
+        let name = Path::new(name);
+        let mode = eitri::open_beneath(std::os::fd::AsFd::as_fd(&dir), name, eitri::Kind::File)
+            .ok()
+            .and_then(|o| rustix::fs::fstat(&o.fd).ok())
+            .map_or(0o644, |st| {
+                #[allow(clippy::useless_conversion, reason = "st_mode is u16 on macOS")]
+                let mode = u32::from(st.st_mode);
+                mode & 0o777
+            });
+        eitri::write_regular(
+            std::os::fd::AsFd::as_fd(&dir),
+            name,
+            content.as_bytes(),
+            mode,
+        )
+        .map_err(|e| std::io::Error::other(e.to_string()))
+    })
+    .await;
+    joined.unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())))
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A reader that has the file open while the agent's write lands sees the whole old file, never a truncated or
+    /// half-written one, and the name holds the whole new one; the mode stays and no temporary file is left.
+    // test-pattern: D
+    #[test]
+    fn a_write_replaces_the_file_whole_and_never_truncates_it_in_place() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = dir.path().join("b.txt");
+            crate::fsio::write(&f, "one\n").unwrap();
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o640)).unwrap();
+            let mut reader = std::fs::File::open(&f).unwrap();
+            write_whole(f.clone(), "one\ntwo\n".to_owned())
+                .await
+                .unwrap();
+            let mut old = String::new();
+            reader.read_to_string(&mut old).unwrap();
+            assert_eq!(
+                old, "one\n",
+                "the open reader still sees the whole old file"
+            );
+            assert_eq!(crate::fsio::read_to_string(&f).unwrap(), "one\ntwo\n");
+            assert_eq!(
+                std::fs::metadata(&f).unwrap().permissions().mode() & 0o777,
+                0o640
+            );
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        })
+    }
+
+    /// A file that is not there yet is made, readable by its folder's users as a new file is.
+    // test-pattern: D
+    #[test]
+    fn a_write_makes_a_new_file() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = dir.path().join("new.txt");
+            write_whole(f.clone(), "x\n".to_owned()).await.unwrap();
+            assert_eq!(crate::fsio::read_to_string(&f).unwrap(), "x\n");
+        })
     }
 }
 
@@ -7178,7 +7277,7 @@ pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
     let r = f.core.agents.stop(p.id.as_str()).await;
     if r.is_ok() && ends {
         gateway_gone(f, p.id.as_str()).await;
-        let _ = f.mcp.close(p.id.as_str()).await;
+        crate::soft::done(f.mcp.close(p.id.as_str()).await, "session");
         asks_gone(f, p.id.as_str());
     }
     r
@@ -7278,7 +7377,9 @@ pub fn tool_output(
 
 /// `agents/pause`: the turn is cancelled once the tool call running now completes.
 pub fn pause(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
-    f.core.agents.cancel_after_tool(p.id.as_str())?;
+    f.core
+        .agents
+        .cancel_after_tool(p.id.as_str(), HoldSource::User)?;
     Ok(true)
 }
 
@@ -7289,7 +7390,7 @@ pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
         gateway_gone(f, p.id.as_str()).await;
         asks_gone(f, p.id.as_str());
     }
-    let _ = f.mcp.close(p.id.as_str()).await;
+    crate::soft::done(f.mcp.close(p.id.as_str()).await, "session");
     r
 }
 
@@ -7326,7 +7427,7 @@ pub(crate) async fn gateway_gone(f: &Front, sid: &str) {
         f.core.budgets.unbind_job(&j);
     }
     if let Some(t) = f.core.agents.take_gateway(sid) {
-        let _ = f.gate.unregister(&t).await;
+        crate::soft::done(f.gate.unregister(&t).await, "session");
     }
 }
 
@@ -7428,7 +7529,7 @@ pub async fn move_session(
         return Err(refuse("a manager is not moved; it is rotated"));
     }
     // stop after the current tool, then wait for the turn to end (a turn that will not is cancelled)
-    hub.cancel_after_tool(id)?;
+    hub.cancel_after_tool(id, HoldSource::Move)?;
     let end = crate::clock::now() + MOVE_WAIT;
     while old.status() == SessionStatus::Busy {
         if crate::clock::now() >= end {
@@ -7595,63 +7696,67 @@ mod tests {
     use runstav::methods::agents::SessionStatus;
     use runstav::methods::timeline::BudgetScope;
 
-    #[tokio::test]
-    async fn rekey_runs_before_the_first_prompt() {
-        let log = std::sync::Mutex::new(Vec::new());
-        rekey_then(
-            async {
-                tokio::task::yield_now().await;
-                log.lock().unwrap().push("rekey");
-            },
-            || log.lock().unwrap().push("prompt"),
-        )
-        .await;
-        assert_eq!(*log.lock().unwrap(), ["rekey", "prompt"]);
+    #[test]
+    fn rekey_runs_before_the_first_prompt() {
+        saman::block_on_current(async move {
+            let log = std::sync::Mutex::new(Vec::new());
+            rekey_then(
+                async {
+                    tokio::task::yield_now().await;
+                    saman::lock(&log).push("rekey");
+                },
+                || saman::lock(&log).push("prompt"),
+            )
+            .await;
+            assert_eq!(*saman::lock(&log), ["rekey", "prompt"]);
+        })
     }
 
-    #[tokio::test]
-    async fn editor_endpoint_is_dropped() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = Front::new(
-            runstav::proof::Cap::generate().unwrap(),
-            dir.path().join("hub-x.sock"),
-            crate::store::WorkDb::spawn(dir.path().join("work.db")).unwrap(),
-            norn::store::CoordDb::spawn(dir.path().join("work.db")),
-        );
-        let fr = &f;
-        let names = move |list: Value| async move {
-            fr.settings
-                .set_overrides(
-                    None,
-                    vec![crate::settings::overrides::Override {
-                        name: "drgnx-agents-start-env-names".into(),
-                        value: list,
-                        source: "test".into(),
-                    }],
-                )
-                .await
-                .unwrap();
-        };
-        let vars = |v: Value| -> Vec<EnvVar> { serde_json::from_value(v).unwrap() };
-        // listed or not, the endpoint's two names are the hub's: an editor's values are dropped, the rest goes on
-        names(json!([
-            "PLAYWRIGHT_MCP_CDP_ENDPOINT",
-            "DRGNX_BROWSER_CDP",
-            "FOO"
-        ]))
-        .await;
-        let env = vars(json!([
-            {"name": "PLAYWRIGHT_MCP_CDP_ENDPOINT", "value": "ws://127.0.0.1:1/devtools/browser/x"},
-            {"name": "DRGNX_BROWSER_CDP", "value": "ws://elsewhere"},
-            {"name": "FOO", "value": "1"}
-        ]));
-        assert_eq!(
-            module_env(&f, Some(env.as_slice())).unwrap(),
-            [("FOO".to_string(), "1".to_string())]
-        );
-        names(json!([])).await;
-        let env = vars(json!([{"name": "DRGNX_BROWSER_CDP", "value": "ws://elsewhere"}]));
-        assert!(module_env(&f, Some(env.as_slice())).unwrap().is_empty());
+    #[test]
+    fn editor_endpoint_is_dropped() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let f = Front::new(
+                runstav::proof::Cap::generate().unwrap(),
+                dir.path().join("hub-x.sock"),
+                crate::store::WorkDb::spawn(dir.path().join("work.db")).unwrap(),
+                norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            );
+            let fr = &f;
+            let names = move |list: Value| async move {
+                fr.settings
+                    .set_overrides(
+                        None,
+                        vec![crate::settings::overrides::Override {
+                            name: "drgnx-agents-start-env-names".into(),
+                            value: list,
+                            source: "test".into(),
+                        }],
+                    )
+                    .await
+                    .unwrap();
+            };
+            let vars = |v: Value| -> Vec<EnvVar> { serde_json::from_value(v).unwrap() };
+            // listed or not, the endpoint's two names are the hub's: an editor's values are dropped, the rest goes on
+            names(json!([
+                "PLAYWRIGHT_MCP_CDP_ENDPOINT",
+                "DRGNX_BROWSER_CDP",
+                "FOO"
+            ]))
+            .await;
+            let env = vars(json!([
+                {"name": "PLAYWRIGHT_MCP_CDP_ENDPOINT", "value": "ws://127.0.0.1:1/devtools/browser/x"},
+                {"name": "DRGNX_BROWSER_CDP", "value": "ws://elsewhere"},
+                {"name": "FOO", "value": "1"}
+            ]));
+            assert_eq!(
+                module_env(&f, Some(env.as_slice())).unwrap(),
+                [("FOO".to_string(), "1".to_string())]
+            );
+            names(json!([])).await;
+            let env = vars(json!([{"name": "DRGNX_BROWSER_CDP", "value": "ws://elsewhere"}]));
+            assert!(module_env(&f, Some(env.as_slice())).unwrap().is_empty());
+        })
     }
 
     #[test]
@@ -7957,225 +8062,45 @@ mod tests {
 
     /// A step's row carries the machine its session's process runs on: the hub's own to start with, and what
     /// `set_machine` says after.
-    #[tokio::test]
-    async fn a_steps_row_carries_the_sessions_machine() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = crate::coord::Writer {
-            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
-            signals: Arc::new(crate::coord::Signals::default()),
-        };
-        let (bus, _seen) = tokio::sync::broadcast::channel(4);
-        let machine = Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string()));
-        let ctx = StepCtx {
-            flow: Arc::default(),
-            session: "a1".into(),
-            task: None,
-            agent: "mock".into(),
-            provider: None,
-            cwd: PathBuf::new(),
-            acp: None,
-            machine: machine.clone(),
-            history: None,
-        };
-        let sink = StepSink {
-            writer,
-            editors: Arc::new(crate::settings::agents::Editors::default()),
-            bus,
-            snap: None,
-            scopes: None,
-            tools: None,
-            asks: None,
-            stamps: None,
-            presence: None,
-            map: None,
-            traces: None,
-            predict: None,
-        };
-        let closed = ClosedStep {
-            open: OpenStep {
-                class: StepClass::Think,
-                start: 1.0,
-                tool: None,
-                tool_kind: None,
-                tool_id: None,
-                message_id: None,
-                key: 0,
-                mcp: false,
-                parent_tool: None,
-            },
-            end: 2.0,
-            turn_id: None,
-            tokens_in: 0,
-            tokens_out: 0,
-            cache_read: 0,
-            cache_write: 0,
-            cost: None,
-            detail: None,
-            command: None,
-            context: None,
-            before: None,
-            call_end: None,
-            diffs: Vec::new(),
-            cell: None,
-        };
-        let (row, _, _) = step_row(&closed, &sink, &ctx);
-        assert_eq!(row.machine.as_deref(), Some("local"));
-        assert_eq!(row.slots, None, "nothing queues a session for a machine");
-        *lock(&machine) = "desktop".into();
-        let (row, _, _) = step_row(&closed, &sink, &ctx);
-        assert_eq!(row.machine.as_deref(), Some("desktop"));
-    }
-
-    #[tokio::test]
-    async fn closed_steps_reach_the_step_table_in_order_and_are_announced() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = crate::coord::Writer {
-            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
-            signals: Arc::new(crate::coord::Signals::default()),
-        };
-        let editors = Arc::new(crate::settings::agents::Editors::default());
-        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let ctx = StepCtx {
-            flow: Arc::default(),
-            session: "a1".into(),
-            task: Some("task:7".into()),
-            agent: "mock".into(),
-            provider: None,
-            cwd: PathBuf::new(),
-            acp: None,
-            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
-            history: None,
-        };
-        let sink = StepSink {
-            writer: writer.clone(),
-            editors,
-            bus,
-            snap: None,
-            scopes: None,
-            tools: None,
-            asks: None,
-            stamps: None,
-            presence: None,
-            map: None,
-            traces: None,
-            predict: None,
-        };
-        tokio::spawn(write_steps(rx, sink, ctx, None));
-        let open = |class, tool: Option<&str>| OpenStep {
-            class,
-            start: 10.0,
-            tool: tool.map(str::to_string),
-            tool_kind: None,
-            tool_id: None,
-            message_id: None,
-            key: 0,
-            mcp: false,
-            parent_tool: None,
-        };
-        for (class, tool, turn) in [
-            (StepClass::Think, None, None),
-            (StepClass::Tool, Some("Read x"), Some("t1".to_string())),
-        ] {
-            tx.send(ClosedStep {
-                open: open(class, tool),
-                end: 11.0,
-                turn_id: turn,
-                tokens_in: 10,
-                tokens_out: 5,
-                cache_read: 0,
-                cache_write: 0,
-                cost: None,
-                detail: None,
-                command: None,
-                context: None,
-                before: None,
-                call_end: None,
-                diffs: Vec::new(),
-                cell: None,
-            })
-            .unwrap();
-        }
-        let first = seen.recv().await.unwrap();
-        let second = seen.recv().await.unwrap();
-        assert_eq!((first.step.seq, first.step.class), (1, StepClass::Think));
-        assert_eq!((second.step.seq, second.step.class), (2, StepClass::Tool));
-        assert_eq!(second.step.turn_id.as_deref(), Some("t1"));
-        assert_eq!(second.step.tokens_out, Some(5));
-        let caller = Caller {
-            class: Class::Service,
-            sid: None,
-            job: None,
-            conn_id: 0,
-        };
-        let rows: Vec<(String, i64, String, Option<String>)> = writer
-            .write(&caller, "agents/step", |tx| {
-                let mut q = tx
-                    .sql()
-                    .prepare("select session, seq, class, tool from step order by seq")?;
-                let it = q.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
-                Ok(it.collect::<Result<Vec<_>, _>>()?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            rows,
-            [
-                ("session:a1".to_string(), 1, "think".to_string(), None),
-                (
-                    "session:a1".to_string(),
-                    2,
-                    "tool".to_string(),
-                    Some("Read x".to_string())
-                ),
-            ]
-        );
-    }
-
-    // test-pattern: D
-    /// Steps that closed while the writer was busy go to the step table in one transaction, not one each: the graph
-    /// writer holds a batch open for its linger after the first request, and one write per step made a long turn's
-    /// steps wait that long each (a 10,000-step turn took minutes to be readable).
-    #[tokio::test]
-    async fn queued_steps_are_written_in_one_transaction() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = crate::coord::Writer {
-            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
-            signals: Arc::new(crate::coord::Signals::default()),
-        };
-        let (bus, mut seen) = tokio::sync::broadcast::channel(64);
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let flow: Arc<StepFlow> = Arc::default();
-        let ctx = StepCtx {
-            flow: flow.clone(),
-            session: "a1".into(),
-            task: None,
-            agent: "mock".into(),
-            provider: None,
-            cwd: PathBuf::new(),
-            acp: None,
-            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
-            history: None,
-        };
-        let sink = StepSink {
-            writer: writer.clone(),
-            editors: Arc::new(crate::settings::agents::Editors::default()),
-            bus,
-            snap: None,
-            scopes: None,
-            tools: None,
-            asks: None,
-            stamps: None,
-            presence: None,
-            map: None,
-            traces: None,
-            predict: None,
-        };
-        for i in 0..50 {
-            tx.send(ClosedStep {
+    #[test]
+    fn a_steps_row_carries_the_sessions_machine() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let writer = crate::coord::Writer {
+                db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+                signals: Arc::new(crate::coord::Signals::default()),
+            };
+            let (bus, _seen) = tokio::sync::broadcast::channel(4);
+            let machine = Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string()));
+            let ctx = StepCtx {
+                flow: Arc::default(),
+                session: "a1".into(),
+                task: None,
+                agent: "mock".into(),
+                provider: None,
+                cwd: PathBuf::new(),
+                acp: None,
+                machine: machine.clone(),
+                history: None,
+            };
+            let sink = StepSink {
+                writer,
+                editors: Arc::new(crate::settings::agents::Editors::default()),
+                bus,
+                snap: None,
+                scopes: None,
+                tools: None,
+                asks: None,
+                stamps: None,
+                presence: None,
+                map: None,
+                traces: None,
+                predict: None,
+            };
+            let closed = ClosedStep {
                 open: OpenStep {
                     class: StepClass::Think,
-                    start: f64::from(i),
+                    start: 1.0,
                     tool: None,
                     tool_kind: None,
                     tool_id: None,
@@ -8184,7 +8109,7 @@ mod tests {
                     mcp: false,
                     parent_tool: None,
                 },
-                end: f64::from(i) + 0.5,
+                end: 2.0,
                 turn_id: None,
                 tokens_in: 0,
                 tokens_out: 0,
@@ -8198,177 +8123,575 @@ mod tests {
                 call_end: None,
                 diffs: Vec::new(),
                 cell: None,
-            })
-            .unwrap();
-        }
-        let before = writer.signals.writes();
-        tokio::spawn(write_steps(rx, sink, ctx, None));
-        let mut seqs = Vec::new();
-        for _ in 0..50 {
-            seqs.push(seen.recv().await.unwrap().step.seq);
-        }
-        assert_eq!(seqs, (1..=50).collect::<Vec<u64>>(), "every step, in order");
-        assert_eq!(
-            writer.signals.writes() - before,
-            1,
-            "the 50 queued steps are one transaction"
-        );
-        assert_eq!(*flow.written.borrow(), 50, "and all count as written");
+            };
+            let (row, _, _) = step_row(&closed, &sink, &ctx);
+            assert_eq!(row.machine.as_deref(), Some("local"));
+            assert_eq!(row.slots, None, "nothing queues a session for a machine");
+            *lock(&machine) = "desktop".into();
+            let (row, _, _) = step_row(&closed, &sink, &ctx);
+            assert_eq!(row.machine.as_deref(), Some("desktop"));
+        })
+    }
+
+    #[test]
+    fn closed_steps_reach_the_step_table_in_order_and_are_announced() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let writer = crate::coord::Writer {
+                db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+                signals: Arc::new(crate::coord::Signals::default()),
+            };
+            let editors = Arc::new(crate::settings::agents::Editors::default());
+            let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let ctx = StepCtx {
+                flow: Arc::default(),
+                session: "a1".into(),
+                task: Some("task:7".into()),
+                agent: "mock".into(),
+                provider: None,
+                cwd: PathBuf::new(),
+                acp: None,
+                machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
+                history: None,
+            };
+            let sink = StepSink {
+                writer: writer.clone(),
+                editors,
+                bus,
+                snap: None,
+                scopes: None,
+                tools: None,
+                asks: None,
+                stamps: None,
+                presence: None,
+                map: None,
+                traces: None,
+                predict: None,
+            };
+            crate::clock::spawn_untracked(module_path!(), write_steps(rx, sink, ctx, None));
+            let open = |class, tool: Option<&str>| OpenStep {
+                class,
+                start: 10.0,
+                tool: tool.map(str::to_string),
+                tool_kind: None,
+                tool_id: None,
+                message_id: None,
+                key: 0,
+                mcp: false,
+                parent_tool: None,
+            };
+            for (class, tool, turn) in [
+                (StepClass::Think, None, None),
+                (StepClass::Tool, Some("Read x"), Some("t1".to_string())),
+            ] {
+                tx.send(ClosedStep {
+                    open: open(class, tool),
+                    end: 11.0,
+                    turn_id: turn,
+                    tokens_in: 10,
+                    tokens_out: 5,
+                    cache_read: 0,
+                    cache_write: 0,
+                    cost: None,
+                    detail: None,
+                    command: None,
+                    context: None,
+                    before: None,
+                    call_end: None,
+                    diffs: Vec::new(),
+                    cell: None,
+                })
+                .unwrap();
+            }
+            let first = seen.recv().await.unwrap();
+            let second = seen.recv().await.unwrap();
+            assert_eq!((first.step.seq, first.step.class), (1, StepClass::Think));
+            assert_eq!((second.step.seq, second.step.class), (2, StepClass::Tool));
+            assert_eq!(second.step.turn_id.as_deref(), Some("t1"));
+            assert_eq!(second.step.tokens_out, Some(5));
+            let caller = Caller {
+                class: Class::Service,
+                sid: None,
+                job: None,
+                conn_id: 0,
+            };
+            let rows: Vec<(String, i64, String, Option<String>)> = writer
+                .write(&caller, "agents/step", |tx| {
+                    let mut q = tx
+                        .sql()
+                        .prepare("select session, seq, class, tool from step order by seq")?;
+                    let it =
+                        q.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+                    Ok(it.collect::<Result<Vec<_>, _>>()?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                rows,
+                [
+                    ("session:a1".to_string(), 1, "think".to_string(), None),
+                    (
+                        "session:a1".to_string(),
+                        2,
+                        "tool".to_string(),
+                        Some("Read x".to_string())
+                    ),
+                ]
+            );
+        })
     }
 
     // test-pattern: D
-    #[tokio::test]
-    async fn the_step_event_carries_the_unit() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = crate::coord::Writer {
-            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
-            signals: Arc::new(crate::coord::Signals::default()),
-        };
-        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let ctx = StepCtx {
-            flow: Arc::default(),
-            session: "a1".into(),
-            task: Some("task:7".into()),
-            agent: "mock".into(),
-            provider: None,
-            cwd: PathBuf::new(),
-            acp: None,
-            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
-            history: None,
-        };
-        let sink = StepSink {
-            writer: writer.clone(),
-            editors: Arc::new(crate::settings::agents::Editors::default()),
-            bus,
-            snap: None,
-            scopes: None,
-            tools: None,
-            asks: None,
-            stamps: None,
-            presence: None,
-            map: None,
-            traces: None,
-            predict: None,
-        };
-        tokio::spawn(write_steps(rx, sink, ctx, None));
-        for cost in [Some(0.15), None] {
+    /// Steps that closed while the writer was busy go to the step table in one transaction, not one each: the graph
+    /// writer holds a batch open for its linger after the first request, and one write per step made a long turn's
+    /// steps wait that long each (a 10,000-step turn took minutes to be readable).
+    #[test]
+    fn queued_steps_are_written_in_one_transaction() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let writer = crate::coord::Writer {
+                db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+                signals: Arc::new(crate::coord::Signals::default()),
+            };
+            let (bus, mut seen) = tokio::sync::broadcast::channel(64);
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let flow: Arc<StepFlow> = Arc::default();
+            let ctx = StepCtx {
+                flow: flow.clone(),
+                session: "a1".into(),
+                task: None,
+                agent: "mock".into(),
+                provider: None,
+                cwd: PathBuf::new(),
+                acp: None,
+                machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
+                history: None,
+            };
+            let sink = StepSink {
+                writer: writer.clone(),
+                editors: Arc::new(crate::settings::agents::Editors::default()),
+                bus,
+                snap: None,
+                scopes: None,
+                tools: None,
+                asks: None,
+                stamps: None,
+                presence: None,
+                map: None,
+                traces: None,
+                predict: None,
+            };
+            for i in 0..50 {
+                tx.send(ClosedStep {
+                    open: OpenStep {
+                        class: StepClass::Think,
+                        start: f64::from(i),
+                        tool: None,
+                        tool_kind: None,
+                        tool_id: None,
+                        message_id: None,
+                        key: 0,
+                        mcp: false,
+                        parent_tool: None,
+                    },
+                    end: f64::from(i) + 0.5,
+                    turn_id: None,
+                    tokens_in: 0,
+                    tokens_out: 0,
+                    cache_read: 0,
+                    cache_write: 0,
+                    cost: None,
+                    detail: None,
+                    command: None,
+                    context: None,
+                    before: None,
+                    call_end: None,
+                    diffs: Vec::new(),
+                    cell: None,
+                })
+                .unwrap();
+            }
+            let before = writer.signals.writes();
+            crate::clock::spawn_untracked(module_path!(), write_steps(rx, sink, ctx, None));
+            let mut seqs = Vec::new();
+            for _ in 0..50 {
+                seqs.push(seen.recv().await.unwrap().step.seq);
+            }
+            assert_eq!(seqs, (1..=50).collect::<Vec<u64>>(), "every step, in order");
+            assert_eq!(
+                writer.signals.writes() - before,
+                1,
+                "the 50 queued steps are one transaction"
+            );
+            assert_eq!(*flow.written.borrow(), 50, "and all count as written");
+        })
+    }
+
+    // test-pattern: D
+    #[test]
+    fn the_step_event_carries_the_unit() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let writer = crate::coord::Writer {
+                db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+                signals: Arc::new(crate::coord::Signals::default()),
+            };
+            let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let ctx = StepCtx {
+                flow: Arc::default(),
+                session: "a1".into(),
+                task: Some("task:7".into()),
+                agent: "mock".into(),
+                provider: None,
+                cwd: PathBuf::new(),
+                acp: None,
+                machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
+                history: None,
+            };
+            let sink = StepSink {
+                writer: writer.clone(),
+                editors: Arc::new(crate::settings::agents::Editors::default()),
+                bus,
+                snap: None,
+                scopes: None,
+                tools: None,
+                asks: None,
+                stamps: None,
+                presence: None,
+                map: None,
+                traces: None,
+                predict: None,
+            };
+            crate::clock::spawn_untracked(module_path!(), write_steps(rx, sink, ctx, None));
+            for cost in [Some(0.15), None] {
+                tx.send(ClosedStep {
+                    open: OpenStep {
+                        class: StepClass::Think,
+                        start: 10.0,
+                        tool: None,
+                        tool_kind: None,
+                        tool_id: None,
+                        message_id: None,
+                        key: 0,
+                        mcp: false,
+                        parent_tool: None,
+                    },
+                    end: 11.0,
+                    turn_id: None,
+                    tokens_in: 1,
+                    tokens_out: 1,
+                    cache_read: 0,
+                    cache_write: 0,
+                    cost,
+                    detail: None,
+                    command: None,
+                    context: None,
+                    before: None,
+                    call_end: None,
+                    diffs: Vec::new(),
+                    cell: None,
+                })
+                .unwrap();
+            }
+            let priced = seen.recv().await.unwrap().step;
+            let unpriced = seen.recv().await.unwrap().step;
+            assert_eq!(priced.cost_unit, Some(Unit::UsdEst));
+            assert_eq!(unpriced.cost_unit, None);
+        })
+    }
+
+    // test-pattern: D
+    #[test]
+    fn an_edit_step_anchors_the_history_record_of_its_write() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let work = dir.path().join("work");
+            std::fs::create_dir_all(&work).unwrap();
+            std::fs::create_dir_all(dir.path().join("state")).unwrap();
+            let git = |args: &[&str]| {
+                assert!(
+                    crate::proc::Command::new("git")
+                        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                        .args(["-c", "commit.gpgsign=false"])
+                        .args(args)
+                        .current_dir(&work)
+                        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                        .env("GIT_CONFIG_NOSYSTEM", "1")
+                        .status()
+                        .unwrap()
+                        .success()
+                )
+            };
+            git(&["init", "-q", "-b", "main"]);
+            crate::fsio::write(work.join("a.txt"), "one\n").unwrap();
+            git(&["add", "."]);
+            git(&["commit", "-q", "-m", "base"]);
+            let hubs = Arc::new(crate::history::wire::Hubs::default());
+            let state = dir.path().join("state");
+            let (hub, tree) = hubs.of_tree(&state, &work).unwrap();
+            let cause = verdandi::Cause {
+                session: Some("a1".into()),
+                ..Default::default()
+            };
+            let made = hub
+                .on_agent_write(&tree, "a.txt", b"one\ntwo\n", "a1", cause, 10.5)
+                .unwrap();
+            let writer = crate::coord::Writer {
+                db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+                signals: Arc::new(crate::coord::Signals::default()),
+            };
+            let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let ctx = StepCtx {
+                flow: Arc::default(),
+                session: "a1".into(),
+                task: None,
+                agent: "mock".into(),
+                provider: None,
+                cwd: work.clone(),
+                acp: None,
+                machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
+                history: Some((hubs.clone(), state)),
+            };
+            let sink = StepSink {
+                writer,
+                editors: Arc::new(crate::settings::agents::Editors::default()),
+                bus,
+                snap: None,
+                scopes: None,
+                tools: None,
+                asks: None,
+                stamps: None,
+                presence: None,
+                map: None,
+                traces: None,
+                predict: None,
+            };
+            crate::clock::spawn_untracked(module_path!(), write_steps(rx, sink, ctx, None));
+            for (kind, end) in [("edit", 11.0), ("read", 12.0)] {
+                tx.send(ClosedStep {
+                    open: OpenStep {
+                        class: StepClass::Tool,
+                        start: end - 0.5,
+                        tool: Some(format!("{kind} a.txt")),
+                        tool_kind: Some(kind.into()),
+                        tool_id: None,
+                        message_id: None,
+                        key: 0,
+                        mcp: false,
+                        parent_tool: None,
+                    },
+                    end,
+                    turn_id: None,
+                    tokens_in: 1,
+                    tokens_out: 1,
+                    cache_read: 0,
+                    cache_write: 0,
+                    cost: None,
+                    detail: None,
+                    command: None,
+                    context: None,
+                    before: None,
+                    call_end: None,
+                    diffs: Vec::new(),
+                    cell: None,
+                })
+                .unwrap();
+            }
+            let edit = seen.recv().await.unwrap().step;
+            let read = seen.recv().await.unwrap().step;
+            assert_eq!(edit.history_op, Some(made[0].op as u64));
+            assert!(edit.revertible);
+            assert_eq!(read.history_op, None, "a read step anchors no record");
+        })
+    }
+
+    // test-pattern: D (the step boundary drives the rescan, never a real watcher's order)
+    #[test]
+    fn an_edit_step_rescans_the_files_it_named() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let work = dir.path().join("work");
+            std::fs::create_dir_all(&work).unwrap();
+            std::fs::create_dir_all(dir.path().join("state")).unwrap();
+            let git = |args: &[&str]| {
+                assert!(
+                    crate::proc::Command::new("git")
+                        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                        .args(["-c", "commit.gpgsign=false"])
+                        .args(args)
+                        .current_dir(&work)
+                        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                        .env("GIT_CONFIG_NOSYSTEM", "1")
+                        .status()
+                        .unwrap()
+                        .success()
+                )
+            };
+            git(&["init", "-q", "-b", "main"]);
+            crate::fsio::write(work.join("a.txt"), "one\n").unwrap();
+            git(&["add", "."]);
+            git(&["commit", "-q", "-m", "base"]);
+            let hubs = Arc::new(crate::history::wire::Hubs::default());
+            let state = dir.path().join("state");
+            let (hub, tree) = hubs.of_tree(&state, &work).unwrap();
+            // the hub's own write of a.txt, then the file on disk
+            let cause = verdandi::Cause {
+                session: Some("a1".into()),
+                ..Default::default()
+            };
+            hub.on_agent_write(&tree, "a.txt", b"one\ntwo\n", "a1", cause, 10.5)
+                .unwrap();
+            crate::fsio::write(work.join("a.txt"), "one\ntwo\n").unwrap();
+            // the agent's own edit tool wrote note.txt in its process: the hub never saw it
+            crate::fsio::write(work.join("note.txt"), "new\n").unwrap();
+            let writer = crate::coord::Writer {
+                db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+                signals: Arc::new(crate::coord::Signals::default()),
+            };
+            let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let ctx = StepCtx {
+                flow: Arc::default(),
+                session: "a1".into(),
+                task: None,
+                agent: "mock".into(),
+                provider: None,
+                cwd: work.clone(),
+                acp: None,
+                machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
+                history: Some((hubs.clone(), state)),
+            };
+            let sink = StepSink {
+                writer,
+                editors: Arc::new(crate::settings::agents::Editors::default()),
+                bus,
+                snap: None,
+                scopes: None,
+                tools: None,
+                asks: None,
+                stamps: None,
+                presence: None,
+                map: None,
+                traces: None,
+                predict: None,
+            };
+            let (claimed, rx_claimed) = tokio::sync::mpsc::unbounded_channel();
+            crate::clock::spawn_untracked(
+                module_path!(),
+                claim_steps(rx, claimed, ctx.clone(), None),
+            );
+            crate::clock::spawn_untracked(module_path!(), write_steps(rx_claimed, sink, ctx, None));
+            // the step names note.txt as the mock does (relative) and a.txt as Claude does (absolute, in a diff)
+            let abs = work.join("a.txt").to_string_lossy().into_owned();
             tx.send(ClosedStep {
                 open: OpenStep {
-                    class: StepClass::Think,
-                    start: 10.0,
-                    tool: None,
-                    tool_kind: None,
+                    class: StepClass::Tool,
+                    start: 11.0,
+                    tool: Some("Edit note.txt".into()),
+                    tool_kind: Some("edit".into()),
                     tool_id: None,
                     message_id: None,
                     key: 0,
                     mcp: false,
                     parent_tool: None,
                 },
-                end: 11.0,
+                end: 11.5,
                 turn_id: None,
                 tokens_in: 1,
                 tokens_out: 1,
                 cache_read: 0,
                 cache_write: 0,
-                cost,
-                detail: None,
+                cost: None,
+                detail: Some(norn::write::work::StepDetail {
+                    path: Some("note.txt".into()),
+                    ..Default::default()
+                }),
                 command: None,
                 context: None,
                 before: None,
                 call_end: None,
-                diffs: Vec::new(),
+                diffs: vec![(abs, Some("one\n".into()), "one\ntwo\n".into())],
                 cell: None,
             })
             .unwrap();
-        }
-        let priced = seen.recv().await.unwrap().step;
-        let unpriced = seen.recv().await.unwrap().step;
-        assert_eq!(priced.cost_unit, Some(Unit::UsdEst));
-        assert_eq!(unpriced.cost_unit, None);
+            seen.recv().await.unwrap();
+            let (_, files) = hub.edits_against_base(&tree).unwrap().expect("the branch");
+            let got: Vec<(&str, bool)> = files
+                .iter()
+                .map(|f| (f.path.as_str(), f.untracked))
+                .collect();
+            assert!(got.contains(&("note.txt", true)), "{got:?}");
+            assert!(got.contains(&("a.txt", false)), "{got:?}");
+            assert_eq!(
+                hub.with(|h| h.count("op").unwrap()),
+                2,
+                "the hub's write once, the outside file once"
+            );
+        })
     }
 
-    // test-pattern: D
-    #[tokio::test]
-    async fn an_edit_step_anchors_the_history_record_of_its_write() {
-        let dir = tempfile::tempdir().unwrap();
-        let work = dir.path().join("work");
-        std::fs::create_dir_all(&work).unwrap();
-        std::fs::create_dir_all(dir.path().join("state")).unwrap();
-        let git = |args: &[&str]| {
-            assert!(
-                std::process::Command::new("git")
-                    .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                    .args(["-c", "commit.gpgsign=false"])
-                    .args(args)
-                    .current_dir(&work)
-                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                    .env("GIT_CONFIG_NOSYSTEM", "1")
-                    .status()
-                    .unwrap()
-                    .success()
-            )
-        };
-        git(&["init", "-q", "-b", "main"]);
-        std::fs::write(work.join("a.txt"), "one\n").unwrap();
-        git(&["add", "."]);
-        git(&["commit", "-q", "-m", "base"]);
-        let hubs = Arc::new(crate::history::wire::Hubs::default());
-        let state = dir.path().join("state");
-        let (hub, tree) = hubs.of_tree(&state, &work).unwrap();
-        let cause = verdandi::Cause {
-            session: Some("a1".into()),
-            ..Default::default()
-        };
-        let made = hub
-            .on_agent_write(&tree, "a.txt", b"one\ntwo\n", "a1", cause, 10.5)
-            .unwrap();
-        let writer = crate::coord::Writer {
-            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
-            signals: Arc::new(crate::coord::Signals::default()),
-        };
-        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let ctx = StepCtx {
-            flow: Arc::default(),
-            session: "a1".into(),
-            task: None,
-            agent: "mock".into(),
-            provider: None,
-            cwd: work.clone(),
-            acp: None,
-            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
-            history: Some((hubs.clone(), state)),
-        };
-        let sink = StepSink {
-            writer,
-            editors: Arc::new(crate::settings::agents::Editors::default()),
-            bus,
-            snap: None,
-            scopes: None,
-            tools: None,
-            asks: None,
-            stamps: None,
-            presence: None,
-            map: None,
-            traces: None,
-            predict: None,
-        };
-        tokio::spawn(write_steps(rx, sink, ctx, None));
-        for (kind, end) in [("edit", 11.0), ("read", 12.0)] {
+    // test-pattern: D (the step's row cannot be written: its store's folder is a file)
+    #[test]
+    fn an_edit_step_whose_row_is_lost_closes_its_checkpoint() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            crate::fsio::write(dir.path().join("not-a-folder"), "").unwrap();
+            let writer = crate::coord::Writer {
+                db: norn::store::CoordDb::spawn(dir.path().join("not-a-folder/work.db")),
+                signals: Arc::new(crate::coord::Signals::default()),
+            };
+            let wt = dir.path().join("wt");
+            std::fs::create_dir_all(&wt).unwrap();
+            crate::fsio::write(wt.join("a.txt"), "edited").unwrap();
+            let snap = crate::timeline::Snap::for_test(
+                dir.path().join("cp"),
+                Arc::new(crate::settings::Settings::new()),
+            );
+            let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+            let sink = StepSink {
+                writer,
+                editors: Arc::new(crate::settings::agents::Editors::default()),
+                bus,
+                snap: Some(snap.clone()),
+                scopes: None,
+                tools: None,
+                asks: None,
+                stamps: None,
+                presence: None,
+                map: None,
+                traces: None,
+                predict: None,
+            };
+            let ctx = StepCtx {
+                flow: Arc::default(),
+                session: "a1".into(),
+                task: None,
+                agent: "mock".into(),
+                provider: None,
+                cwd: wt.clone(),
+                acp: None,
+                machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
+                history: None,
+            };
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            crate::clock::spawn_untracked(module_path!(), write_steps(rx, sink, ctx, None));
+            let cell = crate::timeline::EditCell::default();
             tx.send(ClosedStep {
                 open: OpenStep {
                     class: StepClass::Tool,
-                    start: end - 0.5,
-                    tool: Some(format!("{kind} a.txt")),
-                    tool_kind: Some(kind.into()),
+                    start: 1.0,
+                    tool: Some("Edit a.txt".into()),
+                    tool_kind: Some("edit".into()),
                     tool_id: None,
                     message_id: None,
                     key: 0,
                     mcp: false,
                     parent_tool: None,
                 },
-                end,
+                end: 2.0,
                 turn_id: None,
                 tokens_in: 1,
                 tokens_out: 1,
@@ -8378,231 +8701,31 @@ mod tests {
                 detail: None,
                 command: None,
                 context: None,
-                before: None,
                 call_end: None,
                 diffs: Vec::new(),
-                cell: None,
+                cell: Some(cell.clone()),
+                before: None,
             })
             .unwrap();
-        }
-        let edit = seen.recv().await.unwrap().step;
-        let read = seen.recv().await.unwrap().step;
-        assert_eq!(edit.history_op, Some(made[0].op as u64));
-        assert!(edit.revertible);
-        assert_eq!(read.history_op, None, "a read step anchors no record");
-    }
-
-    // test-pattern: D (the step boundary drives the rescan, never a real watcher's order)
-    #[tokio::test]
-    async fn an_edit_step_rescans_the_files_it_named() {
-        let dir = tempfile::tempdir().unwrap();
-        let work = dir.path().join("work");
-        std::fs::create_dir_all(&work).unwrap();
-        std::fs::create_dir_all(dir.path().join("state")).unwrap();
-        let git = |args: &[&str]| {
-            assert!(
-                std::process::Command::new("git")
-                    .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                    .args(["-c", "commit.gpgsign=false"])
-                    .args(args)
-                    .current_dir(&work)
-                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                    .env("GIT_CONFIG_NOSYSTEM", "1")
-                    .status()
-                    .unwrap()
-                    .success()
-            )
-        };
-        git(&["init", "-q", "-b", "main"]);
-        std::fs::write(work.join("a.txt"), "one\n").unwrap();
-        git(&["add", "."]);
-        git(&["commit", "-q", "-m", "base"]);
-        let hubs = Arc::new(crate::history::wire::Hubs::default());
-        let state = dir.path().join("state");
-        let (hub, tree) = hubs.of_tree(&state, &work).unwrap();
-        // the hub's own write of a.txt, then the file on disk
-        let cause = verdandi::Cause {
-            session: Some("a1".into()),
-            ..Default::default()
-        };
-        hub.on_agent_write(&tree, "a.txt", b"one\ntwo\n", "a1", cause, 10.5)
-            .unwrap();
-        std::fs::write(work.join("a.txt"), "one\ntwo\n").unwrap();
-        // the agent's own edit tool wrote note.txt in its process: the hub never saw it
-        std::fs::write(work.join("note.txt"), "new\n").unwrap();
-        let writer = crate::coord::Writer {
-            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
-            signals: Arc::new(crate::coord::Signals::default()),
-        };
-        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let ctx = StepCtx {
-            flow: Arc::default(),
-            session: "a1".into(),
-            task: None,
-            agent: "mock".into(),
-            provider: None,
-            cwd: work.clone(),
-            acp: None,
-            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
-            history: Some((hubs.clone(), state)),
-        };
-        let sink = StepSink {
-            writer,
-            editors: Arc::new(crate::settings::agents::Editors::default()),
-            bus,
-            snap: None,
-            scopes: None,
-            tools: None,
-            asks: None,
-            stamps: None,
-            presence: None,
-            map: None,
-            traces: None,
-            predict: None,
-        };
-        let (claimed, rx_claimed) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(claim_steps(rx, claimed, ctx.clone(), None));
-        tokio::spawn(write_steps(rx_claimed, sink, ctx, None));
-        // the step names note.txt as the mock does (relative) and a.txt as Claude does (absolute, in a diff)
-        let abs = work.join("a.txt").to_string_lossy().into_owned();
-        tx.send(ClosedStep {
-            open: OpenStep {
-                class: StepClass::Tool,
-                start: 11.0,
-                tool: Some("Edit note.txt".into()),
-                tool_kind: Some("edit".into()),
-                tool_id: None,
-                message_id: None,
-                key: 0,
-                mcp: false,
-                parent_tool: None,
-            },
-            end: 11.5,
-            turn_id: None,
-            tokens_in: 1,
-            tokens_out: 1,
-            cache_read: 0,
-            cache_write: 0,
-            cost: None,
-            detail: Some(norn::write::work::StepDetail {
-                path: Some("note.txt".into()),
-                ..Default::default()
-            }),
-            command: None,
-            context: None,
-            before: None,
-            call_end: None,
-            diffs: vec![(abs, Some("one\n".into()), "one\ntwo\n".into())],
-            cell: None,
+            // the step is announced though its row is lost
+            seen.recv().await.unwrap();
+            assert!(cell.is_done(), "the lost step's checkpoint is closed");
+            // so the agent's next write takes no tree for it
+            snap.before_write("a1", &wt, vec![cell]).await;
+            let repo = crate::timeline::snapshot::repo_of(&dir.path().join("cp"), &wt);
+            let refs = if repo.exists() {
+                let out = crate::proc::Command::new("git")
+                    .arg("--git-dir")
+                    .arg(&repo)
+                    .args(["for-each-ref", "--format=%(refname)"])
+                    .output()
+                    .unwrap();
+                String::from_utf8_lossy(&out.stdout).trim().to_owned()
+            } else {
+                String::new()
+            };
+            assert_eq!(refs, "", "no tree is held for a step nobody keeps");
         })
-        .unwrap();
-        seen.recv().await.unwrap();
-        let (_, files) = hub.edits_against_base(&tree).unwrap().expect("the branch");
-        let got: Vec<(&str, bool)> = files
-            .iter()
-            .map(|f| (f.path.as_str(), f.untracked))
-            .collect();
-        assert!(got.contains(&("note.txt", true)), "{got:?}");
-        assert!(got.contains(&("a.txt", false)), "{got:?}");
-        assert_eq!(
-            hub.with(|h| h.count("op").unwrap()),
-            2,
-            "the hub's write once, the outside file once"
-        );
-    }
-
-    // test-pattern: D (the step's row cannot be written: its store's folder is a file)
-    #[tokio::test]
-    async fn an_edit_step_whose_row_is_lost_closes_its_checkpoint() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("not-a-folder"), "").unwrap();
-        let writer = crate::coord::Writer {
-            db: norn::store::CoordDb::spawn(dir.path().join("not-a-folder/work.db")),
-            signals: Arc::new(crate::coord::Signals::default()),
-        };
-        let wt = dir.path().join("wt");
-        std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(wt.join("a.txt"), "edited").unwrap();
-        let snap = crate::timeline::Snap::for_test(
-            dir.path().join("cp"),
-            Arc::new(crate::settings::Settings::new()),
-        );
-        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
-        let sink = StepSink {
-            writer,
-            editors: Arc::new(crate::settings::agents::Editors::default()),
-            bus,
-            snap: Some(snap.clone()),
-            scopes: None,
-            tools: None,
-            asks: None,
-            stamps: None,
-            presence: None,
-            map: None,
-            traces: None,
-            predict: None,
-        };
-        let ctx = StepCtx {
-            flow: Arc::default(),
-            session: "a1".into(),
-            task: None,
-            agent: "mock".into(),
-            provider: None,
-            cwd: wt.clone(),
-            acp: None,
-            machine: Arc::new(Mutex::new(crate::work::machines::LOCAL.to_string())),
-            history: None,
-        };
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(write_steps(rx, sink, ctx, None));
-        let cell = crate::timeline::EditCell::default();
-        tx.send(ClosedStep {
-            open: OpenStep {
-                class: StepClass::Tool,
-                start: 1.0,
-                tool: Some("Edit a.txt".into()),
-                tool_kind: Some("edit".into()),
-                tool_id: None,
-                message_id: None,
-                key: 0,
-                mcp: false,
-                parent_tool: None,
-            },
-            end: 2.0,
-            turn_id: None,
-            tokens_in: 1,
-            tokens_out: 1,
-            cache_read: 0,
-            cache_write: 0,
-            cost: None,
-            detail: None,
-            command: None,
-            context: None,
-            call_end: None,
-            diffs: Vec::new(),
-            cell: Some(cell.clone()),
-            before: None,
-        })
-        .unwrap();
-        // the step is announced though its row is lost
-        seen.recv().await.unwrap();
-        assert!(cell.is_done(), "the lost step's checkpoint is closed");
-        // so the agent's next write takes no tree for it
-        snap.before_write("a1", &wt, vec![cell]).await;
-        let repo = crate::timeline::snapshot::repo_of(&dir.path().join("cp"), &wt);
-        let refs = if repo.exists() {
-            let out = std::process::Command::new("git")
-                .arg("--git-dir")
-                .arg(&repo)
-                .args(["for-each-ref", "--format=%(refname)"])
-                .output()
-                .unwrap();
-            String::from_utf8_lossy(&out.stdout).trim().to_owned()
-        } else {
-            String::new()
-        };
-        assert_eq!(refs, "", "no tree is held for a step nobody keeps");
     }
 
     /// Three steps of a turn through the writer: a think, an edit tool call, the turn's last think (with the turn id).
@@ -8615,8 +8738,8 @@ mod tests {
         };
         let wt = dir.join("wt");
         std::fs::create_dir_all(&wt).unwrap();
-        std::fs::write(wt.join("a.txt"), "edited").unwrap();
-        std::fs::write(wt.join(".env"), "KEY=1").unwrap();
+        crate::fsio::write(wt.join("a.txt"), "edited").unwrap();
+        crate::fsio::write(wt.join(".env"), "KEY=1").unwrap();
         let settings = Arc::new(crate::settings::Settings::new());
         let sink = StepSink {
             writer: writer.clone(),
@@ -8644,7 +8767,7 @@ mod tests {
             history: None,
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let done = tokio::spawn(write_steps(rx, sink, ctx, None));
+        let done = crate::clock::spawn_untracked(module_path!(), write_steps(rx, sink, ctx, None));
         let open = |class, kind: Option<&str>, start| OpenStep {
             class,
             start,
@@ -8690,58 +8813,66 @@ mod tests {
         (writer, steps, wt)
     }
 
-    #[tokio::test]
-    async fn timeline_every_step_has_its_anchors() {
-        let dir = tempfile::tempdir().unwrap();
-        let (_, steps, _) = written_turn(dir.path()).await;
-        assert_eq!(steps.len(), 3);
-        for s in &steps {
-            assert_eq!(s.message_id.as_deref(), Some("m1"), "{s:?}");
-            assert_eq!(s.turn_id.as_deref(), Some("turn-1"), "{s:?}");
-            assert_eq!(s.log_version, Some(0), "{s:?}");
-        }
-        // a snapshot at the turn's first step and after the completed edit, not after the last think
-        assert!(steps[0].snapshot.is_some() && steps[2].snapshot.is_none());
-        let tree = steps[1].snapshot.clone().expect("the edit's snapshot");
-        let repo =
-            crate::timeline::snapshot::repo_of(&dir.path().join("cp"), &dir.path().join("wt"));
-        let out = std::process::Command::new("git")
-            .args(["--git-dir"])
-            .arg(&repo)
-            .args(["ls-tree", "-r", "--name-only", &tree])
-            .output()
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "a.txt");
+    #[test]
+    fn timeline_every_step_has_its_anchors() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (_, steps, _) = written_turn(dir.path()).await;
+            assert_eq!(steps.len(), 3);
+            for s in &steps {
+                assert_eq!(s.message_id.as_deref(), Some("m1"), "{s:?}");
+                assert_eq!(s.turn_id.as_deref(), Some("turn-1"), "{s:?}");
+                assert_eq!(s.log_version, Some(0), "{s:?}");
+            }
+            // a snapshot at the turn's first step and after the completed edit, not after the last think
+            assert!(steps[0].snapshot.is_some() && steps[2].snapshot.is_none());
+            let tree = steps[1].snapshot.clone().expect("the edit's snapshot");
+            let repo =
+                crate::timeline::snapshot::repo_of(&dir.path().join("cp"), &dir.path().join("wt"));
+            let out = crate::proc::Command::new("git")
+                .args(["--git-dir"])
+                .arg(&repo)
+                .args(["ls-tree", "-r", "--name-only", &tree])
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "a.txt");
+        })
     }
 
-    #[tokio::test]
-    async fn a_resumed_session_s_steps_go_on_from_its_last() {
-        let dir = tempfile::tempdir().unwrap();
-        let (writer, steps, _) = written_turn(dir.path()).await;
-        assert_eq!(last_step(&writer.db, "a1").await, steps.len() as i64);
-        assert_eq!(last_step(&writer.db, "none").await, 0);
+    #[test]
+    fn a_resumed_session_s_steps_go_on_from_its_last() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (writer, steps, _) = written_turn(dir.path()).await;
+            assert_eq!(last_step(&writer.db, "a1").await, steps.len() as i64);
+            assert_eq!(last_step(&writer.db, "none").await, 0);
+        })
     }
 
-    #[tokio::test]
-    async fn timeline_rollup_matches_steps() {
-        let dir = tempfile::tempdir().unwrap();
-        let (writer, steps, _) = written_turn(dir.path()).await;
-        let roll = writer
-            .db
-            .read(|c| norn::read::steps::rollup(c, norn::read::steps::Scope::Session, "session:a1"))
-            .await
-            .unwrap();
-        let sum = |class: &str| -> f64 {
-            steps
-                .iter()
-                .filter(|s| s.class.as_str() == class)
-                .map(|s| s.end.unwrap() - s.start)
-                .sum()
-        };
-        assert_eq!(roll.secs_by_class["think"], sum("think"));
-        assert_eq!(roll.secs_by_class["tool"], sum("tool"));
-        assert_eq!(roll.tokens.input, 3);
-        assert_eq!(roll.tokens.output, 6);
+    #[test]
+    fn timeline_rollup_matches_steps() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (writer, steps, _) = written_turn(dir.path()).await;
+            let roll = writer
+                .db
+                .read(|c| {
+                    norn::read::steps::rollup(c, norn::read::steps::Scope::Session, "session:a1")
+                })
+                .await
+                .unwrap();
+            let sum = |class: &str| -> f64 {
+                steps
+                    .iter()
+                    .filter(|s| s.class.as_str() == class)
+                    .map(|s| s.end.unwrap() - s.start)
+                    .sum()
+            };
+            assert_eq!(roll.secs_by_class["think"], sum("think"));
+            assert_eq!(roll.secs_by_class["tool"], sum("tool"));
+            assert_eq!(roll.tokens.input, 3);
+            assert_eq!(roll.tokens.output, 6);
+        })
     }
 
     /// A provider that sends no `messageId` still has its messages and the steps that follow them tied together.
@@ -8817,7 +8948,9 @@ mod tests {
             steer_mode: false,
             if_free: false,
         });
-        st.turn_step(TurnEvent::Stop { after_tool: true });
+        st.turn_step(TurnEvent::PauseAfterTool {
+            source: HoldSource::User,
+        });
         st.apply(&upd(
             json!({"sessionUpdate": "tool_call", "toolCallId": "t1",
             "title": "Run", "kind": "execute", "status": "in_progress"}),
@@ -8914,7 +9047,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path().join("work");
         std::fs::create_dir(&cwd).unwrap();
-        std::fs::write(dir.path().join("secret"), "x").unwrap();
+        crate::fsio::write(dir.path().join("secret"), "x").unwrap();
         std::os::unix::fs::symlink(dir.path().join("secret"), cwd.join("link")).unwrap();
         let f = Fence {
             cwd: cwd.clone(),

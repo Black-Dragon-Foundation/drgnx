@@ -2,15 +2,34 @@
 //! errnos by name, it never prints file contents, and every `syscall` name runs to a result.
 
 use gleipnir_escape::ProbeLine;
-use std::process::Command;
+use std::ffi::{OsStr, OsString};
+use std::path::Path;
+use std::time::Duration;
 
 const PROBE: &str = env!("CARGO_BIN_EXE_gleipnir-probe");
 
-/// The probe with 0–2 only, whatever this test inherited (a GitHub runner's pipes: `fds` would list them).
+/// How long a probe run may take before its process group is ended.
+const DEADLINE: Duration = Duration::from_secs(120);
+
+/// The probe run to its end with 0–2 only (draugr passes nothing else: a GitHub runner's pipes would be listed by
+/// `fds`), and as its environment `PATH`, `TMPDIR`, `RUST_BACKTRACE` and EXTRA.
+fn run_probe(args: &[&str], extra: &[(&str, &str)]) -> draugr::Output {
+    let set: Vec<(&str, &OsStr)> = extra.iter().map(|(k, v)| (*k, OsStr::new(v))).collect();
+    let spec = draugr::Spec {
+        program: PROBE.into(),
+        args: args.iter().map(OsString::from).collect(),
+        env: draugr::env::build(&["PATH", "TMPDIR", "RUST_BACKTRACE"], &[], &set),
+        cwd: None,
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
+    };
+    draugr::run(spec, DEADLINE).unwrap()
+}
+
+/// The probe's lines and its exit code.
 fn probe(args: &[&str]) -> (Vec<ProbeLine>, i32) {
-    let mut cmd = Command::new(PROBE);
-    gleipnir_escape::only_stdio(cmd.args(args));
-    let out = cmd.output().unwrap();
+    let out = run_probe(args, &[]);
     let lines = String::from_utf8(out.stdout)
         .unwrap()
         .lines()
@@ -22,10 +41,12 @@ fn probe(args: &[&str]) -> (Vec<ProbeLine>, i32) {
 #[test]
 fn one_line_per_probe_and_errnos_by_name() {
     let dir = tempfile::tempdir().unwrap();
-    let f = dir.path().join("f");
-    std::fs::write(&f, "SECRET-CONTENT").unwrap();
+    // a true name: eitri refuses a link in a path
+    let root = dir.path().canonicalize().unwrap();
+    let f = root.join("f");
+    eitri::replace_file(&f, b"SECRET-CONTENT").unwrap();
     let f = f.to_str().unwrap();
-    let missing = dir.path().join("missing");
+    let missing = root.join("missing");
     let missing = missing.to_str().unwrap();
     let (lines, code) = probe(&[
         "read", f, "--and", "read", missing, "--and", "stat", f, "--and", "fds",
@@ -42,7 +63,7 @@ fn one_line_per_probe_and_errnos_by_name() {
     );
     assert_eq!(lines[2].detail.as_deref(), Some("14"));
     assert_eq!(lines[3].detail.as_deref(), Some("0,1,2"));
-    let raw = Command::new(PROBE).args(["read", f]).output().unwrap();
+    let raw = run_probe(&["read", f], &[]);
     assert!(
         !String::from_utf8_lossy(&raw.stdout).contains("SECRET"),
         "read reports the size only"
@@ -95,11 +116,7 @@ fn files_sockets_and_environment() {
         Some("ENOENT"),
         "unix-self removes its socket"
     );
-    let out = Command::new(PROBE)
-        .args(["env-has", "GLP_SET", "GLP_UNSET"])
-        .env("GLP_SET", "v")
-        .output()
-        .unwrap();
+    let out = run_probe(&["env-has", "GLP_SET", "GLP_UNSET"], &[("GLP_SET", "v")]);
     let l: ProbeLine = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         (l.result.as_str(), l.detail.as_deref()),
@@ -170,7 +187,7 @@ fn http_connect_reads_the_status_code() {
     use std::io::{Read, Write};
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = l.local_addr().unwrap();
-    let t = std::thread::spawn(move || {
+    let t = saman::spawn_thread("connect-server", move || {
         for status in ["200 Connection established", "403 Forbidden"] {
             let (mut s, _) = l.accept().unwrap();
             // The whole request head before the answer: the probe sends it in several writes, and closing with
@@ -181,13 +198,13 @@ fn http_connect_reads_the_status_code() {
             }
             write!(s, "HTTP/1.1 {status}\r\n\r\n").unwrap();
         }
-    });
+    })
+    .unwrap();
     let run = |target: &str| {
-        let out = Command::new(PROBE)
-            .args(["http-connect", target])
-            .env("HTTPS_PROXY", format!("http://{addr}"))
-            .output()
-            .unwrap();
+        let out = run_probe(
+            &["http-connect", target],
+            &[("HTTPS_PROXY", &format!("http://{addr}"))],
+        );
         serde_json::from_slice::<ProbeLine>(&out.stdout).unwrap()
     };
     let (ok, no) = (run("a.test:443"), run("b.test:443"));
@@ -200,12 +217,8 @@ fn http_connect_reads_the_status_code() {
         ("blocked", Some("403"))
     );
     t.join().unwrap();
-    let out = Command::new(PROBE)
-        .args(["http-connect", "x:1"])
-        .env_remove("HTTPS_PROXY")
-        .env_remove("https_proxy")
-        .output()
-        .unwrap();
+    // the probe's environment is its own: no proxy variable in it
+    let out = run_probe(&["http-connect", "x:1"], &[]);
     assert_eq!(
         serde_json::from_slice::<ProbeLine>(&out.stdout)
             .unwrap()
@@ -219,7 +232,7 @@ fn http_get_sends_absolute_form_and_reads_the_answer() {
     use std::io::{Read, Write};
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = l.local_addr().unwrap();
-    let t = std::thread::spawn(move || {
+    let t = saman::spawn_thread("get-server", move || {
         let mut heads = Vec::new();
         for answer in [
             "200 OK\r\nX-Glp-Host: a.test\r\nOther: x",
@@ -234,13 +247,13 @@ fn http_get_sends_absolute_form_and_reads_the_answer() {
             write!(s, "HTTP/1.1 {answer}\r\n\r\n").unwrap();
         }
         heads
-    });
+    })
+    .unwrap();
     let run = |url: &str| {
-        let out = Command::new(PROBE)
-            .args(["http-get", url])
-            .env("HTTPS_PROXY", format!("http://{addr}"))
-            .output()
-            .unwrap();
+        let out = run_probe(
+            &["http-get", url],
+            &[("HTTPS_PROXY", &format!("http://{addr}"))],
+        );
         serde_json::from_slice::<ProbeLine>(&out.stdout).unwrap()
     };
     let (ok, no) = (run("http://a.test/x?q=1"), run("http://u:p@b.test:8080/"));
@@ -359,7 +372,7 @@ fn bind_and_socket_probes() {
         ("blocked", Some("EPROTONOSUPPORT"))
     );
     for args in [&["socket", "nope", "stream"][..], &["socket", "inet"]] {
-        let out = Command::new(PROBE).args(args).output().unwrap();
+        let out = run_probe(args, &[]);
         assert_eq!(out.status.code(), Some(2), "{args:?}");
     }
 }
@@ -376,7 +389,7 @@ fn bad_usage_exits_2() {
         &["--stand-in", "/d", "@x"],
         &["--stand-in", "/d", "@x", "port"],
     ] {
-        let out = Command::new(PROBE).args(args).output().unwrap();
+        let out = run_probe(args, &[]);
         assert_eq!(out.status.code(), Some(2), "{args:?}");
         assert!(
             out.stdout.is_empty(),
@@ -398,9 +411,11 @@ fn the_landlock_probe_reports_a_version_or_why_not() {
 #[test]
 fn mkdir_unlink_and_swap() {
     let dir = tempfile::tempdir().unwrap();
-    let p = |n: &str| dir.path().join(n).to_string_lossy().into_owned();
+    // a true name: eitri refuses a link in a path
+    let root = dir.path().canonicalize().unwrap();
+    let p = |n: &str| root.join(n).to_string_lossy().into_owned();
     let (d, a, b) = (p("d"), p("a"), p("b"));
-    std::fs::write(&a, "A").unwrap();
+    eitri::replace_file(Path::new(&a), b"A").unwrap();
     std::fs::create_dir(&b).unwrap();
     let (l, _) = probe(&[
         "mkdir", &d, "--and", "mkdir", &d, "--and", "unlink", &a, "--and", "unlink", &a,
@@ -419,9 +434,9 @@ fn mkdir_unlink_and_swap() {
         ]
     );
     // swap exchanges a file and a directory in place; both names keep existing (Linux renameat2, macOS renamex_np).
-    std::fs::write(&a, "A").unwrap();
+    eitri::replace_file(Path::new(&a), b"A").unwrap();
     let (l, _) = probe(&["swap", &a, &b]);
     assert_eq!(l[0].result, "reached", "{l:?}");
     assert!(std::fs::metadata(&a).unwrap().is_dir());
-    assert_eq!(std::fs::read_to_string(&b).unwrap(), "A");
+    assert_eq!(eitri::read_string(Path::new(&b), 16).unwrap(), "A");
 }
