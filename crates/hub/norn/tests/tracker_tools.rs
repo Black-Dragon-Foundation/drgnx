@@ -1288,6 +1288,83 @@ mod tools {
         })
     }
 
+    /// A run in PROJECT, written as the hub does (the guard lets `Class::System` only).
+    async fn hub_run(w: &World, id: &str, project: i64) {
+        let id = id.to_owned();
+        w.db.write(TxMeta::new("hub", Class::System, "test"), move |tx| {
+            entity::create(
+                tx,
+                EntityNew {
+                    id,
+                    kind: "run".into(),
+                    project: Some(project),
+                    title: Some("merge gate run".into()),
+                    status: Some("done".into()),
+                    body: None,
+                    priority: None,
+                    assignee: None,
+                    data: json!({}),
+                    origin: Origin::Recorded,
+                    source: None,
+                },
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn find_kind_run_returns_runs() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let h = w.place("pa");
+            let a = w.agent("a1", &h);
+            create(&w, &a, "a task").await;
+            hub_run(&w, "run:r1", w.project_n(&h)).await;
+            let o = w
+                .call(&a, "task_read", json!({"op": "find", "kind": "run"}))
+                .await;
+            assert!(!o.err, "{}", o.text);
+            assert_eq!(kinds_of(&o), ["run"]);
+            assert_eq!(o.structured["tasks"][0]["id"], "run:r1");
+            // the words search finds it too, and the default find still shows tasks only
+            let words = w
+                .call(
+                    &a,
+                    "task_read",
+                    json!({"op": "find", "kind": "run", "query": "merge gate"}),
+                )
+                .await;
+            assert_eq!(kinds_of(&words), ["run"]);
+            let tasks = w.call(&a, "task_read", json!({"op": "find"})).await;
+            assert_eq!(kinds_of(&tasks), ["task"]);
+        })
+    }
+
+    #[test]
+    fn find_kind_run_never_shows_another_projects_run() {
+        saman::block_on_current(async {
+            let w = World::new().await;
+            let (ha, hb) = (w.place("pa"), w.place("pb"));
+            let a = w.agent("a1", &ha);
+            let b = w.agent("b1", &hb);
+            create(&w, &a, "a task").await;
+            create(&w, &b, "b task").await;
+            hub_run(&w, "run:in-b", w.project_n(&hb)).await;
+            let o = w
+                .call(&a, "task_read", json!({"op": "find", "kind": "run"}))
+                .await;
+            assert!(!o.err, "{}", o.text);
+            assert!(kinds_of(&o).is_empty(), "{}", o.text);
+            // its own project's agent sees it
+            let own = w
+                .call(&b, "task_read", json!({"op": "find", "kind": "run"}))
+                .await;
+            assert_eq!(own.structured["tasks"][0]["id"], "run:in-b");
+        })
+    }
+
     #[test]
     fn find_kind_spec_and_decision() {
         saman::block_on_current(async {

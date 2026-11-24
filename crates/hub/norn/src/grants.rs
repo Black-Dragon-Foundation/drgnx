@@ -33,6 +33,8 @@ use crate::scope::{self, Caller};
 
 /// The refusal of a grant write by any class but the user's.
 pub const GRANTS_ARE_THE_USERS: &str = "grants are the user's";
+/// The refusal of a run (kind `run`) written by any class but the hub's own (`Class::System`).
+pub const RUNS_ARE_THE_HUBS: &str = "runs are the hub's";
 /// The refusal of a `setting:*` key written by any class but the user's.
 pub const SETTINGS_ARE_THE_USERS: &str = "settings are the user's";
 /// The `kv` keys of store settings (`setting:only-user-closes`, call 17).
@@ -507,6 +509,7 @@ pub struct Filter {
 /// ([`crate::options::rule`]).
 pub fn register(guard: &mut Guard) {
     guard::register(guard, "grant", Class::User, GRANTS_ARE_THE_USERS);
+    guard::register(guard, "run", Class::System, RUNS_ARE_THE_HUBS);
     guard::register_rule(guard, "option", crate::options::rule);
     guard::register_key_prefix(guard, SETTING_PREFIX, Class::User, SETTINGS_ARE_THE_USERS);
     crate::privacy::register(guard);
@@ -1481,6 +1484,51 @@ mod tests {
             guard::check_key(&g, &user(), "setting:only-user-closes"),
             Ok(())
         );
+    }
+
+    /// A run is recorded by the hub itself: an agent tx, an `ext` tx and a user tx are each refused (the user's
+    /// edit of a run would be a forged record too); `Class::System` writes one.
+    #[test]
+    fn a_run_written_by_an_agent_or_the_user_is_refused() {
+        let (_d, _p, mut conn) = db();
+        let run = |id: &str| EntityNew {
+            id: id.into(),
+            kind: "run".into(),
+            project: None,
+            title: Some("a run".into()),
+            status: Some("done".into()),
+            body: None,
+            priority: None,
+            assignee: None,
+            data: json!({}),
+            origin: Origin::Recorded,
+            source: None,
+        };
+        for (i, meta) in [
+            TxMeta::new("agent:s1", Class::Agent, "mcp:task_write/create"),
+            TxMeta::new("ext:claude:1-ab", Class::Ext, "mcp:note_add"),
+            user(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let class = meta.class;
+            let r = write(&mut conn, meta, |tx| {
+                entity::create(tx, run(&format!("run:forged{i}")))
+            });
+            assert_eq!(
+                r.map(drop),
+                Err(WriteError::Refused(RUNS_ARE_THE_HUBS.into())),
+                "{class:?}"
+            );
+        }
+        let made = write(
+            &mut conn,
+            TxMeta::new("hub", Class::System, "proto:coord/x"),
+            |tx| entity::create(tx, run("run:made")),
+        )
+        .unwrap();
+        assert_eq!(made.id, "run:made");
     }
 
     /// Every way a write of kind `grant` (or a `setting:` key) reaches the store, from every class: only `User`
