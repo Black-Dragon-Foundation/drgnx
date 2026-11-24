@@ -163,6 +163,10 @@ pub struct Placement {
     pub needs: Vec<String>,
     /// The lane (`exec/start`'s `lane` and `whole_machine`): work, or a timing run on the island or the whole machine.
     pub lane: forseti::Lane,
+    /// Why its tree is in no registered project (the hub's project registry, [`super::projects`]), with what to do;
+    /// none: it is in one, `JobSpec.project`. A runner never takes such a job: it runs here, or waits as
+    /// [`WaitReason::NotRegistered`].
+    pub unregistered: Option<String>,
 }
 
 /// What a command takes in place of the selector of the rows an attempt runs (`forseti::split::selector`, an Emacs
@@ -201,6 +205,7 @@ impl Default for Placement {
             features: vec![],
             needs: vec![],
             lane: forseti::Lane::Work,
+            unregistered: None,
         }
     }
 }
@@ -248,6 +253,7 @@ pub fn blank_spec(name: &str) -> JobSpec {
         fresh: false,
         stop_on_red: false,
         project: forseti::ProjectId::default(),
+        role: Default::default(),
         trust: JobTrust::Private,
         keys: vec![],
         local_only: false,
@@ -1047,6 +1053,7 @@ pub fn wait_text(r: &WaitReason) -> String {
         WaitReason::Matrix => "the matrix keeps it on this machine".into(),
         WaitReason::AwaitingConfirm => "its runner waits for your confirm".into(),
         WaitReason::NoRunner => "no machine may take it".into(),
+        WaitReason::NotRegistered(why) => why.clone(),
     }
 }
 
@@ -2325,19 +2332,19 @@ impl Queue {
             .collect();
         let exp = |id: &JobId| expected[id];
         let order = forseti::queue_order(&queued, &eff, &exp, now);
-        let project: HashMap<JobId, String> = queued
+        let project: HashMap<JobId, ProjectId> = queued
             .iter()
-            .map(|j| (j.id.clone(), j.spec.project.0.clone()))
+            .map(|j| (j.id.clone(), j.spec.project.clone()))
             .collect();
-        let weights: HashMap<String, f64> = st
+        let weights: HashMap<ProjectId, f64> = st
             .jobs
             .values()
-            .map(|j| (j.s.spec.project.0.clone(), j.s.place.weight))
+            .map(|j| (j.s.spec.project.clone(), j.s.place.weight))
             .collect();
         let order = st.drr.order(
             &order,
             &eff,
-            &|j| project.get(j).cloned().unwrap_or_default(),
+            &|j| forseti::FairOwner::of(project.get(j).cloned().unwrap_or_default()),
             &HashMap::new(),
             &weights,
         );
@@ -2592,6 +2599,10 @@ impl Queue {
         }];
         let need = need_of(job);
         let (mut held_off, mut no_room) = (None, None);
+        // a tree in no registered project has no project to key a runner's state, opt-ins or allow-lists on: here only
+        if q.s.place.unregistered.is_some() {
+            return (cands, held_off, no_room);
+        }
         for (name, r) in &st.runners {
             if r.r.trust == RunnerTrust::Shared
                 && let Some(why) = &q.shared_why
@@ -2777,7 +2788,16 @@ impl Queue {
             }
             Placed::There(name, e, warm) => self.offer(st, job, eff, &name, (e, warm), now),
             Placed::Wait(r) => {
-                let why = forseti::place::why_here(job, &cands, &ctx).or(held_off);
+                // a runner could take it, but for its project: that comes first
+                let unregistered =
+                    q.s.place
+                        .unregistered
+                        .clone()
+                        .filter(|_| !st.runners.is_empty() && q.s.place.may_leave())
+                        .map(|why| wait_text(&WaitReason::NotRegistered(why)));
+                let why = unregistered
+                    .or_else(|| forseti::place::why_here(job, &cands, &ctx))
+                    .or(held_off);
                 // trust alone keeps it off every runner: the design's "runs here: …" words say why
                 if let Some(why) = why {
                     q.waiting = Some(why);
@@ -5299,6 +5319,31 @@ mod tests {
     fn placed(q: &Queue, now: u64) -> Option<String> {
         q.tick(now);
         q.row("x1").unwrap().machine
+    }
+
+    // [D] pure: a job whose tree is in no registered project never goes to a runner, even one that is free while this
+    // machine is busy: it waits saying why; the same job of a registered project goes
+    #[test]
+    fn an_unregistered_job_waits_as_not_registered() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            add(&q, "r1", 600);
+            hello(&q, "r1", true, 100);
+            let mut s = job("x1", Priority::P3, 64);
+            s.place.unregistered = Some("its tree is in no registered project".into());
+            q.submit(s, 100);
+            assert_eq!(placed(&q, 100), None);
+            assert_eq!(
+                q.row("x1").unwrap().waiting.as_deref(),
+                Some("its tree is in no registered project")
+            );
+            let mut s = job("x2", Priority::P3, 64);
+            s.spec.project = ProjectId::from("p1");
+            q.submit(s, 101);
+            q.tick(101);
+            assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r1"));
+        });
     }
 
     // [D] pure: an opt-in feature (`render`, with the GPU its probe found) is offered to a job of the project it was

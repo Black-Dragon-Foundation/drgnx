@@ -480,6 +480,7 @@ impl Drill {
             fresh: false,
             stop_on_red: false,
             project: "p".into(),
+            role: Default::default(),
             trust: if keys.is_empty() {
                 JobTrust::Private
             } else {

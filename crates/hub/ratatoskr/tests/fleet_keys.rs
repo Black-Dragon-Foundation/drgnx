@@ -304,6 +304,7 @@ fn job(id: &str, script: &str, keys: &[&str], image: &str) -> Submit {
         fresh: false,
         stop_on_red: false,
         project: "p".into(),
+        role: Default::default(),
         trust: JobTrust::PrivateKeys,
         keys: keys.clone(),
         local_only: false,

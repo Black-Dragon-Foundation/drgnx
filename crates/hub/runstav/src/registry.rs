@@ -443,6 +443,8 @@ mod tests {
             "runners/set",
             "runners/unbench",
         ]);
+        // the project registry's changes
+        want.extend(["jobs/project-add", "jobs/project-remove"]);
         // paragraph comments: a thread, a reply, a resolve
         want.extend(["comments/add", "comments/reply", "comments/resolve"]);
         // say's: a planning session, the proposal it writes, its end

@@ -11,6 +11,7 @@
 //!   their audit (`key_sent`, `key_use`); [`redact`]: their bytes masked in what a runner returns.
 //! - [`returned`]: what a runner returns, checked before it touches the user's tree (paths, archives, patches), and
 //!   what a `shared` runner's results may not do.
+//! - [`projects`]: the projects the user registered, and which clone here belongs to which: a job's project id.
 //! - [`cloud`]: cloud machines: the providers over plain HTTPS (AWS first), their credentials by command.
 
 use std::path::{Path, PathBuf};
@@ -24,6 +25,7 @@ pub mod keys;
 pub mod link;
 pub mod local;
 pub mod methods;
+pub mod projects;
 pub mod queue;
 pub mod redact;
 #[cfg(all(unix, not(target_os = "android")))]

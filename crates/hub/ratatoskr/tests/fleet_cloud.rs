@@ -536,6 +536,7 @@ mod cloud {
             fresh: false,
             stop_on_red: false,
             project: "p".into(),
+            role: Default::default(),
             trust: JobTrust::Private,
             keys: vec![],
             local_only: false,

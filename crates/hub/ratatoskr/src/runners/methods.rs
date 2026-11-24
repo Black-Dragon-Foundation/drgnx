@@ -7,6 +7,7 @@
 use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Empty;
+use runstav::methods::jobs_q::{Project, ProjectAddParams, ProjectRemoveParams, Projects};
 use runstav::methods::runners::{
     AddParams, Audit, AuditParams, ByName, DiskClass, DiskEntry, DiskParams, Disks, FeatureParams,
     KeyNames, KeysParams, MachineDisk, PinParams, ProbeParams, Probed, ReclaimParams, Reclaimed,
@@ -22,6 +23,51 @@ fn error(code: ErrorCode, message: impl ToString) -> Error {
         message: message.to_string(),
         path: None,
     }
+}
+
+/// The wire's view of a registered project.
+fn project_view(p: crate::runners::projects::Project) -> Project {
+    Project {
+        id: p.id.0,
+        name: p.name,
+        origin: p.origin,
+        roots: p.roots,
+    }
+}
+
+/// `jobs/project-add`: the repository at the path registered (the user's alone; refusals are `invalid-params` at
+/// `path` with the reason and its fix).
+pub async fn project_add(f: &Front, _: &Caller, p: ProjectAddParams) -> Result<Project, Error> {
+    let projects = crate::exec::projects(f).await?;
+    let name = p.name.map(|n| n.into_inner());
+    let r = saman::lock(projects).add(std::path::Path::new(p.path.as_str()), name.as_deref());
+    r.map(project_view).map_err(|e| invalid_at(e, "path"))
+}
+
+/// A refused input as the wire says it: `invalid-params` at PATH, with the reason and its fix.
+fn invalid_at(e: villa::Error, path: &str) -> Error {
+    Error {
+        code: ErrorCode::InvalidParams,
+        message: e.message().to_string(),
+        path: Some(path.into()),
+    }
+}
+
+/// `jobs/project-list`: every registered project.
+pub async fn project_list(f: &Front, _: &Caller, _: Empty) -> Result<Projects, Error> {
+    let projects = crate::exec::projects(f).await?;
+    let list = saman::lock(projects).list();
+    Ok(Projects {
+        projects: list.into_iter().map(project_view).collect(),
+    })
+}
+
+/// `jobs/project-remove`: a project and its clones' mappings removed.
+pub async fn project_remove(f: &Front, _: &Caller, p: ProjectRemoveParams) -> Result<bool, Error> {
+    let projects = crate::exec::projects(f).await?;
+    let id = forseti::ProjectId(p.id.into_inner());
+    let r = saman::lock(projects).remove(&id);
+    r.map(|()| true).map_err(|e| invalid_at(e, "id"))
 }
 
 #[cfg(all(unix, not(target_os = "android")))]
