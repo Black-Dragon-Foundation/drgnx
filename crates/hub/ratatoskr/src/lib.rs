@@ -98,6 +98,7 @@ pub mod forecast;
 pub mod front;
 pub mod fsio;
 pub mod gateway;
+pub mod git_actions;
 pub mod graph;
 pub mod graph_cli;
 pub mod hello;
@@ -150,7 +151,6 @@ pub mod supervisor;
 pub mod term;
 pub mod timeline;
 pub mod version;
-pub mod view;
 pub mod work;
 
 /// How the process ends (design 3.2): supervisors restart on 75 and never on 1, 2 or 3.

@@ -933,8 +933,16 @@ pub fn start(f: &crate::front::Front) {
         .unwrap_or_else(|| dirs.hub.join("term"));
     let terms = f.core.terms.clone();
     let sink: Arc<dyn Sink> = f.editors.clone();
-    let hub = f.core.views.hub_id();
+    let hub = instance_id();
     crate::clock::spawn("term:open", async move { terms.open(dir, sink, hub).await });
+}
+
+/// A random instance id below 2^53, so every JSON reader holds it exactly: on every patch, so a patch of an earlier hub
+/// never reads as this one's.
+fn instance_id() -> u64 {
+    let mut b = [0u8; 8];
+    getrandom::fill(&mut b).expect("the system's random source");
+    u64::from_le_bytes(b) & ((1 << 53) - 1)
 }
 
 /// Milliseconds since the epoch (a record's `detached_at` outlives this hub).

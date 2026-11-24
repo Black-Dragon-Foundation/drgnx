@@ -1,25 +1,19 @@
 //! Other agent CLIs' past sessions (Claude Code, Gemini CLI, Codex): found in the CLIs' own folders, read read-only
 //! through `minni`, indexed in `<state>/hub/history.db` (mode 0600, apart from work.db) with the transcripts' text in
-//! an FTS5 table after the transcript redaction, and shown as rows: the History list (`agents/history/subscribe`) and
-//! a session's transcript (`agents/history/open`, view `agent-history/PROVIDER:ID`), drawn by the panel's own row
-//! builder.  Resume here (`agents/history/resume`) starts a drgnx session attached to the CLI's own session id; the
+//! an FTS5 table after the transcript redaction, and searched and opened by the methods below (hub-built rows are
+//! switched off; the client draws the list).  Resume here (`agents/history/resume`) starts a drgnx session attached to the CLI's own session id; the
 //! jail gets a copy of that one file, or, chosen per resume, read-write access to that one original file
 //! ([`grant`], read by `sandbox::login_grants`).
 //!
 //! Privacy: the hub only ever reads those folders (opened read-only, never following a link); the user's words stay
 //! here (no model, no other index); the methods are the user's alone, and no agent tool reaches them.
 
-use crate::agents::session::rows;
 use crate::dispatch::Caller;
 use crate::front::Front;
-use crate::view::Key;
 use minni::{Provider, Reader};
-use rodd::faces::FaceId;
-use rodd::{Row, RowBuilder};
-use runstav::methods::agents::{Entry, EntryType};
 use runstav::methods::past::{
     PastDrift, PastHit, PastHits, PastOpened, PastProvider, PastRef, PastResume, PastResumed,
-    PastRoute, PastScanned, PastSearch, PastSession, PastStatus, PastSubscribe,
+    PastRoute, PastScanned, PastSearch, PastSession, PastStatus,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
@@ -36,9 +30,7 @@ pub const DB: &str = "history.db";
 const MAX_FILE: u64 = 512 << 20;
 /// The readers kept for reading on from an offset (the files changed last).
 const READERS: usize = 32;
-/// The transcripts kept open as views.
-const OPEN: usize = 16;
-/// The rows of the list, at most.
+/// The sessions of the list, at most.
 const LIST: usize = 2000;
 /// The view prefix of a past session's transcript.
 pub const VIEW: &str = "agent-history/";
@@ -383,19 +375,12 @@ fn index_text(e: &Value) -> Option<String> {
 const DRIFT_PCT: i64 = 20;
 const DRIFT_LINES: i64 = 10;
 
-/// What a shown History list asked for: its workspace, its query and, for a section of another list, its limit.
-type Asked = (Option<String>, Option<String>, Option<usize>);
-
-/// The past sessions: where the index is, what it reads, the readers kept, the list's views and the transcripts open.
+/// The past sessions: where the index is, what it reads and the readers kept.
 #[derive(Default)]
 pub struct History {
     inner: Mutex<Inner>,
     /// The list as last read from the index, newest first.
     list: Mutex<Vec<PastSession>>,
-    /// (connection, view) → (workspace, query) of each History list shown.
-    shown: Mutex<BTreeMap<(u64, String), Asked>>,
-    /// The transcripts open, by view, oldest first.
-    open: Mutex<Vec<(String, Arc<Vec<Entry>>)>>,
     /// Files opened to read since the start.
     reads: std::sync::atomic::AtomicU64,
 }
@@ -453,7 +438,6 @@ impl History {
         }
         drop(i);
         lock(&self.list).clear();
-        lock(&self.open).clear();
     }
 
     pub fn roots(&self) -> Option<Roots> {
@@ -687,63 +671,6 @@ impl History {
             .cloned()
             .ok_or_else(|| villa::Error::invalid(format!("no past session {key}")))?;
         Ok((s, PathBuf::from(path)))
-    }
-
-    /// The rows of the History list KEY shows, when it is one.
-    pub fn build(&self, f: &Front, key: &Key) -> bool {
-        if let Some(view) = key.1.strip_prefix(VIEW) {
-            let entries = lock(&self.open)
-                .iter()
-                .find(|(v, _)| v == &key.1)
-                .map(|(_, e)| e.clone());
-            let Some(entries) = entries else {
-                return false;
-            };
-            let _only_when_used_elsewhere = &view;
-            f.core
-                .views
-                .publish_built(f, key, |_, _| (transcript_rows(&entries), Vec::new()));
-            return true;
-        }
-        let Some((workspace, query, limit)) =
-            lock(&self.shown).get(&(key.0, key.1.clone())).cloned()
-        else {
-            return false;
-        };
-        let hits = query
-            .as_deref()
-            .filter(|q| !q.trim().is_empty())
-            .map(|q| self.search(q).unwrap_or_default());
-        let list = lock(&self.list).clone();
-        f.core.views.publish_built(f, key, |_, _| {
-            (
-                list_rows(&list, workspace.as_deref(), hits.as_deref(), limit),
-                Vec::new(),
-            )
-        });
-        true
-    }
-
-    /// Every class of CONN's VIEW built again.
-    fn build_all(&self, f: &Front, conn: Option<u64>, view: &str) {
-        for key in f.core.views.keys_of(view) {
-            if conn.is_none_or(|c| c == key.0) {
-                self.build(f, &key);
-            }
-        }
-    }
-
-    /// The list views shown, built again (after a scan changed the index).
-    pub fn rebuild_lists(&self, f: &Front) {
-        let views: Vec<(u64, String)> = lock(&self.shown).keys().cloned().collect();
-        for (c, v) in views {
-            self.build_all(f, Some(c), &v);
-        }
-    }
-
-    /// Connection CONN is gone: its lists are no longer shown.
-    pub fn gone(&self, conn: u64) {
-        lock(&self.shown).retain(|(c, _), _| *c != conn);
     }
 }
 
@@ -986,203 +913,6 @@ fn search_in(db: &Connection, query: &str) -> villa::Result<Vec<PastHit>> {
     Ok(hits)
 }
 
-/// The mark a provider's rows start with.
-fn mark(p: PastProvider) -> &'static str {
-    match p {
-        PastProvider::Claude => "Claude",
-        PastProvider::Gemini => "Gemini",
-        PastProvider::Codex => "Codex",
-    }
-}
-
-/// Whether CWD is WORKSPACE or under it.
-fn in_workspace(cwd: Option<&str>, workspace: Option<&str>) -> bool {
-    let (Some(c), Some(w)) = (cwd, workspace) else {
-        return false;
-    };
-    let w = w.trim_end_matches('/');
-    c == w || c.strip_prefix(w).is_some_and(|r| r.starts_with('/'))
-}
-
-/// One past session's row: the provider's mark, the title, then the project, the date, the turns and the branch
-/// dimmed (and the hit's snippet, when searched); the session's provider and id over the row.
-fn session_row(s: &PastSession, snippet: Option<&str>) -> Row {
-    let mut r = RowBuilder::new(format!("h:{}:{}", provider_of(s.provider).name(), s.id));
-    r.push("  ", None);
-    r.push(mark(s.provider), Some(FaceId::AgentPanelSubtle.name()));
-    r.push("  ", None);
-    r.push(&rows::one_line(&s.title, 70), None);
-    let project = s
-        .cwd
-        .as_deref()
-        .and_then(|c| c.trim_end_matches('/').rsplit('/').next())
-        .unwrap_or("");
-    let mut meta = vec![project.to_owned()];
-    if let Some(d) = s.updated.as_deref().or(s.started.as_deref()) {
-        meta.push(d.chars().take(10).collect());
-    }
-    meta.push(format!(
-        "{} turn{}",
-        s.turns,
-        if s.turns == 1 { "" } else { "s" }
-    ));
-    if let Some(b) = &s.branch {
-        meta.push(b.clone());
-    }
-    let meta: Vec<String> = meta.into_iter().filter(|m| !m.is_empty()).collect();
-    r.push(
-        &format!("  {}", meta.join(" · ")),
-        Some(FaceId::AgentPanelSubtle.name()),
-    );
-    if let Some(sn) = snippet.filter(|sn| *sn != s.title) {
-        r.push(
-            &format!("  — {}", rows::one_line(sn, 60)),
-            Some(FaceId::AgentPanelSubtle.name()),
-        );
-    }
-    let end = r.pos();
-    r.prop(
-        0,
-        end,
-        "drgnx-past",
-        json!({"provider": provider_of(s.provider).name(), "id": s.id}),
-    );
-    r.finish()
-}
-
-fn header_row(key: &str, text: &str) -> Row {
-    let mut r = RowBuilder::new(key);
-    r.push(text, Some(FaceId::AgentPanelSubtle.name()));
-    r.finish()
-}
-
-/// The History list's rows: the workspace's sessions under one header, then the others'; with HITS (a search), the
-/// hits in their order.  With LIMIT, a section of another list: a "Past sessions" header first, at most LIMIT sessions
-/// (the workspace's first), and a last row saying how many more Past Sessions shows.
-pub fn list_rows(
-    list: &[PastSession],
-    workspace: Option<&str>,
-    hits: Option<&[PastHit]>,
-    limit: Option<usize>,
-) -> Vec<Row> {
-    let Some(limit) = limit else {
-        return all_rows(list, workspace, hits);
-    };
-    let mut out = vec![header_row("h:past", "Past sessions")];
-    let rows = all_rows(list, workspace, hits);
-    let sessions = rows
-        .iter()
-        .filter(|r| r.key.matches(':').count() >= 2)
-        .count();
-    let mut shown = 0;
-    for r in rows {
-        let session = r.key.matches(':').count() >= 2;
-        if session && shown == limit {
-            continue;
-        }
-        shown += usize::from(session);
-        out.push(r);
-    }
-    // a header whose sessions were all cut goes too
-    while out
-        .last()
-        .is_some_and(|r| r.key.matches(':').count() < 2 && r.key != "h:none" && r.key != "h:past")
-    {
-        out.pop();
-    }
-    if sessions > limit {
-        out.push(header_row(
-            "h:more",
-            &format!("  {} more in Show Past Sessions", sessions - limit),
-        ));
-    }
-    out
-}
-
-fn all_rows(list: &[PastSession], workspace: Option<&str>, hits: Option<&[PastHit]>) -> Vec<Row> {
-    let shown: Vec<(&PastSession, Option<&str>)> = match hits {
-        Some(h) => h
-            .iter()
-            .map(|h| (&h.session, Some(h.snippet.as_str())))
-            .collect(),
-        None => list.iter().map(|s| (s, None)).collect(),
-    };
-    if shown.is_empty() {
-        let text = if hits.is_some() {
-            "  No past session matches"
-        } else {
-            "  No past sessions of Claude Code, Gemini CLI or Codex"
-        };
-        return vec![header_row("h:none", text)];
-    }
-    let (here, other): (Vec<_>, Vec<_>) = shown
-        .into_iter()
-        .partition(|(s, _)| in_workspace(s.cwd.as_deref(), workspace));
-    let mut out = Vec::new();
-    if !here.is_empty() {
-        out.push(header_row("h:here", "This workspace"));
-        out.extend(here.iter().map(|(s, sn)| session_row(s, *sn)));
-    }
-    if !other.is_empty() {
-        out.push(header_row(
-            "h:other",
-            if here.is_empty() {
-                "Past sessions"
-            } else {
-                "Other projects"
-            },
-        ));
-        out.extend(other.iter().map(|(s, sn)| session_row(s, *sn)));
-    }
-    out
-}
-
-/// A past transcript's rows: the panel's own groups and rows, every step folded as a live session's start.
-pub fn transcript_rows(entries: &[Entry]) -> Vec<Row> {
-    let all: Vec<(usize, &Entry)> = entries.iter().enumerate().collect();
-    let look = rows::Look::default();
-    let facts = BTreeMap::new();
-    let cx = rows::Cx {
-        look: &look,
-        facts: &facts,
-        always: &|_| false,
-        prov: &|_| None,
-        right: &|_| 0,
-        bg: &rows::NO_BG,
-    };
-    let mut out = Vec::new();
-    for (head, thoughts) in rows::groups(&all) {
-        let entry = &entries[head];
-        let th: Vec<&Entry> = thoughts.iter().map(|t| &entries[*t]).collect();
-        let blocks = (entry.kind == EntryType::Agent).then(|| {
-            let mut md = crate::agents::markdown::Stream::default();
-            md.update(entry.rest.get("text").and_then(Value::as_str).unwrap_or(""));
-            md.blocks().to_vec()
-        });
-        out.extend(rows::group_rows(head, entry, &th, blocks.as_deref(), &cx));
-    }
-    out
-}
-
-/// A minni entry as the hub's transcript entry (an unknown type is a note).
-pub fn entry_of(v: &Value) -> Entry {
-    let mut rest = match v {
-        Value::Object(m) => m.clone(),
-        _ => serde_json::Map::new(),
-    };
-    let kind = match rest.remove("type").as_ref().and_then(Value::as_str) {
-        Some("user") => EntryType::User,
-        Some("agent") => EntryType::Agent,
-        Some("thought") => EntryType::Thought,
-        Some("tool") => EntryType::Tool,
-        Some("error") => EntryType::Error,
-        Some("compaction") => EntryType::Compaction,
-        Some("notice") => EntryType::Notice,
-        _ => EntryType::Note,
-    };
-    Entry { kind, rest }
-}
-
 /// The terminal's resume command of PROVIDER's session ID, as argv.
 pub fn resume_argv(p: PastProvider, id: &str) -> Vec<String> {
     match p {
@@ -1285,20 +1015,16 @@ fn off() -> Error {
     err("past sessions are off (drgnx-agents-history)")
 }
 
-/// Scan on a blocking thread; the lists shown built again.
+/// Scan on a blocking thread.
 pub async fn scan_now(f: &Front) -> Result<u64, Error> {
     if !ready(f)? {
-        f.core.past.rebuild_lists(f);
         return Ok(0);
     }
     let me = f.core.past.clone();
-    let (n, changed) = crate::clock::blocking(move || me.scan_changed())
+    let (n, _changed) = crate::clock::blocking(move || me.scan_changed())
         .await
         .map_err(|e| internal(format!("the scan: {e}")))?
         .map_err(internal)?;
-    if changed {
-        f.core.past.rebuild_lists(f);
-    }
     Ok(n)
 }
 
@@ -1310,22 +1036,6 @@ pub async fn follow(f: Arc<Front>) {
         }
         crate::clock::sleep(std::time::Duration::from_secs(2)).await;
     }
-}
-
-pub async fn subscribe(f: &Front, c: &Caller, p: PastSubscribe) -> Result<bool, Error> {
-    let on = ready(f)?;
-    let view = p.view.0.clone();
-    lock(&f.core.past.shown).insert(
-        (c.conn_id, view.clone()),
-        (
-            p.workspace
-                .map(|w| w.as_str().trim_end_matches('/').to_owned()),
-            p.query.map(|q| q.0),
-            p.limit.map(|n| (n as usize).clamp(1, 200)),
-        ),
-    );
-    f.core.past.build_all(f, Some(c.conn_id), &view);
-    Ok(on)
 }
 
 pub async fn search(f: &Front, _: &Caller, p: PastSearch) -> Result<PastHits, Error> {
@@ -1341,33 +1051,9 @@ pub async fn open(f: &Front, _: &Caller, p: PastRef) -> Result<PastOpened, Error
     if !ready(f)? {
         return Err(off());
     }
-    let (session, path) = f.core.past.find(p.provider, &p.id.0).map_err(err)?;
+    let (session, _path) = f.core.past.find(p.provider, &p.id.0).map_err(err)?;
     let provider = provider_of(p.provider);
-    let entries = crate::clock::blocking(move || -> villa::Result<Vec<Entry>> {
-        let mut rd = Reader::new(provider);
-        let found = Found {
-            provider,
-            path: path.clone(),
-            size: 0,
-            mtime: 0,
-        };
-        read_into(&mut rd, &found)
-            .map_err(|e| villa::Error::io(format!("{}: {e}", path.display())))?;
-        Ok(rd.entries().iter().map(entry_of).collect())
-    })
-    .await
-    .map_err(|e| internal(format!("the read: {e}")))?
-    .map_err(internal)?;
     let view = format!("{VIEW}{}:{}", provider.name(), session.id);
-    {
-        let mut open = lock(&f.core.past.open);
-        open.retain(|(v, _)| v != &view);
-        open.push((view.clone(), Arc::new(entries)));
-        if open.len() > OPEN {
-            open.remove(0);
-        }
-    }
-    f.core.past.build_all(f, None, &view);
     Ok(PastOpened {
         argv: resume_argv(p.provider, &session.id),
         resume_here: profile_for(f, p.provider).is_some(),

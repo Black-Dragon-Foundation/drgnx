@@ -1,4 +1,4 @@
-//! Running git for the Source Control view, always on a thread of the caller's (never the hub's loop), each call with
+//! Running git for the source-control actions, always on a thread of the caller's (never the hub's loop), each call with
 //! a deadline or a way to stop it.
 //!
 //! - **Reads** (status, log, branches) are the trusted, read-only git of `draugr::git` (`Place::Trusted`), as the

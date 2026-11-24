@@ -153,8 +153,6 @@ pub struct SessionTrace {
     /// The heads its worktree does not trace any more (they went over the budget).
     learned: Arc<Mutex<BTreeSet<String>>>,
     presence: Arc<Live>,
-    /// The Work map, told who is in the files a step's opens changed.
-    map: Arc<crate::work::map::Map>,
     writer: crate::coord::Writer,
     front: Weak<Front>,
     socket: Option<PathBuf>,
@@ -195,7 +193,6 @@ impl Traces {
             probe: Mutex::new(FsProbe::default()),
             learned,
             presence: front.core.presence.clone(),
-            map: front.core.map.clone(),
             writer: front.writer.clone(),
             front: front.tool_hub.front.get().cloned().unwrap_or_default(),
             socket: socket.clone(),
@@ -288,13 +285,12 @@ impl SessionTrace {
     fn emit(&self, e: Emit) {
         let files = touches(&e.seen, &self.rules, &mut *lock(&self.probe));
         if !files.is_empty() {
-            let changed = self.presence.apply(PresenceEv::Step {
+            self.presence.apply(PresenceEv::Step {
                 session: self.sid.clone(),
                 step: e.step,
                 at: e.at,
                 files,
             });
-            self.map.presence(&self.presence.now_in(&changed));
         }
         if let Some(l) = e.label {
             self.label(e.step, l);

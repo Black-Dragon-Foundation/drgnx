@@ -624,33 +624,6 @@ pub const VIEW_MAX: usize = 64;
 /// The widest map, in units.
 pub const WIDTH_MAX: u32 = 10_000;
 
-fn check_view(view: &str) -> Result<(), Error> {
-    if view.is_empty() || view.len() > VIEW_MAX {
-        return Err(invalid("view", "a view id of 1 to 64 bytes"));
-    }
-    Ok(())
-}
-
-fn check_layers(collapsed: &[u8]) -> Result<(), Error> {
-    if collapsed.iter().any(|l| !(1..=8).contains(l)) {
-        return Err(invalid("collapsed", "layers 1 to 8"));
-    }
-    Ok(())
-}
-
-fn check_width(w: u32) -> Result<(), Error> {
-    if w > WIDTH_MAX {
-        return Err(invalid("width_units", "at most 10000 units"));
-    }
-    Ok(())
-}
-
-fn check_map_subscribe(p: &MapSubscribe) -> Result<(), Error> {
-    check_view(&p.view)?;
-    check_width(p.width_units)?;
-    check_layers(&p.collapsed)
-}
-
 /// `work/target/set`'s params: the target date of a spec or a plan (null clears it).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -670,18 +643,6 @@ fn check_target_set(p: &TargetSetParams) -> Result<(), Error> {
         return Err(invalid("target_at", "a finite number of seconds, or null"));
     }
     Ok(())
-}
-
-fn check_map_set(p: &MapSet) -> Result<(), Error> {
-    check_view(&p.view)?;
-    if let Some(w) = p.width_units {
-        check_width(w)?;
-    }
-    check_layers(p.collapsed.as_deref().unwrap_or_default())
-}
-
-fn check_map_close(p: &MapClose) -> Result<(), Error> {
-    check_view(&p.view)
 }
 
 fn check_presence_subscribe(p: &PresenceSubscribe) -> Result<(), Error> {
@@ -706,93 +667,6 @@ fn check_presence_get(p: &PresenceGet) -> Result<(), Error> {
     } else {
         Err(invalid("file", "an absolute path"))
     }
-}
-
-/// The most lanes one Timeline holds.
-const LANES_MAX: usize = 256;
-
-fn check_trail_subscribe(p: &TrailSubscribe) -> Result<(), Error> {
-    check_view(&p.view)?;
-    if let Some(w) = &p.window {
-        check_window(w)?;
-    }
-    let name = |s: &str| !s.is_empty() && s.len() <= NAME_MAX;
-    match (&p.session, p.lanes.is_empty()) {
-        (Some(s), true) if name(s) => Ok(()),
-        (Some(_), true) => Err(invalid("session", "a session id")),
-        (None, false) if p.lanes.len() > LANES_MAX => Err(invalid("lanes", "at most 256 lanes")),
-        (None, false)
-            if p.lanes
-                .iter()
-                .all(|l| name(&l.session) && l.label.len() <= NAME_MAX) =>
-        {
-            Ok(())
-        }
-        (None, false) => Err(invalid("lanes", "lanes of a session id and a label")),
-        _ => Err(invalid("session", "one of session or lanes")),
-    }
-}
-
-fn check_trail_close(p: &TrailClose) -> Result<(), Error> {
-    check_view(&p.view)
-}
-
-/// The longest window a Timeline or the Schedule shows: a year.
-pub const WINDOW_MAX: f64 = 366.0 * 86_400.0;
-
-fn check_window(w: &Window) -> Result<(), Error> {
-    if !(w.from.is_finite() && w.to.is_finite() && w.from >= 0.0 && w.to > w.from) {
-        return Err(invalid("window", "from before to, seconds since the epoch"));
-    }
-    if w.to - w.from > WINDOW_MAX {
-        return Err(invalid("window", "a window of a year at most"));
-    }
-    Ok(())
-}
-
-fn check_trail_set(p: &TrailSet) -> Result<(), Error> {
-    check_view(&p.view)?;
-    p.window.as_ref().map_or(Ok(()), check_window)
-}
-
-fn check_schedule_subscribe(p: &ScheduleSubscribe) -> Result<(), Error> {
-    check_view(&p.view)?;
-    check_window(&p.window)
-}
-
-fn check_schedule_set(p: &ScheduleSet) -> Result<(), Error> {
-    check_view(&p.view)?;
-    p.window.as_ref().map_or(Ok(()), check_window)
-}
-
-/// The most plans one Board is scoped to.
-const PLANS_MAX: usize = 64;
-
-fn check_board_subscribe(p: &BoardSubscribe) -> Result<(), Error> {
-    check_view(&p.view)?;
-    check_view(&p.map).map_err(|_| invalid("map", "a map view id of 1 to 64 bytes"))?;
-    if p.plans.len() > PLANS_MAX || p.plans.iter().any(|s| s.is_empty() || s.len() > NAME_MAX) {
-        return Err(invalid("plans", "at most 64 plan ids"));
-    }
-    Ok(())
-}
-
-fn check_flow_subscribe(p: &FlowSubscribe) -> Result<(), Error> {
-    check_view(&p.view)?;
-    check_view(&p.map).map_err(|_| invalid("map", "a map view id of 1 to 64 bytes"))?;
-    if p.job
-        .as_ref()
-        .is_some_and(|j| j.is_empty() || j.len() > NAME_MAX)
-    {
-        return Err(invalid("job", "a job id"));
-    }
-    if p.detail
-        .as_ref()
-        .is_some_and(|t| t.is_empty() || t.len() > NAME_MAX)
-    {
-        return Err(invalid("detail", "a task id"));
-    }
-    Ok(())
 }
 
 fn check_conclusions(p: &ConclusionsParams) -> Result<(), Error> {
@@ -969,70 +843,10 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_conclusions,
         ),
         method!(
-            "work/map/subscribe", WorkMapSubscribe(MapSubscribe) -> MapRows,
-            classes: [User], writes: false,
-            doc: "open (or open again) one map view of this connection: its model comes as view-model (a reset first) and its rows as view-patch per display class, to this connection only; the answer is the hub's id and the view's version",
-            check: check_map_subscribe,
-        ),
-        method!(
-            "work/map/set", WorkMapSet(MapSet) -> MapVersion,
-            classes: [User], writes: false,
-            doc: "change one map view (filters, collapsed layers, width, density, shown, the selection): a change the user made relayouts at once",
-            check: check_map_set,
-        ),
-        method!(
             "work/target/set", WorkTargetSet(TargetSetParams) -> bool,
             classes: [User], writes: true,
             doc: "set (or with null clear) the target date of a spec or a plan; true when the item exists",
             check: check_target_set,
-        ),
-        method!(
-            "work/map/close", WorkMapClose(MapClose) -> bool,
-            classes: [User], writes: false,
-            doc: "end one map view of this connection (a connection's views end with it)",
-            check: check_map_close,
-        ),
-        method!(
-            "work/trail/subscribe", WorkTrailSubscribe(TrailSubscribe) -> TrailSubscribed,
-            classes: [User], writes: false,
-            doc: "open (or open again) one trail view (a session's steps and conclusions) or Timeline view (a lane per session) of this connection: its rows come as view-patch per display class, the first a reset, before the answer",
-            check: check_trail_subscribe,
-        ),
-        method!(
-            "work/trail/set", WorkTrailSet(TrailSet) -> bool,
-            classes: [User], writes: false,
-            doc: "zoom, pan or filter one Timeline view of this connection without subscribing again: its window (a window without follow stops following), follow (now kept in view) and filter (all, edits, waits); false when the view is not a Timeline",
-            check: check_trail_set,
-        ),
-        method!(
-            "work/schedule/subscribe", WorkScheduleSubscribe(ScheduleSubscribe) -> TrailSubscribed,
-            classes: [User], writes: false,
-            doc: "open (or open again) one Schedule view of this connection over a window: the List's rows of the connection's map view (or its tasks by machine), each with its bar (done, forecast to p50 and p90, baseline, target, state), its rows per display class, the first a reset, before the answer",
-            check: check_schedule_subscribe,
-        ),
-        method!(
-            "work/schedule/set", WorkScheduleSet(ScheduleSet) -> bool,
-            classes: [User], writes: false,
-            doc: "zoom, pan or regroup one Schedule view of this connection without subscribing again; false when the view is not a Schedule",
-            check: check_schedule_set,
-        ),
-        method!(
-            "work/trail/close", WorkTrailClose(TrailClose) -> bool,
-            classes: [User], writes: false,
-            doc: "end one trail, Timeline, Schedule or Board view of this connection (a connection's views end with it)",
-            check: check_trail_close,
-        ),
-        method!(
-            "work/board/subscribe", WorkBoardSubscribe(BoardSubscribe) -> TrailSubscribed,
-            classes: [User], writes: false,
-            doc: "open (or open again) one Board view of this connection: the tracker's tasks (of plans, else every task) by column, its model and its rows per display class, the first a reset, before the answer; read again after each write",
-            check: check_board_subscribe,
-        ),
-        method!(
-            "work/flow/subscribe", WorkFlowSubscribe(FlowSubscribe) -> TrailSubscribed,
-            classes: [User], writes: false,
-            doc: "open (or open again) one Flow lens view of this connection: a plan run's tasks by gate (a chip per gate from the hub's evidence), its merge batch and rule pack, its model and its rows per display class, the first a reset, before the answer; read again after each write; with detail, one task's detail tile (why it is held, what clears it, its evidence, its actions), with rules the Rules tile (the rule pack), as rows alone",
-            check: check_flow_subscribe,
         ),
         method!(
             "work/files", WorkFiles(EditedFiles) -> EditedFilesList,
@@ -1080,19 +894,6 @@ mod tests {
         ] {
             assert!(report(bad.clone()).is_err(), "{bad}");
         }
-    }
-
-    /// The Rules tile takes the selected task with it (its Evidence tab's); a task id is still checked.
-    #[test]
-    fn the_rules_tile_takes_the_selected_task() {
-        let flow = |v: serde_json::Value| {
-            let (p, _) = crate::registry::decode_params::<FlowSubscribe>(&v)?;
-            check_flow_subscribe(&p)
-        };
-        assert!(
-            flow(json!({"view": "v/rules", "map": "v", "rules": true, "detail": "J#5"})).is_ok()
-        );
-        assert!(flow(json!({"view": "v/rules", "map": "v", "rules": true, "detail": ""})).is_err());
     }
 
     /// A target is set on a spec or a plan only, with a finite time or null.

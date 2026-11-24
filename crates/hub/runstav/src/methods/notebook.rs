@@ -353,25 +353,8 @@ fn check_cell(p: &NotebookCellRef) -> Result<(), Error> {
     name("cell", &p.cell)
 }
 
-fn check_focus(p: &NotebookFocusParams) -> Result<(), Error> {
-    name("id", &p.id)?;
-    p.cell.as_deref().map_or(Ok(()), |c| name("cell", c))
-}
-
 fn check_log(p: &NotebookLogParams) -> Result<(), Error> {
     name("id", &p.id)
-}
-
-fn check_view(p: &NotebookViewParams) -> Result<(), Error> {
-    name("id", &p.id)?;
-    match (p.kind, p.cell.as_deref()) {
-        (NotebookViewKind::Output, Some(c)) => name("cell", c),
-        (NotebookViewKind::Output, None) => Err(invalid("cell", "the cell whose output it shows")),
-        (NotebookViewKind::Outline | NotebookViewKind::Log, None) => Ok(()),
-        (NotebookViewKind::Outline | NotebookViewKind::Log, Some(_)) => {
-            Err(invalid("cell", "none for this view"))
-        }
-    }
 }
 
 fn check_clear(p: &NotebookClear) -> Result<(), Error> {
@@ -451,18 +434,6 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "the whole output of one cell as nbformat objects, within the hub's limits (the inline tail is cut at 20 rows)",
             check: check_cell,
-        ),
-        method!(
-            "notebook/view", NotebookView(NotebookViewParams) -> NotebookViewName,
-            classes: [User], writes: false,
-            doc: "a hub view of a notebook for the editor to show in Sjá: the cell outline (one row per cell with its index, type, first line, prompt and state) the whole output of one cell (windowed by view/window) or the kernel's log; the answer names the view, rows follow its view/env",
-            check: check_view,
-        ),
-        method!(
-            "notebook/focus", NotebookFocus(NotebookFocusParams) -> bool,
-            classes: [User], writes: false,
-            doc: "the editor is in this cell of the notebook (none: in none): the cell outline marks its row; sent when the cell changes",
-            check: check_focus,
         ),
         method!(
             "notebook/log", NotebookLog(NotebookLogParams) -> NotebookLog,

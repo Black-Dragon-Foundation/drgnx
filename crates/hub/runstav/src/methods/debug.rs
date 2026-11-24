@@ -665,48 +665,6 @@ pub struct DebugDataBreakpoints {
     pub breakpoints: Vec<Value>,
 }
 
-fn check_data_bp(p: &DebugDataBreakpoint) -> Result<(), Error> {
-    let need = |k: &str, ok: bool| {
-        if ok {
-            Ok(())
-        } else {
-            Err(invalid(k, "required by this op"))
-        }
-    };
-    for (k, v) in [
-        ("session", &p.session),
-        ("name", &p.name),
-        ("view", &p.view),
-        ("node", &p.node),
-        ("data_id", &p.data_id),
-    ] {
-        if let Some(t) = v {
-            check_text(k, t)?;
-        }
-    }
-    if let Some(a) = &p.access_type
-        && !["read", "write", "readWrite"].contains(&a.as_str())
-    {
-        return Err(invalid("access_type", "read, write or readWrite"));
-    }
-    match p.op.as_str() {
-        "add" => {
-            let by_ref = p.session.is_some() && p.reference.is_some() && p.name.is_some();
-            let by_node = p.view.is_some() && p.node.is_some();
-            need(
-                "session, reference and name (or view and node)",
-                by_ref || by_node,
-            )
-        }
-        "remove" => {
-            need("session", p.session.is_some())?;
-            need("data_id", p.data_id.is_some())
-        }
-        "list" => need("session", p.session.is_some()),
-        _ => Err(invalid("op", "one of add, remove, list")),
-    }
-}
-
 /// `debug/run-to-cursor`: SESSION stops once at PATH's LINE (a breakpoint for it alone), continuing if it is stopped.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugRunToCursor {
@@ -922,69 +880,6 @@ fn check_run_to(p: &DebugRunToCursor) -> Result<(), Error> {
     Ok(())
 }
 
-fn check_view(p: &DebugView) -> Result<(), Error> {
-    check_text("view", &p.view)?;
-    check_root(&p.root)?;
-    if let Some(s) = &p.session {
-        check_text("session", s)?;
-    }
-    if p.filter.as_ref().is_some_and(|f| f.len() > TEXT_MAX) {
-        return Err(invalid("filter", "at most 4096 bytes"));
-    }
-    if p.indent.is_some_and(|i| i > 256) {
-        return Err(invalid("indent", "at most 256"));
-    }
-    Ok(())
-}
-
-fn check_expand(p: &DebugExpand) -> Result<(), Error> {
-    check_text("view", &p.view)?;
-    check_text("node", &p.node)
-}
-
-fn check_watch(p: &DebugWatch) -> Result<(), Error> {
-    check_root(&p.root)?;
-    if !WATCH_OPS.contains(&p.op.as_str()) {
-        return Err(invalid("op", "one of add, edit, remove, move"));
-    }
-    if matches!(p.op.as_str(), "add" | "edit") {
-        check_text("expr", p.expr.as_deref().unwrap_or_default())?;
-    }
-    if p.op != "add" && p.index.is_none() {
-        return Err(invalid("index", "required by this op"));
-    }
-    if p.op == "move" && p.to.is_none() {
-        return Err(invalid("to", "required by this op"));
-    }
-    Ok(())
-}
-
-fn check_set_value(p: &DebugSetValue) -> Result<(), Error> {
-    check_text("view", &p.view)?;
-    check_text("node", &p.node)?;
-    if p.value.len() > TEXT_MAX {
-        return Err(invalid("value", "at most 4096 bytes"));
-    }
-    Ok(())
-}
-
-fn check_children(p: &DebugChildren) -> Result<(), Error> {
-    check_text("session", &p.session)?;
-    if p.reference <= 0 {
-        return Err(invalid("reference", "a positive variablesReference"));
-    }
-    Ok(())
-}
-
-fn check_evaluate(p: &DebugEvaluate) -> Result<(), Error> {
-    check_text("session", &p.session)?;
-    check_text("expr", &p.expr)?;
-    if !EVAL_CONTEXTS.contains(&p.context.as_str()) {
-        return Err(invalid("context", "one of repl, hover, clipboard, watch"));
-    }
-    Ok(())
-}
-
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -1018,52 +913,10 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_run_to,
         ),
         method!(
-            "debug/data-breakpoint", DebugDataBreakpoint(DebugDataBreakpoint) -> DebugDataBreakpoints,
-            classes: [User], writes: false,
-            doc: "a session's data breakpoints (Break on Value Change): watch a variable as the adapter's dataBreakpointInfo names it, or drop one; they last as long as the session",
-            check: check_data_bp,
-        ),
-        method!(
             "debug/select", DebugSelect(DebugSelect) -> bool,
             classes: [User], writes: false,
             doc: "show a frame of a session's stop: its scopes and variables are fetched in the same stop, and debug-frame names its line",
             check: check_select,
-        ),
-        method!(
-            "debug/view", DebugView(DebugView) -> bool,
-            classes: [User], writes: false,
-            doc: "show the Run and Debug view of a project: its variables, watches, call stack and breakpoints, built by the hub at every stop and change",
-            check: check_view,
-        ),
-        method!(
-            "debug/expand", DebugExpand(DebugExpand) -> bool,
-            classes: [User], writes: false,
-            doc: "open or close a node of the Run and Debug view: a variable's children, a chunk of a long array, another thread's frames, more frames",
-            check: check_expand,
-        ),
-        method!(
-            "debug/watch", DebugWatch(DebugWatch) -> Vec<String>,
-            classes: [User], writes: false,
-            doc: "add, edit, remove or move a project's watch expression (kept with its breakpoints): the list",
-            check: check_watch,
-        ),
-        method!(
-            "debug/set-value", DebugSetValue(DebugSetValue) -> DebugValue,
-            classes: [User], writes: false,
-            doc: "set a variable or watched expression of the Run and Debug view to a new value in the debugged program",
-            check: check_set_value,
-        ),
-        method!(
-            "debug/evaluate", DebugEvaluate(DebugEvaluate) -> DebugEvaluated,
-            classes: [User], writes: false,
-            doc: "evaluate an expression in a stopped session's frame (the value to copy, a hover, the console)",
-            check: check_evaluate,
-        ),
-        method!(
-            "debug/children", DebugChildren(DebugChildren) -> DebugChildList,
-            classes: [User], writes: false,
-            doc: "the children of a value the debug console shows, while the stop it is of lasts (after a resume: an error, the value is stale)",
-            check: check_children,
         ),
         method!(
             "debug/trust", DebugTrust(DebugTrust) -> bool,

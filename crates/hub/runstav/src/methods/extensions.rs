@@ -406,36 +406,6 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "one row with its requirements, who needs it, where it comes from and its cached readme",
         ),
         method!(
-            "extensions/rows", ExtensionsRows(RowsParams) -> RowsResult,
-            classes: [User], writes: false,
-            doc: "the rows of these ids, in their order; an unknown id is left out",
-        ),
-        method!(
-            "extensions/list", ExtensionsList(ListParams) -> ListResult,
-            classes: [User], writes: false,
-            doc: "the Extensions list as the view's rows: each section's search, in order, its header and rows built in the hub and sent as `view-patch` to every class of VIEW after its model; answers each section's total",
-            check: |p| {
-                if p.view.is_empty() || p.view.len() > super::view::VIEW_MAX {
-                    return Err(invalid("view", "a view id of 1 to 64 bytes"));
-                }
-                if (p.sections.is_empty() && p.generations.is_empty()) || p.sections.len() > SECTIONS_MAX {
-                    return Err(invalid("sections", "1 to 8 sections (none: generations only)"));
-                }
-                if p.generations.len() > GENERATIONS_MAX {
-                    return Err(invalid("generations", "at most 256 generations"));
-                }
-                for (i, s) in p.sections.iter().enumerate() {
-                    if s.search.query.chars().count() > QUERY_MAX {
-                        return Err(invalid(&format!("sections/{i}/search/query"), "the query is too long"));
-                    }
-                    if s.search.limit.is_some_and(|l| l == 0 || l > LIST_LIMIT_MAX) {
-                        return Err(invalid(&format!("sections/{i}/search/limit"), "limit is 1 to 20000"));
-                    }
-                }
-                Ok(())
-            },
-        ),
-        method!(
             "extensions/modules", ExtensionsModules(ModulesParams) -> Empty,
             classes: [User], writes: false,
             doc: "the editor's module table (name, doc, packages, flags, state), held in memory so the list can show modules; replaces the last table",

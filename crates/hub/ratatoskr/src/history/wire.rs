@@ -329,9 +329,6 @@ pub async fn batch(f: &Front, _: &Caller, p: w::BatchParams) -> Result<w::BatchR
             .await
             .map_err(|e| internal(e.to_string()))?
             .map_err(failed)?;
-    if let Some(file) = &file {
-        crate::view::outline::touched(f, &file.to_string_lossy());
-    }
     if by_agent && let Some(file) = file {
         let file = crate::work::presence::true_name(&file.to_string_lossy());
         f.core.buffers.changed(&[file]);
@@ -351,15 +348,11 @@ pub async fn batch(f: &Front, _: &Caller, p: w::BatchParams) -> Result<w::BatchR
 /// `history/resync`.
 pub async fn resync(f: &Front, _: &Caller, p: w::ResyncParams) -> Result<w::Done, Error> {
     let hub = f.core.history.of_buffer(&p.buffer_id)?;
-    let file = hub.buffer_file(&p.buffer_id);
     let now = crate::clock::wall_secs();
     crate::clock::blocking(move || hub.resync(&p.buffer_id, &p.text, p.version, now))
         .await
         .map_err(|e| internal(e.to_string()))?
         .map_err(failed)?;
-    if let Some(file) = file {
-        crate::view::outline::touched(f, &file.to_string_lossy());
-    }
     Ok(w::Done { ok: true })
 }
 

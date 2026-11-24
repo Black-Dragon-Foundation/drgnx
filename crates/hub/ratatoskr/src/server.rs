@@ -243,7 +243,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     front.extensions.configure(&env);
     front.search.bind(&front);
     front.debug.bind(&front);
-    front.core.views.bind(&front);
+    front.core.git.bind(&front);
     if let Some(d) = front.dirs.get() {
         front
             .search
@@ -279,15 +279,12 @@ pub async fn run(args: ServeArgs) -> Exit {
         "orch:evidence",
         crate::orch::evidence::run(front.clone(), front.core.exec.subscribe()),
     );
-    // `RATATOSKR_SEED_SCENE=1` (test-hooks): one plan run for the look scenes, once, into a fresh store; `map` seeds
-    // the same run with the Work map's graph (the mockup's) in place of the Flow's one agent
+    // `RATATOSKR_SEED_SCENE=1` (test-hooks): one plan run for the look scenes, once, into a fresh store
     #[cfg(feature = "test-hooks")]
-    if let Some(mode) = std::env::var_os("RATATOSKR_SEED_SCENE").filter(|v| v == "1" || v == "map")
-    {
+    if std::env::var_os("RATATOSKR_SEED_SCENE").is_some_and(|v| v == "1") {
         let f = front.clone();
-        let map = mode == "map";
         crate::clock::spawn("orch:scene", async move {
-            if let Err(e) = crate::orch::scene::seed(&f, map).await {
+            if let Err(e) = crate::orch::scene::seed(&f).await {
                 tracing::warn!("the scene's plan run was not seeded: {e}");
             }
         });
@@ -314,9 +311,6 @@ pub async fn run(args: ServeArgs) -> Exit {
     crate::debug::fork_seal::sweep(&crate::debug::fork_seal::forks_root(
         &front.shell_env.paths_env(),
     ));
-    // the Work map follows the store's records and the clock's minutes while a map is open
-    crate::clock::spawn("map:run", crate::work::map::run(front.clone()));
-    crate::clock::spawn("trail:run", crate::work::trail::run(front.clone()));
     // the editors' buffer views follow the presence model from now on
     front.core.buffers.bind(&front);
     // an edit step's file is checked against the other worktrees' from now on

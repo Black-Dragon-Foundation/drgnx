@@ -19,7 +19,6 @@ mod search_eval_sources;
 mod search_extra_gpus;
 mod search_fingerprint;
 mod search_manage;
-mod search_modes_rows;
 mod search_packs;
 mod search_prefer;
 mod search_query;

@@ -93,7 +93,7 @@ struct Open {
     /// What the kernel's task holds of runs that are not over (requests, cells, latest): none when nothing runs.
     held: std::sync::atomic::AtomicUsize,
     /// What the kernel said that answered no cell (the Sjá log view).
-    log: Mutex<super::views::KernelLog>,
+    log: Mutex<super::kernel_log::KernelLog>,
     /// The cells whose full output a view shows: their running output is copied into the notebook with every tail, not once a second.
     watched: Mutex<HashSet<String>>,
     /// Watched cells whose running output is to be copied again at the next tick (a view was asked for after the output came).
@@ -369,7 +369,7 @@ impl Notebooks {
             states: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
             held: std::sync::atomic::AtomicUsize::new(0),
-            log: Mutex::new(super::views::KernelLog::default()),
+            log: Mutex::new(super::kernel_log::KernelLog::default()),
             watched: Mutex::new(HashSet::new()),
             resync: Mutex::new(HashSet::new()),
         });
@@ -680,7 +680,7 @@ impl Notebooks {
         conn: u64,
         id: &str,
         since: u64,
-    ) -> villa::Result<(Vec<super::views::LogEntry>, u64, u64)> {
+    ) -> villa::Result<(Vec<super::kernel_log::LogEntry>, u64, u64)> {
         let open = self
             .get(conn, id)
             .map_err(|e| villa::Error::invalid(e.to_string()))?;
@@ -706,28 +706,6 @@ impl Notebooks {
     /// Whether notebook ID is CONN's.
     pub fn owns(&self, conn: u64, id: &str) -> bool {
         self.get(conn, id).is_ok()
-    }
-
-    /// The first LIMIT cells of notebook ID for its outline, and how many cells there are.
-    pub async fn outline(
-        &self,
-        conn: u64,
-        id: &str,
-        limit: usize,
-    ) -> villa::Result<(usize, Vec<super::views::OutlineCell>)> {
-        let open = self
-            .get(conn, id)
-            .map_err(|e| villa::Error::invalid(e.to_string()))?;
-        let book = open.book.lock().await;
-        let (total, mut cells) = book.outline(limit);
-        for c in &mut cells {
-            match open.state_of(&c.id) {
-                "queued" => c.state = "queued",
-                "running" => c.state = "running",
-                _ => {}
-            }
-        }
-        Ok((total, cells))
     }
 
     /// Cell CELL of notebook ID as a run (what its full-output view shows).

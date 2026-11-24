@@ -1762,21 +1762,6 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "download the built-in model after the user agreed to its size; nothing downloads without this consent",
         ),
         method!(
-            "search/run", SearchRun(RunParams) -> RunStarted,
-            classes: [User], writes: false,
-            doc: "run the Search view's search over a folder and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches; ids m:RUN:N), ending with search-run-done; a newer search of the view stops the old one, and the matches the user unticked in it stay unticked when found again",
-        ),
-        method!(
-            "search/buffer", SearchBuffer(BufferParams) -> bool,
-            classes: [User], writes: false,
-            doc: "an editor buffer with unsaved edits: the Search view's searches search its text in place of its file (the current search at once), the text sent or, with mirror, the edit history's mirror of the tracked buffer (false while it is behind version or no buffer is tracked), or say the buffer is too large and is searched on disk; without text, mirror or large the file is searched again",
-        ),
-        method!(
-            "search/files", SearchFiles(FilesParams) -> FilesStarted,
-            classes: [User], writes: false,
-            doc: "rank a folder's file names for a query and send a hub-fed view the best as rows (view-patch); git's list in a repository, a walk that follows no link elsewhere; a newer query of the view stops the old one",
-        ),
-        method!(
             "search/symbol-at", SearchSymbolAt(SymbolAtParams) -> SymbolAt,
             classes: [User], writes: false,
             doc: "the name of the innermost symbol a file (read from disk) defines around a line, from Hrafn's outline; none outside every symbol",
@@ -1807,81 +1792,6 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "where a name is used in a project's view, by name only (no type resolution): the files and first lines, under the definition that uses it, ranked by the using file; its definitions first",
         ),
         method!(
-            "search/grep-replace", SearchGrepReplace(GrepReplaceParams) -> bool,
-            classes: [User], writes: false,
-            doc: "the replacement a view's grep rows preview changed: the rows are patched, nothing is searched again; false when the view has no search",
-        ),
-        method!(
-            "search/group", SearchGroup(GroupParams) -> bool,
-            classes: [User], writes: false,
-            doc: "regroup a view's search (by file, folder tree or definition; by path, count or the files' rank in the map) without searching again: its rows and model again, the match ids and ticks kept; false when the view has no search",
-        ),
-        method!(
-            "search/fold", SearchFold(FoldParams) -> bool,
-            classes: [User], writes: false,
-            doc: "fold or open a folder of a view's search grouped by Folders: only its rows change (the model keeps every node); false when the view has no search or no such folder",
-        ),
-        method!(
-            "search/grep-skipped", SearchGrepSkipped(GrepSkippedParams) -> bool,
-            classes: [User], writes: false,
-            doc: "a view's grep rows after Replace All: only the matches it skipped, each with why; the search stops; false when the view has no search",
-        ),
-        method!(
-            "search/edit-doc", SearchEditDoc(EditDocParams) -> EditDocAnswer,
-            classes: [User], writes: false,
-            doc: "the lines of a view's search for an Edit Results buffer: each source line once (a match's, or context around one), with its id, file, line number and text; none past the max (over), files that cannot be written skipped with why",
-        ),
-        method!(
-            "search/edits", SearchEdits(EditsParams) -> EditsAnswer,
-            classes: [User], writes: false,
-            doc: "the edit set of a view's search (its ticked matches, the ids named, edits the caller names, or the changed lines of an Edit Results buffer): per file the edits with lines, character columns, byte ranges, old and new text; overlapping matches, files changed since the search, large and binary files skipped with why; kept as a change set for search/apply",
-        ),
-        method!(
-            "search/handoff", SearchHandoff(HandoffParams) -> HandoffAnswer,
-            classes: [User], writes: true,
-            doc: "hand a view's ticked matches to an agent: a brief (the instruction, the query, the matches grouped by file, at most 300 lines, the rest through the drgnx-search tool search_results) to a new worker in its own worktree or to a live session; hidden paths left out unless asked; its progress is search-handoff-state",
-        ),
-        method!(
-            "search/handoff-context", SearchHandoffContext(HandoffContextParams) -> HandoffContext,
-            classes: [User], writes: false,
-            doc: "what Ask an Agent's card shows before Send: the first places of the matches it would hand off, how many in all, the brief's size in tokens and the hidden paths left out",
-        ),
-        method!(
-            "search/handoff-mark", SearchHandoffMark(HandoffMarkParams) -> bool,
-            classes: [User], writes: false,
-            doc: "a hand-off's rows show the agent's mark from now on: a new worker's, known once its first snapshot comes (after search/handoff answered); the asking window's own hand-offs only",
-        ),
-        method!(
-            "search/handoff-state", SearchHandoffState(HandoffStateParams) -> HandoffState,
-            classes: [User], writes: false,
-            doc: "where a hand-off is: sent, editing or done, and which of its matches the agent's edits took out, which are still there and which cannot be found again",
-        ),
-        method!(
-            "search/preview", SearchPreview(PreviewParams) -> PreviewAnswer,
-            classes: [User], writes: false,
-            doc: "one file's changes of a view's search as a unified diff: lines added and removed, the hunks with their matches' ids and a regexp's groups, the matches skipped with why",
-        ),
-        method!(
-            "search/apply", SearchApply(ApplyParams) -> bool,
-            classes: [User], writes: true,
-            doc: "write a change set from search/edits, one file at a time in the hub's write queue (shared with pair writes): a file an editor has open by that editor (search-apply), any other on disk atomically over a check that it is as the edit set read it; ends with search-change",
-        ),
-        method!(
-            "search/applied", SearchApplied(AppliedParams) -> bool,
-            classes: [User], writes: false,
-            doc: "the editor's answer to search-apply: the edits applied and skipped, their inverse, the buffer's tick and whether it saved; true when the hub was waiting for it",
-        ),
-        method!(
-            "search/undo", SearchUndo(UndoParams) -> bool,
-            classes: [User], writes: true,
-            doc: "put back every file a change set wrote (the hub keeps the last 20, open files' inverse edits included), leaving alone a file edited since; ends with search-change",
-        ),
-        method!(
-            "search/grep-look", SearchGrepLook(GrepLookParams) -> bool,
-            classes: [User], writes: false,
-            doc: "a view's grep rows go on: one more window of rows (more), or the rows up to a match beyond them and a margin (upto); false when the view has no search; a search sends only its first 200 rows until asked",
-        ),
-        method!(
             "search/recent", SearchRecent(RootParams) -> RecentAnswer,
             classes: [User], writes: false,
             doc: "a project's recent searches, newest first (the last 50): each search that stood past the typing pause and was not empty, with its mode, toggles, replacement, scope and globs",
@@ -1910,11 +1820,6 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/scope-bases", SearchScopeBases(RootParams) -> ScopeBases,
             classes: [User], writes: false,
             doc: "the Branch scope's menu for a folder's repository: the current branch, its upstream, the default base, the recent branches, and whether HEAD is detached",
-        ),
-        method!(
-            "explorer/subscribe", ExplorerSubscribe(ExplorerParams) -> ExplorerStarted,
-            classes: [User], writes: false,
-            doc: "list the Explorer's roots and open folders for a hub-fed view on a thread: its tree model (view-model) and its rows (view-patch) to every class; ask again with the new open folders to expand or collapse; a newer listing of the view stops the old one",
         ),
         method!(
             "search/typing", SearchTyping(Empty) -> Empty,
