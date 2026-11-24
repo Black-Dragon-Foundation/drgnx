@@ -12,8 +12,8 @@
 //! - a transcript is only ever read in slices of at most [`SLICE_MAX`] steps;
 //! - a merge goes through `RunGit` into the manager's own integration branch `job/<manager>`, never into main.
 
-use crate::agents::Origin;
 use crate::agents::session::{self, Session};
+use crate::agents::{HoldSource, Origin};
 use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::hook_points;
@@ -845,7 +845,7 @@ pub async fn tool(f: &Front, sid: &str, op: &'static str, args: Value) -> Result
             gate(f, sid, &who, Action::AgentsControl, None, &facts).await?;
             f.core
                 .agents
-                .cancel_after_tool(a.id.as_str())
+                .cancel_after_tool(a.id.as_str(), HoldSource::Manager)
                 .map_err(|e| e.message)?;
             Ok(json!({"paused": true}).to_string())
         }

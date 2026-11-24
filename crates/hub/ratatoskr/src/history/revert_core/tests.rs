@@ -311,7 +311,7 @@ impl Core for World {
                 self.revert(RevertEvent::UserSend)
             }
             RevertEvent::UserStop => {
-                let fx = self.turn.step(TurnEvent::Stop { after_tool: false });
+                let fx = self.turn.step(TurnEvent::Stop);
                 self.turn_fx(fx);
                 self.revert(RevertEvent::UserStop)
             }

@@ -58,7 +58,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
-use turn_core::{KillWhy, QueueEdit, TurnCore, TurnEffect, TurnEvent};
+use turn_core::{HoldSource, KillWhy, QueueEdit, TurnCore, TurnEffect, TurnEvent};
 
 /// Events about one session come at most this often.
 const EMIT_EVERY: Duration = Duration::from_millis(50);
@@ -5602,7 +5602,7 @@ impl Session {
     /// instead: the prompt waits at the front of the held queue, and nothing is sent.
     pub(crate) fn stop_turn(self: &Arc<Self>) -> bool {
         !self
-            .turn_event(TurnEvent::Stop { after_tool: false })
+            .turn_event(TurnEvent::Stop)
             .contains(&TurnEffect::NotRunning)
     }
 
@@ -5622,14 +5622,19 @@ impl Session {
 
     /// Pause: cancel once the tool call running now completes and hold the queue; with no turn running, hold the
     /// queue.
-    pub(crate) fn pause_after_tool(self: &Arc<Self>) -> Result<(), Error> {
+    pub(crate) fn pause_after_tool(self: &Arc<Self>, source: HoldSource) -> Result<(), Error> {
         if self
-            .turn_event(TurnEvent::Stop { after_tool: true })
+            .turn_event(TurnEvent::PauseAfterTool { source })
             .contains(&TurnEffect::Exited)
         {
             return Err(invalid("id", "the session has exited"));
         }
         Ok(())
+    }
+
+    /// SOURCE's hold on the turn running lifts ([`TurnEvent::ClearHold`]).
+    pub(crate) fn clear_hold(self: &Arc<Self>, source: HoldSource) {
+        self.turn_event(TurnEvent::ClearHold { source });
     }
 
     /// A budget's pause lifts ([`super::Agents::resume_paused`]): "Continue." goes first, labelled "resumed by you"
@@ -7363,7 +7368,9 @@ pub fn tool_output(
 
 /// `agents/pause`: the turn is cancelled once the tool call running now completes.
 pub fn pause(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
-    f.core.agents.cancel_after_tool(p.id.as_str())?;
+    f.core
+        .agents
+        .cancel_after_tool(p.id.as_str(), HoldSource::User)?;
     Ok(true)
 }
 
@@ -7513,7 +7520,7 @@ pub async fn move_session(
         return Err(refuse("a manager is not moved; it is rotated"));
     }
     // stop after the current tool, then wait for the turn to end (a turn that will not is cancelled)
-    hub.cancel_after_tool(id)?;
+    hub.cancel_after_tool(id, HoldSource::Move)?;
     let end = crate::clock::now() + MOVE_WAIT;
     while old.status() == SessionStatus::Busy {
         if crate::clock::now() >= end {
@@ -8902,7 +8909,9 @@ mod tests {
             steer_mode: false,
             if_free: false,
         });
-        st.turn_step(TurnEvent::Stop { after_tool: true });
+        st.turn_step(TurnEvent::PauseAfterTool {
+            source: HoldSource::User,
+        });
         st.apply(&upd(
             json!({"sessionUpdate": "tool_call", "toolCallId": "t1",
             "title": "Run", "kind": "execute", "status": "in_progress"}),
