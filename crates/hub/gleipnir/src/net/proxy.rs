@@ -14,13 +14,14 @@ use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::time::{Duration, UNIX_EPOCH};
 
+use saman::lock;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixListener};
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::{AbortHandle, JoinSet};
+use tokio::task::JoinSet;
 
 use super::host::{Host, Target, TargetError, is_public, parse_target};
 use super::policy::{
@@ -109,7 +110,7 @@ impl WebState {
 
     /// `f` on a context of the state as it is now for `target` (Unix seconds for `now`). No lock is held past `f`.
     fn with_ctx<R>(&self, target: &Target, f: impl FnOnce(&WebCtx) -> R) -> R {
-        let now = SystemTime::now()
+        let now = stund::wall()
             .duration_since(UNIX_EPOCH)
             .map_or(0.0, |d| d.as_secs_f64());
         let web = self.web_for(target, now);
@@ -313,7 +314,7 @@ struct Shared {
     /// The events sent already, so each is sent once.
     said: Mutex<HashSet<ProxyEvent>>,
     /// Each tag's accept loops; aborting one drops its listener and its connections with it.
-    listeners: Mutex<HashMap<u64, Vec<AbortHandle>>>,
+    listeners: Mutex<HashMap<u64, Vec<saman::Task<()>>>>,
 }
 
 /// A running proxy. Dropping it shuts it down.
@@ -381,21 +382,22 @@ impl ProxyHandle {
 
     /// Accepts clients on `listener`; their events carry `tag`.
     pub fn listen(&self, listener: Listener, tag: u64) {
-        let task = tokio::spawn(serve(self.shared.clone(), listener, tag));
+        // dropped with the handle's `close` or `shutdown`, which ends the listener and its connections
+        let task = saman::spawn("proxy-serve", serve(self.shared.clone(), listener, tag));
         lock(&self.shared.listeners)
             .entry(tag)
             .or_default()
-            .push(task.abort_handle());
+            .push(task);
     }
 
     /// Drops the listeners of `tag` and every connection they accepted.
     pub fn close(&self, tag: u64) {
-        for task in lock(&self.shared.listeners)
-            .remove(&tag)
-            .unwrap_or_default()
-        {
-            task.abort();
-        }
+        // dropping a task ends it
+        drop(
+            lock(&self.shared.listeners)
+                .remove(&tag)
+                .unwrap_or_default(),
+        );
         lock(&self.shared.said).retain(|e| e.tag() != tag);
     }
 
@@ -419,9 +421,8 @@ impl ProxyHandle {
 
     /// Drops every listener and connection.
     pub fn shutdown(&self) {
-        for task in lock(&self.shared.listeners).drain().flat_map(|(_, v)| v) {
-            task.abort();
-        }
+        // dropping a task ends it
+        drop(lock(&self.shared.listeners).drain().collect::<Vec<_>>());
     }
 }
 
@@ -429,11 +430,6 @@ impl Drop for ProxyHandle {
     fn drop(&mut self) {
         self.shutdown();
     }
-}
-
-/// A poisoned lock still holds consistent data here (sets and maps changed in one call), so it is used as it is.
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// A client connection, from either kind of listener.
@@ -488,7 +484,7 @@ async fn serve(sh: Arc<Shared>, mut listener: Listener, tag: u64) {
                 // a relay channel that ended: its connections end with the loop
                 Ok(None) => return,
                 // out of fds and the like: wait a little rather than spin
-                Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+                Err(_) => stund::sleep(Duration::from_millis(50)).await,
             },
             Some(_) = conns.join_next(), if !conns.is_empty() => {}
         }
@@ -509,7 +505,8 @@ async fn accept(listener: &mut Listener) -> io::Result<Option<(Box<dyn Client>, 
                 return Ok(None);
             };
             let gone: Gone = Box::pin(async move {
-                let _ = gone.await;
+                // signalled, or its sender dropped: either way the client is gone
+                gone.await.unwrap_or_default();
             });
             (Box::new(io), gone)
         }
@@ -524,8 +521,10 @@ const BAD_GATEWAY: &str = "502 Bad Gateway";
 /// Answers `status` with no body and closes.
 async fn answer(mut client: Box<dyn Client>, status: &str) {
     let text = format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-    if client.write_all(text.as_bytes()).await.is_ok() {
-        let _ = client.shutdown().await;
+    if client.write_all(text.as_bytes()).await.is_ok()
+        && let Err(e) = client.shutdown().await
+    {
+        tracing::debug!(error = %e, "a client's close failed");
     }
 }
 
@@ -1174,7 +1173,7 @@ mod tests {
         let attempts = Arc::new(Mutex::new(Vec::new()));
         let seen = attempts.clone();
         let connect: Connect = Arc::new(move |a: SocketAddr| -> Connecting {
-            seen.lock().unwrap().push(a);
+            lock(&seen).push(a);
             connect(a)
         });
         let (tx, events) = mpsc::channel(64);
@@ -1206,7 +1205,7 @@ mod tests {
         }
 
         fn attempts(&self) -> Vec<SocketAddr> {
-            self.attempts.lock().unwrap().clone()
+            lock(&self.attempts).clone()
         }
 
         /// A relay channel's listener on `tag`; the sender is what the owner's end holds.
@@ -1251,7 +1250,7 @@ mod tests {
         let (tx, rx) = mpsc::unbounded_channel();
         let connect: Connect = Arc::new(move |a: SocketAddr| -> Connecting {
             if a == hole {
-                let _ = tx.send(a);
+                saman::delivered(tx.send(a), "a blackhole attempt");
                 Box::pin(std::future::pending())
             } else {
                 tcp_connect(a)
@@ -1315,14 +1314,18 @@ mod tests {
     async fn echo() -> SocketAddr {
         let l = tokio::net::TcpListener::bind((LOOP, 0)).await.unwrap();
         let a = l.local_addr().unwrap();
-        tokio::spawn(async move {
+        saman::spawn("echo-accept", async move {
             while let Ok((mut c, _)) = l.accept().await {
-                tokio::spawn(async move {
+                saman::spawn("echo", async move {
                     let (mut r, mut w) = c.split();
-                    let _ = tokio::io::copy(&mut r, &mut w).await;
-                });
+                    if let Err(e) = tokio::io::copy(&mut r, &mut w).await {
+                        tracing::debug!(error = %e, "an echo ended with a reset");
+                    }
+                })
+                .detach("an echo lives until its client closes");
             }
-        });
+        })
+        .detach("the echo upstream lives until the test's runtime ends");
         a
     }
 
@@ -1331,13 +1334,14 @@ mod tests {
         let l = tokio::net::TcpListener::bind((LOOP, 0)).await.unwrap();
         let a = l.local_addr().unwrap();
         let (tx, rx) = oneshot::channel();
-        tokio::spawn(async move {
+        saman::spawn("recorder", async move {
             let (mut c, _) = l.accept().await.unwrap();
             let mut got = Vec::new();
             c.read_to_end(&mut got).await.unwrap();
-            let _ = tx.send(got);
+            saman::delivered(tx.send(got), "what the recorder got");
             c.write_all(&answer).await.unwrap();
-        });
+        })
+        .detach("the recorder lives until its one connection ends");
         (a, rx)
     }
 
@@ -1362,889 +1366,948 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn only_the_allowlist() {
-        let up = echo().await;
-        let mut r = rig(pinned_up(up.port()), &[], &[]);
-        let p = r.listen(1);
+    #[test]
+    fn only_the_allowlist() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let mut r = rig(pinned_up(up.port()), &[], &[]);
+            let p = r.listen(1);
 
-        let (mut s, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
-        assert_eq!(code, 200);
-        assert!(echoes(&mut s, b"hello").await);
+            let (mut s, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
+            assert_eq!(code, 200);
+            assert!(echoes(&mut s, b"hello").await);
 
-        // the same name on another port, another name on the same port: not listed
-        for other in ["up.test:22".to_owned(), format!("down.test:{}", up.port())] {
-            let (mut s, code) = connect_to(&p, &other).await;
-            assert_eq!(code, 403, "{other}");
-            assert!(closed(&mut s).await);
-        }
-        assert_eq!(
-            r.said(),
-            vec![
-                ProxyEvent::Denied {
-                    tag: 1,
-                    target: t("up.test:22")
-                },
-                ProxyEvent::Denied {
-                    tag: 1,
-                    target: t(&format!("down.test:{}", up.port()))
-                },
-            ]
-        );
-        assert_eq!(
-            r.attempts(),
-            vec![up],
-            "only the listed target was connected"
-        );
+            // the same name on another port, another name on the same port: not listed
+            for other in ["up.test:22".to_owned(), format!("down.test:{}", up.port())] {
+                let (mut s, code) = connect_to(&p, &other).await;
+                assert_eq!(code, 403, "{other}");
+                assert!(closed(&mut s).await);
+            }
+            assert_eq!(
+                r.said(),
+                vec![
+                    ProxyEvent::Denied {
+                        tag: 1,
+                        target: t("up.test:22")
+                    },
+                    ProxyEvent::Denied {
+                        tag: 1,
+                        target: t(&format!("down.test:{}", up.port()))
+                    },
+                ]
+            );
+            assert_eq!(
+                r.attempts(),
+                vec![up],
+                "only the listed target was connected"
+            );
+        });
     }
 
-    #[tokio::test]
-    async fn no_tls_termination() {
-        // a ClientHello-like start, then every byte value, sent with the head and after the 200
-        let mut early = vec![
-            0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xfc, 0x03, 0x03,
-        ];
-        early.extend(0u8..=255);
-        early.extend_from_slice(b"\r\n\r\nCONNECT x HTTP/1.1\r\n\r\n");
-        let later: Vec<u8> = (0u8..=255).rev().cycle().take(100_000).collect();
-        let answer: Vec<u8> = (0u8..=255).cycle().take(70_000).collect();
-        let (up, got) = recorder(answer.clone()).await;
-        let mut r = rig(pinned_up(up.port()), &[], &[]);
-        let p = r.listen(1);
+    #[test]
+    fn no_tls_termination() {
+        saman::block_on_current(async {
+            // a ClientHello-like start, then every byte value, sent with the head and after the 200
+            let mut early = vec![
+                0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xfc, 0x03, 0x03,
+            ];
+            early.extend(0u8..=255);
+            early.extend_from_slice(b"\r\n\r\nCONNECT x HTTP/1.1\r\n\r\n");
+            let later: Vec<u8> = (0u8..=255).rev().cycle().take(100_000).collect();
+            let answer: Vec<u8> = (0u8..=255).cycle().take(70_000).collect();
+            let (up, got) = recorder(answer.clone()).await;
+            let mut r = rig(pinned_up(up.port()), &[], &[]);
+            let p = r.listen(1);
 
-        let mut first = format!("CONNECT up.test:{} HTTP/1.1\r\n\r\n", up.port()).into_bytes();
-        first.extend_from_slice(&early);
-        let (mut s, code) = ask(&p, &first).await;
-        assert_eq!(code, 200);
-        s.write_all(&later).await.unwrap();
-        s.shutdown().await.unwrap();
-        let mut back = Vec::new();
-        timeout(WAIT, s.read_to_end(&mut back))
-            .await
-            .unwrap()
-            .unwrap();
+            let mut first = format!("CONNECT up.test:{} HTTP/1.1\r\n\r\n", up.port()).into_bytes();
+            first.extend_from_slice(&early);
+            let (mut s, code) = ask(&p, &first).await;
+            assert_eq!(code, 200);
+            s.write_all(&later).await.unwrap();
+            s.shutdown().await.unwrap();
+            let mut back = Vec::new();
+            timeout(WAIT, s.read_to_end(&mut back))
+                .await
+                .unwrap()
+                .unwrap();
 
-        let mut sent = early;
-        sent.extend_from_slice(&later);
-        assert_eq!(
-            got.await.unwrap(),
-            sent,
-            "the upstream sees the client's exact bytes"
-        );
-        assert_eq!(back, answer, "the client sees the upstream's exact bytes");
-        assert!(r.said().is_empty());
+            let mut sent = early;
+            sent.extend_from_slice(&later);
+            assert_eq!(
+                got.await.unwrap(),
+                sent,
+                "the upstream sees the client's exact bytes"
+            );
+            assert_eq!(back, answer, "the client sees the upstream's exact bytes");
+            assert!(r.said().is_empty());
+        });
     }
 
-    #[tokio::test]
-    async fn plain_get_refused() {
-        let up = echo().await;
-        let mut r = rig(pinned_up(up.port()), &[], &[]);
-        let p = r.listen(1);
-        let (mut s, code) = ask(
-            &p,
-            format!(
-                "GET http://up.test:{}/ HTTP/1.1\r\nHost: up.test\r\n\r\n",
-                up.port()
+    #[test]
+    fn plain_get_refused() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let mut r = rig(pinned_up(up.port()), &[], &[]);
+            let p = r.listen(1);
+            let (mut s, code) = ask(
+                &p,
+                format!(
+                    "GET http://up.test:{}/ HTTP/1.1\r\nHost: up.test\r\n\r\n",
+                    up.port()
+                )
+                .as_bytes(),
             )
-            .as_bytes(),
-        )
-        .await;
-        assert_eq!(code, 400);
-        assert!(closed(&mut s).await);
-        assert_eq!(
-            r.said(),
-            vec![ProxyEvent::Refused {
-                tag: 1,
-                target: String::new(),
-                why: RefuseWhy::BadRequest
-            }]
-        );
-        assert!(r.attempts().is_empty());
+            .await;
+            assert_eq!(code, 400);
+            assert!(closed(&mut s).await);
+            assert_eq!(
+                r.said(),
+                vec![ProxyEvent::Refused {
+                    tag: 1,
+                    target: String::new(),
+                    why: RefuseWhy::BadRequest
+                }]
+            );
+            assert!(r.attempts().is_empty());
+        });
     }
 
-    #[tokio::test]
-    async fn bad_requests_table() {
-        let up = echo().await;
-        let port = up.port();
-        let mut cfg = pinned_up(port);
-        cfg.max_head = 256;
-        // listed literals that are not public: still refused, and a regression would reach the fixture
-        for lit in [
-            format!("127.0.0.1:{port}"),
-            format!("[::ffff:127.0.0.1]:{port}"),
-        ] {
-            cfg.allow.push(t(&lit));
-        }
-        let v6up = SocketAddr::new("::ffff:127.0.0.1".parse().unwrap(), port);
-        let mut r = rig(cfg, &[], &[(v6up, up)]);
-        let p = r.listen(7);
-        use RefuseWhy::*;
-        let long = "a".repeat(300);
-        let (lit4, lit6) = (
-            format!("127.0.0.1:{port}"),
-            format!("[::ffff:127.0.0.1]:{port}"),
-        );
-        // the request, the status, and the event (its target and why)
-        type Row<'a> = (Vec<u8>, u16, Option<(&'a str, RefuseWhy)>);
-        let rows: Vec<Row> = vec![
-            (
-                format!("CONNECT up.test:{port} HTTP/2.0\r\n\r\n").into(),
-                400,
-                Some(("", BadRequest)),
-            ),
-            (
-                format!("connect up.test:{port} HTTP/1.1\r\n\r\n").into(),
-                400,
-                Some(("", BadRequest)),
-            ),
-            (
-                format!("CONNECT  up.test:{port} HTTP/1.1\r\n\r\n").into(),
-                400,
-                Some(("", BadRequest)),
-            ),
-            (
-                format!("CONNECT up.test:{port}\r\n\r\n").into(),
-                400,
-                Some(("", BadRequest)),
-            ),
-            (
-                format!("CONNECT up.test:{port} HTTP/1.1 x\r\n\r\n").into(),
-                400,
-                Some(("", BadRequest)),
-            ),
-            (
-                b"CONNECT a\0b.com:443 HTTP/1.1\r\n\r\n".to_vec(),
-                400,
-                Some(("a\\x00b.com:443", NotAscii)),
-            ),
-            (
-                "CONNECT bücher.de:443 HTTP/1.1\r\n\r\n".into(),
-                400,
-                Some(("b\\xc3\\xbccher.de:443", NotAscii)),
-            ),
-            (
-                b"CONNECT up.test:0 HTTP/1.1\r\n\r\n".to_vec(),
-                400,
-                Some(("up.test:0", BadRequest)),
-            ),
-            (
-                b"CONNECT 127.1:80 HTTP/1.1\r\n\r\n".to_vec(),
-                400,
-                Some(("127.1:80", BadRequest)),
-            ),
-            (
-                b"CONNECT foo_bar.com:443 HTTP/1.1\r\n\r\n".to_vec(),
-                400,
-                Some(("foo_bar.com:443", BadRequest)),
-            ),
-            (
-                format!("CONNECT up.test:{port} HTTP/1.1\r\nX: {long}\r\n\r\n").into(),
-                400,
-                Some(("", BadRequest)),
-            ),
-            (
-                b"*.up.test:443 HTTP/1.1\r\n\r\n".to_vec(),
-                400,
-                Some(("", BadRequest)),
-            ),
-            (
-                b"CONNECT *.up.test:443 HTTP/1.1\r\n\r\n".to_vec(),
-                403,
-                Some(("*.up.test:443", Wildcard)),
-            ),
-            (
-                format!("CONNECT 127.0.0.1:{port} HTTP/1.1\r\n\r\n").into(),
-                403,
-                Some((&lit4, Private)),
-            ),
-            (
-                format!("CONNECT [::ffff:127.0.0.1]:{port} HTTP/1.1\r\n\r\n").into(),
-                403,
-                Some((&lit6, Private)),
-            ),
-            (
-                b"CONNECT 169.254.169.254:80 HTTP/1.1\r\n\r\n".to_vec(),
-                403,
-                Some(("169.254.169.254:80", Private)),
-            ),
-            (
-                b"CONNECT [64:ff9b::a9fe:a9fe]:80 HTTP/1.1\r\n\r\n".to_vec(),
-                403,
-                Some(("[64:ff9b::a9fe:a9fe]:80", Private)),
-            ),
-            (
-                b"CONNECT 10.0.0.1:443 HTTP/1.1\r\n\r\n".to_vec(),
-                403,
-                Some(("10.0.0.1:443", Private)),
-            ),
-        ];
-        // each event is said once per tag: a row repeating an earlier row's event expects none
-        let mut before = HashSet::new();
-        for (req, want, event) in rows {
-            let shown = String::from_utf8_lossy(&req).into_owned();
-            let (mut s, code) = ask(&p, &req).await;
-            assert_eq!(code, want, "{shown:?}");
-            assert!(closed(&mut s).await, "{shown:?}");
-            let expect: Vec<ProxyEvent> = event
-                .map(|(target, why)| ProxyEvent::Refused {
-                    tag: 7,
-                    target: target.into(),
-                    why,
-                })
-                .filter(|e| before.insert(e.clone()))
-                .into_iter()
-                .collect();
-            assert_eq!(r.said(), expect, "{shown:?}");
-        }
-        assert!(
-            r.attempts().is_empty(),
-            "nothing was connected: {:?}",
-            r.attempts()
-        );
+    #[test]
+    fn bad_requests_table() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let port = up.port();
+            let mut cfg = pinned_up(port);
+            cfg.max_head = 256;
+            // listed literals that are not public: still refused, and a regression would reach the fixture
+            for lit in [
+                format!("127.0.0.1:{port}"),
+                format!("[::ffff:127.0.0.1]:{port}"),
+            ] {
+                cfg.allow.push(t(&lit));
+            }
+            let v6up = SocketAddr::new("::ffff:127.0.0.1".parse().unwrap(), port);
+            let mut r = rig(cfg, &[], &[(v6up, up)]);
+            let p = r.listen(7);
+            use RefuseWhy::*;
+            let long = "a".repeat(300);
+            let (lit4, lit6) = (
+                format!("127.0.0.1:{port}"),
+                format!("[::ffff:127.0.0.1]:{port}"),
+            );
+            // the request, the status, and the event (its target and why)
+            type Row<'a> = (Vec<u8>, u16, Option<(&'a str, RefuseWhy)>);
+            let rows: Vec<Row> = vec![
+                (
+                    format!("CONNECT up.test:{port} HTTP/2.0\r\n\r\n").into(),
+                    400,
+                    Some(("", BadRequest)),
+                ),
+                (
+                    format!("connect up.test:{port} HTTP/1.1\r\n\r\n").into(),
+                    400,
+                    Some(("", BadRequest)),
+                ),
+                (
+                    format!("CONNECT  up.test:{port} HTTP/1.1\r\n\r\n").into(),
+                    400,
+                    Some(("", BadRequest)),
+                ),
+                (
+                    format!("CONNECT up.test:{port}\r\n\r\n").into(),
+                    400,
+                    Some(("", BadRequest)),
+                ),
+                (
+                    format!("CONNECT up.test:{port} HTTP/1.1 x\r\n\r\n").into(),
+                    400,
+                    Some(("", BadRequest)),
+                ),
+                (
+                    b"CONNECT a\0b.com:443 HTTP/1.1\r\n\r\n".to_vec(),
+                    400,
+                    Some(("a\\x00b.com:443", NotAscii)),
+                ),
+                (
+                    "CONNECT bücher.de:443 HTTP/1.1\r\n\r\n".into(),
+                    400,
+                    Some(("b\\xc3\\xbccher.de:443", NotAscii)),
+                ),
+                (
+                    b"CONNECT up.test:0 HTTP/1.1\r\n\r\n".to_vec(),
+                    400,
+                    Some(("up.test:0", BadRequest)),
+                ),
+                (
+                    b"CONNECT 127.1:80 HTTP/1.1\r\n\r\n".to_vec(),
+                    400,
+                    Some(("127.1:80", BadRequest)),
+                ),
+                (
+                    b"CONNECT foo_bar.com:443 HTTP/1.1\r\n\r\n".to_vec(),
+                    400,
+                    Some(("foo_bar.com:443", BadRequest)),
+                ),
+                (
+                    format!("CONNECT up.test:{port} HTTP/1.1\r\nX: {long}\r\n\r\n").into(),
+                    400,
+                    Some(("", BadRequest)),
+                ),
+                (
+                    b"*.up.test:443 HTTP/1.1\r\n\r\n".to_vec(),
+                    400,
+                    Some(("", BadRequest)),
+                ),
+                (
+                    b"CONNECT *.up.test:443 HTTP/1.1\r\n\r\n".to_vec(),
+                    403,
+                    Some(("*.up.test:443", Wildcard)),
+                ),
+                (
+                    format!("CONNECT 127.0.0.1:{port} HTTP/1.1\r\n\r\n").into(),
+                    403,
+                    Some((&lit4, Private)),
+                ),
+                (
+                    format!("CONNECT [::ffff:127.0.0.1]:{port} HTTP/1.1\r\n\r\n").into(),
+                    403,
+                    Some((&lit6, Private)),
+                ),
+                (
+                    b"CONNECT 169.254.169.254:80 HTTP/1.1\r\n\r\n".to_vec(),
+                    403,
+                    Some(("169.254.169.254:80", Private)),
+                ),
+                (
+                    b"CONNECT [64:ff9b::a9fe:a9fe]:80 HTTP/1.1\r\n\r\n".to_vec(),
+                    403,
+                    Some(("[64:ff9b::a9fe:a9fe]:80", Private)),
+                ),
+                (
+                    b"CONNECT 10.0.0.1:443 HTTP/1.1\r\n\r\n".to_vec(),
+                    403,
+                    Some(("10.0.0.1:443", Private)),
+                ),
+            ];
+            // each event is said once per tag: a row repeating an earlier row's event expects none
+            let mut before = HashSet::new();
+            for (req, want, event) in rows {
+                let shown = String::from_utf8_lossy(&req).into_owned();
+                let (mut s, code) = ask(&p, &req).await;
+                assert_eq!(code, want, "{shown:?}");
+                assert!(closed(&mut s).await, "{shown:?}");
+                let expect: Vec<ProxyEvent> = event
+                    .map(|(target, why)| ProxyEvent::Refused {
+                        tag: 7,
+                        target: target.into(),
+                        why,
+                    })
+                    .filter(|e| before.insert(e.clone()))
+                    .into_iter()
+                    .collect();
+                assert_eq!(r.said(), expect, "{shown:?}");
+            }
+            assert!(
+                r.attempts().is_empty(),
+                "nothing was connected: {:?}",
+                r.attempts()
+            );
+        });
     }
 
-    #[tokio::test]
-    async fn wildcard_is_refused_without_denied() {
-        let up = echo().await;
-        let mut r = rig(pinned_up(up.port()), &[], &[]);
-        let p = r.listen(1);
-        for _ in 0..2 {
-            let (mut s, code) = connect_to(&p, &format!("*.up.test:{}", up.port())).await;
+    #[test]
+    fn wildcard_is_refused_without_denied() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let mut r = rig(pinned_up(up.port()), &[], &[]);
+            let p = r.listen(1);
+            for _ in 0..2 {
+                let (mut s, code) = connect_to(&p, &format!("*.up.test:{}", up.port())).await;
+                assert_eq!(code, 403);
+                assert!(closed(&mut s).await);
+            }
+            assert_eq!(
+                r.said(),
+                vec![ProxyEvent::Refused {
+                    tag: 1,
+                    target: format!("*.up.test:{}", up.port()),
+                    why: RefuseWhy::Wildcard
+                }]
+            );
+            assert!(r.attempts().is_empty());
+        });
+    }
+
+    #[test]
+    fn dns_answer_private_refused() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            // listed, not pinned; DNS answers only private addresses, one of them the fixture
+            let cfg = ProxyConfig {
+                allow: vec![t("inside.test:443")],
+                ..ProxyConfig::default()
+            };
+            let answers = vec![vec![
+                SocketAddr::new(IpAddr::V4(LOOP), 443),
+                "10.0.0.5:443".parse().unwrap(),
+                "[::ffff:192.168.1.1]:443".parse().unwrap(),
+            ]];
+            let to_up = SocketAddr::new(IpAddr::V4(LOOP), 443);
+            let mut r = rig(cfg, &[("inside.test", answers)], &[(to_up, up)]);
+            let p = r.listen(3);
+            let (mut s, code) = connect_to(&p, "inside.test:443").await;
             assert_eq!(code, 403);
             assert!(closed(&mut s).await);
-        }
-        assert_eq!(
-            r.said(),
-            vec![ProxyEvent::Refused {
-                tag: 1,
-                target: format!("*.up.test:{}", up.port()),
-                why: RefuseWhy::Wildcard
-            }]
-        );
-        assert!(r.attempts().is_empty());
+            assert_eq!(
+                r.said(),
+                vec![ProxyEvent::Refused {
+                    tag: 3,
+                    target: "inside.test:443".into(),
+                    why: RefuseWhy::Private
+                }]
+            );
+            assert!(r.attempts().is_empty(), "connected: {:?}", r.attempts());
+        });
     }
 
-    #[tokio::test]
-    async fn dns_answer_private_refused() {
-        let up = echo().await;
-        // listed, not pinned; DNS answers only private addresses, one of them the fixture
-        let cfg = ProxyConfig {
-            allow: vec![t("inside.test:443")],
-            ..ProxyConfig::default()
-        };
-        let answers = vec![vec![
-            SocketAddr::new(IpAddr::V4(LOOP), 443),
-            "10.0.0.5:443".parse().unwrap(),
-            "[::ffff:192.168.1.1]:443".parse().unwrap(),
-        ]];
-        let to_up = SocketAddr::new(IpAddr::V4(LOOP), 443);
-        let mut r = rig(cfg, &[("inside.test", answers)], &[(to_up, up)]);
-        let p = r.listen(3);
-        let (mut s, code) = connect_to(&p, "inside.test:443").await;
-        assert_eq!(code, 403);
-        assert!(closed(&mut s).await);
-        assert_eq!(
-            r.said(),
-            vec![ProxyEvent::Refused {
-                tag: 3,
-                target: "inside.test:443".into(),
-                why: RefuseWhy::Private
-            }]
-        );
-        assert!(r.attempts().is_empty(), "connected: {:?}", r.attempts());
+    #[test]
+    fn pinned_private_reached() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            // DNS would say something else; the pin wins, and is asked of no resolver
+            let wrong = vec![vec![SocketAddr::new(IpAddr::V4(PUBLIC), up.port())]];
+            let mut r = rig(pinned_up(up.port()), &[("up.test", wrong)], &[]);
+            let p = r.listen(1);
+            let (mut s, code) = connect_to(&p, &format!("UP.test.:{}", up.port())).await;
+            assert_eq!(code, 200);
+            assert!(echoes(&mut s, b"pinned").await);
+            assert_eq!(r.attempts(), vec![up]);
+            assert_eq!(r.resolver.calls.load(Ordering::SeqCst), 0);
+            assert!(r.said().is_empty());
+
+            // a pin is for its exact name: a listed subdomain goes to DNS (which has no answer here)
+            let sub = t(&format!("sub.up.test:{}", up.port()));
+            r.handle.allow(sub.clone());
+            let (_s, code) = connect_to(&p, &sub.to_string()).await;
+            assert_eq!(code, 502);
+            assert_eq!(r.attempts(), vec![up]);
+        });
     }
 
-    #[tokio::test]
-    async fn pinned_private_reached() {
-        let up = echo().await;
-        // DNS would say something else; the pin wins, and is asked of no resolver
-        let wrong = vec![vec![SocketAddr::new(IpAddr::V4(PUBLIC), up.port())]];
-        let mut r = rig(pinned_up(up.port()), &[("up.test", wrong)], &[]);
-        let p = r.listen(1);
-        let (mut s, code) = connect_to(&p, &format!("UP.test.:{}", up.port())).await;
-        assert_eq!(code, 200);
-        assert!(echoes(&mut s, b"pinned").await);
-        assert_eq!(r.attempts(), vec![up]);
-        assert_eq!(r.resolver.calls.load(Ordering::SeqCst), 0);
-        assert!(r.said().is_empty());
-
-        // a pin is for its exact name: a listed subdomain goes to DNS (which has no answer here)
-        let sub = t(&format!("sub.up.test:{}", up.port()));
-        r.handle.allow(sub.clone());
-        let (_s, code) = connect_to(&p, &sub.to_string()).await;
-        assert_eq!(code, 502);
-        assert_eq!(r.attempts(), vec![up]);
+    #[test]
+    fn mixed_dns_answer_uses_the_public_address() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let cfg = ProxyConfig {
+                allow: vec![t("mixed.test:443")],
+                ..ProxyConfig::default()
+            };
+            let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+            let private = SocketAddr::new(IpAddr::V4(LOOP), 443);
+            // the private one first, and it too leads to the fixture: only the attempt list tells them apart
+            let answers = vec![vec![private, "[fe80::1]:443".parse().unwrap(), public]];
+            let mut r = rig(
+                cfg,
+                &[("mixed.test", answers)],
+                &[(public, up), (private, up)],
+            );
+            let p = r.listen(1);
+            let (mut s, code) = connect_to(&p, "mixed.test:443").await;
+            assert_eq!(code, 200);
+            assert!(echoes(&mut s, b"mixed").await);
+            assert_eq!(r.attempts(), vec![public]);
+            assert!(r.said().is_empty());
+        });
     }
 
-    #[tokio::test]
-    async fn mixed_dns_answer_uses_the_public_address() {
-        let up = echo().await;
-        let cfg = ProxyConfig {
-            allow: vec![t("mixed.test:443")],
-            ..ProxyConfig::default()
-        };
-        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
-        let private = SocketAddr::new(IpAddr::V4(LOOP), 443);
-        // the private one first, and it too leads to the fixture: only the attempt list tells them apart
-        let answers = vec![vec![private, "[fe80::1]:443".parse().unwrap(), public]];
-        let mut r = rig(
-            cfg,
-            &[("mixed.test", answers)],
-            &[(public, up), (private, up)],
-        );
-        let p = r.listen(1);
-        let (mut s, code) = connect_to(&p, "mixed.test:443").await;
-        assert_eq!(code, 200);
-        assert!(echoes(&mut s, b"mixed").await);
-        assert_eq!(r.attempts(), vec![public]);
-        assert!(r.said().is_empty());
+    #[test]
+    fn one_resolution_rebinding_cannot_redirect() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let cfg = ProxyConfig {
+                allow: vec![t("rebind.test:443")],
+                ..ProxyConfig::default()
+            };
+            let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+            let private = SocketAddr::new(IpAddr::V4(LOOP), 443);
+            // a DNS answer that turns private after the first question; the port in an answer is not the target's
+            let answers = vec![
+                vec![SocketAddr::new(IpAddr::V4(PUBLIC), 8443)],
+                vec![private],
+            ];
+            let r = rig(
+                cfg,
+                &[("rebind.test", answers)],
+                &[(public, up), (private, up)],
+            );
+            let p = r.listen(1);
+            let (mut s, code) = connect_to(&p, "rebind.test:443").await;
+            assert_eq!(code, 200);
+            assert!(echoes(&mut s, b"once").await);
+            assert_eq!(r.resolver.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                r.attempts(),
+                vec![public],
+                "the checked address, on the target's port"
+            );
+        });
     }
 
-    #[tokio::test]
-    async fn one_resolution_rebinding_cannot_redirect() {
-        let up = echo().await;
-        let cfg = ProxyConfig {
-            allow: vec![t("rebind.test:443")],
-            ..ProxyConfig::default()
-        };
-        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
-        let private = SocketAddr::new(IpAddr::V4(LOOP), 443);
-        // a DNS answer that turns private after the first question; the port in an answer is not the target's
-        let answers = vec![
-            vec![SocketAddr::new(IpAddr::V4(PUBLIC), 8443)],
-            vec![private],
-        ];
-        let r = rig(
-            cfg,
-            &[("rebind.test", answers)],
-            &[(public, up), (private, up)],
-        );
-        let p = r.listen(1);
-        let (mut s, code) = connect_to(&p, "rebind.test:443").await;
-        assert_eq!(code, 200);
-        assert!(echoes(&mut s, b"once").await);
-        assert_eq!(r.resolver.calls.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            r.attempts(),
-            vec![public],
-            "the checked address, on the target's port"
-        );
+    #[test]
+    fn listed_but_unreachable_is_502() {
+        saman::block_on_current(async {
+            // a listed public name whose addresses refuse, one that does not resolve, and one whose answer is empty
+            // (no address at all is unreachable, not private). The refusal is the connector's own, on every system: a
+            // dropped listener's port went back to the kernel, which could hand it to another test's listener (200), and
+            // a port bound but never listening refuses on Linux but drops the SYN on macOS (the connect hangs)
+            let cfg = ProxyConfig {
+                allow: vec![
+                    t("gone.test:443"),
+                    t("nowhere.test:443"),
+                    t("empty.test:443"),
+                ],
+                ..ProxyConfig::default()
+            };
+            let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+            let mut r = rig_with(
+                cfg,
+                &[
+                    ("gone.test", vec![vec![public]]),
+                    ("empty.test", vec![vec![]]),
+                ],
+                |_| Box::pin(async { Err(io::Error::from(io::ErrorKind::ConnectionRefused)) }),
+            );
+            let p = r.listen(1);
+            for target in ["gone.test:443", "nowhere.test:443", "empty.test:443"] {
+                let (mut s, code) = connect_to(&p, target).await;
+                assert_eq!(code, 502, "{target}");
+                assert!(closed(&mut s).await);
+            }
+            assert_eq!(r.attempts(), vec![public], "only gone.test has an address");
+            assert!(r.said().is_empty());
+        });
     }
 
-    #[tokio::test]
-    async fn listed_but_unreachable_is_502() {
-        // a listed public name whose addresses refuse, one that does not resolve, and one whose answer is empty
-        // (no address at all is unreachable, not private). The refusal is the connector's own, on every system: a
-        // dropped listener's port went back to the kernel, which could hand it to another test's listener (200), and
-        // a port bound but never listening refuses on Linux but drops the SYN on macOS (the connect hangs)
-        let cfg = ProxyConfig {
-            allow: vec![
-                t("gone.test:443"),
-                t("nowhere.test:443"),
-                t("empty.test:443"),
-            ],
-            ..ProxyConfig::default()
-        };
-        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
-        let mut r = rig_with(
-            cfg,
-            &[
-                ("gone.test", vec![vec![public]]),
-                ("empty.test", vec![vec![]]),
-            ],
-            |_| Box::pin(async { Err(io::Error::from(io::ErrorKind::ConnectionRefused)) }),
-        );
-        let p = r.listen(1);
-        for target in ["gone.test:443", "nowhere.test:443", "empty.test:443"] {
-            let (mut s, code) = connect_to(&p, target).await;
-            assert_eq!(code, 502, "{target}");
+    #[test]
+    fn denied_once_per_target() {
+        saman::block_on_current(async {
+            let mut r = rig(ProxyConfig::default(), &[], &[]);
+            let p = r.listen(5);
+            for target in [
+                "a.test:443",
+                "a.test:443",
+                "A.test.:443",
+                "b.test:443",
+                "a.test:443",
+            ] {
+                let (_s, code) = connect_to(&p, target).await;
+                assert_eq!(code, 403, "{target}");
+            }
+            assert_eq!(
+                r.said(),
+                vec![
+                    ProxyEvent::Denied {
+                        tag: 5,
+                        target: t("a.test:443")
+                    },
+                    ProxyEvent::Denied {
+                        tag: 5,
+                        target: t("b.test:443")
+                    },
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn allow_takes_effect_on_retry() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let target = t(&format!("up.test:{}", up.port()));
+            let cfg = ProxyConfig {
+                allow: Vec::new(),
+                ..pinned_up(up.port())
+            };
+            let mut r = rig(cfg, &[], &[]);
+            let p = r.listen(1);
+            let (_s, code) = connect_to(&p, &target.to_string()).await;
+            assert_eq!(code, 403);
+            assert_eq!(
+                r.said(),
+                vec![ProxyEvent::Denied {
+                    tag: 1,
+                    target: target.clone()
+                }]
+            );
+
+            r.handle.allow(target.clone());
+            let (mut s, code) = connect_to(&p, &target.to_string()).await;
+            assert_eq!(code, 200);
+            assert!(echoes(&mut s, b"now").await);
+
+            r.handle.deny(&target);
+            let (_s2, code) = connect_to(&p, &target.to_string()).await;
+            assert_eq!(code, 403);
+            assert!(echoes(&mut s, b"spliced stays").await);
+        });
+    }
+
+    #[test]
+    fn socks_greeting_closed() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let mut r = rig(pinned_up(up.port()), &[], &[]);
+            let p = r.listen(1);
+            for greeting in [
+                &[0x05u8, 0x01, 0x00][..],
+                &[0x04, 0x01, 0x00, 0x50, 127, 0, 0, 1, 0][..],
+            ] {
+                let mut s = UnixStream::connect(&p).await.unwrap();
+                s.write_all(greeting).await.unwrap();
+                let mut got = Vec::new();
+                // an end or a reset: closed either way
+                timeout(WAIT, s.read_to_end(&mut got))
+                    .await
+                    .expect("not closed")
+                    .unwrap_or_default();
+                assert!(got.is_empty(), "answered {got:?}");
+            }
+            assert!(r.said().is_empty());
+            assert!(r.attempts().is_empty());
+        });
+    }
+
+    #[test]
+    fn slow_head_times_out() {
+        saman::block_on_current(async {
+            let cfg = ProxyConfig {
+                head_timeout: Duration::from_millis(300),
+                ..ProxyConfig::default()
+            };
+            let mut r = rig(cfg, &[], &[]);
+            let p = r.listen(1);
+            let (mut s, code) = ask(&p, b"CONNECT up.test:443 HTTP/1.1\r\nHost: up").await;
+            assert_eq!(code, 400);
             assert!(closed(&mut s).await);
-        }
-        assert_eq!(r.attempts(), vec![public], "only gone.test has an address");
-        assert!(r.said().is_empty());
-    }
-
-    #[tokio::test]
-    async fn denied_once_per_target() {
-        let mut r = rig(ProxyConfig::default(), &[], &[]);
-        let p = r.listen(5);
-        for target in [
-            "a.test:443",
-            "a.test:443",
-            "A.test.:443",
-            "b.test:443",
-            "a.test:443",
-        ] {
-            let (_s, code) = connect_to(&p, target).await;
-            assert_eq!(code, 403, "{target}");
-        }
-        assert_eq!(
-            r.said(),
-            vec![
-                ProxyEvent::Denied {
-                    tag: 5,
-                    target: t("a.test:443")
-                },
-                ProxyEvent::Denied {
-                    tag: 5,
-                    target: t("b.test:443")
-                },
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn allow_takes_effect_on_retry() {
-        let up = echo().await;
-        let target = t(&format!("up.test:{}", up.port()));
-        let cfg = ProxyConfig {
-            allow: Vec::new(),
-            ..pinned_up(up.port())
-        };
-        let mut r = rig(cfg, &[], &[]);
-        let p = r.listen(1);
-        let (_s, code) = connect_to(&p, &target.to_string()).await;
-        assert_eq!(code, 403);
-        assert_eq!(
-            r.said(),
-            vec![ProxyEvent::Denied {
-                tag: 1,
-                target: target.clone()
-            }]
-        );
-
-        r.handle.allow(target.clone());
-        let (mut s, code) = connect_to(&p, &target.to_string()).await;
-        assert_eq!(code, 200);
-        assert!(echoes(&mut s, b"now").await);
-
-        r.handle.deny(&target);
-        let (_s2, code) = connect_to(&p, &target.to_string()).await;
-        assert_eq!(code, 403);
-        assert!(echoes(&mut s, b"spliced stays").await);
-    }
-
-    #[tokio::test]
-    async fn socks_greeting_closed() {
-        let up = echo().await;
-        let mut r = rig(pinned_up(up.port()), &[], &[]);
-        let p = r.listen(1);
-        for greeting in [
-            &[0x05u8, 0x01, 0x00][..],
-            &[0x04, 0x01, 0x00, 0x50, 127, 0, 0, 1, 0][..],
-        ] {
-            let mut s = UnixStream::connect(&p).await.unwrap();
-            s.write_all(greeting).await.unwrap();
-            let mut got = Vec::new();
-            let _ = timeout(WAIT, s.read_to_end(&mut got))
-                .await
-                .expect("not closed");
-            assert!(got.is_empty(), "answered {got:?}");
-        }
-        assert!(r.said().is_empty());
-        assert!(r.attempts().is_empty());
-    }
-
-    #[tokio::test]
-    async fn slow_head_times_out() {
-        let cfg = ProxyConfig {
-            head_timeout: Duration::from_millis(300),
-            ..ProxyConfig::default()
-        };
-        let mut r = rig(cfg, &[], &[]);
-        let p = r.listen(1);
-        let (mut s, code) = ask(&p, b"CONNECT up.test:443 HTTP/1.1\r\nHost: up").await;
-        assert_eq!(code, 400);
-        assert!(closed(&mut s).await);
-        assert_eq!(
-            r.said(),
-            vec![ProxyEvent::Refused {
-                tag: 1,
-                target: String::new(),
-                why: RefuseWhy::BadRequest
-            }]
-        );
+            assert_eq!(
+                r.said(),
+                vec![ProxyEvent::Refused {
+                    tag: 1,
+                    target: String::new(),
+                    why: RefuseWhy::BadRequest
+                }]
+            );
+        });
     }
 
     /// The refusal waits out the head timeout: on a virtual clock the head is still being waited for the instant before
     /// the timeout, and refused at it.
-    #[tokio::test]
-    async fn slow_head_is_refused_only_after_the_head_timeout() {
-        let clock = stund::Manual::default();
-        let _on = clock.on_this_thread();
-        let cfg = ProxyConfig {
-            head_timeout: Duration::from_millis(300),
-            ..ProxyConfig::default()
-        };
-        let r = rig(cfg, &[], &[]);
-        let p = r.listen(1);
-        let asking =
-            tokio::spawn(async move { ask(&p, b"CONNECT up.test:443 HTTP/1.1\r\nHost: up").await });
-        skuld::wait_until_async(
-            "the proxy waits for the rest of the head",
-            WAIT.as_secs(),
-            || async { (clock.sleepers() == 1).then_some(()) },
-        )
-        .await;
-        clock.advance(Duration::from_millis(299));
-        tokio::task::yield_now().await;
-        assert!(
-            !asking.is_finished(),
-            "refused 1 ms before the head timeout"
-        );
-        clock.advance(Duration::from_millis(1));
-        let (_s, code) = asking.await.unwrap();
-        assert_eq!(code, 400);
+    #[test]
+    fn slow_head_is_refused_only_after_the_head_timeout() {
+        saman::block_on_current(async {
+            let clock = stund::Manual::default();
+            let _on = clock.on_this_thread();
+            let cfg = ProxyConfig {
+                head_timeout: Duration::from_millis(300),
+                ..ProxyConfig::default()
+            };
+            let r = rig(cfg, &[], &[]);
+            let p = r.listen(1);
+            let asking = saman::spawn("asking", async move {
+                ask(&p, b"CONNECT up.test:443 HTTP/1.1\r\nHost: up").await
+            });
+            skuld::wait_until_async(
+                "the proxy waits for the rest of the head",
+                WAIT.as_secs(),
+                || async { (clock.sleepers() == 1).then_some(()) },
+            )
+            .await;
+            clock.advance(Duration::from_millis(299));
+            tokio::task::yield_now().await;
+            assert!(
+                !asking.is_finished(),
+                "refused 1 ms before the head timeout"
+            );
+            clock.advance(Duration::from_millis(1));
+            let (_s, code) = asking.await.unwrap();
+            assert_eq!(code, 400);
+        });
     }
 
-    #[tokio::test]
-    async fn cap_of_64() {
-        let up = echo().await;
-        let mut r = rig(pinned_up(up.port()), &[], &[]);
-        let p = r.listen(1);
-        let mut held = Vec::new();
-        for _ in 0..64 {
-            held.push(UnixStream::connect(&p).await.unwrap());
-        }
-        let (mut s, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
-        assert_eq!(code, 403, "the 65th");
-        assert!(closed(&mut s).await);
-        // the held ones are served
-        held[0]
-            .write_all(format!("CONNECT up.test:{} HTTP/1.1\r\n\r\n", up.port()).as_bytes())
-            .await
-            .unwrap();
-        assert_eq!(status(&read_head(&mut held[0]).await), 200);
-        assert!(r.said().is_empty());
-
-        // the slots come back when they close
-        drop(held);
-        let target = format!("up.test:{}", up.port());
-        skuld::wait_until_async("the slots come back", WAIT.as_secs(), || {
-            let (p, target) = (&p, &target);
-            async move {
-                let (_s, code) = connect_to(p, target).await;
-                (code == 200).then_some(())
+    #[test]
+    fn cap_of_64() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let mut r = rig(pinned_up(up.port()), &[], &[]);
+            let p = r.listen(1);
+            let mut held = Vec::new();
+            for _ in 0..64 {
+                held.push(UnixStream::connect(&p).await.unwrap());
             }
-        })
-        .await;
+            let (mut s, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
+            assert_eq!(code, 403, "the 65th");
+            assert!(closed(&mut s).await);
+            // the held ones are served
+            held[0]
+                .write_all(format!("CONNECT up.test:{} HTTP/1.1\r\n\r\n", up.port()).as_bytes())
+                .await
+                .unwrap();
+            assert_eq!(status(&read_head(&mut held[0]).await), 200);
+            assert!(r.said().is_empty());
+
+            // the slots come back when they close
+            drop(held);
+            let target = format!("up.test:{}", up.port());
+            skuld::wait_until_async("the slots come back", WAIT.as_secs(), || {
+                let (p, target) = (&p, &target);
+                async move {
+                    let (_s, code) = connect_to(p, target).await;
+                    (code == 200).then_some(())
+                }
+            })
+            .await;
+        });
     }
 
     /// The tunnel is ended only after the idle limit, and an active one outlives it: on a virtual clock the idle one
     /// is open at 499 ms and ended at 500, and the busy one's bytes move its limit.
-    #[tokio::test]
-    async fn an_idle_tunnel_is_ended_and_an_active_one_is_not() {
-        let clock = stund::Manual::default();
-        let _on = clock.on_this_thread();
-        let up = echo().await;
-        let cfg = ProxyConfig {
-            idle_timeout: Duration::from_millis(500),
-            ..pinned_up(up.port())
-        };
-        let r = rig(cfg, &[], &[]);
-        let p = r.listen(1);
-        let target = format!("up.test:{}", up.port());
-        let (mut idle, code) = connect_to(&p, &target).await;
-        assert_eq!(code, 200);
-        let (mut busy, code) = connect_to(&p, &target).await;
-        assert_eq!(code, 200);
-        // 2 x 200 ms with the busy one echoing: nothing is idle for its limit yet
-        for _ in 0..2 {
+    #[test]
+    fn an_idle_tunnel_is_ended_and_an_active_one_is_not() {
+        saman::block_on_current(async {
+            let clock = stund::Manual::default();
+            let _on = clock.on_this_thread();
+            let up = echo().await;
+            let cfg = ProxyConfig {
+                idle_timeout: Duration::from_millis(500),
+                ..pinned_up(up.port())
+            };
+            let r = rig(cfg, &[], &[]);
+            let p = r.listen(1);
+            let target = format!("up.test:{}", up.port());
+            let (mut idle, code) = connect_to(&p, &target).await;
+            assert_eq!(code, 200);
+            let (mut busy, code) = connect_to(&p, &target).await;
+            assert_eq!(code, 200);
+            // 2 x 200 ms with the busy one echoing: nothing is idle for its limit yet
+            for _ in 0..2 {
+                assert!(
+                    echoes(&mut busy, b"ping").await,
+                    "an active tunnel lives on"
+                );
+                clock.advance(Duration::from_millis(200));
+                tokio::task::yield_now().await;
+            }
             assert!(
                 echoes(&mut busy, b"ping").await,
                 "an active tunnel lives on"
             );
-            clock.advance(Duration::from_millis(200));
-            tokio::task::yield_now().await;
-        }
-        assert!(
-            echoes(&mut busy, b"ping").await,
-            "an active tunnel lives on"
-        );
-        assert_eq!(r.conns(), 2, "the idle one is open at 400 ms");
-        // the idle one's last byte was at 0: it is ended at 500 ms
-        clock.advance(Duration::from_millis(100));
-        assert!(closed(&mut idle).await, "the idle tunnel was ended");
-        skuld::wait_until_async("its place is free again", WAIT.as_secs(), || async {
-            (r.conns() == 1).then_some(())
-        })
-        .await;
-        drop(busy);
-        r.all_free().await;
+            assert_eq!(r.conns(), 2, "the idle one is open at 400 ms");
+            // the idle one's last byte was at 0: it is ended at 500 ms
+            clock.advance(Duration::from_millis(100));
+            assert!(closed(&mut idle).await, "the idle tunnel was ended");
+            skuld::wait_until_async("its place is free again", WAIT.as_secs(), || async {
+                (r.conns() == 1).then_some(())
+            })
+            .await;
+            drop(busy);
+            r.all_free().await;
+        });
     }
 
-    #[tokio::test]
-    async fn a_stalled_event_reader_never_holds_a_place() {
-        let r = rig(ProxyConfig::default(), &[], &[]);
-        let p = r.listen(1);
-        // the events channel holds 64 and nobody reads it: the 65th and later refusals are still answered
-        for i in 0..70 {
-            let (mut s, code) = timeout(WAIT, connect_to(&p, &format!("denied{i}.test:443")))
-                .await
-                .unwrap_or_else(|_| panic!("refusal {i} waited on the events channel"));
-            assert_eq!(code, 403, "{i}");
-            assert!(closed(&mut s).await);
-        }
-        r.all_free().await;
-        assert_eq!(r.handle.dropped_events(), 6);
+    #[test]
+    fn a_stalled_event_reader_never_holds_a_place() {
+        saman::block_on_current(async {
+            let r = rig(ProxyConfig::default(), &[], &[]);
+            let p = r.listen(1);
+            // the events channel holds 64 and nobody reads it: the 65th and later refusals are still answered
+            for i in 0..70 {
+                let (mut s, code) = timeout(WAIT, connect_to(&p, &format!("denied{i}.test:443")))
+                    .await
+                    .unwrap_or_else(|_| panic!("refusal {i} waited on the events channel"));
+                assert_eq!(code, 403, "{i}");
+                assert!(closed(&mut s).await);
+            }
+            r.all_free().await;
+            assert_eq!(r.handle.dropped_events(), 6);
+        });
     }
 
-    #[tokio::test]
-    async fn half_close_carries_the_answer() {
-        let (up, got) = recorder(b"the answer".to_vec()).await;
-        let r = rig(pinned_up(up.port()), &[], &[]);
-        let p = r.listen(1);
-        let (mut s, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
-        assert_eq!(code, 200);
-        s.write_all(b"the question").await.unwrap();
-        s.shutdown().await.unwrap();
-        let mut back = Vec::new();
-        timeout(WAIT, s.read_to_end(&mut back))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(got.await.unwrap(), b"the question");
-        assert_eq!(back, b"the answer");
-    }
-
-    #[tokio::test]
-    async fn two_listeners_one_allowlist_events_tagged() {
-        let up = echo().await;
-        let target = t(&format!("up.test:{}", up.port()));
-        let cfg = ProxyConfig {
-            allow: Vec::new(),
-            ..pinned_up(up.port())
-        };
-        let mut r = rig(cfg, &[], &[]);
-        let (p1, p2) = (r.listen(1), r.listen(2));
-        r.handle.allow(target.clone());
-        for p in [&p1, &p2] {
-            let (mut s, code) = connect_to(p, &target.to_string()).await;
+    #[test]
+    fn half_close_carries_the_answer() {
+        saman::block_on_current(async {
+            let (up, got) = recorder(b"the answer".to_vec()).await;
+            let r = rig(pinned_up(up.port()), &[], &[]);
+            let p = r.listen(1);
+            let (mut s, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
             assert_eq!(code, 200);
-            assert!(echoes(&mut s, b"shared").await);
-        }
-        for p in [&p1, &p2] {
-            let (_s, code) = connect_to(p, "x.test:443").await;
+            s.write_all(b"the question").await.unwrap();
+            s.shutdown().await.unwrap();
+            let mut back = Vec::new();
+            timeout(WAIT, s.read_to_end(&mut back))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(got.await.unwrap(), b"the question");
+            assert_eq!(back, b"the answer");
+        });
+    }
+
+    #[test]
+    fn two_listeners_one_allowlist_events_tagged() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let target = t(&format!("up.test:{}", up.port()));
+            let cfg = ProxyConfig {
+                allow: Vec::new(),
+                ..pinned_up(up.port())
+            };
+            let mut r = rig(cfg, &[], &[]);
+            let (p1, p2) = (r.listen(1), r.listen(2));
+            r.handle.allow(target.clone());
+            for p in [&p1, &p2] {
+                let (mut s, code) = connect_to(p, &target.to_string()).await;
+                assert_eq!(code, 200);
+                assert!(echoes(&mut s, b"shared").await);
+            }
+            for p in [&p1, &p2] {
+                let (_s, code) = connect_to(p, "x.test:443").await;
+                assert_eq!(code, 403);
+            }
+            assert_eq!(
+                r.said(),
+                vec![
+                    ProxyEvent::Denied {
+                        tag: 1,
+                        target: t("x.test:443")
+                    },
+                    ProxyEvent::Denied {
+                        tag: 2,
+                        target: t("x.test:443")
+                    },
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn close_tag_ends_its_connections_only() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let target = format!("up.test:{}", up.port());
+            let mut r = rig(pinned_up(up.port()), &[], &[]);
+            let (p1, p2) = (r.listen(1), r.listen(2));
+            for p in [&p1, &p2] {
+                let (_s, code) = connect_to(p, "x.test:443").await;
+                assert_eq!(code, 403);
+            }
+            assert_eq!(r.said().len(), 2, "x.test denied once on each tag");
+            let (mut a, code_a) = connect_to(&p1, &target).await;
+            let (mut b, code_b) = connect_to(&p2, &target).await;
+            // one still in its head, on tag 1
+            let mut c = UnixStream::connect(&p1).await.unwrap();
+            c.write_all(b"CONNECT up").await.unwrap();
+            assert_eq!((code_a, code_b), (200, 200));
+            assert!(echoes(&mut a, b"before").await);
+
+            r.handle.close(1);
+            assert!(closed(&mut a).await, "tag 1's tunnel ends");
+            assert!(closed(&mut c).await, "tag 1's half-read client ends");
+            assert!(echoes(&mut b, b"after").await, "tag 2's tunnel stays");
+            let (mut d, code) = connect_to(&p2, &target).await;
+            assert_eq!(code, 200);
+            assert!(echoes(&mut d, b"new").await);
+            // tag 1 no longer accepts
+            skuld::wait_until_async("tag 1 stops accepting", WAIT.as_secs(), || {
+                let p1 = &p1;
+                async move { UnixStream::connect(p1).await.is_err().then_some(()) }
+            })
+            .await;
+
+            // close forgets what tag 1 was told, and only that: tag 2 stays quiet about x.test, a new tag 1 hears it again
+            let (_s, code) = connect_to(&p2, "x.test:443").await;
             assert_eq!(code, 403);
-        }
-        assert_eq!(
-            r.said(),
-            vec![
-                ProxyEvent::Denied {
+            assert!(r.said().is_empty(), "tag 2 was told about x.test already");
+            let again = r.dir.path().join("again.sock");
+            r.handle
+                .listen(Listener::Unix(UnixListener::bind(&again).unwrap()), 1);
+            let (_s, code) = connect_to(&again, "x.test:443").await;
+            assert_eq!(code, 403);
+            assert_eq!(
+                r.said(),
+                vec![ProxyEvent::Denied {
                     tag: 1,
                     target: t("x.test:443")
-                },
-                ProxyEvent::Denied {
-                    tag: 2,
+                }]
+            );
+        });
+    }
+
+    #[test]
+    fn dropping_the_handle_ends_everything() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let r = rig(pinned_up(up.port()), &[], &[]);
+            let p = r.listen(1);
+            let (mut a, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
+            assert_eq!(code, 200);
+            let Rig {
+                handle, dir: _dir, ..
+            } = r;
+            drop(handle);
+            assert!(closed(&mut a).await);
+        });
+    }
+
+    #[test]
+    fn shutdown_ends_everything() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let r = rig(pinned_up(up.port()), &[], &[]);
+            let p = r.listen(1);
+            let (mut a, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
+            assert_eq!(code, 200);
+            r.handle.shutdown();
+            assert!(closed(&mut a).await);
+        });
+    }
+
+    #[test]
+    fn a_relayed_stream_is_judged_like_a_socket_client() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let mut r = rig(pinned_up(up.port()), &[], &[]);
+            let tx = r.relay(7);
+            let (mut s, _alive) = relayed(&tx).await;
+            assert_eq!(
+                connect_on(&mut s, &format!("up.test:{}", up.port())).await,
+                200
+            );
+            assert!(echoes(&mut s, b"hello").await);
+
+            let (mut s, _alive) = relayed(&tx).await;
+            assert_eq!(connect_on(&mut s, "x.test:443").await, 403);
+            assert!(closed(&mut s).await);
+            assert_eq!(
+                r.said(),
+                vec![ProxyEvent::Denied {
+                    tag: 7,
                     target: t("x.test:443")
-                },
-            ]
-        );
+                }]
+            );
+        });
     }
 
-    #[tokio::test]
-    async fn close_tag_ends_its_connections_only() {
-        let up = echo().await;
-        let target = format!("up.test:{}", up.port());
-        let mut r = rig(pinned_up(up.port()), &[], &[]);
-        let (p1, p2) = (r.listen(1), r.listen(2));
-        for p in [&p1, &p2] {
-            let (_s, code) = connect_to(p, "x.test:443").await;
-            assert_eq!(code, 403);
-        }
-        assert_eq!(r.said().len(), 2, "x.test denied once on each tag");
-        let (mut a, code_a) = connect_to(&p1, &target).await;
-        let (mut b, code_b) = connect_to(&p2, &target).await;
-        // one still in its head, on tag 1
-        let mut c = UnixStream::connect(&p1).await.unwrap();
-        c.write_all(b"CONNECT up").await.unwrap();
-        assert_eq!((code_a, code_b), (200, 200));
-        assert!(echoes(&mut a, b"before").await);
+    #[test]
+    fn the_cap_counts_relayed_streams() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let target = format!("up.test:{}", up.port());
+            let cfg = ProxyConfig {
+                max_conns: 2,
+                ..pinned_up(up.port())
+            };
+            let r = rig(cfg, &[], &[]);
+            let tx = r.relay(1);
+            let held = [relayed(&tx).await, relayed(&tx).await];
+            let (mut s, _alive) = relayed(&tx).await;
+            assert_eq!(connect_on(&mut s, &target).await, 403, "the third");
+            assert!(closed(&mut s).await);
 
-        r.handle.close(1);
-        assert!(closed(&mut a).await, "tag 1's tunnel ends");
-        assert!(closed(&mut c).await, "tag 1's half-read client ends");
-        assert!(echoes(&mut b, b"after").await, "tag 2's tunnel stays");
-        let (mut d, code) = connect_to(&p2, &target).await;
-        assert_eq!(code, 200);
-        assert!(echoes(&mut d, b"new").await);
-        // tag 1 no longer accepts
-        skuld::wait_until_async("tag 1 stops accepting", WAIT.as_secs(), || {
-            let p1 = &p1;
-            async move { UnixStream::connect(p1).await.is_err().then_some(()) }
-        })
-        .await;
-
-        // close forgets what tag 1 was told, and only that: tag 2 stays quiet about x.test, a new tag 1 hears it again
-        let (_s, code) = connect_to(&p2, "x.test:443").await;
-        assert_eq!(code, 403);
-        assert!(r.said().is_empty(), "tag 2 was told about x.test already");
-        let again = r.dir.path().join("again.sock");
-        r.handle
-            .listen(Listener::Unix(UnixListener::bind(&again).unwrap()), 1);
-        let (_s, code) = connect_to(&again, "x.test:443").await;
-        assert_eq!(code, 403);
-        assert_eq!(
-            r.said(),
-            vec![ProxyEvent::Denied {
-                tag: 1,
-                target: t("x.test:443")
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn dropping_the_handle_ends_everything() {
-        let up = echo().await;
-        let r = rig(pinned_up(up.port()), &[], &[]);
-        let p = r.listen(1);
-        let (mut a, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
-        assert_eq!(code, 200);
-        let Rig {
-            handle, dir: _dir, ..
-        } = r;
-        drop(handle);
-        assert!(closed(&mut a).await);
-    }
-
-    #[tokio::test]
-    async fn shutdown_ends_everything() {
-        let up = echo().await;
-        let r = rig(pinned_up(up.port()), &[], &[]);
-        let p = r.listen(1);
-        let (mut a, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
-        assert_eq!(code, 200);
-        r.handle.shutdown();
-        assert!(closed(&mut a).await);
-    }
-
-    #[tokio::test]
-    async fn a_relayed_stream_is_judged_like_a_socket_client() {
-        let up = echo().await;
-        let mut r = rig(pinned_up(up.port()), &[], &[]);
-        let tx = r.relay(7);
-        let (mut s, _alive) = relayed(&tx).await;
-        assert_eq!(
-            connect_on(&mut s, &format!("up.test:{}", up.port())).await,
-            200
-        );
-        assert!(echoes(&mut s, b"hello").await);
-
-        let (mut s, _alive) = relayed(&tx).await;
-        assert_eq!(connect_on(&mut s, "x.test:443").await, 403);
-        assert!(closed(&mut s).await);
-        assert_eq!(
-            r.said(),
-            vec![ProxyEvent::Denied {
-                tag: 7,
-                target: t("x.test:443")
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn the_cap_counts_relayed_streams() {
-        let up = echo().await;
-        let target = format!("up.test:{}", up.port());
-        let cfg = ProxyConfig {
-            max_conns: 2,
-            ..pinned_up(up.port())
-        };
-        let r = rig(cfg, &[], &[]);
-        let tx = r.relay(1);
-        let held = [relayed(&tx).await, relayed(&tx).await];
-        let (mut s, _alive) = relayed(&tx).await;
-        assert_eq!(connect_on(&mut s, &target).await, 403, "the third");
-        assert!(closed(&mut s).await);
-
-        // the places come back when the streams are gone
-        drop(held);
-        r.all_free().await;
-        let (mut s, _alive) = relayed(&tx).await;
-        assert_eq!(connect_on(&mut s, &target).await, 200);
-    }
-
-    #[tokio::test]
-    async fn close_tag_ends_relayed_streams() {
-        let up = echo().await;
-        let target = format!("up.test:{}", up.port());
-        let r = rig(pinned_up(up.port()), &[], &[]);
-        let (tx1, tx2) = (r.relay(1), r.relay(2));
-        let (mut a, _alive_a) = relayed(&tx1).await;
-        let (mut b, _alive_b) = relayed(&tx2).await;
-        assert_eq!(connect_on(&mut a, &target).await, 200);
-        assert_eq!(connect_on(&mut b, &target).await, 200);
-        // one still in its head, on tag 1
-        let (mut c, _alive_c) = relayed(&tx1).await;
-        c.write_all(b"CONNECT up").await.unwrap();
-
-        r.handle.close(1);
-        assert!(closed(&mut a).await, "tag 1's tunnel ends");
-        assert!(closed(&mut c).await, "tag 1's half-read stream ends");
-        timeout(WAIT, tx1.closed())
-            .await
-            .expect("tag 1's channel is let go");
-        assert!(echoes(&mut b, b"after").await, "tag 2's tunnel stays");
-
-        // a channel that ends ends its listener's streams too
-        drop(tx2);
-        assert!(closed(&mut b).await, "tag 2's tunnel ends with its channel");
-    }
-
-    #[tokio::test]
-    async fn abandoned_connects_to_a_blackhole_never_cost_a_403() {
-        let up = echo().await;
-        let hole = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
-        let (connect, mut attempts) = blackhole(hole);
-        let cfg = ProxyConfig {
-            max_conns: 128,
-            ..up_and_hole(up.port(), hole)
-        };
-        let r = rig_with(cfg, &[], move |a| connect(a));
-        let tx = r.relay(1);
-        // the job's ends stay open throughout: only the owner's word that a stream is gone frees its place
-        let mut jobs = Vec::new();
-        for wave in [64, 64, 64, 8] {
-            let mut alive = Vec::new();
-            for _ in 0..wave {
-                let (mut s, a) = relayed(&tx).await;
-                s.write_all(b"CONNECT hole.test:443 HTTP/1.1\r\n\r\n")
-                    .await
-                    .unwrap();
-                jobs.push(s);
-                alive.push(a);
-            }
-            for _ in 0..wave {
-                timeout(WAIT, attempts.recv())
-                    .await
-                    .expect("each stream reaches its connect");
-            }
-            drop(alive);
+            // the places come back when the streams are gone
+            drop(held);
             r.all_free().await;
-        }
-        let (mut s, _alive) = relayed(&tx).await;
-        assert_eq!(
-            connect_on(&mut s, &format!("up.test:{}", up.port())).await,
-            200
-        );
-        assert!(echoes(&mut s, b"room").await);
+            let (mut s, _alive) = relayed(&tx).await;
+            assert_eq!(connect_on(&mut s, &target).await, 200);
+        });
     }
 
-    #[tokio::test]
-    async fn an_upstream_connect_times_out() {
-        let hole = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
-        let (connect, mut attempts) = blackhole(hole);
-        let cfg = ProxyConfig {
-            connect_timeout: Duration::from_millis(300),
-            ..up_and_hole(1, hole)
-        };
-        let r = rig_with(cfg, &[], move |a| connect(a));
-        let p = r.listen(1);
-        let (mut s, code) = connect_to(&p, "hole.test:443").await;
-        assert_eq!(code, 502);
-        assert!(closed(&mut s).await);
-        assert_eq!(attempts.try_recv(), Ok(hole));
-        r.all_free().await;
+    #[test]
+    fn close_tag_ends_relayed_streams() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let target = format!("up.test:{}", up.port());
+            let r = rig(pinned_up(up.port()), &[], &[]);
+            let (tx1, tx2) = (r.relay(1), r.relay(2));
+            let (mut a, _alive_a) = relayed(&tx1).await;
+            let (mut b, _alive_b) = relayed(&tx2).await;
+            assert_eq!(connect_on(&mut a, &target).await, 200);
+            assert_eq!(connect_on(&mut b, &target).await, 200);
+            // one still in its head, on tag 1
+            let (mut c, _alive_c) = relayed(&tx1).await;
+            c.write_all(b"CONNECT up").await.unwrap();
+
+            r.handle.close(1);
+            assert!(closed(&mut a).await, "tag 1's tunnel ends");
+            assert!(closed(&mut c).await, "tag 1's half-read stream ends");
+            timeout(WAIT, tx1.closed())
+                .await
+                .expect("tag 1's channel is let go");
+            assert!(echoes(&mut b, b"after").await, "tag 2's tunnel stays");
+
+            // a channel that ends ends its listener's streams too
+            drop(tx2);
+            assert!(closed(&mut b).await, "tag 2's tunnel ends with its channel");
+        });
+    }
+
+    #[test]
+    fn abandoned_connects_to_a_blackhole_never_cost_a_403() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let hole = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+            let (connect, mut attempts) = blackhole(hole);
+            let cfg = ProxyConfig {
+                max_conns: 128,
+                ..up_and_hole(up.port(), hole)
+            };
+            let r = rig_with(cfg, &[], move |a| connect(a));
+            let tx = r.relay(1);
+            // the job's ends stay open throughout: only the owner's word that a stream is gone frees its place
+            let mut jobs = Vec::new();
+            for wave in [64, 64, 64, 8] {
+                let mut alive = Vec::new();
+                for _ in 0..wave {
+                    let (mut s, a) = relayed(&tx).await;
+                    s.write_all(b"CONNECT hole.test:443 HTTP/1.1\r\n\r\n")
+                        .await
+                        .unwrap();
+                    jobs.push(s);
+                    alive.push(a);
+                }
+                for _ in 0..wave {
+                    timeout(WAIT, attempts.recv())
+                        .await
+                        .expect("each stream reaches its connect");
+                }
+                drop(alive);
+                r.all_free().await;
+            }
+            let (mut s, _alive) = relayed(&tx).await;
+            assert_eq!(
+                connect_on(&mut s, &format!("up.test:{}", up.port())).await,
+                200
+            );
+            assert!(echoes(&mut s, b"room").await);
+        });
+    }
+
+    #[test]
+    fn an_upstream_connect_times_out() {
+        saman::block_on_current(async {
+            let hole = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+            let (connect, mut attempts) = blackhole(hole);
+            let cfg = ProxyConfig {
+                connect_timeout: Duration::from_millis(300),
+                ..up_and_hole(1, hole)
+            };
+            let r = rig_with(cfg, &[], move |a| connect(a));
+            let p = r.listen(1);
+            let (mut s, code) = connect_to(&p, "hole.test:443").await;
+            assert_eq!(code, 502);
+            assert!(closed(&mut s).await);
+            assert_eq!(attempts.try_recv(), Ok(hole));
+            r.all_free().await;
+        });
     }
 
     use crate::net::policy::PrivateTarget;
@@ -2282,431 +2345,448 @@ mod tests {
         back
     }
 
-    #[tokio::test]
-    async fn absolute_form_is_rewritten() {
-        let answer =
-            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok".to_vec();
-        let (up1, got1) = recorder(answer.clone()).await;
-        let (up2, got2) = recorder(answer.clone()).await;
-        let pub1 = SocketAddr::new(IpAddr::V4(PUBLIC), 80);
-        let pub2 = SocketAddr::new("2606:4700::1".parse().unwrap(), 80);
-        let w = web_on();
-        let mut r = rig(
-            web_cfg(&w),
-            &[(
-                "web.test",
-                vec![vec![SocketAddr::new(IpAddr::V4(PUBLIC), 0)]],
-            )],
-            &[(pub1, up1), (pub2, up2)],
-        );
-        let p = r.listen(4);
+    #[test]
+    fn absolute_form_is_rewritten() {
+        saman::block_on_current(async {
+            let answer =
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok"
+                    .to_vec();
+            let (up1, got1) = recorder(answer.clone()).await;
+            let (up2, got2) = recorder(answer.clone()).await;
+            let pub1 = SocketAddr::new(IpAddr::V4(PUBLIC), 80);
+            let pub2 = SocketAddr::new("2606:4700::1".parse().unwrap(), 80);
+            let w = web_on();
+            let mut r = rig(
+                web_cfg(&w),
+                &[(
+                    "web.test",
+                    vec![vec![SocketAddr::new(IpAddr::V4(PUBLIC), 0)]],
+                )],
+                &[(pub1, up1), (pub2, up2)],
+            );
+            let p = r.listen(4);
 
-        let req = "GET http://WEB.test/a/b?c=1 HTTP/1.1\r\nHost: evil.test\r\n\
+            let req = "GET http://WEB.test/a/b?c=1 HTTP/1.1\r\nHost: evil.test\r\n\
                    Proxy-Authorization: Basic eA==\r\nProxy-Connection: keep-alive\r\n\
                    Connection: keep-alive, X-Secret\r\nX-Secret: 1\r\nKeep-Alive: 300\r\nTE: trailers\r\n\
                    Upgrade: h2c\r\nAccept: */*\r\nuser-agent: t\r\n\r\n";
-        assert_eq!(
-            send_all(&p, req.as_bytes()).await,
-            answer,
-            "the response head is not rewritten"
-        );
-        assert_eq!(
-            String::from_utf8(got1.await.unwrap()).unwrap(),
-            "GET /a/b?c=1 HTTP/1.1\r\nHost: web.test\r\nAccept: */*\r\nuser-agent: t\r\nConnection: close\r\n\r\n"
-        );
+            assert_eq!(
+                send_all(&p, req.as_bytes()).await,
+                answer,
+                "the response head is not rewritten"
+            );
+            assert_eq!(
+                String::from_utf8(got1.await.unwrap()).unwrap(),
+                "GET /a/b?c=1 HTTP/1.1\r\nHost: web.test\r\nAccept: */*\r\nuser-agent: t\r\nConnection: close\r\n\r\n"
+            );
 
-        // a literal with no path, a query only, HTTP/1.0
-        let req = "HEAD http://[2606:4700::1]?q HTTP/1.0\r\n\r\n";
-        assert_eq!(send_all(&p, req.as_bytes()).await, answer);
-        assert_eq!(
-            String::from_utf8(got2.await.unwrap()).unwrap(),
-            "HEAD /?q HTTP/1.0\r\nHost: [2606:4700::1]\r\nConnection: close\r\n\r\n"
-        );
-        assert_eq!(
-            r.said(),
-            vec![reached(4, "web.test"), reached(4, "2606:4700::1")]
-        );
-        assert_eq!(r.attempts(), vec![pub1, pub2]);
+            // a literal with no path, a query only, HTTP/1.0
+            let req = "HEAD http://[2606:4700::1]?q HTTP/1.0\r\n\r\n";
+            assert_eq!(send_all(&p, req.as_bytes()).await, answer);
+            assert_eq!(
+                String::from_utf8(got2.await.unwrap()).unwrap(),
+                "HEAD /?q HTTP/1.0\r\nHost: [2606:4700::1]\r\nConnection: close\r\n\r\n"
+            );
+            assert_eq!(
+                r.said(),
+                vec![reached(4, "web.test"), reached(4, "2606:4700::1")]
+            );
+            assert_eq!(r.attempts(), vec![pub1, pub2]);
+        });
     }
 
-    #[tokio::test]
-    async fn absolute_form_early_body_reaches_upstream_once() {
-        let (up, got) = recorder(b"HTTP/1.1 204 No Content\r\n\r\n".to_vec()).await;
-        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 80);
-        let w = web_on();
-        let r = rig(
-            web_cfg(&w),
-            &[("post.test", vec![vec![public]])],
-            &[(public, up)],
-        );
-        let p = r.listen(1);
-        // 3 KiB of body that looks like nothing in particular, then a second request hidden in it
-        let mut body: Vec<u8> = (0u8..=255).cycle().take(3072).collect();
-        body.extend_from_slice(
-            b"\r\n\r\nGET http://other.test/ HTTP/1.1\r\nHost: other.test\r\n\r\n",
-        );
-        let later: Vec<u8> = (0u8..=255).rev().cycle().take(5000).collect();
-        let length = body.len() + later.len();
-        let mut first =
-            format!("POST http://post.test/form HTTP/1.1\r\nContent-Length: {length}\r\n\r\n")
-                .into_bytes();
-        first.extend_from_slice(&body);
+    #[test]
+    fn absolute_form_early_body_reaches_upstream_once() {
+        saman::block_on_current(async {
+            let (up, got) = recorder(b"HTTP/1.1 204 No Content\r\n\r\n".to_vec()).await;
+            let public = SocketAddr::new(IpAddr::V4(PUBLIC), 80);
+            let w = web_on();
+            let r = rig(
+                web_cfg(&w),
+                &[("post.test", vec![vec![public]])],
+                &[(public, up)],
+            );
+            let p = r.listen(1);
+            // 3 KiB of body that looks like nothing in particular, then a second request hidden in it
+            let mut body: Vec<u8> = (0u8..=255).cycle().take(3072).collect();
+            body.extend_from_slice(
+                b"\r\n\r\nGET http://other.test/ HTTP/1.1\r\nHost: other.test\r\n\r\n",
+            );
+            let later: Vec<u8> = (0u8..=255).rev().cycle().take(5000).collect();
+            let length = body.len() + later.len();
+            let mut first =
+                format!("POST http://post.test/form HTTP/1.1\r\nContent-Length: {length}\r\n\r\n")
+                    .into_bytes();
+            first.extend_from_slice(&body);
 
-        let mut s = UnixStream::connect(&p).await.unwrap();
-        // one write, so the body comes in the same read as the head
-        s.write_all(&first).await.unwrap();
-        s.write_all(&later).await.unwrap();
-        s.shutdown().await.unwrap();
-        let mut back = Vec::new();
-        timeout(WAIT, s.read_to_end(&mut back))
-            .await
-            .unwrap()
-            .unwrap();
+            let mut s = UnixStream::connect(&p).await.unwrap();
+            // one write, so the body comes in the same read as the head
+            s.write_all(&first).await.unwrap();
+            s.write_all(&later).await.unwrap();
+            s.shutdown().await.unwrap();
+            let mut back = Vec::new();
+            timeout(WAIT, s.read_to_end(&mut back))
+                .await
+                .unwrap()
+                .unwrap();
 
-        let mut want = format!(
+            let mut want = format!(
             "POST /form HTTP/1.1\r\nHost: post.test\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
         )
         .into_bytes();
-        want.extend_from_slice(&body);
-        want.extend_from_slice(&later);
-        assert!(
-            got.await.unwrap() == want,
-            "the upstream gets the head, then the body once, in order"
-        );
-        assert_eq!(back, b"HTTP/1.1 204 No Content\r\n\r\n");
-        assert_eq!(r.attempts(), vec![public]);
+            want.extend_from_slice(&body);
+            want.extend_from_slice(&later);
+            assert!(
+                got.await.unwrap() == want,
+                "the upstream gets the head, then the body once, in order"
+            );
+            assert_eq!(back, b"HTTP/1.1 204 No Content\r\n\r\n");
+            assert_eq!(r.attempts(), vec![public]);
+        });
     }
 
-    #[tokio::test]
-    async fn https_absolute_and_userinfo_are_400() {
-        let up = echo().await;
-        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 80);
-        let w = web_on();
-        let mut r = rig(
-            web_cfg(&w),
-            &[("web.test", vec![vec![public]])],
-            &[(public, up)],
-        );
-        let p = r.listen(9);
-        let rows: &[&[u8]] = &[
-            b"GET https://web.test/ HTTP/1.1\r\n\r\n",
-            b"GET HTTPS://web.test/ HTTP/1.1\r\n\r\n",
-            b"GET http://user:pw@web.test/ HTTP/1.1\r\n\r\n",
-            b"GET http://user@web.test/ HTTP/1.1\r\n\r\n",
-            b"GET ftp://web.test/ HTTP/1.1\r\n\r\n",
-            b"GET http://web.test/#top HTTP/1.1\r\n\r\n",
-            b"GET http:///x HTTP/1.1\r\n\r\n",
-            b"GET http://web.test/ HTTP/2.0\r\n\r\n",
-            b"GET  http://web.test/ HTTP/1.1\r\n\r\n",
-            b"G(T http://web.test/ HTTP/1.1\r\n\r\n",
-            b"GET http://web.test/\x01 HTTP/1.1\r\n\r\n",
-            b"GET /origin-form HTTP/1.1\r\nHost: web.test\r\n\r\n",
-            b"GET http://web.test/ HTTP/1.1\r\nX-A: 1\r\n folded\r\n\r\n",
-            b"GET http://web.test/ HTTP/1.1\r\nNo-Colon\r\n\r\n",
-            b"GET http://web.test/ HTTP/1.1\r\nBad Name: x\r\n\r\n",
-            b"GET http://web.test/ HTTP/1.1\r\nX-A: 1\nHost: evil.test\r\n\r\n",
-            b"GET http://web.test/ HTTP/1.1\r\nX-A: \0\r\n\r\n",
-        ];
-        for req in rows {
-            let (mut s, code) = ask(&p, req).await;
-            assert_eq!(code, 400, "{:?}", String::from_utf8_lossy(req));
-            assert!(closed(&mut s).await);
-        }
-        // a malformed authority is the target's error, said with its text
-        let (_s, code) = ask(&p, b"GET http://web.test:/ HTTP/1.1\r\n\r\n").await;
-        assert_eq!(code, 400);
-        assert_eq!(
-            r.said(),
-            vec![
-                ProxyEvent::Refused {
-                    tag: 9,
-                    target: String::new(),
-                    why: RefuseWhy::BadRequest
-                },
-                ProxyEvent::Refused {
-                    tag: 9,
-                    target: "web.test:".into(),
-                    why: RefuseWhy::BadRequest
-                },
-            ]
-        );
-        assert!(r.attempts().is_empty());
-        assert_eq!(r.resolver.calls.load(Ordering::SeqCst), 0);
+    #[test]
+    fn https_absolute_and_userinfo_are_400() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let public = SocketAddr::new(IpAddr::V4(PUBLIC), 80);
+            let w = web_on();
+            let mut r = rig(
+                web_cfg(&w),
+                &[("web.test", vec![vec![public]])],
+                &[(public, up)],
+            );
+            let p = r.listen(9);
+            let rows: &[&[u8]] = &[
+                b"GET https://web.test/ HTTP/1.1\r\n\r\n",
+                b"GET HTTPS://web.test/ HTTP/1.1\r\n\r\n",
+                b"GET http://user:pw@web.test/ HTTP/1.1\r\n\r\n",
+                b"GET http://user@web.test/ HTTP/1.1\r\n\r\n",
+                b"GET ftp://web.test/ HTTP/1.1\r\n\r\n",
+                b"GET http://web.test/#top HTTP/1.1\r\n\r\n",
+                b"GET http:///x HTTP/1.1\r\n\r\n",
+                b"GET http://web.test/ HTTP/2.0\r\n\r\n",
+                b"GET  http://web.test/ HTTP/1.1\r\n\r\n",
+                b"G(T http://web.test/ HTTP/1.1\r\n\r\n",
+                b"GET http://web.test/\x01 HTTP/1.1\r\n\r\n",
+                b"GET /origin-form HTTP/1.1\r\nHost: web.test\r\n\r\n",
+                b"GET http://web.test/ HTTP/1.1\r\nX-A: 1\r\n folded\r\n\r\n",
+                b"GET http://web.test/ HTTP/1.1\r\nNo-Colon\r\n\r\n",
+                b"GET http://web.test/ HTTP/1.1\r\nBad Name: x\r\n\r\n",
+                b"GET http://web.test/ HTTP/1.1\r\nX-A: 1\nHost: evil.test\r\n\r\n",
+                b"GET http://web.test/ HTTP/1.1\r\nX-A: \0\r\n\r\n",
+            ];
+            for req in rows {
+                let (mut s, code) = ask(&p, req).await;
+                assert_eq!(code, 400, "{:?}", String::from_utf8_lossy(req));
+                assert!(closed(&mut s).await);
+            }
+            // a malformed authority is the target's error, said with its text
+            let (_s, code) = ask(&p, b"GET http://web.test:/ HTTP/1.1\r\n\r\n").await;
+            assert_eq!(code, 400);
+            assert_eq!(
+                r.said(),
+                vec![
+                    ProxyEvent::Refused {
+                        tag: 9,
+                        target: String::new(),
+                        why: RefuseWhy::BadRequest
+                    },
+                    ProxyEvent::Refused {
+                        tag: 9,
+                        target: "web.test:".into(),
+                        why: RefuseWhy::BadRequest
+                    },
+                ]
+            );
+            assert!(r.attempts().is_empty());
+            assert_eq!(r.resolver.calls.load(Ordering::SeqCst), 0);
+        });
     }
 
-    #[tokio::test]
-    async fn allowlist_policy_is_unchanged() {
-        assert!(matches!(ProxyConfig::default().policy, Policy::Allowlist));
-        let up = echo().await;
-        let cfg = ProxyConfig {
-            policy: Policy::Allowlist,
-            ..pinned_up(up.port())
-        };
-        let mut r = rig(cfg, &[], &[]);
-        let p = r.listen(1);
-        let (mut s, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
-        assert_eq!(code, 200);
-        assert!(echoes(&mut s, b"listed").await);
-        for (target, want) in [
-            ("x.test:443", 403),
-            ("192.168.1.20:80", 403),
-            ("169.254.169.254:80", 403),
-        ] {
-            let (_s, code) = connect_to(&p, target).await;
-            assert_eq!(code, want, "{target}");
-        }
-        let (mut s, code) = ask(
-            &p,
-            format!("GET http://up.test:{}/ HTTP/1.1\r\n\r\n", up.port()).as_bytes(),
-        )
-        .await;
-        assert_eq!(code, 400, "absolute-form stays refused");
-        assert!(closed(&mut s).await);
-        assert_eq!(
-            r.said(),
-            vec![
-                ProxyEvent::Denied {
-                    tag: 1,
-                    target: t("x.test:443")
-                },
-                ProxyEvent::Refused {
-                    tag: 1,
-                    target: "192.168.1.20:80".into(),
-                    why: RefuseWhy::Private
-                },
-                ProxyEvent::Refused {
-                    tag: 1,
-                    target: "169.254.169.254:80".into(),
-                    why: RefuseWhy::Private
-                },
-                ProxyEvent::Refused {
-                    tag: 1,
-                    target: String::new(),
-                    why: RefuseWhy::BadRequest
-                },
-            ],
-            "no Reached, no WebOff: the allowlist's own events"
-        );
-        assert_eq!(r.attempts(), vec![up]);
-    }
-
-    #[tokio::test]
-    async fn web_off_says_weboff_once_per_target() {
-        let up = echo().await;
-        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
-        let any_port = SocketAddr::new(IpAddr::V4(PUBLIC), 0);
-        let w = Arc::new(WebState::default());
-        let mut r = rig(
-            web_cfg(&w),
-            &[
-                ("web.test", vec![vec![any_port]]),
-                ("other.test", vec![vec![any_port]]),
-            ],
-            &[(public, up)],
-        );
-        let p = r.listen(2);
-        for target in [
-            "web.test:443",
-            "web.test:443",
-            "other.test:443",
-            "WEB.test.:443",
-        ] {
-            let (mut s, code) = connect_to(&p, target).await;
-            assert_eq!(code, 403, "{target}");
-            assert!(closed(&mut s).await);
-        }
-        let (_s, code) = ask(&p, b"GET http://web.test/ HTTP/1.1\r\n\r\n").await;
-        assert_eq!(code, 403);
-        let weboff = |target: &str| ProxyEvent::WebOff {
-            tag: 2,
-            target: t(target),
-        };
-        assert_eq!(
-            r.said(),
-            vec![
-                weboff("web.test:443"),
-                weboff("other.test:443"),
-                weboff("web.test:80")
-            ]
-        );
-        assert!(r.attempts().is_empty());
-
-        w.set_web(true);
-        let (mut s, code) = connect_to(&p, "web.test:443").await;
-        assert_eq!(code, 200);
-        assert!(echoes(&mut s, b"now").await);
-        assert_eq!(r.said(), vec![reached(2, "web.test")]);
-        assert_eq!(r.attempts(), vec![public]);
-    }
-
-    #[tokio::test]
-    async fn a_web_host_opens_only_itself_and_forgotten_questions_are_asked_again() {
-        let up = echo().await;
-        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
-        let any_port = SocketAddr::new(IpAddr::V4(PUBLIC), 0);
-        let w = Arc::new(WebState::default());
-        let mut r = rig(
-            web_cfg(&w),
-            &[
-                ("web.test", vec![vec![any_port]]),
-                ("other.test", vec![vec![any_port]]),
-                ("old.test", vec![vec![any_port]]),
-            ],
-            &[(public, up)],
-        );
-        let p = r.listen(2);
-        // a once grant opens its host:port alone, until it expires
-        w.set_web_hosts(vec![
-            (t("web.test:443"), None),
-            (t("old.test:443"), Some(1.0)),
-        ]);
-        let (mut s, code) = connect_to(&p, "web.test:443").await;
-        assert_eq!(code, 200);
-        assert!(echoes(&mut s, b"one").await);
-        for target in ["web.test:80", "other.test:443", "old.test:443"] {
-            let (_s, code) = connect_to(&p, target).await;
-            assert_eq!(code, 403, "{target}");
-        }
-        let weboff = |target: &str| ProxyEvent::WebOff {
-            tag: 2,
-            target: t(target),
-        };
-        assert_eq!(
-            r.said(),
-            vec![
-                reached(2, "web.test"),
-                weboff("web.test:80"),
-                weboff("other.test:443"),
-                weboff("old.test:443")
-            ]
-        );
-        // said once, until the caller forgets the questions; what was reached stays said
-        let (_s, code) = connect_to(&p, "other.test:443").await;
-        assert_eq!(code, 403);
-        assert!(r.said().is_empty());
-        r.handle.forget_questions(2);
-        r.handle.forget_questions(7);
-        for target in ["other.test:443", "web.test:443"] {
-            let _ = connect_to(&p, target).await;
-        }
-        assert_eq!(r.said(), vec![weboff("other.test:443")]);
-    }
-
-    #[tokio::test]
-    async fn grant_set_at_runtime_takes_effect_on_next_request() {
-        let up = echo().await;
-        let lan: SocketAddr = "192.168.1.20:8080".parse().unwrap();
-        let host_addrs = Arc::new(RwLock::new(HostAddrs::default()));
-        let w = Arc::new(WebState::new(
-            host_addrs.clone(),
-            Arc::new(RwLock::new(NeverSet::default())),
-        ));
-        let mut r = rig(web_cfg(&w), &[("evil.test", vec![vec![lan]])], &[(lan, up)]);
-        let p = r.listen(3);
-        let refused = |target: &str, why| ProxyEvent::Refused {
-            tag: 3,
-            target: target.into(),
-            why,
-        };
-        let grant = |expires| PrivateGrant {
-            target: PrivateTarget::HostPort(t("192.168.1.20:8080")),
-            expires,
-        };
-
-        // no grant: the card's question, with the address
-        let (_s, code) = connect_to(&p, "192.168.1.20:8080").await;
-        assert_eq!(code, 403);
-        assert_eq!(
-            r.said(),
-            vec![ProxyEvent::Private {
-                tag: 3,
-                asked: t("192.168.1.20:8080"),
-                addr: lan,
-                class: Class::Lan
-            }]
-        );
-
-        // granted: the next request goes through
-        w.set_grants(vec![grant(None)]);
-        let (mut a, code) = connect_to(&p, "192.168.1.20:8080").await;
-        assert_eq!(code, 200);
-        assert!(echoes(&mut a, b"granted").await);
-        assert_eq!(r.said(), vec![reached(3, "192.168.1.20")]);
-
-        // a name rebound onto the grant is refused
-        let (_s, code) = connect_to(&p, "evil.test:8080").await;
-        assert_eq!(code, 403);
-        assert_eq!(
-            r.said(),
-            vec![refused("evil.test:8080", RefuseWhy::Rebound)]
-        );
-
-        // the host's addresses and the deny list are read at each request
-        host_addrs.write().unwrap().0.insert(lan.ip());
-        let (_s, code) = connect_to(&p, "192.168.1.20:8080").await;
-        assert_eq!(code, 403);
-        assert_eq!(
-            r.said(),
-            vec![refused("192.168.1.20:8080", RefuseWhy::Loopback)]
-        );
-        host_addrs.write().unwrap().0.clear();
-        w.set_deny_hosts(vec!["192.168.1.20".into()]);
-        let (_s, code) = connect_to(&p, "192.168.1.20:8080").await;
-        assert_eq!(code, 403);
-        assert_eq!(
-            r.said(),
-            vec![refused("192.168.1.20:8080", RefuseWhy::DenyListed)]
-        );
-        w.set_deny_hosts(Vec::new());
-
-        // expired: refused again (the question was said already); the tunnel spliced before stays
-        w.set_grants(vec![grant(Some(1.0))]);
-        let (_s, code) = connect_to(&p, "192.168.1.20:8080").await;
-        assert_eq!(code, 403);
-        assert!(r.said().is_empty());
-        assert!(echoes(&mut a, b"stays").await);
-        assert_eq!(r.attempts(), vec![lan]);
-    }
-
-    #[tokio::test]
-    async fn connect_to_80_for_websockets() {
-        let up = echo().await;
-        let public = SocketAddr::new(IpAddr::V4(PUBLIC), 80);
-        let w = web_on();
-        let mut r = rig(
-            web_cfg(&w),
-            &[("ws.test", vec![vec![public]])],
-            &[(public, up)],
-        );
-        let p = r.listen(1);
-        let (mut s, code) = ask(
-            &p,
-            b"CONNECT ws.test:80 HTTP/1.1\r\nHost: ws.test:80\r\n\r\n",
-        )
-        .await;
-        assert_eq!(code, 200);
-        assert!(
-            echoes(
-                &mut s,
-                b"GET /socket HTTP/1.1\r\nHost: ws.test\r\nUpgrade: websocket\r\n\r\n"
+    #[test]
+    fn allowlist_policy_is_unchanged() {
+        saman::block_on_current(async {
+            assert!(matches!(ProxyConfig::default().policy, Policy::Allowlist));
+            let up = echo().await;
+            let cfg = ProxyConfig {
+                policy: Policy::Allowlist,
+                ..pinned_up(up.port())
+            };
+            let mut r = rig(cfg, &[], &[]);
+            let p = r.listen(1);
+            let (mut s, code) = connect_to(&p, &format!("up.test:{}", up.port())).await;
+            assert_eq!(code, 200);
+            assert!(echoes(&mut s, b"listed").await);
+            for (target, want) in [
+                ("x.test:443", 403),
+                ("192.168.1.20:80", 403),
+                ("169.254.169.254:80", 403),
+            ] {
+                let (_s, code) = connect_to(&p, target).await;
+                assert_eq!(code, want, "{target}");
+            }
+            let (mut s, code) = ask(
+                &p,
+                format!("GET http://up.test:{}/ HTTP/1.1\r\n\r\n", up.port()).as_bytes(),
             )
-            .await,
-            "the tunnel carries the upgrade as it is"
-        );
-        let (_s, code) = connect_to(&p, "ws.test:8080").await;
-        assert_eq!(code, 403);
-        assert_eq!(
-            r.said(),
-            vec![
-                reached(1, "ws.test"),
-                ProxyEvent::Refused {
-                    tag: 1,
-                    target: "ws.test:8080".into(),
-                    why: RefuseWhy::Port
-                }
-            ]
-        );
-        assert_eq!(r.attempts(), vec![public]);
+            .await;
+            assert_eq!(code, 400, "absolute-form stays refused");
+            assert!(closed(&mut s).await);
+            assert_eq!(
+                r.said(),
+                vec![
+                    ProxyEvent::Denied {
+                        tag: 1,
+                        target: t("x.test:443")
+                    },
+                    ProxyEvent::Refused {
+                        tag: 1,
+                        target: "192.168.1.20:80".into(),
+                        why: RefuseWhy::Private
+                    },
+                    ProxyEvent::Refused {
+                        tag: 1,
+                        target: "169.254.169.254:80".into(),
+                        why: RefuseWhy::Private
+                    },
+                    ProxyEvent::Refused {
+                        tag: 1,
+                        target: String::new(),
+                        why: RefuseWhy::BadRequest
+                    },
+                ],
+                "no Reached, no WebOff: the allowlist's own events"
+            );
+            assert_eq!(r.attempts(), vec![up]);
+        });
+    }
+
+    #[test]
+    fn web_off_says_weboff_once_per_target() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+            let any_port = SocketAddr::new(IpAddr::V4(PUBLIC), 0);
+            let w = Arc::new(WebState::default());
+            let mut r = rig(
+                web_cfg(&w),
+                &[
+                    ("web.test", vec![vec![any_port]]),
+                    ("other.test", vec![vec![any_port]]),
+                ],
+                &[(public, up)],
+            );
+            let p = r.listen(2);
+            for target in [
+                "web.test:443",
+                "web.test:443",
+                "other.test:443",
+                "WEB.test.:443",
+            ] {
+                let (mut s, code) = connect_to(&p, target).await;
+                assert_eq!(code, 403, "{target}");
+                assert!(closed(&mut s).await);
+            }
+            let (_s, code) = ask(&p, b"GET http://web.test/ HTTP/1.1\r\n\r\n").await;
+            assert_eq!(code, 403);
+            let weboff = |target: &str| ProxyEvent::WebOff {
+                tag: 2,
+                target: t(target),
+            };
+            assert_eq!(
+                r.said(),
+                vec![
+                    weboff("web.test:443"),
+                    weboff("other.test:443"),
+                    weboff("web.test:80")
+                ]
+            );
+            assert!(r.attempts().is_empty());
+
+            w.set_web(true);
+            let (mut s, code) = connect_to(&p, "web.test:443").await;
+            assert_eq!(code, 200);
+            assert!(echoes(&mut s, b"now").await);
+            assert_eq!(r.said(), vec![reached(2, "web.test")]);
+            assert_eq!(r.attempts(), vec![public]);
+        });
+    }
+
+    #[test]
+    fn a_web_host_opens_only_itself_and_forgotten_questions_are_asked_again() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+            let any_port = SocketAddr::new(IpAddr::V4(PUBLIC), 0);
+            let w = Arc::new(WebState::default());
+            let mut r = rig(
+                web_cfg(&w),
+                &[
+                    ("web.test", vec![vec![any_port]]),
+                    ("other.test", vec![vec![any_port]]),
+                    ("old.test", vec![vec![any_port]]),
+                ],
+                &[(public, up)],
+            );
+            let p = r.listen(2);
+            // a once grant opens its host:port alone, until it expires
+            w.set_web_hosts(vec![
+                (t("web.test:443"), None),
+                (t("old.test:443"), Some(1.0)),
+            ]);
+            let (mut s, code) = connect_to(&p, "web.test:443").await;
+            assert_eq!(code, 200);
+            assert!(echoes(&mut s, b"one").await);
+            for target in ["web.test:80", "other.test:443", "old.test:443"] {
+                let (_s, code) = connect_to(&p, target).await;
+                assert_eq!(code, 403, "{target}");
+            }
+            let weboff = |target: &str| ProxyEvent::WebOff {
+                tag: 2,
+                target: t(target),
+            };
+            assert_eq!(
+                r.said(),
+                vec![
+                    reached(2, "web.test"),
+                    weboff("web.test:80"),
+                    weboff("other.test:443"),
+                    weboff("old.test:443")
+                ]
+            );
+            // said once, until the caller forgets the questions; what was reached stays said
+            let (_s, code) = connect_to(&p, "other.test:443").await;
+            assert_eq!(code, 403);
+            assert!(r.said().is_empty());
+            r.handle.forget_questions(2);
+            r.handle.forget_questions(7);
+            for target in ["other.test:443", "web.test:443"] {
+                drop(connect_to(&p, target).await);
+            }
+            assert_eq!(r.said(), vec![weboff("other.test:443")]);
+        });
+    }
+
+    #[test]
+    fn grant_set_at_runtime_takes_effect_on_next_request() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let lan: SocketAddr = "192.168.1.20:8080".parse().unwrap();
+            let host_addrs = Arc::new(RwLock::new(HostAddrs::default()));
+            let w = Arc::new(WebState::new(
+                host_addrs.clone(),
+                Arc::new(RwLock::new(NeverSet::default())),
+            ));
+            let mut r = rig(web_cfg(&w), &[("evil.test", vec![vec![lan]])], &[(lan, up)]);
+            let p = r.listen(3);
+            let refused = |target: &str, why| ProxyEvent::Refused {
+                tag: 3,
+                target: target.into(),
+                why,
+            };
+            let grant = |expires| PrivateGrant {
+                target: PrivateTarget::HostPort(t("192.168.1.20:8080")),
+                expires,
+            };
+
+            // no grant: the card's question, with the address
+            let (_s, code) = connect_to(&p, "192.168.1.20:8080").await;
+            assert_eq!(code, 403);
+            assert_eq!(
+                r.said(),
+                vec![ProxyEvent::Private {
+                    tag: 3,
+                    asked: t("192.168.1.20:8080"),
+                    addr: lan,
+                    class: Class::Lan
+                }]
+            );
+
+            // granted: the next request goes through
+            w.set_grants(vec![grant(None)]);
+            let (mut a, code) = connect_to(&p, "192.168.1.20:8080").await;
+            assert_eq!(code, 200);
+            assert!(echoes(&mut a, b"granted").await);
+            assert_eq!(r.said(), vec![reached(3, "192.168.1.20")]);
+
+            // a name rebound onto the grant is refused
+            let (_s, code) = connect_to(&p, "evil.test:8080").await;
+            assert_eq!(code, 403);
+            assert_eq!(
+                r.said(),
+                vec![refused("evil.test:8080", RefuseWhy::Rebound)]
+            );
+
+            // the host's addresses and the deny list are read at each request
+            host_addrs.write().unwrap().0.insert(lan.ip());
+            let (_s, code) = connect_to(&p, "192.168.1.20:8080").await;
+            assert_eq!(code, 403);
+            assert_eq!(
+                r.said(),
+                vec![refused("192.168.1.20:8080", RefuseWhy::Loopback)]
+            );
+            host_addrs.write().unwrap().0.clear();
+            w.set_deny_hosts(vec!["192.168.1.20".into()]);
+            let (_s, code) = connect_to(&p, "192.168.1.20:8080").await;
+            assert_eq!(code, 403);
+            assert_eq!(
+                r.said(),
+                vec![refused("192.168.1.20:8080", RefuseWhy::DenyListed)]
+            );
+            w.set_deny_hosts(Vec::new());
+
+            // expired: refused again (the question was said already); the tunnel spliced before stays
+            w.set_grants(vec![grant(Some(1.0))]);
+            let (_s, code) = connect_to(&p, "192.168.1.20:8080").await;
+            assert_eq!(code, 403);
+            assert!(r.said().is_empty());
+            assert!(echoes(&mut a, b"stays").await);
+            assert_eq!(r.attempts(), vec![lan]);
+        });
+    }
+
+    #[test]
+    fn connect_to_80_for_websockets() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let public = SocketAddr::new(IpAddr::V4(PUBLIC), 80);
+            let w = web_on();
+            let mut r = rig(
+                web_cfg(&w),
+                &[("ws.test", vec![vec![public]])],
+                &[(public, up)],
+            );
+            let p = r.listen(1);
+            let (mut s, code) = ask(
+                &p,
+                b"CONNECT ws.test:80 HTTP/1.1\r\nHost: ws.test:80\r\n\r\n",
+            )
+            .await;
+            assert_eq!(code, 200);
+            assert!(
+                echoes(
+                    &mut s,
+                    b"GET /socket HTTP/1.1\r\nHost: ws.test\r\nUpgrade: websocket\r\n\r\n"
+                )
+                .await,
+                "the tunnel carries the upgrade as it is"
+            );
+            let (_s, code) = connect_to(&p, "ws.test:8080").await;
+            assert_eq!(code, 403);
+            assert_eq!(
+                r.said(),
+                vec![
+                    reached(1, "ws.test"),
+                    ProxyEvent::Refused {
+                        tag: 1,
+                        target: "ws.test:8080".into(),
+                        why: RefuseWhy::Port
+                    }
+                ]
+            );
+            assert_eq!(r.attempts(), vec![public]);
+        });
     }
 
     // ---- Policy::Job: a container job's proxy (container-net Task 11) ----
@@ -2760,26 +2840,27 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn a_granted_host_port_connects_to_loopback() {
-        let up = echo().await;
-        let (w, _) = job_state(&[]);
-        w.set_grants(vec![host_grant(up.port())]);
-        let r = rig(job_cfg(&w, &[]), &[], &[]);
-        let p = r.listen(5);
-        let (mut s, code) = connect_to(&p, &format!("host.drgnx.internal:{}", up.port())).await;
-        assert_eq!(code, 200);
-        assert!(echoes(&mut s, b"to the host").await);
-        assert!(
-            r.attempts()
-                .iter()
-                .all(|a| a.ip().is_loopback() && a.port() == up.port())
-        );
-        // absolute-form to the reserved name is forwarded in origin-form
-        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec();
-        let (rec, got) = recorder(answer).await;
-        w.set_grants(vec![host_grant(rec.port())]);
-        let back = send_all(
+    #[test]
+    fn a_granted_host_port_connects_to_loopback() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let (w, _) = job_state(&[]);
+            w.set_grants(vec![host_grant(up.port())]);
+            let r = rig(job_cfg(&w, &[]), &[], &[]);
+            let p = r.listen(5);
+            let (mut s, code) = connect_to(&p, &format!("host.drgnx.internal:{}", up.port())).await;
+            assert_eq!(code, 200);
+            assert!(echoes(&mut s, b"to the host").await);
+            assert!(
+                r.attempts()
+                    .iter()
+                    .all(|a| a.ip().is_loopback() && a.port() == up.port())
+            );
+            // absolute-form to the reserved name is forwarded in origin-form
+            let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec();
+            let (rec, got) = recorder(answer).await;
+            w.set_grants(vec![host_grant(rec.port())]);
+            let back = send_all(
             &p,
             format!(
                 "GET http://host.drgnx.internal:{0}/x HTTP/1.1\r\nHost: host.drgnx.internal:{0}\r\n\r\n",
@@ -2788,110 +2869,123 @@ mod tests {
             .as_bytes(),
         )
         .await;
-        assert!(
-            back.starts_with(b"HTTP/1.1 200"),
-            "{}",
-            String::from_utf8_lossy(&back)
-        );
-        let sent = timeout(WAIT, got).await.unwrap().unwrap();
-        assert!(
-            sent.starts_with(b"GET /x HTTP/1.1"),
-            "{}",
-            String::from_utf8_lossy(&sent)
-        );
+            assert!(
+                back.starts_with(b"HTTP/1.1 200"),
+                "{}",
+                String::from_utf8_lossy(&back)
+            );
+            let sent = timeout(WAIT, got).await.unwrap().unwrap();
+            assert!(
+                sent.starts_with(b"GET /x HTTP/1.1"),
+                "{}",
+                String::from_utf8_lossy(&sent)
+            );
+        });
     }
 
-    #[tokio::test]
-    async fn an_ungranted_port_is_a_private_event() {
-        let (w, _) = job_state(&[]);
-        let mut r = rig(job_cfg(&w, &[]), &[], &[]);
-        let p = r.listen(6);
-        let (_s, code) = connect_to(&p, "host.drgnx.internal:8080").await;
-        assert_eq!(code, 403);
-        let said = r.said();
-        assert!(
-            matches!(said.as_slice(), [ProxyEvent::Private { tag: 6, asked, .. }] if *asked == t("host.drgnx.internal:8080")),
-            "{said:?}"
-        );
-        assert!(r.attempts().is_empty());
+    #[test]
+    fn an_ungranted_port_is_a_private_event() {
+        saman::block_on_current(async {
+            let (w, _) = job_state(&[]);
+            let mut r = rig(job_cfg(&w, &[]), &[], &[]);
+            let p = r.listen(6);
+            let (_s, code) = connect_to(&p, "host.drgnx.internal:8080").await;
+            assert_eq!(code, 403);
+            let said = r.said();
+            assert!(
+                matches!(said.as_slice(), [ProxyEvent::Private { tag: 6, asked, .. }] if *asked == t("host.drgnx.internal:8080")),
+                "{said:?}"
+            );
+            assert!(r.attempts().is_empty());
+        });
     }
 
-    #[tokio::test]
-    async fn localhost_and_127_are_refused_under_a_grant() {
-        let up = echo().await;
-        let (w, _) = job_state(&[]);
-        w.set_grants(vec![host_grant(up.port())]);
-        let r = rig(job_cfg(&w, &[]), &[("localhost", vec![vec![up]])], &[]);
-        let p = r.listen(7);
-        for target in [
-            format!("localhost:{}", up.port()),
-            format!("127.0.0.1:{}", up.port()),
-            format!("[::1]:{}", up.port()),
-        ] {
+    #[test]
+    fn localhost_and_127_are_refused_under_a_grant() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let (w, _) = job_state(&[]);
+            w.set_grants(vec![host_grant(up.port())]);
+            let r = rig(job_cfg(&w, &[]), &[("localhost", vec![vec![up]])], &[]);
+            let p = r.listen(7);
+            for target in [
+                format!("localhost:{}", up.port()),
+                format!("127.0.0.1:{}", up.port()),
+                format!("[::1]:{}", up.port()),
+            ] {
+                let (_s, code) = connect_to(&p, &target).await;
+                assert_eq!(code, 403, "{target}");
+            }
+            assert!(r.attempts().is_empty());
+        });
+    }
+
+    #[test]
+    fn a_never_port_is_refused_under_any_grant() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let (w, _) = job_state(&[up.port()]);
+            w.set_grants(vec![host_grant(up.port())]);
+            let r = rig(job_cfg(&w, &[]), &[], &[]);
+            let p = r.listen(8);
+            let (_s, code) = connect_to(&p, &format!("host.drgnx.internal:{}", up.port())).await;
+            assert_eq!(code, 403);
+            assert!(r.attempts().is_empty());
+        });
+    }
+
+    #[test]
+    fn a_port_added_to_the_never_set_after_the_grant_is_refused_at_the_next_dial() {
+        saman::block_on_current(async {
+            let up = echo().await;
+            let (w, never) = job_state(&[]);
+            w.set_grants(vec![host_grant(up.port())]);
+            let r = rig(job_cfg(&w, &[]), &[], &[]);
+            let p = r.listen(9);
+            let target = format!("host.drgnx.internal:{}", up.port());
             let (_s, code) = connect_to(&p, &target).await;
-            assert_eq!(code, 403, "{target}");
-        }
-        assert!(r.attempts().is_empty());
+            assert_eq!(code, 200);
+            never.write().unwrap().loopback_ports.insert(up.port());
+            let (_s, code) = connect_to(&p, &target).await;
+            assert_eq!(code, 403);
+        });
     }
 
-    #[tokio::test]
-    async fn a_never_port_is_refused_under_any_grant() {
-        let up = echo().await;
-        let (w, _) = job_state(&[up.port()]);
-        w.set_grants(vec![host_grant(up.port())]);
-        let r = rig(job_cfg(&w, &[]), &[], &[]);
-        let p = r.listen(8);
-        let (_s, code) = connect_to(&p, &format!("host.drgnx.internal:{}", up.port())).await;
-        assert_eq!(code, 403);
-        assert!(r.attempts().is_empty());
+    #[test]
+    fn allowed_targets_stay_connect_only() {
+        saman::block_on_current(async {
+            let (w, _) = job_state(&[]);
+            let r = rig(job_cfg(&w, &["listed.test:80"]), &[], &[]);
+            let p = r.listen(10);
+            let back = send_all(
+                &p,
+                b"GET http://listed.test:80/ HTTP/1.1\r\nHost: listed.test\r\n\r\n",
+            )
+            .await;
+            assert!(
+                back.starts_with(b"HTTP/1.1 400"),
+                "{}",
+                String::from_utf8_lossy(&back)
+            );
+            assert!(r.attempts().is_empty());
+        });
     }
 
-    #[tokio::test]
-    async fn a_port_added_to_the_never_set_after_the_grant_is_refused_at_the_next_dial() {
-        let up = echo().await;
-        let (w, never) = job_state(&[]);
-        w.set_grants(vec![host_grant(up.port())]);
-        let r = rig(job_cfg(&w, &[]), &[], &[]);
-        let p = r.listen(9);
-        let target = format!("host.drgnx.internal:{}", up.port());
-        let (_s, code) = connect_to(&p, &target).await;
-        assert_eq!(code, 200);
-        never.write().unwrap().loopback_ports.insert(up.port());
-        let (_s, code) = connect_to(&p, &target).await;
-        assert_eq!(code, 403);
-    }
-
-    #[tokio::test]
-    async fn allowed_targets_stay_connect_only() {
-        let (w, _) = job_state(&[]);
-        let r = rig(job_cfg(&w, &["listed.test:80"]), &[], &[]);
-        let p = r.listen(10);
-        let back = send_all(
-            &p,
-            b"GET http://listed.test:80/ HTTP/1.1\r\nHost: listed.test\r\n\r\n",
-        )
-        .await;
-        assert!(
-            back.starts_with(b"HTTP/1.1 400"),
-            "{}",
-            String::from_utf8_lossy(&back)
-        );
-        assert!(r.attempts().is_empty());
-    }
-
-    #[tokio::test]
-    async fn web_stays_off_under_the_job_policy() {
-        let (w, _) = job_state(&[]);
-        let mut r = rig(job_cfg(&w, &["crates.io:443"]), &[], &[]);
-        let p = r.listen(11);
-        let (_s, code) = connect_to(&p, "pub.test:443").await;
-        assert_eq!(code, 403);
-        assert_eq!(
-            r.said(),
-            vec![ProxyEvent::Denied {
-                tag: 11,
-                target: t("pub.test:443")
-            }]
-        );
+    #[test]
+    fn web_stays_off_under_the_job_policy() {
+        saman::block_on_current(async {
+            let (w, _) = job_state(&[]);
+            let mut r = rig(job_cfg(&w, &["crates.io:443"]), &[], &[]);
+            let p = r.listen(11);
+            let (_s, code) = connect_to(&p, "pub.test:443").await;
+            assert_eq!(code, 403);
+            assert_eq!(
+                r.said(),
+                vec![ProxyEvent::Denied {
+                    tag: 11,
+                    target: t("pub.test:443")
+                }]
+            );
+        });
     }
 }

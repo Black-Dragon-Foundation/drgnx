@@ -940,7 +940,7 @@ mod tests {
                 "x/sess/S3/proxy.sock",
                 "agent/agent.1",
             ] {
-                fs::write(b.join(f), "x").unwrap();
+                eitri::replace_file(&b.join(f), b"x").unwrap();
             }
             Fx { _dir: dir, b }
         }
@@ -1042,7 +1042,7 @@ mod tests {
 
     /// Where a source path can go, for tables that try one path in every source key.
     #[derive(Clone, Copy, Debug)]
-    enum Key {
+    enum Place {
         Read,
         Write,
         BindRo,
@@ -1052,18 +1052,18 @@ mod tests {
         Tmp,
     }
 
-    const SOURCE_KEYS: [Key; 7] = [
-        Key::Read,
-        Key::Write,
-        Key::BindRo,
-        Key::BindRw,
-        Key::Home,
-        Key::Run,
-        Key::Tmp,
+    const SOURCE_KEYS: [Place; 7] = [
+        Place::Read,
+        Place::Write,
+        Place::BindRo,
+        Place::BindRw,
+        Place::Home,
+        Place::Run,
+        Place::Tmp,
     ];
 
     /// `spec` with `p` as the source of `key` (and as its dest where dests equal sources).
-    fn put(mut spec: Spec, key: Key, p: &Path, target: Target) -> Spec {
+    fn put(mut spec: Spec, key: Place, p: &Path, target: Target) -> Spec {
         let dest = |d: &str| {
             if target == Target::LinuxBwrap {
                 PathBuf::from(d)
@@ -1077,12 +1077,12 @@ mod tests {
             dest: dest(d),
         };
         match key {
-            Key::Read => spec.read.push(p.into()),
-            Key::Write => spec.write.push(p.into()),
-            Key::BindRo => spec.binds.push(bind(Mode::Ro, "/mnt/x")),
-            Key::BindRw => spec.binds.push(bind(Mode::Rw, "/mnt/x")),
-            Key::Home => spec.home = Some(bind(Mode::Rw, "/home/agent")),
-            Key::Run => {
+            Place::Read => spec.read.push(p.into()),
+            Place::Write => spec.write.push(p.into()),
+            Place::BindRo => spec.binds.push(bind(Mode::Ro, "/mnt/x")),
+            Place::BindRw => spec.binds.push(bind(Mode::Rw, "/mnt/x")),
+            Place::Home => spec.home = Some(bind(Mode::Rw, "/home/agent")),
+            Place::Run => {
                 spec.run = Some(bind(Mode::Ro, "/run/drgnx"));
                 spec.sockets.clear();
                 if let Net::Isolated { relay, .. } = &mut spec.net {
@@ -1091,7 +1091,7 @@ mod tests {
                     }
                 }
             }
-            Key::Tmp => spec.tmp = Some(p.into()),
+            Place::Tmp => spec.tmp = Some(p.into()),
         }
         spec
     }
@@ -1188,9 +1188,9 @@ mod tests {
         for t in TARGETS {
             let cases = SOURCE_KEYS
                 .iter()
-                .filter(|k| !matches!(k, Key::Run))
+                .filter(|k| !matches!(k, Place::Run))
                 .flat_map(|k| rows.iter().map(move |r| (*k, r)))
-                .chain(run_rows.iter().map(|r| (Key::Run, r)));
+                .chain(run_rows.iter().map(|r| (Place::Run, r)));
             for (key, (row, p, want)) in cases {
                 let spec = put(fx.spec(t), key, p, t);
                 let got = validate(spec, &fx.ctx(), t).map(|_| ()).map_err(|r| r.rule);
@@ -1441,7 +1441,7 @@ mod tests {
                 ("the sandbox dir", fx.p("state/sandbox"), Rule::Closed),
                 ("the state dir", fx.p("state"), Rule::ExposesUser),
             ] {
-                refused(&fx, row, t, put(fx.spec(t), Key::BindRw, &p, t), rule);
+                refused(&fx, row, t, put(fx.spec(t), Place::BindRw, &p, t), rule);
             }
         }
         // The context opens only its own closed dirs: a system dir stays closed whatever it says.
@@ -1449,7 +1449,7 @@ mod tests {
         ctx.open_inside_closed.push("/proc/sys".into());
         let t = Target::LinuxBwrap;
         validate(fx.spec(t), &ctx, t).expect("the base passes with this context");
-        let spec = put(fx.spec(t), Key::Read, Path::new("/proc/sys/kernel"), t);
+        let spec = put(fx.spec(t), Place::Read, Path::new("/proc/sys/kernel"), t);
         assert_eq!(validate(spec, &ctx, t).unwrap_err().rule, Rule::Closed);
     }
 
@@ -1458,7 +1458,7 @@ mod tests {
         let fx = Fx::new();
         base_passes(&fx);
         for t in TARGETS {
-            let with_run = |src: PathBuf| put(fx.spec(t), Key::Run, &src, t);
+            let with_run = |src: PathBuf| put(fx.spec(t), Place::Run, &src, t);
             let rows: Vec<(&str, Spec)> = vec![
                 (
                     "run: a sub-path of a session dir",
@@ -1468,15 +1468,15 @@ mod tests {
                 ("run: not in a sessions dir", with_run(fx.p("other"))),
                 (
                     "read: another session's dir",
-                    put(fx.spec(t), Key::Read, &fx.p("x/sess/S2"), t),
+                    put(fx.spec(t), Place::Read, &fx.p("x/sess/S2"), t),
                 ),
                 ("read: a sub-path of this session's dir", {
                     let s = with_run(fx.p("x/sess/S3"));
-                    put(s, Key::Read, &fx.p("x/sess/S3/out"), t)
+                    put(s, Place::Read, &fx.p("x/sess/S3/out"), t)
                 }),
                 (
                     "write: what holds a sessions dir",
-                    put(fx.spec(t), Key::Write, &fx.p("x"), t),
+                    put(fx.spec(t), Place::Write, &fx.p("x"), t),
                 ),
                 ("a socket outside run", {
                     let mut s = fx.spec(t);
@@ -1510,7 +1510,7 @@ mod tests {
         base_passes(&fx);
         for t in TARGETS {
             for p in [fx.p("home/u/go"), fx.p("home/u/go/bin")] {
-                for key in [Key::Write, Key::BindRw, Key::Home, Key::Tmp] {
+                for key in [Place::Write, Place::BindRw, Place::Home, Place::Tmp] {
                     refused(
                         &fx,
                         &format!("{p:?} as {key:?}"),
@@ -1519,7 +1519,7 @@ mod tests {
                         Rule::ProgramDir,
                     );
                 }
-                for key in [Key::Read, Key::BindRo] {
+                for key in [Place::Read, Place::BindRo] {
                     let spec = put(fx.spec(t), key, &p, t);
                     validate(spec, &fx.ctx(), t).unwrap_or_else(|r| panic!("{key:?} {p:?}: {r:?}"));
                 }
@@ -1532,7 +1532,7 @@ mod tests {
         let fx = Fx::new();
         base_passes(&fx);
         for t in TARGETS {
-            for key in [Key::Write, Key::BindRo, Key::BindRw, Key::Home] {
+            for key in [Place::Write, Place::BindRo, Place::BindRw, Place::Home] {
                 refused(
                     &fx,
                     &format!("{key:?}"),
@@ -1541,12 +1541,12 @@ mod tests {
                     Rule::Missing,
                 );
             }
-            let mut spec = put(fx.spec(t), Key::Run, &fx.p("x/sess/S9"), t);
+            let mut spec = put(fx.spec(t), Place::Run, &fx.p("x/sess/S9"), t);
             spec.sockets.clear();
             refused(&fx, "run", t, spec, Rule::Missing);
             // tmp may be made later.
             validate(
-                put(fx.spec(t), Key::Tmp, &fx.p("other/nope"), t),
+                put(fx.spec(t), Place::Tmp, &fx.p("other/nope"), t),
                 &fx.ctx(),
                 t,
             )
@@ -1982,7 +1982,7 @@ mod tests {
     /// place inside; on a target without mounts it is a host path, so it is the true name of the host's `/tmp` (a link
     /// to `/private/tmp` on macOS, which rule 1 would refuse before rule 12 says what the row is about).
     fn with_browser(fx: &Fx, target: Target) -> Spec {
-        fs::write(fx.p("other/chrome"), "x").unwrap();
+        eitri::replace_file(&fx.p("other/chrome"), b"x").unwrap();
         let mut s = fx.spec(target);
         if let Net::Isolated { relay, .. } = &mut s.net
             && let Some(first) = relay.first()

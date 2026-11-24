@@ -159,7 +159,7 @@ impl Sandbox {
         // macOS: one backend. Android: not this branch (see below).
         #[cfg(target_os = "macos")]
         {
-            let _ = bwrap_override;
+            drop(bwrap_override);
             let program = macos::find()?;
             Ok(Sandbox {
                 kind: BackendKind::Seatbelt,
@@ -172,7 +172,7 @@ impl Sandbox {
         // Android and every other target: no backend; fails closed.
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
-            let _ = (tier, helper, bwrap_override);
+            drop((tier, helper, bwrap_override));
             Err(none::refusal("this system has none"))
         }
     }
@@ -291,7 +291,7 @@ impl Sandbox {
         browser_hub: Option<OwnedFd>,
         hooks: Hooks,
     ) -> Result<Prepared, Refusal> {
-        let _ = (spec, command, browser_hub, hooks);
+        drop((spec, command, browser_hub, hooks));
         Err(none::refusal("this system has none"))
     }
 }
@@ -339,16 +339,15 @@ fn seatbelt_prepared(run: macos::Run) -> Prepared {
 }
 
 /// The bwrap this host has and its version, for the check's facts: root-owned only, any version (Linux; else `None`).
+#[cfg(target_os = "linux")]
 pub(crate) fn host_bwrap(only: Option<&std::path::Path>) -> Option<(PathBuf, (u32, u32, u32))> {
-    #[cfg(target_os = "linux")]
-    {
-        linux::bwrap::probe(only)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = only;
-        None
-    }
+    linux::bwrap::probe(only)
+}
+
+/// The bwrap this host has: none off Linux.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn host_bwrap(_only: Option<&std::path::Path>) -> Option<(PathBuf, (u32, u32, u32))> {
+    None
 }
 
 /// Whether this host is macOS, and then whether `/usr/bin/sandbox-exec` is there where only root can change it.

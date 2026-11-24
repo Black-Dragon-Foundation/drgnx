@@ -207,7 +207,9 @@ impl Drop for Listener {
     fn drop(&mut self) {
         if let Some(t) = self.thread.take() {
             self.stop.take();
-            let _ = t.join();
+            if t.join().is_err() {
+                tracing::debug!("the answering thread panicked");
+            }
         }
     }
 }
@@ -260,16 +262,15 @@ pub fn install() -> io::Result<OwnedFd> {
 
 /// Offer the command at `sock` (the traced side; see the module). Never refuses the command: every outcome but
 /// [`Offered::Lost`] lets it run.
+#[cfg(target_os = "linux")]
 pub fn offer(sock: &Path, scope: Scope, command: &str) -> Offered {
-    #[cfg(target_os = "linux")]
-    {
-        linux::offer(sock, scope, command)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (sock, scope, command);
-        Offered::Untraced("opens are traced on Linux only".into())
-    }
+    linux::offer(sock, scope, command)
+}
+
+/// Offer the command: untraced off Linux.
+#[cfg(not(target_os = "linux"))]
+pub fn offer(_sock: &Path, _scope: Scope, _command: &str) -> Offered {
+    Offered::Untraced("opens are traced on Linux only".into())
 }
 
 /// A hello the supervisor has read, waiting for its answer.
@@ -316,16 +317,15 @@ impl Offer {
 }
 
 /// Start the answering thread on listener `fd`; each open it read goes to `out`.
+#[cfg(target_os = "linux")]
 pub fn listen(fd: OwnedFd, opts: ListenOptions, out: Sender<Open>) -> io::Result<Listener> {
-    #[cfg(target_os = "linux")]
-    {
-        linux::listen(fd, opts, out)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (fd, opts, out);
-        Err(unsupported())
-    }
+    linux::listen(fd, opts, out)
+}
+
+/// Start the answering thread: refused off Linux.
+#[cfg(not(target_os = "linux"))]
+pub fn listen(_fd: OwnedFd, _opts: ListenOptions, _out: Sender<Open>) -> io::Result<Listener> {
+    Err(unsupported())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -338,24 +338,32 @@ fn unsupported() -> io::Error {
 /// listener installed but not handed over: 125).
 pub fn wrapper_main(args: Vec<OsString>) -> i32 {
     let [_, cmd] = args.as_slice() else {
-        eprintln!("usage: {WRAPPER_NAME} COMMAND");
+        crate::say(&format!("usage: {WRAPPER_NAME} COMMAND"));
         return 2;
     };
     if let (Some(sock), Some(text)) = (std::env::var_os(SOCK_ENV), cmd.to_str())
         && let Offered::Lost(why) = offer(Path::new(&sock), Scope::Step, text)
     {
-        eprintln!("{WRAPPER_NAME}: {why}");
+        crate::say(&format!("{WRAPPER_NAME}: {why}"));
         return 125;
     }
-    use std::os::unix::process::CommandExt;
-    let mut e = std::process::Command::new("bash").arg("-c").arg(cmd).exec();
+    // the traced command is the process itself, with the environment the step had
+    let run = |program: &str| {
+        draugr::exec(&draugr::Spec {
+            program: program.into(),
+            args: vec!["-c".into(), cmd.clone()],
+            env: std::env::vars_os().collect(),
+            cwd: None,
+            stdin_null: false,
+            pass_fds: Vec::new(),
+            new_session: false,
+        })
+    };
+    let mut e = run("bash");
     if e.kind() == io::ErrorKind::NotFound {
-        e = std::process::Command::new("/bin/bash")
-            .arg("-c")
-            .arg(cmd)
-            .exec();
+        e = run("/bin/bash");
     }
-    eprintln!("{WRAPPER_NAME}: cannot run bash: {e}");
+    crate::say(&format!("{WRAPPER_NAME}: cannot run bash: {e}"));
     if e.kind() == io::ErrorKind::NotFound {
         127
     } else {
@@ -388,6 +396,8 @@ mod linux {
     /// Bounds of the answering thread's caches (open `/proc/<pid>/mem` files, tid → tgid).
     const MEMS_MAX: usize = 256;
     const TGIDS_MAX: usize = 4096;
+    /// The most of a task's `/proc/<tid>/status` that is read.
+    const STATUS_CAP: u64 = 1 << 16;
 
     #[repr(C)]
     #[derive(Default, Clone, Copy)]
@@ -526,11 +536,15 @@ mod linux {
                 )),
             },
             Err(e) if e.raw_os_error() == Some(libc::EBUSY) => {
-                let _ = (&s).write_all(b"busy\n");
+                if let Err(e) = (&s).write_all(b"busy\n") {
+                    tracing::debug!(error = %e, "the supervisor did not hear `busy`");
+                }
                 Offered::Busy
             }
             Err(e) => {
-                let _ = (&s).write_all(format!("failed: {e}\n").as_bytes());
+                if let Err(w) = (&s).write_all(format!("failed: {e}\n").as_bytes()) {
+                    tracing::debug!(error = %w, "the supervisor did not hear `failed`");
+                }
                 Offered::Untraced(format!("the open listener: {e}"))
             }
         }
@@ -659,12 +673,22 @@ mod linux {
         })
     }
 
+    /// The errno the test hook makes the sync wake-up's ioctl fail with.
+    #[cfg(feature = "test-hooks")]
+    fn forced_errno(opts: &ListenOptions) -> Option<i32> {
+        opts.set_flags_errno
+    }
+
+    /// Without the feature the ioctl is never forced to fail.
+    #[cfg(not(feature = "test-hooks"))]
+    fn forced_errno(_opts: &ListenOptions) -> Option<i32> {
+        None
+    }
+
     fn set_sync(fd: &OwnedFd, opts: &ListenOptions) -> Result<(), i32> {
-        #[cfg(feature = "test-hooks")]
-        if let Some(e) = opts.set_flags_errno {
+        if let Some(e) = forced_errno(opts) {
             return Err(e);
         }
-        let _ = opts;
         // SAFETY: an ioctl on our listener fd with a by-value flag.
         let r = unsafe { libc::ioctl(fd.as_raw_fd(), IOCTL_SET_FLAGS as _, FD_SYNC_WAKE_UP) };
         if r < 0 { Err(errno()) } else { Ok(()) }
@@ -704,9 +728,8 @@ mod linux {
             mems: HashMap::new(),
             tgids: HashMap::new(),
         };
-        let thread = std::thread::Builder::new()
-            .name(WRAPPER_NAME.into())
-            .spawn(move || a.run())?;
+        let thread =
+            saman::spawn_thread(WRAPPER_NAME, move || a.run()).map_err(io::Error::other)?;
         Ok(Listener {
             stop: Some(stop_w),
             reading,
@@ -785,7 +808,8 @@ mod linux {
 
         /// Read, check, continue; then hand what was read on.
         fn one(&mut self, n: &Notif, ended: &mut Ended) {
-            let t0 = Instant::now();
+            // real time, whatever clock a test installed: the round trip to the kernel is what this measures
+            let t0 = stund::real::instant();
             ended.notifications += 1;
             self.counts.notifications.fetch_add(1, Ordering::Relaxed);
             let a = n.data.args;
@@ -889,7 +913,8 @@ mod linux {
             if let Some(g) = self.tgids.get(&tid) {
                 return Some(*g);
             }
-            let s = std::fs::read_to_string(format!("/proc/{tid}/status")).ok()?;
+            let s =
+                eitri::read_string(Path::new(&format!("/proc/{tid}/status")), STATUS_CAP).ok()?;
             let g = s
                 .lines()
                 .find_map(|l| l.strip_prefix("Tgid:"))

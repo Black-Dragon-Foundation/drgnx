@@ -12,7 +12,6 @@
 mod trace_support;
 
 use gleipnir::trace::{self as gt, ListenOptions};
-use std::io::Write;
 use trace_support::{
     CHILD_ENV, Kid, Sup, WRAPPER, child_command, child_line, marker_value, run, spawn,
 };
@@ -33,17 +32,17 @@ fn child() {
 /// N timed opens of the files listed in `file`, round robin; one JSON marker with the loop's time and the per-open
 /// p50 and p95 in ns.
 fn opens(c: &Kid) {
-    let list: Vec<std::ffi::CString> = std::fs::read_to_string(c.file.as_ref().unwrap())
+    let list: Vec<std::ffi::CString> = eitri::read_string(c.file.as_ref().unwrap(), 1 << 20)
         .unwrap()
         .lines()
         .filter(|l| !l.is_empty())
         .map(|l| std::ffi::CString::new(l).unwrap())
         .collect();
     let mut lat = Vec::with_capacity(c.n as usize);
-    let start = std::time::Instant::now();
+    let start = stund::real::instant();
     for i in 0..c.n as usize {
         let p = &list[i % list.len()];
-        let t = std::time::Instant::now();
+        let t = stund::real::instant();
         // SAFETY: a NUL-terminated path; the fd is closed at once.
         let fd = unsafe { libc::open(p.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
         lat.push(t.elapsed().as_nanos() as u64);
@@ -55,15 +54,12 @@ fn opens(c: &Kid) {
     lat.sort_unstable();
     let pct = |p: f64| lat[((lat.len() - 1) as f64 * p).round() as usize];
     // straight to fd 1, as the support's markers go (the harness captures only `print!`)
-    let mut out = std::io::stdout().lock();
-    writeln!(
-        out,
+    annall::cli_out(&format!(
         "opens: {{\"loop_ns\":{loop_ns},\"p50_ns\":{},\"p95_ns\":{}}}",
         pct(0.5),
         pct(0.95)
-    )
+    ))
     .unwrap();
-    out.flush().unwrap();
 }
 
 const OPENS: u64 = 2000;
@@ -98,7 +94,7 @@ fn one(s: &Sup, list: &std::path::Path, traced: bool) -> (u64, u64) {
     }
     let v: serde_json::Value = serde_json::from_str(
         &marker_value(&out.stdout, "opens: ")
-            .unwrap_or_else(|| panic!("no result: {}", String::from_utf8_lossy(&out.stderr))),
+            .unwrap_or_else(|| panic!("no result: {}", out.stderr)),
     )
     .unwrap();
     (
@@ -142,7 +138,10 @@ fn measure() -> ((u64, u64), (u64, u64)) {
 fn notify_round_trip_p95_within_15_us() {
     let ((_, off), (_, on)) = measure();
     let added = on.saturating_sub(off);
-    eprintln!("open p95: untraced {off} ns, traced {on} ns, added {added} ns");
+    annall::cli_err(&format!(
+        "open p95: untraced {off} ns, traced {on} ns, added {added} ns"
+    ))
+    .unwrap();
     assert!(
         added <= 15_000,
         "a notified open adds {added} ns at p95, over 15 µs"
@@ -154,7 +153,10 @@ fn notify_round_trip_p95_within_15_us() {
 fn traced_2000_opens_within_budget() {
     let ((off, _), (on, _)) = measure();
     let added = on.saturating_sub(off);
-    eprintln!("2,000 opens: untraced {off} ns, traced {on} ns, added {added} ns");
+    annall::cli_err(&format!(
+        "2,000 opens: untraced {off} ns, traced {on} ns, added {added} ns"
+    ))
+    .unwrap();
     assert!(
         added <= 50_000_000,
         "2,000 traced opens add {added} ns, over 50 ms"

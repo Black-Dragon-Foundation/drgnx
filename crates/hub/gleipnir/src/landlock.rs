@@ -533,8 +533,7 @@ pub fn restrict(plan: &LandlockPlan, abi_cap: Option<u8>) -> Result<Applied, Lan
 /// Not Linux: always [`LandlockError::Unsupported`].
 // Android among them: no backend; apps get no user namespaces; fails closed.
 #[cfg(not(target_os = "linux"))]
-pub fn restrict(plan: &LandlockPlan, abi_cap: Option<u8>) -> Result<Applied, LandlockError> {
-    let _ = (plan, abi_cap);
+pub fn restrict(_plan: &LandlockPlan, _abi_cap: Option<u8>) -> Result<Applied, LandlockError> {
     Err(LandlockError::Unsupported)
 }
 
@@ -1439,25 +1438,44 @@ mod tests {
         }
         let k = kernel_abi();
         if k < need.max(1) {
-            eprintln!(
+            annall::cli_err(&format!(
                 "SKIP {name}: the kernel's Landlock ABI is {k}, this needs {}",
                 need.max(1)
-            );
+            ))
+            .unwrap();
             return;
         }
-        let out = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                &format!("landlock::tests::{name}"),
-                "--exact",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env(CHILD, "1")
-            .envs(env.iter().map(|(k, v)| (*k, v)))
-            .output()
-            .unwrap();
+        let set: Vec<(&str, &std::ffi::OsStr)> =
+            std::iter::once((CHILD, std::ffi::OsStr::new("1")))
+                .chain(
+                    env.iter()
+                        .map(|(k, v)| (*k, std::ffi::OsStr::new(v.as_str()))),
+                )
+                .collect();
+        let out = draugr::run(
+            draugr::Spec {
+                program: std::env::current_exe().unwrap(),
+                args: vec![
+                    format!("landlock::tests::{name}").into(),
+                    "--exact".into(),
+                    "--nocapture".into(),
+                    "--test-threads=1".into(),
+                ],
+                env: draugr::env::build(
+                    &["PATH", "TMPDIR", stig::HOME_VAR, "RUST_BACKTRACE"],
+                    &["LC_", "LANG"],
+                    &set,
+                ),
+                cwd: None,
+                stdin_null: true,
+                pass_fds: Vec::new(),
+                new_session: false,
+            },
+            std::time::Duration::from_secs(120),
+        )
+        .unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
-        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stderr = &out.stderr;
         assert!(
             out.status.success() && stdout.contains("test result: ok. 1 passed"),
             "child {name}: {:?}\n{stdout}\n{stderr}",
@@ -1474,6 +1492,14 @@ mod tests {
 
     fn errno<T: fmt::Debug>(r: std::io::Result<T>) -> Option<i32> {
         r.err().and_then(|e| e.raw_os_error())
+    }
+
+    /// [`errno`] for a write through `eitri`.
+    fn write_errno(r: Result<(), eitri::FsError>) -> Option<i32> {
+        match r {
+            Err(eitri::FsError::Io(e)) => e.raw_os_error(),
+            _ => None,
+        }
     }
 
     /// A plan with read on "/" and write on `writable` only.
@@ -1530,7 +1556,7 @@ mod tests {
             std::fs::create_dir(&outside).unwrap();
             restrict(&write_plan(1, &inside), None).unwrap();
             assert_eq!(
-                errno(std::fs::write(outside.join("f"), "x")),
+                write_errno(eitri::replace_file(&outside.join("f"), b"x")),
                 Some(libc::EACCES)
             );
             assert_eq!(
@@ -1548,9 +1574,9 @@ mod tests {
             std::fs::create_dir(&inside).unwrap();
             let applied = restrict(&write_plan(1, &inside), None).unwrap();
             assert_eq!(applied.abi, effective_abi(kernel_abi(), None));
-            std::fs::write(inside.join("f"), "x").unwrap();
+            eitri::replace_file(&inside.join("f"), b"x").unwrap();
             std::fs::create_dir(inside.join("d")).unwrap();
-            std::fs::rename(inside.join("f"), inside.join("d/g")).unwrap();
+            eitri::rename_file(&inside.join("f"), &inside.join("d/g")).unwrap();
             std::fs::remove_file(inside.join("d/g")).unwrap();
         });
     }
@@ -1567,7 +1593,7 @@ mod tests {
                 matches!(err, LandlockError::BelowFloor { need: 99, .. }),
                 "{err:?}"
             );
-            std::fs::write(dir.path().join("outside"), "x").expect("nothing was restricted");
+            eitri::replace_file(&dir.path().join("outside"), b"x").expect("nothing was restricted");
         });
     }
 
@@ -1583,7 +1609,7 @@ mod tests {
                 matches!(err, LandlockError::BelowFloor { need: 9, effective, .. } if effective <= 8),
                 "{err:?}"
             );
-            std::fs::write(dir.path().join("out/f"), "x").expect("nothing was restricted");
+            eitri::replace_file(&dir.path().join("out/f"), b"x").expect("nothing was restricted");
         });
     }
 
@@ -1607,9 +1633,9 @@ mod tests {
             assert_eq!(errno(UnixStream::connect(&user)), Some(libc::EACCES));
             UnixStream::connect(&run).expect("the run source is reached");
             // The write root is still writable, and the host's /tmp is not.
-            std::fs::write(dir.path().join("w/f"), "x").unwrap();
+            eitri::replace_file(&dir.path().join("w/f"), b"x").unwrap();
             assert_eq!(
-                errno(std::fs::write(dir.path().join("out/f"), "x")),
+                write_errno(eitri::replace_file(&dir.path().join("out/f"), b"x")),
                 Some(libc::EACCES)
             );
         });
@@ -1740,9 +1766,9 @@ mod tests {
             );
             TcpStream::connect(web.local_addr().unwrap()).expect("the web port is reached");
             assert_eq!(errno(TcpListener::bind("127.0.0.1:0")), Some(libc::EACCES));
-            std::fs::write(own.join("f"), "x").expect("its own dir is written");
+            eitri::replace_file(&own.join("f"), b"x").expect("its own dir is written");
             assert_eq!(
-                errno(std::fs::write(other.join("f"), "x")),
+                write_errno(eitri::replace_file(&other.join("f"), b"x")),
                 Some(libc::EACCES)
             );
             assert_eq!(errno(std::fs::read_dir(&other)), Some(libc::EACCES));
@@ -1750,27 +1776,45 @@ mod tests {
     }
 
     /// A `sleep` the parent started, for the /proc rows; killed when dropped.
-    struct Sleeper(std::process::Child);
+    struct Sleeper {
+        pool: saman::Executor,
+        child: draugr::Child,
+    }
 
     impl Sleeper {
         fn start() -> Sleeper {
-            Sleeper(
-                std::process::Command::new("sleep")
-                    .arg("60")
-                    .env("GLP_CANARY", "c4n4ry")
-                    .spawn()
-                    .unwrap(),
-            )
+            let pool = saman::Executor::new(1).unwrap();
+            let child = pool
+                .block_on(draugr::spawn(draugr::Spec {
+                    program: "sleep".into(),
+                    args: vec!["60".into()],
+                    env: draugr::env::build(
+                        &["PATH"],
+                        &[],
+                        &[("GLP_CANARY", std::ffi::OsStr::new("c4n4ry"))],
+                    ),
+                    cwd: None,
+                    stdin_null: true,
+                    pass_fds: Vec::new(),
+                    new_session: false,
+                }))
+                .unwrap();
+            Sleeper { pool, child }
         }
         fn pid(&self) -> String {
-            self.0.id().to_string()
+            self.child.id().to_string()
         }
     }
 
     impl Drop for Sleeper {
         fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+            // the group is ended and reaped
+            if let Err(e) = self
+                .pool
+                .block_on(self.child.wait_deadline(std::time::Duration::ZERO))
+            {
+                tracing::debug!(error = %e, "the sleeper was not reaped");
+            }
         }
     }
 

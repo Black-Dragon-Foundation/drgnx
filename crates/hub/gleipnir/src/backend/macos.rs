@@ -13,9 +13,8 @@ use crate::spec::{Mode, Spec, ValidSpec};
 use crate::validate::{Refusal, Rule};
 use eitri::TrustedProgram;
 use std::ffi::OsString;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// The only `sandbox-exec` gleipnir runs: never one found through `PATH`.
@@ -149,20 +148,10 @@ fn write_profile(dir: &Path, text: &str) -> io::Result<PathBuf> {
             "{PROFILE_PREFIX}{:016x}.sb",
             u64::from_ne_bytes(bytes)
         ));
-        let opened = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&file);
-        match opened {
-            Ok(mut f) => {
-                f.write_all(text.as_bytes())?;
-                f.sync_all()?;
-                return Ok(file);
-            }
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
+        // made exclusively (a name taken is tried again), then written where it stands
+        if eitri::create_new(&file, 0o600)? {
+            eitri::write_in_place(&file, text.as_bytes())?;
+            return Ok(file);
         }
     }
     Err(io::Error::new(
@@ -262,7 +251,7 @@ mod tests {
         // With a run: a new file in the session dir, 0600, the profile's own text; a link planted there is neither
         // followed nor replaced, and its target is untouched.
         let target = s.write[0].join("victim");
-        fs::write(&target, "keep").unwrap();
+        eitri::replace_file(&target, b"keep").unwrap();
         let planted = run_dir.join("profile-0000000000000000.sb");
         std::os::unix::fs::symlink(&target, &planted).unwrap();
         let valid = ValidSpec::assume_valid(s.clone(), Target::Macos);
@@ -300,10 +289,10 @@ mod tests {
         assert!(meta.is_file());
         assert_eq!(meta.permissions().mode() & 0o7777, 0o600);
         assert_eq!(
-            fs::read_to_string(&file).unwrap(),
+            eitri::read_string(&file, 1 << 20).unwrap(),
             sbpl::profile(&valid, &mac).unwrap()
         );
-        assert_eq!(fs::read_to_string(&target).unwrap(), "keep");
+        assert_eq!(eitri::read_string(&target, 1 << 20).unwrap(), "keep");
         assert!(fs::symlink_metadata(&planted).unwrap().is_symlink());
         // A second run in the same session (a wider spec, started at once) gets a file of its own: the first run's
         // file still holds the first profile (gate review S7: two starts never swap policies).
@@ -318,11 +307,11 @@ mod tests {
         want.sort();
         assert_eq!(entries(&run_dir), want);
         assert_eq!(
-            fs::read_to_string(&file).unwrap(),
+            eitri::read_string(&file, 1 << 20).unwrap(),
             sbpl::profile(&valid, &mac).unwrap()
         );
         assert_eq!(
-            fs::read_to_string(&file2).unwrap(),
+            eitri::read_string(&file2, 1 << 20).unwrap(),
             sbpl::profile(&wider, &mac).unwrap()
         );
         for w in &writable {

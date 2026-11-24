@@ -13,6 +13,13 @@ publish = false
 hlaup = { path = "../hlaup", version = "0.1.0" }  # the probe's copy, run at once, never busy (ETXTBSY)
 gleipnir = { path = "../gleipnir", version = "0.1.0", features = ["escape-fixture"] }
 draugr = { path = "../draugr", version = "0.1.0" }
+eitri = { path = "../eitri", version = "0.1.0" }
+stund = { path = "../stund", version = "0.1.0" }  # real-time waits on the kernel's processes
+saman.workspace = true
+villa.workspace = true
+annall.workspace = true
+stig.workspace = true
+tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

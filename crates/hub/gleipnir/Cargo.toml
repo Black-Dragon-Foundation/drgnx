@@ -21,6 +21,12 @@ eitri = { path = "../eitri", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+saman.workspace = true
+villa.workspace = true
+annall.workspace = true
+stig.workspace = true  # the variable names a sandbox's environment is built from
+tracing.workspace = true
+draugr = { path = "../draugr", version = "0.1.0" }  # `bwrap --version` and the tests' children
 stund = { path = "../stund", version = "0.1.0" }  # the proxy's head and idle timeouts wait on the installed clock
 rustix.workspace = true
 libc.workspace = true

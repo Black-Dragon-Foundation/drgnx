@@ -48,6 +48,9 @@ pub struct HostFacts {
     pub sandbox_exec: bool,
 }
 
+/// The most of one host file (`/etc/os-release`, a `/proc/sys` flag) that is read.
+const HOST_FILE_CAP: u64 = 1 << 20;
+
 /// The facts of this host.
 pub fn facts() -> HostFacts {
     facts_with(None)
@@ -55,7 +58,11 @@ pub fn facts() -> HostFacts {
 
 /// [`facts`] with `bwrap_override` as the only bwrap candidate (a test hook; still held to the root-owned rule).
 pub fn facts_with(bwrap_override: Option<&Path>) -> HostFacts {
-    let read = |p: &str| std::fs::read_to_string(p).ok();
+    // `/etc/os-release` is a link on most distributions, which `eitri` refuses: it reads the file the link names
+    let read = |p: &str| {
+        let real = std::fs::canonicalize(p).ok()?;
+        eitri::read_string(&real, HOST_FILE_CAP).ok()
+    };
     let (ids, version) = read("/etc/os-release")
         .map(|t| parse_os_release(&t))
         .unwrap_or_default();
@@ -564,14 +571,17 @@ impl ProbeDir {
                 .mode(0o700)
                 .create(dir.base.join(d))?;
         }
-        std::fs::write(dir.base.join("outside/canary"), "canary\n")?;
+        eitri::replace_file(&dir.base.join("outside/canary"), b"canary\n")
+            .map_err(std::io::Error::other)?;
         Ok(dir)
     }
 }
 
 impl Drop for ProbeDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.base);
+        if let Err(e) = std::fs::remove_dir_all(&self.base) {
+            tracing::debug!(dir = %self.base.display(), error = %e, "the probe's folder was not removed");
+        }
     }
 }
 

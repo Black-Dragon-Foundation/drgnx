@@ -27,6 +27,9 @@ pub mod toolchain;
 pub mod trace;
 pub mod validate;
 
+mod say;
+pub(crate) use say::say;
+
 // What a caller needs to run something in the sandbox (docs/develop/gleipnir.md, "Using it").
 #[cfg(feature = "test-hooks")]
 pub use backend::TestHooks;

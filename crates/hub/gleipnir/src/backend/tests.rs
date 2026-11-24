@@ -31,7 +31,7 @@ impl Fx {
             "w/.env",
             "elsewhere/x",
         ] {
-            fs::write(b.join(f), "x").unwrap();
+            eitri::replace_file(&b.join(f), b"x").unwrap();
         }
         Fx { _dir: dir, b }
     }
@@ -384,7 +384,7 @@ fn full_never_falls_back_to_reduced() {
     let fx = Fx::new();
     // A bwrap that is not there, and one only root does not own (or under the world-writable /tmp).
     let fake = fx.p("bin/bwrap");
-    fs::write(&fake, "#!/bin/sh\necho bubblewrap 0.12.0\n").unwrap();
+    eitri::replace_file(&fake, b"#!/bin/sh\necho bubblewrap 0.12.0\n").unwrap();
     for bwrap in [fx.p("bin/no-bwrap"), fake] {
         let r = Sandbox::detect(Tier::Full, fx.helper(), Some(bwrap.clone())).unwrap_err();
         assert_eq!(r.rule, Rule::Malformed, "{bwrap:?}: {}", r.message);
