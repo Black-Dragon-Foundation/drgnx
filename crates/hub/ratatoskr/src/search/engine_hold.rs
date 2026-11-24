@@ -8,8 +8,8 @@
 //!    and the `drm-engine-gfx` / `drm-engine-compute` nanoseconds), two samples apart. Our own engine processes never
 //!    count. A context that sits idle (a compositor's, a browser's) does not hold the device: the process must use at
 //!    least [`BUSY_PCT`] percent of an engine over the sample.
-//! 2. **The device's free video memory is under what the engine needs** ([`super::engine_limits::vram_need_mib`]): a
-//!    program took the memory the next start of the engine would use.
+//! 2. **Another program took video memory**: the device's free memory fell, since the engine started, by at least half
+//!    of what the engine needs ([`super::engine_limits::vram_need_mib`]).
 //!
 //! The parsing is pure over text, so tests state the lists; [`Probe`] reads this machine.
 
@@ -120,11 +120,16 @@ pub fn busy_nvidia(pmon: &str, gpu: u32, own: &[i32]) -> Vec<String> {
         .collect()
 }
 
-/// The video memory signal: the device's FREE MiB under NEED MiB (unknown free: no signal).
-pub fn vram_short(need: u64, free: Option<u64>) -> Option<String> {
-    let f = free?;
-    (f < need).then(|| {
-        format!("only {f} MiB of video memory is free and the engine needs {need} MiB: another program took it")
+/// The video memory signal: another program took at least half of the engine's need (NEED MiB) since the engine started.
+/// BASELINE is the device's free MiB just after the start (with the engine's own memory in), FREE the free MiB now;
+/// either unknown: no signal. (Free memory under the need itself would be no signal: the engine holds its own share.)
+pub fn vram_taken(baseline: Option<u64>, free: Option<u64>, need: u64) -> Option<String> {
+    let (b, f) = (baseline?, free?);
+    let took = b.saturating_sub(f);
+    (took >= need.div_ceil(2)).then(|| {
+        format!(
+            "{took} MiB of video memory was taken since the engine started (only {f} MiB is free): another program uses the GPU"
+        )
     })
 }
 
@@ -307,9 +312,13 @@ mod tests {
     }
 
     #[test]
-    fn video_memory_under_the_need_holds() {
-        assert!(vram_short(2000, Some(1500)).is_some());
-        assert!(vram_short(2000, Some(2000)).is_none());
-        assert!(vram_short(2000, None).is_none());
+    fn video_memory_taken_since_the_start_holds() {
+        // a drop of at least half the need (1000 of 2000) since the start holds; a smaller one, or no baseline, does not
+        assert!(vram_taken(Some(5000), Some(4000), 2000).is_some());
+        assert!(vram_taken(Some(5000), Some(4001), 2000).is_none());
+        assert!(vram_taken(None, Some(10), 2000).is_none());
+        assert!(vram_taken(Some(5000), None, 2000).is_none());
+        // the engine's own memory is not "taken": free under the need with nothing lost since the start is fine
+        assert!(vram_taken(Some(500), Some(500), 3000).is_none());
     }
 }

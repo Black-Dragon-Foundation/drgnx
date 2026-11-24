@@ -644,7 +644,7 @@ fn a_game_on_the_device_pauses_the_engine_after_its_batch_and_says_why() {
 }
 
 #[test]
-fn free_video_memory_under_the_need_pauses_the_engine_until_it_is_back() {
+fn video_memory_taken_by_another_program_pauses_the_engine_until_it_is_back() {
     use std::sync::Arc;
     on_hub_runtime(async {
         let r = rig_with_devices(ROCM_ONE);
@@ -710,6 +710,24 @@ fn a_held_engine_shows_as_held_with_its_reason_in_the_chain_status() {
         assert_eq!(entry.state, "held");
         assert!(entry.why.unwrap().contains("train.py (pid 4)"));
         run.abort();
+        e.close().await;
+    });
+}
+
+/// The engine's own memory is not "taken": a card with little memory left from the start (a compositor, the engine) is
+/// not held while nothing changes (a 6 GB laptop card held its own indexing for ever before this).
+#[test]
+fn little_free_video_memory_that_never_changes_does_not_hold() {
+    use std::sync::Arc;
+    on_hub_runtime(async {
+        let r = rig_with_devices("  ROCm0: AMD Radeon RTX (6144 MiB, 3500 MiB free)\n");
+        let mut spec = r.spec();
+        spec.device = Some("ROCm0".into());
+        let e = Arc::new(LocalEngine::new(spec));
+        let out = e.embed_docs(&several()).await.unwrap();
+        assert_eq!(out.len(), 5);
+        assert!(r.embeds().len() > 1, "several batches ran");
+        assert_eq!(e.holding(), None);
         e.close().await;
     });
 }

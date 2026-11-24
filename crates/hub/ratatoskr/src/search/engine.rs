@@ -123,6 +123,8 @@ struct Shared {
     held: Mutex<Option<String>>,
     /// The device's free video memory as last asked, and when.
     free_seen: Mutex<Option<(tokio::time::Instant, Option<u64>)>>,
+    /// The device's free memory just after the engine started (with the engine's own memory taken), when known.
+    free_baseline: Mutex<Option<u64>>,
 }
 
 impl Shared {
@@ -261,6 +263,7 @@ impl LocalEngine {
                 busy: AtomicUsize::new(0),
                 held: Mutex::new(None),
                 free_seen: Mutex::new(None),
+                free_baseline: Mutex::new(None),
             }),
             identity,
         }
@@ -321,7 +324,12 @@ impl LocalEngine {
             }
         };
         let need = engine_limits::vram_need_mib(self.gguf_bytes(), ctx);
-        super::engine_hold::vram_short(need, free)
+        let baseline = *self
+            .shared
+            .free_baseline
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        super::engine_hold::vram_taken(baseline, free, need)
     }
 
     /// Returns when nothing holds the device; while something does, says why in [`holding`](Self::holding) and looks
@@ -540,12 +548,18 @@ impl LocalEngine {
                 return Err(EmbedError(why));
             }
         };
-        if let Some(d) = gpu
-            && let Some(why) =
-                engine_limits::vram_over(before, self.device_free(d).await, s.limits.vram_mib)
-        {
-            end(&self.shared, Running { port, ..r }).await;
-            return Err(EmbedError(why));
+        if let Some(d) = gpu {
+            let after = self.device_free(d).await;
+            if let Some(why) = engine_limits::vram_over(before, after, s.limits.vram_mib) {
+                end(&self.shared, Running { port, ..r }).await;
+                return Err(EmbedError(why));
+            }
+            // the free memory with this engine in it: what the hold measures another program's grab against
+            *self
+                .shared
+                .free_baseline
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = after;
         }
         tracing::info!(
             "search: the engine started (pid {pid}, port {port}, context {ctx}, device {})",
