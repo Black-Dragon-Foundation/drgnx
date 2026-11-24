@@ -1,0 +1,37 @@
+[package]
+name = "eykt"
+description = "Eykt, the hub's clock and its time-bound foundations: the clock (virtual in a test build), the stall watchdog, stage timestamps, the ordered disk writer, the step snapshots and the project of a folder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# The virtual clock (`serve --test-clock`, `clock::advance`, ...). `ratatoskr/test-hooks` forwards to it.
+test-hooks = ["urdr/test-hooks"]
+# What the hub's own unit tests reach into: the per-thread virtual clock (`clock::on_virtual`) and its probes. Never on in a release build.
+test-support = []
+
+[dependencies]
+stofn = { path = "../stofn", version = "0.1.0" }
+norn = { path = "../norn", version = "0.1.0" }  # `project::project_of`: which project a folder is in
+urdr = { path = "../urdr", version = "0.1.0" }  # the store thread's answer waits on the clock (`urdr::wait`)
+stund = { path = "../stund", version = "0.1.0" }  # the other crates' timers wait on the installed clock
+gleipnir = { path = "../gleipnir", version = "0.1.0" }  # the secret files a snapshot leaves out
+eitri = { path = "../eitri", version = "0.1.0" }  # a restore writes through it
+villa.workspace = true
+saman.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+rustix.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+skuld = { path = "../skuld", version = "0.1.0" }  # waits in tests
+stofn = { path = "../stofn", version = "0.1.0", features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

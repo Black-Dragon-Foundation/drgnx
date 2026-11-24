@@ -490,6 +490,7 @@ fn exempt(rel: &str) -> bool {
     rel.ends_with("skuld/src/wait.rs")
         || rel.ends_with("/tests/timing.rs")
         || rel.contains("ratatoskr/src/clock")
+        || rel.contains("eykt/src/clock")
 }
 
 /// Every banned call in test code across `crates/core/*/{src,tests}` and `crates/hub/*/{src,tests}` of the workspace

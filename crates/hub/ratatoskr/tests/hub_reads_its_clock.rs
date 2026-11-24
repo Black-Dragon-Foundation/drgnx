@@ -93,22 +93,32 @@ fn sites_of(text: &str, patterns: &[&str]) -> Vec<(usize, String)> {
     found
 }
 
-/// The crate's non-test sources, as (path under `src/`, text), in path order.
+/// The non-test sources of this crate and of `eykt` (where the clock, the watchdog and the snapshots live), as (path
+/// under the crate's `src/`, text), in path order.
 fn hub_sources() -> Vec<(String, String)> {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = Vec::new();
-    sources(&src, &mut files);
-    files
-        .into_iter()
-        .filter_map(|f| {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut out = Vec::new();
+    for (prefix, src) in [
+        ("", manifest.join("src")),
+        ("eykt/", manifest.join("../eykt/src")),
+    ] {
+        let mut files = Vec::new();
+        sources(&src, &mut files);
+        out.extend(files.into_iter().filter_map(|f| {
             let rel = f
                 .strip_prefix(&src)
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/");
-            (!exempt(&rel)).then(|| (rel, ratatoskr::fsio::read_to_string(&f).unwrap()))
-        })
-        .collect()
+            (!exempt(&rel)).then(|| {
+                (
+                    format!("{prefix}{rel}"),
+                    ratatoskr::fsio::read_to_string(&f).unwrap(),
+                )
+            })
+        }));
+    }
+    out
 }
 
 #[test]
@@ -163,7 +173,7 @@ const RAW_SPAWNS: &[(&str, usize, &str)] = &[
         "the accept loop: a connection's writes are serving steps (its spawn is stall.rs's)",
     ),
     (
-        "stall.rs",
+        "eykt/stall.rs",
         3,
         "the watchdog's heartbeat, and stall::spawn: the connections and a session's run and turns, named for it",
     ),

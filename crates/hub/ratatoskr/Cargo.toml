@@ -19,7 +19,7 @@ path = "src/main.rs"
 [features]
 # Every test-only surface (the `__test_flood` method, `--agent-socket`, `sandbox run`): off in the binary install.sh
 # builds. The migration's seams too (`DRGNX_TEST_MIGRATE7_FAIL`, `_PAUSE`).
-test-hooks = ["gleipnir/test-hooks", "norn/test-hooks", "urdr/test-hooks", "bifrost/test-hooks", "vor/mock", "vegvisir/fixture"]
+test-hooks = ["eykt/test-hooks", "gleipnir/test-hooks", "norn/test-hooks", "urdr/test-hooks", "bifrost/test-hooks", "vor/mock", "vegvisir/fixture"]
 # The fuzz crate's entry into the session reducer (`agents::session::fuzz_apply`); off everywhere else.
 fuzzing = []
 # Builds the fleet rows (tests/fleet_link.rs, tests/fleet_runners.rs), which run only inside a fake-runner fleet's
@@ -127,6 +127,7 @@ tracing-appender.workspace = true
 lexopt.workspace = true
 sha2.workspace = true  # the merge gate's diff hashes
 stofn = { path = "../stofn", version = "0.1.0" }  # the shims (fsio, proc, soft), the shell environment, the unpacker and the helpers that need no clock
+eykt = { path = "../eykt", version = "0.1.0" }  # the clock (one virtual clock per process), the stall watchdog, the ordered disk writer, the step snapshots, the project of a folder
 http-body-util.workspace = true  # the download's body
 http = "1"                # the download's request (already in the tree through hyper)
 # a plugin's HTTPS to the address the hub judged (plugins::hub_io); all three already in the tree through bifrost
@@ -167,6 +168,7 @@ zbus = { version = "6", default-features = false, features = ["tokio", "proxy", 
 
 [dev-dependencies]
 stofn = { path = "../stofn", version = "0.1.0", features = ["test-support"] }  # fsio::disk (a slow disk) and exe::pin_exe_for_test
+eykt = { path = "../eykt", version = "0.1.0", features = ["test-support"] }  # the per-thread virtual clock of the unit tests
 zip.workspace = true  # tests build archives for the installs
 flate2.workspace = true
 tar.workspace = true
