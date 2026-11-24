@@ -14,6 +14,7 @@
 
 use super::capture::{self, Seen};
 use super::revert_core::{Pending, RevertCore, RevertEffect, RevertEvent, RevertStep};
+use crate::agents::HoldSource;
 use crate::agents::rewind::{self, Target};
 use crate::agents::session::{self, internal, invalid};
 use crate::dispatch::Caller;
@@ -1042,7 +1043,7 @@ async fn run(f: &Front, s: Saved, op: Option<i64>) -> Result<w::Applied, Error> 
             E::Detach => {
                 if let Ok(sess) = f.core.agents.find(&p.sid) {
                     sess.detach();
-                    let _ = f.core.agents.cancel_after_tool(&p.sid);
+                    let _ = f.core.agents.cancel_after_tool(&p.sid, HoldSource::Revert);
                 }
                 continue;
             }

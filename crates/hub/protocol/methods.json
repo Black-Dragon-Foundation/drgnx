@@ -25911,7 +25911,23 @@
                 ]
               },
               "effective_for": {
-                "description": "An actor (`ext:KIND:ID`, an agent or session id): only the active grants that apply to it (its effective\nrights; a project or profile grant cannot be matched without the actor's project).",
+                "description": "An actor (`ext:KIND:ID`, an agent or session id): only the active grants that apply to it (its effective\nrights; a project or profile grant is matched only with the actor's `project` or `profile`).",
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "profile": {
+                "description": "With `effective_for`: the actor's profile name, so a grant that names the profile applies to it.",
+                "maxLength": 256,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "project": {
+                "description": "With `effective_for`: the project the actor works in (`project:ID`, a slug or its number), so a grant that names\nthe project applies to it.",
                 "maxLength": 256,
                 "type": [
                   "string",

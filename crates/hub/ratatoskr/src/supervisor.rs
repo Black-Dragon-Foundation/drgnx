@@ -9,6 +9,7 @@
 //! second, reads the sessions ([`Obs`]) and the facts the graph and the jobs hold ([`Facts`]), and acts on a rule the
 //! first time it holds (it fires again only after the condition cleared).
 
+use crate::agents::HoldSource;
 use crate::front::Front;
 use runstav::methods::agents::SessionStatus;
 use runstav::methods::matrix::Role;
@@ -383,7 +384,10 @@ async fn act(f: &Front, o: &Obs, rule: Rule, text: &str) {
         };
         text = format!("{text}; {said}");
     } else {
-        let _ = f.core.agents.cancel_after_tool(&o.sid);
+        let _ = f
+            .core
+            .agents
+            .cancel_after_tool(&o.sid, HoldSource::Supervisor);
     }
     let text = text.as_str();
     if rule == Rule::Silent {

@@ -47,6 +47,10 @@ proposals. It works in its own project only, and it follows the matrix like drgn
 - Its decisions are always proposals, and each names where it comes from.
 - Every change it makes is its own entry in the history, so `ratatoskr graph revert --tx N` undoes it.
 
+An agent can ask what the grants you made let it do: its tool `my_grants` lists the active grants that apply to it (its
+kind's, any outside agent's, its project's) and no one else's; `ratatoskr graph grants show WHO` shows you the same set for
+an agent (`--project P` and `--profile NAME` add the project and profile it works under).
+
 Lists the agent reads (`task_read` find, ready and mine, `graph_read`) come back as a one-line header ("3 tasks (rows
 in the structured result)") and the rows in the tool's structured result, so each row costs the agent's context once.
 Resource links to the entities are sent only when the agent asks for them with `links: true`.

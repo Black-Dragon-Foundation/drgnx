@@ -58,7 +58,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
-use turn_core::{KillWhy, QueueEdit, TurnCore, TurnEffect, TurnEvent};
+use turn_core::{HoldSource, KillWhy, QueueEdit, TurnCore, TurnEffect, TurnEvent};
 
 /// Events about one session come at most this often.
 const EMIT_EVERY: Duration = Duration::from_millis(50);
@@ -3417,6 +3417,15 @@ pub(crate) async fn relaunch(
             st.step_begin(StepClass::JobWait, None);
         }
     }
+    // `RATATOSKR_TEST_RESUME_INSERT_DELAY_MS` (test-hooks): the session is back in the hub's table that late after its
+    // agent has resumed or loaded, as when the machine is loaded (a restart serves while it brings the sessions back)
+    #[cfg(feature = "test-hooks")]
+    if let Some(ms) = std::env::var("RATATOSKR_TEST_RESUME_INSERT_DELAY_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        crate::clock::sleep(Duration::from_millis(ms)).await;
+    }
     hub.insert(s.clone());
     crate::stall::spawn("session:run", s.clone().run(rx, done));
     s.changed();
@@ -5593,7 +5602,7 @@ impl Session {
     /// instead: the prompt waits at the front of the held queue, and nothing is sent.
     pub(crate) fn stop_turn(self: &Arc<Self>) -> bool {
         !self
-            .turn_event(TurnEvent::Stop { after_tool: false })
+            .turn_event(TurnEvent::Stop)
             .contains(&TurnEffect::NotRunning)
     }
 
@@ -5613,14 +5622,19 @@ impl Session {
 
     /// Pause: cancel once the tool call running now completes and hold the queue; with no turn running, hold the
     /// queue.
-    pub(crate) fn pause_after_tool(self: &Arc<Self>) -> Result<(), Error> {
+    pub(crate) fn pause_after_tool(self: &Arc<Self>, source: HoldSource) -> Result<(), Error> {
         if self
-            .turn_event(TurnEvent::Stop { after_tool: true })
+            .turn_event(TurnEvent::PauseAfterTool { source })
             .contains(&TurnEffect::Exited)
         {
             return Err(invalid("id", "the session has exited"));
         }
         Ok(())
+    }
+
+    /// SOURCE's hold on the turn running lifts ([`TurnEvent::ClearHold`]).
+    pub(crate) fn clear_hold(self: &Arc<Self>, source: HoldSource) {
+        self.turn_event(TurnEvent::ClearHold { source });
     }
 
     /// A budget's pause lifts ([`super::Agents::resume_paused`]): "Continue." goes first, labelled "resumed by you"
@@ -6491,7 +6505,7 @@ impl Session {
         }
         // the edit history records what is written: the content after the hooks' change, never a refused write
         self.record_write(&real, &content).await;
-        tokio::fs::write(&real, content)
+        write_whole(real, content)
             .await
             .map_err(|e| (-32602, format!("{path}: {e}")))
     }
@@ -7132,6 +7146,82 @@ pub(crate) fn text_for_intent(text: &str, intent: Option<SendIntent>) -> String 
     }
 }
 
+/// CONTENT as the whole of the file REAL: written to a temporary file in its folder and renamed over it (its mode
+/// kept, 0o644 for a new file), so the file is never seen empty or half written.  A step's claim, the watcher and a
+/// rescan read the file while the write is under way (the history recorded it first); an in-place truncating write
+/// let one read it empty, which the history recorded as an outside change that emptied the file, and the version that
+/// refilled it then took the lines from the agent's write and the reason that went with them.
+async fn write_whole(real: PathBuf, content: String) -> std::io::Result<()> {
+    let joined = crate::clock::blocking(move || {
+        let (Some(parent), Some(name)) = (real.parent(), real.file_name()) else {
+            return Err(std::io::Error::other("the path names no file"));
+        };
+        let dir = std::fs::File::open(parent)?;
+        let name = Path::new(name);
+        let mode = eitri::open_beneath(std::os::fd::AsFd::as_fd(&dir), name, eitri::Kind::File)
+            .ok()
+            .and_then(|o| rustix::fs::fstat(&o.fd).ok())
+            .map_or(0o644, |st| {
+                #[allow(clippy::useless_conversion, reason = "st_mode is u16 on macOS")]
+                let mode = u32::from(st.st_mode);
+                mode & 0o777
+            });
+        eitri::write_regular(
+            std::os::fd::AsFd::as_fd(&dir),
+            name,
+            content.as_bytes(),
+            mode,
+        )
+        .map_err(|e| std::io::Error::other(e.to_string()))
+    })
+    .await;
+    joined.unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())))
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A reader that has the file open while the agent's write lands sees the whole old file, never a truncated or
+    /// half-written one, and the name holds the whole new one; the mode stays and no temporary file is left.
+    // test-pattern: D
+    #[tokio::test]
+    async fn a_write_replaces_the_file_whole_and_never_truncates_it_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("b.txt");
+        std::fs::write(&f, "one\n").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let mut reader = std::fs::File::open(&f).unwrap();
+        write_whole(f.clone(), "one\ntwo\n".to_owned())
+            .await
+            .unwrap();
+        let mut old = String::new();
+        reader.read_to_string(&mut old).unwrap();
+        assert_eq!(
+            old, "one\n",
+            "the open reader still sees the whole old file"
+        );
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "one\ntwo\n");
+        assert_eq!(
+            std::fs::metadata(&f).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    /// A file that is not there yet is made, readable by its folder's users as a new file is.
+    // test-pattern: D
+    #[tokio::test]
+    async fn a_write_makes_a_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("new.txt");
+        write_whole(f.clone(), "x\n".to_owned()).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "x\n");
+    }
+}
+
 #[cfg(test)]
 mod intent_tests {
     use super::*;
@@ -7278,7 +7368,9 @@ pub fn tool_output(
 
 /// `agents/pause`: the turn is cancelled once the tool call running now completes.
 pub fn pause(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
-    f.core.agents.cancel_after_tool(p.id.as_str())?;
+    f.core
+        .agents
+        .cancel_after_tool(p.id.as_str(), HoldSource::User)?;
     Ok(true)
 }
 
@@ -7428,7 +7520,7 @@ pub async fn move_session(
         return Err(refuse("a manager is not moved; it is rotated"));
     }
     // stop after the current tool, then wait for the turn to end (a turn that will not is cancelled)
-    hub.cancel_after_tool(id)?;
+    hub.cancel_after_tool(id, HoldSource::Move)?;
     let end = crate::clock::now() + MOVE_WAIT;
     while old.status() == SessionStatus::Busy {
         if crate::clock::now() >= end {
@@ -8817,7 +8909,9 @@ mod tests {
             steer_mode: false,
             if_free: false,
         });
-        st.turn_step(TurnEvent::Stop { after_tool: true });
+        st.turn_step(TurnEvent::PauseAfterTool {
+            source: HoldSource::User,
+        });
         st.apply(&upd(
             json!({"sessionUpdate": "tool_call", "toolCallId": "t1",
             "title": "Run", "kind": "execute", "status": "in_progress"}),

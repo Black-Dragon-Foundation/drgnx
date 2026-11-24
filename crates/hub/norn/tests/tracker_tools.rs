@@ -1294,9 +1294,9 @@ mod tools {
     #[test]
     fn default_session_lists_23() {
         // the 23, the four job tools (Task 15), `report_submit` and the two plan tools (Task 21), `extensions_suggest`,
-        // `huddle_reply`, `comment_reply`, `procedure_get`, `records_read` and `records_write`
-        assert_eq!(tools_for(ToolSets::default()).len(), 36);
-        assert_eq!(tools().len(), 23);
+        // `huddle_reply`, `comment_reply`, `procedure_get`, `records_read`, `records_write` and `my_grants`
+        assert_eq!(tools_for(ToolSets::default()).len(), 37);
+        assert_eq!(tools().len(), 24);
     }
 
     /// The six debugger tools come only with the debug set (a session whose project debugs).
@@ -1322,7 +1322,7 @@ mod tools {
                 ..ToolSets::default()
             })
             .len(),
-            42
+            43
         );
     }
 

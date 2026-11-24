@@ -21,6 +21,7 @@
 //!   spend, so a request over the nested minimum is refused with `budget_exceeded`.
 //! - **Pace** is linear over the last 24 h of a meter's readings; the clock is an argument, never read here.
 
+use crate::agents::HoldSource;
 use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::matrix::{Limit, Unit};
@@ -1379,8 +1380,13 @@ pub async fn raise(f: &Front, c: &Caller, p: BudgetRaiseParams) -> Result<Budget
     // each session the card paused: still held, or (with resume) sent the continue
     let mut go_on = |sid: String, resume: bool| match b.holder_of_session(&sid) {
         Some(by) => held.push(BudgetHeld { id: sid, by }),
-        None if resume && f.core.agents.resume_paused(&sid).unwrap_or(false) => resumed.push(sid),
-        None => {}
+        None => {
+            // the raise lifts the budget's own hold on a turn running (not the supervisor's, a manager's, ...)
+            let _ = f.core.agents.clear_hold(&sid, HoldSource::Budget);
+            if resume && f.core.agents.resume_paused(&sid).unwrap_or(false) {
+                resumed.push(sid);
+            }
+        }
     };
     match card.job.clone() {
         Some(job) => {
@@ -1487,7 +1493,7 @@ async fn reached_limit(f: &Front, h: &Hit) {
         .collect();
     for sid in &sessions {
         // a session that has exited or is unknown is not paused
-        let _ = f.core.agents.cancel_after_tool(sid);
+        let _ = f.core.agents.cancel_after_tool(sid, HoldSource::Budget);
     }
     for sid in &sessions {
         for j in f.core.budgets.job_of(sid) {

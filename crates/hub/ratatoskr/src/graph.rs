@@ -1013,6 +1013,16 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
         let who = l.who.map(|s| s.into_inner());
         let active = l.active;
         let effective = l.effective_for.map(|s| s.into_inner());
+        let (actor_project, actor_profile) = (
+            l.project.map(|s| s.into_inner()),
+            l.profile.map(|s| s.into_inner()),
+        );
+        if effective.is_none() && (actor_project.is_some() || actor_profile.is_some()) {
+            return Err(invalid(
+                "project",
+                "a project or profile names an actor: it goes with effective_for",
+            ));
+        }
         let list = read(w, move |c| {
             let who = match who {
                 Some(t) => {
@@ -1033,9 +1043,15 @@ async fn grants_of(w: &Writer, caller: &Caller, p: api::GrantsParams) -> Result<
                     },
                     actor: actor.clone(),
                     session: Some(actor.clone()),
-                    profile: None,
+                    profile: actor_profile,
                     job: None,
-                    project: None,
+                    project: match &actor_project {
+                        Some(t) => Some(
+                            project_n(c, t)?
+                                .ok_or_else(|| refused(format!("no such project: {t}")))?,
+                        ),
+                        None => None,
+                    },
                 };
                 list.retain(|g| g.active(at) && g.who.matches(&caller));
             }
@@ -2684,6 +2700,62 @@ mod tests {
             }
         }
         assert!(grants_now(&w).await.is_empty());
+    }
+
+    /// `graph grants show WHO --project P --profile NAME`: a grant that names a project or a profile applies to the actor
+    /// only when the project or profile is given; another project's does not, and an unknown project is refused.
+    #[tokio::test]
+    async fn show_counts_a_project_or_profile_grant_when_the_actor_names_them() {
+        let (_dir, w, a, b) = fixture().await;
+        let call = |p: Value| {
+            let w = &w;
+            async move { grants_of(w, &user(), serde_json::from_value(p).unwrap()).await }
+        };
+        for who in [format!("project:{a}"), "profile:claude".to_owned()] {
+            call(json!({"grant": {"who": who, "what": format!("project:{a}"),
+                "access": "task-write", "ops": ["note"]}}))
+            .await
+            .unwrap();
+        }
+        call(
+            json!({"grant": {"who": format!("project:{b}"), "what": format!("project:{b}"),
+            "access": "task-write", "ops": ["note"]}}),
+        )
+        .await
+        .unwrap();
+        let shown = |extra: Value| {
+            let mut l = json!({"effective_for": "s-7", "active": true});
+            for (k, v) in extra.as_object().unwrap() {
+                l[k] = v.clone();
+            }
+            call(json!({ "list": l }))
+        };
+        let count = |v: Value| v["grants"].as_array().unwrap().len();
+        assert_eq!(
+            count(shown(json!({})).await.unwrap()),
+            0,
+            "no project, no profile"
+        );
+        assert_eq!(
+            count(shown(json!({"project": a.to_string()})).await.unwrap()),
+            1
+        );
+        assert_eq!(count(shown(json!({"profile": "claude"})).await.unwrap()), 1);
+        assert_eq!(
+            count(
+                shown(json!({"project": format!("project:{a}"), "profile": "claude"}))
+                    .await
+                    .unwrap()
+            ),
+            2
+        );
+        assert_eq!(
+            count(shown(json!({"project": b.to_string()})).await.unwrap()),
+            1
+        );
+        assert!(shown(json!({"project": "project:no-such"})).await.is_err());
+        let alone = call(json!({"list": {"project": a.to_string()}})).await;
+        assert!(alone.is_err(), "a project names an actor");
     }
 
     /// The user's write grants: made, listed by the actor they apply to, edited and revoked, each a user-class tx.

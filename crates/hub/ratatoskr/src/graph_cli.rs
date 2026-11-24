@@ -132,8 +132,13 @@ pub enum GrantsSub {
         /// `none` clears it.
         until: Option<String>,
     },
-    /// The active grants that apply to an actor.
-    Show(String),
+    /// The active grants that apply to an actor: WHO is `ext:KIND:ID` or a session id, PROJECT (`--project`) the project
+    /// it works in and PROFILE (`--profile`) its profile, so a project or profile grant that names them is counted too.
+    Show {
+        who: String,
+        project: Option<String>,
+        profile: Option<String>,
+    },
 }
 
 fn num(v: &str, what: &str) -> Result<u64, String> {
@@ -159,7 +164,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
     // options that take a value
     let valued = [
         "project", "out", "since", "tx", "entity", "to-ver", "field", "reason", "who", "access",
-        "expires", "with", "root", "only", "path", "where", "what", "until",
+        "expires", "with", "root", "only", "path", "where", "what", "until", "profile",
     ];
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
@@ -307,7 +312,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
             Sub::Scrub
         }
         "grants" => {
-            known(&["who", "access", "expires", "where", "what", "until"])?;
+            known(&[
+                "who", "access", "expires", "where", "what", "until", "project", "profile",
+            ])?;
             let ops: Vec<String> = opts
                 .iter()
                 .filter(|(k, _)| k == "what")
@@ -369,7 +376,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<GraphCommand, S
                 }
                 Some("show") => {
                     no_words(2)?;
-                    GrantsSub::Show(w.next().ok_or("graph grants show needs WHO")?.into())
+                    GrantsSub::Show {
+                        who: w.next().ok_or("graph grants show needs WHO")?.into(),
+                        project: get("project"),
+                        profile: get("profile"),
+                    }
                 }
                 Some(other) => return Err(format!("unknown grants subcommand {other:?}")),
             };
@@ -606,10 +617,20 @@ impl GraphCommand {
                 }
                 ("graph/grants", json!({"edit": e}))
             }
-            Sub::Grants(GrantsSub::Show(who)) => (
-                "graph/grants",
-                json!({"list": {"effective_for": who, "active": true}}),
-            ),
+            Sub::Grants(GrantsSub::Show {
+                who,
+                project,
+                profile,
+            }) => {
+                let mut l = json!({"effective_for": who, "active": true});
+                if let Some(p) = project {
+                    l["project"] = json!(p);
+                }
+                if let Some(p) = profile {
+                    l["profile"] = json!(p);
+                }
+                ("graph/grants", json!({"list": l}))
+            }
             Sub::Grants(GrantsSub::Revoke(id)) => ("graph/grants", json!({"revoke": id})),
             Sub::Settings { only_user_closes } => (
                 "graph/settings",
@@ -1196,6 +1217,19 @@ mod tests {
                 "graph/grants",
                 json!({"list": {"effective_for": "ext:claude:7", "active": true}})
             )
+        );
+        assert_eq!(
+            m(&[
+                "grants",
+                "show",
+                "s-1",
+                "--project",
+                "demo",
+                "--profile",
+                "claude"
+            ])
+            .1,
+            json!({"list": {"effective_for": "s-1", "active": true, "project": "demo", "profile": "claude"}})
         );
         assert_eq!(m(&["settings"]), ("graph/settings", json!({"get": {}})));
         assert_eq!(
