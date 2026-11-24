@@ -6984,6 +6984,8 @@ dependencies = [
  "hlaup",
  "libc",
  "proptest",
+ "quick-xml 0.42.0",
+ "regex",
  "rustix",
  "saman",
  "secrecy",
@@ -8173,9 +8175,11 @@ dependencies = [
 name = "vordr"
 version = "0.1.0"
 dependencies = [
+ "forseti",
  "serde",
  "serde_json",
  "skuld",
+ "toml_edit",
  "villa",
 ]
 

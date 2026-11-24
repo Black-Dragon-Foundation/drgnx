@@ -266,13 +266,8 @@ impl Platform for LinuxPlatform {
                 .map_err(|e| villa::Error::unavailable(format!("{NET_ALLOW}: {e}")))?;
             Some(f)
         };
-        let parser: Parser =
-            serde_json::from_value(serde_json::Value::String(if req.parser.is_empty() {
-                "exit".into()
-            } else {
-                req.parser.to_string()
-            }))
-            .map_err(|_| villa::Error::unavailable(format!("no row parser {:?}", req.parser)))?;
+        let parser =
+            Parser::from_name(req.parser).map_err(|e| villa::Error::unavailable(e.message()))?;
         slices::ensure_tree(SLICE_ROOT, self.profile)?;
         // a timing job runs on the island: its slice is under the timing slice, out of the work slice's CPUs
         let slice = if matches!(meta.spec.lane, forseti::Lane::Timing { pinned: Some(_) }) {

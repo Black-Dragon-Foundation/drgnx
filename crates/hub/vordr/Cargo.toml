@@ -8,6 +8,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
+forseti = { path = "../forseti", version = "0.1.0" }  # the key's `Canon` and the selector dialects
+toml_edit.workspace = true  # `.drgnx/jobs.toml`, read with spans for `file:line` errors
 serde.workspace = true
 serde_json.workspace = true
 villa.workspace = true

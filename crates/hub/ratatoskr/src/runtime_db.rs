@@ -37,6 +37,9 @@
 //! - the project registry (13): `projects` (the hub-assigned id, the display name, the origin URL and the sorted,
 //!   comma-joined root commits the user registered) and `project_clones` (each clone's git common dir, the project it
 //!   maps to and the root commit its mapping is re-checked by) ([`crate::runners::projects`]).
+//! - the artifact index (14): `artifacts` (one row per key and role: kind, use, the runner that holds it, the job that
+//!   builds it, `building` or `present`, size, last use and pins) ([`crate::runners::artifacts`]). A `building` row
+//!   whose job is gone is cleared at restart.
 //!
 //! A file of a newer schema (left by a newer binary before an `update --back`) is moved aside, with its `-wal` and
 //! `-shm`, as `runtime.db.newer-N-UNIXTIME`, and a new one made.  From migration 2 that loses the sessions it held:
@@ -130,6 +133,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
          roots text not null); \
          create table project_clones(common_dir text primary key, project text not null, root text not null);",
     ),
+    (
+        14,
+        "create table artifacts(key text not null, role text not null, project text not null, kind text not null, \
+         use_ text not null, route text, runner text, job text, state text not null, size integer not null, \
+         made integer not null, last_used integer not null, pins text not null, primary key(key, role));",
+    ),
 ];
 
 /// Open (or make) `runtime.db` in HUB_DIR on its own store thread.
@@ -206,7 +215,7 @@ mod tests {
             "{names:?}"
         );
         let fresh = urdr::open_readonly(&file).unwrap();
-        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("12"));
+        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("14"));
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600

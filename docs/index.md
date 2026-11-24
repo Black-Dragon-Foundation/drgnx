@@ -41,7 +41,8 @@ some of them still describe that version's Emacs side, and they are revised as t
 
 User guides: [agents outside drgnx](guide/outside-agents.md) (Claude Code, Codex… joining the work, and binding them
 to a role); [search](guide/search.md) (the engine per GPU, the download and its total, your CPU, memory and GPU limits);
-[runners](guide/runners.md) (the machines that run jobs, and how each keeps its disk).
+[runners](guide/runners.md) (the machines that run jobs, and how each keeps its disk); [job packs](guide/job-packs.md)
+(`.drgnx/jobs.toml`: a project's builds and tests as data).
 
 ## Licences
 

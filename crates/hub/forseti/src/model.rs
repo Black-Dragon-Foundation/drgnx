@@ -263,6 +263,27 @@ pub struct JobSpec {
     /// What the hub derives for the job or its pack declares beyond the starter's request.
     #[serde(default)]
     pub derived: Derived,
+    /// The artifacts the job uses: the queue makes each present (or waits for its build) before the job starts.
+    #[serde(default)]
+    pub artifacts: Vec<ArtifactUse>,
+}
+
+/// A job's use of one artifact (`docs/develop/forseti.md`, "Artifact keys"; the index is `ratatoskr`'s `artifacts`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactUse {
+    /// The pack's name for it.
+    pub name: String,
+    /// `image` or `command`.
+    pub kind: String,
+    /// `ro`, `seed`, `image` or `toolchain`.
+    pub use_: String,
+    pub key: crate::artifact::ArtifactKey,
+    /// Always none: the registry route is not built.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
+    /// The spec of the artifact's own job, made when the index has none: its `role` is the consumer's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<Box<JobSpec>>,
 }
 
 /// A job's derived fields ([`JobSpec::derived`]): the hub fills them at submit, from the frozen tree and the pack.
@@ -279,6 +300,10 @@ pub struct Derived {
     /// ([`crate::admit::admit`]'s IO gate). The pack declares it.
     #[serde(default)]
     pub io_heavy: bool,
+    /// The selector dialect that renders `select` (`dialect::Dialect::name`): part of a suite's history key, so two
+    /// dialects' selections never share a history.
+    #[serde(default)]
+    pub dialect: Option<String>,
 }
 
 /// The history class of a tree of BYTES: `floor(log2(MiB))`, 0 below 2 MiB.

@@ -250,6 +250,7 @@ mod tests {
             local_only: false,
             writes: vec![],
             derived: Default::default(),
+            artifacts: vec![],
         }
     }
 

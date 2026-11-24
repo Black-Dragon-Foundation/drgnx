@@ -78,6 +78,7 @@ mod tests {
             local_only: false,
             writes: vec![],
             derived: Default::default(),
+            artifacts: vec![],
         }
     }
 
@@ -249,7 +250,7 @@ mod tests {
                 env: vec![("CI".into(), "1".into())],
                 net_hosts: vec!["crates.io:443".into()],
                 pins: vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())],
-                parser: "cargo-test".into(),
+                parser: "libtest".into(),
             },
             Frame::Started {
                 r: r(),

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="4" failures="1" errors="0" uuid="0f0b3a52-1111-4e2b-9d8f-5d0c2c1a7e11" timestamp="2026-11-24T10:00:00.000+00:00" time="0.123">
+    <testsuite name="mycrate::bin/mycrate" tests="4" disabled="1" errors="0" failures="1">
+        <testcase name="tests::good" classname="mycrate::bin/mycrate" timestamp="2026-11-24T10:00:00.000+00:00" time="0.001"/>
+        <testcase name="tests::bad" classname="mycrate::bin/mycrate" timestamp="2026-11-24T10:00:00.000+00:00" time="0.002">
+            <failure message="assertion `left == right` failed" type="test failure with exit code 101">thread 'tests::bad' panicked at src/lib.rs:9:9:
+assertion `left == right` failed
+  left: 1
+ right: 2</failure>
+            <system-err>thread 'tests::bad' panicked at src/lib.rs:9:9</system-err>
+        </testcase>
+        <testcase name="tests::flaky" classname="mycrate::bin/mycrate" timestamp="2026-11-24T10:00:00.000+00:00" time="0.003">
+            <flakyFailure timestamp="2026-11-24T10:00:00.000+00:00" time="0.001" message="exit code 101" type="flaky failure with exit code 101">
+                <stack-trace>thread 'tests::flaky' panicked at src/lib.rs:20:9</stack-trace>
+            </flakyFailure>
+        </testcase>
+        <testcase name="tests::off" classname="mycrate::bin/mycrate">
+            <skipped/>
+        </testcase>
+    </testsuite>
+</testsuites>

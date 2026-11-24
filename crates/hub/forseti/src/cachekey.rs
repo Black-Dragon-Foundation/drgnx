@@ -39,16 +39,17 @@ pub struct KeyParts {
     pub machine: Option<String>,
 }
 
-struct Feed(Sha256);
+/// The key's encoding: every field length-prefixed into one SHA-256 (also `artifact`'s keys).
+pub(crate) struct Feed(pub(crate) Sha256);
 
 impl Feed {
     /// One field: its length, then its bytes, so no two field lists feed the same bytes.
-    fn bytes(&mut self, b: &[u8]) {
+    pub(crate) fn bytes(&mut self, b: &[u8]) {
         self.0.update((b.len() as u64).to_le_bytes());
         self.0.update(b);
     }
 
-    fn str(&mut self, s: &str) {
+    pub(crate) fn str(&mut self, s: &str) {
         self.bytes(s.as_bytes());
     }
 
@@ -62,7 +63,7 @@ impl Feed {
         }
     }
 
-    fn list(&mut self, l: &[String]) {
+    pub(crate) fn list(&mut self, l: &[String]) {
         self.0.update((l.len() as u64).to_le_bytes());
         for s in l {
             self.str(s);

@@ -128,6 +128,7 @@ fn spec(script: &str) -> JobSpec {
         local_only: false,
         writes: vec![],
         derived: Default::default(),
+        artifacts: vec![],
         os: Default::default(),
     }
 }
@@ -629,12 +630,11 @@ mod drill {
                 runner("r1", 0),
                 Session::start("r1", channels, q.route(), q.link_events()),
             );
-            let script = format!(
-                "sel='{ROWS}'; for i in $(seq 1 240); do printf 't%s\\n' $i | grep -q -- \"$sel\" || continue; \
-             echo \"(:name \\\"t$i\\\" :verdict pass)\"; \
-             if [ $i = 150 ]; then mkfifo /tmp/gate; read x < /tmp/gate; fi; done"
-            );
-            let mut s = spec(&script);
+            // the selector's items follow the script as its arguments: `--exact t1 t2 …`
+            let script = "shift; for n in \"$@\"; do echo \"test $n ... ok\"; \
+             if [ $n = t150 ]; then mkfifo /tmp/gate; read x < /tmp/gate; fi; done";
+            let mut s = spec(script);
+            s.command.extend(["sh".into(), ROWS.into()]);
             s.weight = Weight::Heavy;
             q.submit(
                 Submit {
@@ -647,7 +647,8 @@ mod drill {
                         send: SendMode::Heavy,
                         image: Some(img.clone()),
                         suite: Some(Suite {
-                            parser: "plist".into(),
+                            parser: "libtest".into(),
+                            dialect: Some("libtest-exact".into()),
                             listed: (1..=240).map(|i| format!("t{i}")).collect(),
                         }),
                         ..Placement::default()
@@ -667,7 +668,7 @@ mod drill {
                 |_, _| {
                     ratatoskr::fsio::read_to_string(&log)
                         .ok()
-                        .filter(|l| l.contains("\"t150\""))
+                        .filter(|l| l.contains("test t150 ..."))
                         .map(|_| ())
                 },
             )
@@ -707,7 +708,7 @@ mod drill {
             );
             let rows = |text: &str| -> Vec<String> {
                 text.lines()
-                    .filter(|l| l.starts_with("(:name"))
+                    .filter(|l| l.starts_with("test t"))
                     .map(String::from)
                     .collect()
             };
@@ -720,7 +721,7 @@ mod drill {
                 90,
                 "attempt 2 reran only the rest: {second:?}"
             );
-            assert!(second[0].contains("\"t151\"") && second[89].contains("\"t240\""));
+            assert!(second[0].contains("test t151 ") && second[89].contains("test t240 "));
             // r1 is back: its attempt 1, late, is stopped where it parked
             let (channels, _child1) = serve("r1", &root1, prefix, hub);
             assert!(q.set_session(

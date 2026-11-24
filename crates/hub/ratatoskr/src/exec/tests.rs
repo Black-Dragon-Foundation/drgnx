@@ -57,16 +57,19 @@ fn a_test_job_that_ran_no_rows_does_not_pass() {
             .min_ran,
         None
     );
-    for (parser, min) in [("ert", Some(1)), ("cargo-test", Some(1)), ("plist", None)] {
+    for (parser, min) in [("libtest", Some(1)), ("junit", Some(1)), ("exit", None)] {
         job.place.suite = Some(queue::Suite {
             parser: parser.into(),
+            dialect: Some("nextest".into()),
             listed: vec!["a".into()],
         });
         let s = job.forseti_spec("x1", "1G", &Default::default());
         assert_eq!(s.expect.min_ran, min, "{parser}");
+        assert_eq!(s.derived.dialect.as_deref(), Some("nextest"));
     }
     job.place.suite = Some(queue::Suite {
-        parser: "ert".into(),
+        parser: "libtest".into(),
+        dialect: None,
         listed: vec![],
     });
     let s = job.forseti_spec("x1", "1G", &Default::default());
@@ -445,21 +448,28 @@ fn a_job_reaching_a_pinned_host_stays_here() {
 #[test]
 fn rows_reach_the_queue_and_a_run_here_runs_them_all() {
     let p = params(
-        json!({"argv": ["run", "{rows}"], "rows": {"parser": "plist", "listed": ["t1", "t2"]}}),
+        json!({"argv": ["run", "{rows}"], "rows": {"parser": "libtest", "dialect": "libtest-exact", "listed": ["t1", "t2"]}}),
     );
     let suite = suite_of(&p).expect("a suite");
     assert_eq!(
         suite,
         queue::Suite {
-            parser: "plist".into(),
+            parser: "libtest".into(),
+            dialect: Some("libtest-exact".into()),
             listed: vec!["t1".into(), "t2".into()],
         }
     );
     let argv = vec!["run".to_string(), queue::ROWS.to_string()];
     assert_eq!(
         local_argv(&argv, Some(&suite)),
-        vec!["run".to_string(), forseti::split::selector(&suite.listed)]
+        vec!["run", "--exact", "t1", "t2"]
     );
+    // no dialect names no syntax: the argv stays as it was sent
+    let bare = queue::Suite {
+        dialect: None,
+        ..suite.clone()
+    };
+    assert_eq!(local_argv(&argv, Some(&bare)), argv);
     assert_eq!(local_argv(&argv, None), argv);
     assert_eq!(suite_of(&params(json!({}))), None);
 }

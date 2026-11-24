@@ -17,7 +17,7 @@
 use super::memwatch::{self, MARKER};
 use crate::linux::disk;
 use crate::linux::jobexec::{HelperSpec, JobExec, KILL_REASON, read_kill_reason};
-use crate::linux::parse::{self, RowVerdict};
+use crate::linux::parse;
 use crate::linux::probe::Probe;
 use crate::linux::result::{ResultJson, RowResult};
 use forseti::Verdict;
@@ -348,7 +348,7 @@ fn judge(dir: &Path, spec: &JobExec, seen: &Seen, wall_s: f64) -> ResultJson {
             tracing::debug!(error = %e, "reading the job's log");
         }
     }
-    let parsed = parse::parse(spec.parser, &log);
+    let parsed = parse::parse(&spec.parser, &log);
     let reason = read_kill_reason(dir);
     let evicted = reason.as_deref() == Some(crate::linux::jobexec::EVICTED);
     let ev = ExitEvidence {
@@ -395,21 +395,11 @@ fn judge(dir: &Path, spec: &JobExec, seen: &Seen, wall_s: f64) -> ResultJson {
         verdict,
         infra,
         counts: parsed.counts,
-        failing: parsed
-            .rows
-            .iter()
-            .filter(|(_, v)| matches!(v, RowVerdict::Fail | RowVerdict::Crash))
-            .map(|(n, _)| n.clone())
-            .collect(),
+        failing: parsed.failing(),
         rows: parsed
             .rows
             .iter()
-            .map(|(name, v)| RowResult {
-                name: name.clone(),
-                verdict: *v,
-                attempt: spec.attempt,
-                machine: spec.machine.clone(),
-            })
+            .map(|r| RowResult::of(r, spec.attempt, &spec.machine))
             .collect(),
         machine: spec.machine.clone(),
         grant: spec.grant,

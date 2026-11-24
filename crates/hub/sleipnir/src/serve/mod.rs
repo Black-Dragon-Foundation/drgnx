@@ -2065,6 +2065,7 @@ pub(crate) fn tests_spec() -> forseti::JobSpec {
         local_only: false,
         writes: vec![],
         derived: Default::default(),
+        artifacts: vec![],
     }
 }
 

@@ -13,6 +13,22 @@ pub struct RowResult {
     pub verdict: RowVerdict,
     pub attempt: u32,
     pub machine: String,
+    /// A few lines of the failure, as the tool printed them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+}
+
+impl RowResult {
+    /// ROW as attempt ATTEMPT on MACHINE reported it.
+    pub fn of(row: &forseti::Row, attempt: u32, machine: &str) -> RowResult {
+        RowResult {
+            name: row.name.clone(),
+            verdict: RowVerdict::of(row),
+            attempt,
+            machine: machine.to_string(),
+            excerpt: row.excerpt.clone(),
+        }
+    }
 }
 
 /// An attempt's result.
@@ -79,6 +95,7 @@ mod tests {
                 verdict: RowVerdict::Fail,
                 attempt: 1,
                 machine: "desk".into(),
+                excerpt: None,
             }],
             failing: vec!["a::b".into()],
             machine: "desk".into(),

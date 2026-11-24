@@ -5,11 +5,13 @@
 //! and carry out what they return. `docs/develop/forseti.md` describes each rule and where its numbers come from.
 
 pub mod admit;
+pub mod artifact;
 pub mod backfill;
 pub mod bisect;
 pub mod cachekey;
 pub mod classify;
 pub mod cost;
+pub mod dialect;
 pub mod disk;
 pub mod drain;
 pub mod evict;
@@ -20,6 +22,7 @@ pub mod model;
 pub mod place;
 pub mod priority;
 pub mod reserve;
+pub mod row;
 pub mod safety;
 pub mod sim;
 pub mod split;
@@ -28,6 +31,9 @@ pub mod split;
 mod testkit;
 
 pub use admit::{Budget, admit, budget, head_protection, oom_rerun, size};
+pub use artifact::{ArtifactKey, Canon, KeyInputs, SCHEDULING_ONLY, artifact_key};
+pub use dialect::{Dialect, DialectSpec};
+pub use row::{Row, RowClass, RowVerdict};
 // `backfill::Reservation` stays in its module: at the root it would shadow the two schedulers' `Reservation`.
 pub use backfill::{Need, backfill_ok, budget_at, expected_end, reservation};
 pub use classify::{ExitEvidence, classify};

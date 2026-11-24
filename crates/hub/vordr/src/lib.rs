@@ -7,6 +7,8 @@
 //!   domr output alike.
 //! - [`facts`]: what a job ran on (tree key, env stamp, platform, selector), which evidence must match.
 //! - [`evidence`]: one fact a gate reads, bound to a task.
+//! - [`jobs`]: a project's job pack (`.drgnx/jobs.toml`): stages, artifacts, toolchains, caches, pipelines and the
+//!   gate, with `file:line` refusals.
 //! - [`pack`]: a rule pack (the gates' rules and parameters) and the policy paths a tip can't change alone.
 //! - [`redfirst`], [`gates`]: red first, trailers, the author check, waivers.
 //! - [`notes`]: a merge's structured intent notes and what they must cover.
@@ -15,13 +17,14 @@
 //! - [`reruns`]: a red batch's reruns at the line and at each tip alone, and whom they name.
 //! - [`push`]: the push gate's full run, on the exact commit's tree with the current env stamp.
 //!
-//! No clock, no threads, no files: `serde` only.
+//! No clock, no threads, no files: `serde`, `toml_edit` (the pack's text) and `forseti`'s pure types only.
 
 pub mod batch;
 pub mod evidence;
 pub mod facts;
 pub mod gates;
 pub mod groups;
+pub mod jobs;
 pub mod notes;
 pub mod pack;
 pub mod push;

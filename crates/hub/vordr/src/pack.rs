@@ -5,7 +5,12 @@ use serde::{Deserialize, Serialize};
 
 /// The gates' policy files: read from the line's base, never from the tip, and a tip that changes one asks the user
 /// at its merge (`code.ci-config`).
-pub const POLICY_PATHS: &[&str] = &["test/affected.eld", "test/frozen.eld", "test/flaky.eld"];
+pub const POLICY_PATHS: &[&str] = &[
+    crate::jobs::FILE,
+    "test/affected.eld",
+    "test/frozen.eld",
+    "test/flaky.eld",
+];
 
 /// The rules a pack may name.
 pub const RULE_IDS: &[&str] = &[

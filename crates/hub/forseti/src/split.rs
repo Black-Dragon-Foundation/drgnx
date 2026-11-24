@@ -23,28 +23,10 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    /// The selector that picks this chunk's rows: `^\(a\|b\)$` (Emacs alternation).
-    pub fn selector(&self) -> String {
-        selector(&self.rows)
+    /// The argv items that pick this chunk's rows, in DIALECT's syntax.
+    pub fn selector(&self, dialect: &dyn crate::dialect::Dialect) -> villa::Result<Vec<String>> {
+        dialect.selector(&self.rows)
     }
-}
-
-/// `regexp-quote`: what Emacs escapes in a literal.
-fn quote(name: &str) -> String {
-    let mut s = String::with_capacity(name.len());
-    for c in name.chars() {
-        if matches!(c, '[' | '*' | '.' | '\\' | '?' | '+' | '^' | '$') {
-            s.push('\\');
-        }
-        s.push(c);
-    }
-    s
-}
-
-/// The selector for ROWS, as an Emacs regexp read from a string: `^\(a\|b\)$`, each name quoted. Never `|`.
-pub fn selector(rows: &[String]) -> String {
-    let names: Vec<String> = rows.iter().map(|r| quote(r)).collect();
-    format!("^\\({}\\)$", names.join("\\|"))
 }
 
 /// How many chunks the rest is cut into: `clamp(set_minutes / max(8 min, 4 × overhead), 1, rows)`, raised to the free
@@ -306,13 +288,15 @@ mod tests {
 
     // [D] pure
     #[test]
-    fn selector_uses_backslash_bar_and_at_most_40() {
+    fn selector_is_the_dialects_and_a_chunk_has_at_most_40() {
         let c = Chunk {
             rows: s(&["a", "b.c", "d+e"]),
             probe: false,
         };
-        assert_eq!(c.selector(), "^\\(a\\|b\\.c\\|d\\+e\\)$");
-        assert!(!c.selector().contains('|') || c.selector().contains("\\|"));
+        assert_eq!(
+            c.selector(&crate::dialect::LibtestExact).unwrap(),
+            s(&["--exact", "a", "b.c", "d+e"])
+        );
         let all = chunks(&names(500), 800.0, 60, None, &[], &[]);
         assert!(
             all.iter().all(|c| c.rows.len() <= MAX_NAMES),

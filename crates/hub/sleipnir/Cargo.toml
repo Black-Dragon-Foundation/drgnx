@@ -15,7 +15,7 @@ proto = ["dep:forseti", "dep:serde_json", "dep:secrecy", "dep:zeroize"]
 sync = ["dep:forseti", "dep:serde_json", "dep:sha2", "dep:sha1", "dep:similar", "dep:rustix", "dep:secrecy", "std-owners"]
 # the probe, the reservation files and the executor: blocking, std, rustix and serde only, no tokio; the probe's
 # facts are the protocol's
-linux = ["proto", "dep:forseti", "dep:serde_json", "dep:rustix", "dep:libc", "std-owners"]
+linux = ["proto", "dep:forseti", "dep:serde_json", "dep:rustix", "dep:libc", "dep:regex", "dep:quick-xml", "std-owners"]
 # the standards' owner crates (errors, files, processes, time, threads, output, paths): every blocking module reaches
 # them; the wire protocol and the key line stay pure
 std-owners = ["dep:villa", "dep:eitri", "dep:draugr", "dep:stund", "dep:saman", "dep:annall", "dep:stig", "dep:tracing"]
@@ -31,6 +31,8 @@ forseti = { path = "../forseti", version = "0.1.0", optional = true }
 rustix = { workspace = true, features = ["event"], optional = true }
 libc = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }  # the `regex` row parser
+quick-xml = { version = "0.42", optional = true }  # the `junit` row parser (the hub already has it)
 sha1 = { workspace = true, optional = true }  # git's blob ids in a returned patch's `index` lines
 similar = { version = "2.7", optional = true }  # a returned patch's hunks (the hub already has it)
 secrecy = { workspace = true, features = ["serde"], optional = true }

@@ -347,6 +347,7 @@ fn job(id: &str, script: &str, frozen: Frozen, mem_mib: u64) -> Submit {
         local_only: false,
         writes: vec![],
         derived: Default::default(),
+        artifacts: vec![],
         os: forseti::Os::Macos,
     };
     Submit {

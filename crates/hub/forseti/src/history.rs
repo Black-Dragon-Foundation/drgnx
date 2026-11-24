@@ -32,41 +32,26 @@ pub struct HistRow {
 }
 
 /// The key runs of the same work share: the kind, then the suite (a check's stage), the class of the rows selected
-/// ([`selector_class`]) and the tree's size bucket (`Derived::tree_bucket`), or else the command with paths
-/// normalised (the job's tree and any `.claude/worktrees/<name>` path become `{tree}`, a `.claude/tmp` path `{tmp}`),
-/// so a command run from two worktrees has one history.
+/// (the selector dialect and the class it gives the selection, [`crate::dialect::class_of`]) and the tree's size bucket
+/// (`Derived::tree_bucket`), or else the command with paths normalised (the job's tree and any
+/// `.claude/worktrees/<name>` path become `{tree}`, a `.claude/tmp` path `{tmp}`), so a command run from two worktrees
+/// has one history.
 pub fn history_key(spec: &JobSpec) -> String {
     const SEP: char = '\u{1f}';
     let kind = spec.kind.name();
     if let Some(suite) = &spec.suite {
-        let class = selector_class(spec.select.as_deref());
+        let dialect = spec.derived.dialect.as_deref();
+        let class = crate::dialect::class_of(dialect, spec.select.as_deref());
         let bucket = spec
             .derived
             .tree_bucket
             .map_or(String::new(), |b| b.to_string());
-        return format!("{kind}{SEP}suite{SEP}{suite}{SEP}{class}{SEP}{bucket}");
+        let dialect = dialect.unwrap_or("");
+        return format!("{kind}{SEP}suite{SEP}{suite}{SEP}{dialect}{SEP}{class}{SEP}{bucket}");
     }
     let tree = spec.tree.to_string_lossy();
     let args: Vec<String> = spec.command.iter().map(|a| normalise(a, &tree)).collect();
     format!("{kind}{SEP}cmd{SEP}{}", args.join(&SEP.to_string()))
-}
-
-/// The class of a row selector, so selections of one shape share a history: `all` (none), `alt` (an alternation,
-/// `\|`), `prefix` (one `^name/` or `^name-` prefix: letters, digits and `-`, then `/` or `-`), `other`.
-pub fn selector_class(select: Option<&str>) -> &'static str {
-    let Some(s) = select else {
-        return "all";
-    };
-    if s.contains(r"\|") {
-        return "alt";
-    }
-    let prefix = s.strip_prefix('^').is_some_and(|rest| {
-        let name = rest.trim_end_matches(['/', '-']);
-        name.len() + 1 == rest.len()
-            && !name.is_empty()
-            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    });
-    if prefix { "prefix" } else { "other" }
 }
 
 /// The start of the path that contains byte `at`: the arg's start, or just after a space, `=` or `:`.
@@ -362,35 +347,34 @@ mod tests {
         assert_ne!(history_key(&s), k);
     }
 
-    #[test]
-    fn ert_prefixes_of_one_class_share_a_key() {
-        // [D] pure (design §5.3 item 5): `ert=^drgnx-fold/` and `ert=^drgnx-marks/` share a p95.
-        let at = |sel: &str| {
-            let mut s = spec("j");
-            s.suite = Some("ert".into());
-            s.select = Some(sel.into());
-            history_key(&s)
-        };
-        assert_eq!(at("^drgnx-fold/"), at("^drgnx-marks/"));
-        assert_eq!(at("^drgnx-fold-"), at("^drgnx-marks/"));
-        assert_eq!(selector_class(Some("^drgnx-fold/")), "prefix");
-        assert_eq!(selector_class(None), "all");
+    fn keyed(dialect: Option<&str>, sel: Option<&str>) -> String {
+        let mut s = spec("j");
+        s.suite = Some("tests".into());
+        s.derived.dialect = dialect.map(String::from);
+        s.select = sel.map(String::from);
+        history_key(&s)
     }
 
     #[test]
-    fn an_alternation_is_another_class() {
-        // [D] pure
-        let at = |sel: Option<&str>| {
-            let mut s = spec("j");
-            s.suite = Some("ert".into());
-            s.select = sel.map(String::from);
-            history_key(&s)
-        };
-        assert_eq!(selector_class(Some(r"^drgnx-a/\|^drgnx-b/")), "alt");
-        assert_eq!(selector_class(Some("moved-down$")), "other");
-        assert_ne!(at(Some(r"^drgnx-a/\|^drgnx-b/")), at(Some("^drgnx-a/")));
-        assert_ne!(at(None), at(Some("^drgnx-a/")));
-        assert_ne!(at(Some("moved-down$")), at(Some("^drgnx-a/")));
+    fn selections_of_one_class_share_a_key() {
+        // [D] pure: two nextest filtersets of tests share a p95; a package selection, and all rows, are other classes
+        let a = keyed(Some("nextest"), Some("test(=a::one) | test(=a::two)"));
+        assert_eq!(a, keyed(Some("nextest"), Some("test(=b::x)")));
+        assert_ne!(a, keyed(Some("nextest"), Some("package(=a)")));
+        assert_ne!(a, keyed(Some("nextest"), None));
+    }
+
+    #[test]
+    fn two_dialects_never_share_a_key() {
+        // [D] pure: the same selection text under two dialects is two histories (the dialect is in the key)
+        assert_ne!(
+            keyed(Some("nextest"), Some("--exact a")),
+            keyed(Some("libtest-exact"), Some("--exact a"))
+        );
+        assert_ne!(
+            keyed(Some("nextest"), None),
+            keyed(Some("libtest-exact"), None)
+        );
     }
 
     #[test]
