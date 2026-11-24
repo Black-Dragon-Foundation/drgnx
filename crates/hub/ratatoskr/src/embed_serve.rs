@@ -472,7 +472,7 @@ pub struct Running {
     cert_sha256: Option<String>,
     dir: PathBuf,
     token_sha: Arc<Mutex<[u8; 32]>>,
-    task: tokio::task::JoinHandle<()>,
+    task: crate::clock::Spawned<()>,
 }
 
 impl Running {

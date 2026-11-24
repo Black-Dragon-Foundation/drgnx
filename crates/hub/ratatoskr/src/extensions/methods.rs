@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::UNIX_EPOCH;
 
 /// The most of a readme a details page carries.
@@ -117,7 +117,7 @@ pub struct Hub {
 type Ids = Arc<HashSet<String>>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// A search's filters named a Recommended version this connection's set is not at.

@@ -26,7 +26,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use bifrost::engine::{End, Exchange, Sent, Tap};
@@ -57,7 +57,7 @@ struct Replay {
 static MODE: OnceLock<Mode> = OnceLock::new();
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 fn var<'a>(env: &'a Env, name: &str) -> Option<&'a str> {
@@ -287,9 +287,12 @@ fn replayer(dir: &Path, env: &Env) -> Result<(u16, PathBuf, PathBuf), String> {
     match port {
         Some(p) => {
             // it ends with this hub (`--parent`); its status is read when it does, so it leaves no zombie
-            std::thread::spawn(move || {
-                crate::soft::done(child.wait(), "recording");
-            });
+            crate::soft::done(
+                saman::spawn_thread("ratatoskr:recording", move || {
+                    crate::soft::done(child.wait(), "recording");
+                }),
+                "thread",
+            );
             Ok((p, mock, scratch))
         }
         None => {
@@ -346,10 +349,8 @@ impl Recorder {
             .map_err(|e| format!("cannot write {}/manifest.json: {e}", dir.display()))?;
         let (tx, rx) = mpsc::channel::<(String, String)>();
         let into = dir.to_path_buf();
-        std::thread::Builder::new()
-            .name("recording".into())
-            .spawn(move || write_lines(&into, &rx))
-            .map_err(|e| format!("no writer thread: {e}"))?;
+        saman::spawn_thread("recording", move || write_lines(&into, &rx))
+            .map_err(|e| format!("no writer thread: {}", e.message()))?;
         Ok(Recorder::open(dir, roots, manifest, tx))
     }
 

@@ -24,6 +24,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::clock::Spawned;
 use bytes::Bytes;
 use fastwebsockets::{FragmentCollectorRead, Frame, OpCode, Payload};
 use heimdall::codec::{self, FrameDecoder, KIND_CDP, KIND_CONTROL};
@@ -40,7 +41,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, mpsc, oneshot};
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use crate::clock;
@@ -98,7 +98,7 @@ pub struct BrokerCfg {
 pub struct BrokerHandle {
     ctl: mpsc::UnboundedSender<Cmd>,
     connected: Arc<AtomicBool>,
-    accept: JoinHandle<()>,
+    accept: Spawned<()>,
 }
 
 impl BrokerHandle {

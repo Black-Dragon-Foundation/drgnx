@@ -17,7 +17,7 @@ use crate::runner::clash::{self, Clash, Rule};
 use runstav::methods::agents::{Huddle, HuddleReply, HuddleState};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// The most replies each agent gives in one huddle.
 pub const REPLIES_MAX: usize = 2;
@@ -276,7 +276,7 @@ pub struct Huddles {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 fn rule_name(r: Rule) -> String {

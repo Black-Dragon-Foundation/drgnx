@@ -491,7 +491,7 @@ mod run {
         };
         let stdout = child.take_stdout();
         // The child's stdout, passed through (tokio's own stdout is not built here: small writes to ours).
-        let pump = tokio::spawn(async move {
+        let pump = crate::clock::spawn_untracked(module_path!(), async move {
             use tokio::io::AsyncReadExt;
             let Some(mut out) = stdout else { return };
             let mut buf = [0u8; 8192];

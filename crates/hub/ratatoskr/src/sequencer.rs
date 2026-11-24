@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 use tokio::sync::{Notify, mpsc, oneshot};
 
@@ -37,7 +37,7 @@ pub fn install() {
     let seq = Arc::new(Sequencer::new());
     if GLOBAL.set(seq.clone()).is_ok() {
         // not a clock task: a barrier's advance runs inside it, and must not wait for the task it runs in
-        tokio::spawn(SERVING.scope((), seq.run()));
+        crate::clock::spawn_untracked(module_path!(), SERVING.scope((), seq.run()));
     }
 }
 
@@ -56,7 +56,7 @@ pub(crate) async fn in_serving_step<F: Future>(f: F) -> F::Output {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// A line a client sent, `__seq` taken out.

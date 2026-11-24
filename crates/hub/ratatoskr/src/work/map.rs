@@ -25,7 +25,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::Duration;
 use vegvisir::layout::{self, Layout};
 use vegvisir::render;
@@ -544,7 +544,7 @@ pub struct Map {
 }
 
 fn lock(m: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 fn minute() -> u64 {

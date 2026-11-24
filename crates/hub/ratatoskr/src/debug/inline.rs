@@ -82,7 +82,7 @@ fn lists() -> &'static Lists {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// TEXT cut to MAX characters, its last an ellipsis when cut.

@@ -772,7 +772,7 @@ mod tests {
         for i in 0..24 {
             let s = s.clone();
             let file = file.clone();
-            tasks.push(tokio::spawn(async move {
+            tasks.push(crate::clock::spawn_untracked(module_path!(), async move {
                 if i % 3 == 0 {
                     crate::fsio::write(
                         &file,

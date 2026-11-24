@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 /// A preview made against an older state of the files or the session.
 pub(crate) const STALE: &str = "stale";
@@ -221,7 +221,7 @@ impl Drop for Held<'_> {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 impl Reverts {

@@ -15,7 +15,7 @@ use crate::front::Front;
 use crate::runner::clash::{self, DiffIndex, RunSession, RunState};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
 /// A predicted conflict is looked for at most once per (A, B, path) per this many seconds of the hub's clock.
 pub const EVERY: f64 = 30.0;
@@ -254,7 +254,7 @@ pub struct Live {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// One check to run: the other session, its worktree, its job and task.

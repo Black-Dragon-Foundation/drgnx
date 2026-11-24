@@ -213,6 +213,11 @@ pub mod real {
         std::time::Instant::now()
     }
 
+    /// The system's time of day, whatever clock is installed: for the base a virtual clock itself starts from.
+    pub fn wall() -> std::time::SystemTime {
+        std::time::SystemTime::now()
+    }
+
     /// Wait D with the calling thread blocked, for real.
     pub fn sleep_blocking(d: Duration) {
         std::thread::sleep(d);

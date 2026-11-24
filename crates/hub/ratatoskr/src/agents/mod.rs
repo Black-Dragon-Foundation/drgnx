@@ -75,7 +75,7 @@ pub struct Hub {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 impl Hub {
@@ -238,7 +238,9 @@ impl Hub {
         let all: Vec<Arc<Session>> = lock(&self.sessions).values().cloned().collect();
         let ends: Vec<_> = all
             .into_iter()
-            .map(|s| tokio::spawn(async move { s.shutdown().await }))
+            .map(|s| {
+                crate::clock::spawn_untracked(module_path!(), async move { s.shutdown().await })
+            })
             .collect();
         for e in ends {
             crate::soft::done(e.await, "mod");

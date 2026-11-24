@@ -46,7 +46,7 @@ thread_local! {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 #[cfg(target_os = "linux")]
@@ -108,15 +108,15 @@ pub fn threshold(var: Option<&str>, test_hooks: bool, virtual_clock: bool) -> Op
 
 /// `tokio::spawn` of F, named NAME for the watchdog when it runs: for the tasks that stay off the virtual clock's
 /// tracking ([`crate::clock::spawn`] names the others).
-pub fn spawn<F>(name: &'static str, f: F) -> tokio::task::JoinHandle<F::Output>
+pub fn spawn<F>(name: &'static str, f: F) -> crate::clock::Spawned<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
     if on() {
-        return tokio::spawn(Named::new(Cow::Borrowed(name), f));
+        return crate::clock::spawn_untracked(module_path!(), Named::new(Cow::Borrowed(name), f));
     }
-    tokio::spawn(f)
+    crate::clock::spawn_untracked(module_path!(), f)
 }
 
 /// Name tasks from now on (before any is spawned).
@@ -286,7 +286,7 @@ fn start_to(threshold: Duration, seen: Option<Arc<Mutex<Vec<String>>>>) -> Watch
     };
     let b = beat.clone();
     // a plain tokio task (not named, not on the virtual clock): its lateness is the stall
-    tokio::spawn(async move {
+    crate::clock::spawn_untracked(module_path!(), async move {
         // real time (the watchdog never runs on the virtual clock); a late tick is followed by one a TICK after it
         let mut tick = crate::clock::real_interval(TICK);
         loop {
@@ -294,42 +294,40 @@ fn start_to(threshold: Duration, seen: Option<Arc<Mutex<Vec<String>>>>) -> Watch
             b.last.store(b.ms(), Ordering::Relaxed);
         }
     });
-    let spawned = std::thread::Builder::new()
-        .name("ratatoskr-stall".into())
-        .spawn(move || {
-            // since when the stall being reported began (ms on the beat's clock)
-            let mut stalled: Option<u64> = None;
-            loop {
-                std::thread::sleep(TICK);
-                if stop.load(Ordering::Relaxed) {
-                    return;
-                }
-                let now = beat.ms();
-                let late = now.saturating_sub(beat.last.load(Ordering::Relaxed));
-                // a poll held past the threshold is a held worker even while the other one keeps the beat
-                let held = holders(threshold);
-                match (
-                    stalled,
-                    report(Duration::from_millis(late), threshold, &held),
-                ) {
-                    (None, Some(_)) => {
-                        // every poll in progress, however short: a task waiting on a lock names the one holding it
-                        let line = report(Duration::MAX, threshold, &holders(Duration::ZERO))
-                            .unwrap_or_default();
-                        stalled = Some(now);
-                        tracing::warn!(late_ms = late, held = line, "the runtime stalled");
-                        tell(format!("stalled: late {late} ms; {line}"));
-                    }
-                    (Some(since), None) => {
-                        let lasted = now.saturating_sub(since);
-                        tracing::warn!(lasted_ms = lasted, "the runtime stall ended");
-                        tell(format!("ended after {lasted} ms"));
-                        stalled = None;
-                    }
-                    _ => {}
-                }
+    let spawned = saman::spawn_thread("ratatoskr-stall", move || {
+        // since when the stall being reported began (ms on the beat's clock)
+        let mut stalled: Option<u64> = None;
+        loop {
+            std::thread::sleep(TICK);
+            if stop.load(Ordering::Relaxed) {
+                return;
             }
-        });
+            let now = beat.ms();
+            let late = now.saturating_sub(beat.last.load(Ordering::Relaxed));
+            // a poll held past the threshold is a held worker even while the other one keeps the beat
+            let held = holders(threshold);
+            match (
+                stalled,
+                report(Duration::from_millis(late), threshold, &held),
+            ) {
+                (None, Some(_)) => {
+                    // every poll in progress, however short: a task waiting on a lock names the one holding it
+                    let line = report(Duration::MAX, threshold, &holders(Duration::ZERO))
+                        .unwrap_or_default();
+                    stalled = Some(now);
+                    tracing::warn!(late_ms = late, held = line, "the runtime stalled");
+                    tell(format!("stalled: late {late} ms; {line}"));
+                }
+                (Some(since), None) => {
+                    let lasted = now.saturating_sub(since);
+                    tracing::warn!(lasted_ms = lasted, "the runtime stall ended");
+                    tell(format!("ended after {lasted} ms"));
+                    stalled = None;
+                }
+                _ => {}
+            }
+        }
+    });
     let thread = spawned
         .inspect_err(|e| tracing::warn!("the stall watchdog did not start: {e}"))
         .ok();

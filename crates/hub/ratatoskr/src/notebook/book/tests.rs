@@ -245,7 +245,7 @@ fn a_notebook_of_ten_thousand_cells_is_opened_synced_and_given_tails_by_index() 
     // on a thread waited for with a deadline: quadratic work here would fail the test, not hang it
     let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
     let s2 = slot.clone();
-    std::thread::spawn(move || {
+    saman::spawn_thread("ratatoskr:tests", move || {
         let mut b = Book::open(Path::new("/x/big.ipynb"), text).unwrap();
         let tails = (0..MAX_CELLS)
             .filter_map(|i| b.tail(&format!("c{i}")))
@@ -280,7 +280,8 @@ fn a_notebook_of_ten_thousand_cells_is_opened_synced_and_given_tails_by_index() 
             b.tail("c4").is_none(),
             b.tail("added").is_some(),
         ));
-    });
+    })
+    .unwrap();
     let (tails, n, first, seventh, c5_gone, added) =
         skuld::wait_until("the notebook", 60, || saman::lock(&slot).take());
     assert_eq!((tails, n), (MAX_CELLS, MAX_CELLS));

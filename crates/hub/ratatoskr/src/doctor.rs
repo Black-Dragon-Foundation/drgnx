@@ -667,9 +667,12 @@ struct BoundedCheck {
 fn bounded(limit: Duration, f: impl FnOnce() -> Check + Send + 'static) -> BoundedCheck {
     let (tx, rx) = std::sync::mpsc::channel();
     let started = crate::clock::real_now();
-    std::thread::spawn(move || {
-        crate::soft::done(tx.send(f()), "tx send");
-    });
+    crate::soft::done(
+        saman::spawn_thread("ratatoskr:doctor", move || {
+            crate::soft::done(tx.send(f()), "tx send");
+        }),
+        "thread",
+    );
     BoundedCheck { rx, started, limit }
 }
 

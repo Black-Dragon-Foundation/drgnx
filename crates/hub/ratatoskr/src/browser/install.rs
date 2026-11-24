@@ -1066,7 +1066,7 @@ mod tests {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
-            tokio::spawn(async move {
+            crate::clock::spawn_untracked(module_path!(), async move {
                 while let Ok((mut s, _)) = listener.accept().await {
                     let mut buf = [0u8; 2048];
                     let n = s.read(&mut buf).await.unwrap_or(0);
@@ -1162,7 +1162,7 @@ mod tests {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let body = zip.clone();
-            tokio::spawn(async move {
+            crate::clock::spawn_untracked(module_path!(), async move {
                 while let Ok((mut s, _)) = listener.accept().await {
                     let mut buf = [0u8; 2048];
                     crate::soft::done(s.read(&mut buf).await, "install");

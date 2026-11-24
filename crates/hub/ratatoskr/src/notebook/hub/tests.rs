@@ -133,11 +133,11 @@ struct Seen {
 
 /// The kernel's side of notebook `nb1` (its first kernel): answers `kernel_info`, runs what it is sent (the code is its own output;
 /// BOOM is an error, SLOW never answers, ASK asks for input), and notes what reached it.
-fn kernel_side(folder: &Path, id: &str, nth: u32, seen: Arc<Seen>) -> tokio::task::JoinHandle<()> {
+fn kernel_side(folder: &Path, id: &str, nth: u32, seen: Arc<Seen>) -> crate::clock::Spawned<()> {
     let prefix = folder.join(format!("k-{id}-k{nth}"));
     let ep = move |n| format!("ipc://{}-{n}", prefix.display());
     let path = folder.join(format!("kernel-{id}-k{nth}.json"));
-    tokio::spawn(async move {
+    crate::clock::spawn_untracked(module_path!(), async move {
         let (mut shell, mut iopub, mut stdin, mut control) = (
             RouterSocket::new(),
             PubSocket::new(),
@@ -155,7 +155,7 @@ fn kernel_side(folder: &Path, id: &str, nth: u32, seen: Arc<Seen>) -> tokio::tas
         .await;
         let seen2 = seen.clone();
         let k2 = key.clone();
-        tokio::spawn(async move {
+        crate::clock::spawn_untracked(module_path!(), async move {
             while let Ok(m) = control.recv().await {
                 if let Ok(d) = wire::decode(&k2, &frames(m)) {
                     saman::lock(&seen2.control).push(d.header.msg_type);
@@ -720,9 +720,10 @@ fn only_regular_notebook_files_ending_in_ipynb_are_opened() {
         let slot = Arc::new(Mutex::new(None));
         let s2 = slot.clone();
         let (a, b) = (fifo.clone(), zero.clone());
-        std::thread::spawn(move || {
+        saman::spawn_thread("ratatoskr:tests", move || {
             *saman::lock(&s2) = Some((read_notebook(&a), read_notebook(&b)))
-        });
+        })
+        .unwrap();
         let (f, z) = skuld::wait_until("the reads", 30, || saman::lock(&slot).take());
         assert!(f.unwrap_err().message().contains("not a regular file"));
         assert!(z.unwrap_err().message().contains("not a regular file"));
@@ -1064,7 +1065,9 @@ fn a_notebook_closed_while_its_kernel_starts_does_not_keep_the_kernel() {
             .join(format!("kernel-{id}-k1.json"));
         // the kernel's side is not there yet: the start waits for its sockets
         let (h2, id2) = (hub.clone(), id.clone());
-        let starting = tokio::spawn(async move { h2.start(7, &id2, None, None).await });
+        let starting = crate::clock::spawn_untracked(module_path!(), async move {
+            h2.start(7, &id2, None, None).await
+        });
         skuld::wait_until("the kernel to be starting", 30, || {
             file.exists().then_some(())
         });
@@ -1170,7 +1173,9 @@ fn opens_that_run_at_once_cannot_pass_the_limit_together() {
         let tasks: Vec<_> = (0..(MAX_OPEN * 3))
             .map(|_| {
                 let (hub, path) = (hub.clone(), path.clone());
-                tokio::spawn(async move { hub.open(9, &path, None).await.is_ok() })
+                crate::clock::spawn_untracked(module_path!(), async move {
+                    hub.open(9, &path, None).await.is_ok()
+                })
             })
             .collect();
         let mut ok = 0;

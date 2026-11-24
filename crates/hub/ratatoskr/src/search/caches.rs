@@ -14,7 +14,7 @@ use hrafn::{StoreError, VectorCache};
 use hrafn_embed::fingerprint::Identity;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 /// How often the caches are swept.
@@ -40,7 +40,7 @@ impl Caches {
     /// The caches of STATE (`STATE/vectors/`): one per state directory in this process, so two projects of the state
     /// share each cache's one writer.
     pub fn shared(state: &Path) -> Arc<Caches> {
-        let mut r = saman::lock(&registry());
+        let mut r = saman::lock(registry());
         if let Some(c) = r.get(state).and_then(Weak::upgrade) {
             return c;
         }

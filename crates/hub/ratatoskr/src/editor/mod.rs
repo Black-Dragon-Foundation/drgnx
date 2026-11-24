@@ -35,7 +35,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::Duration;
 
 /// A view gets at most one frame per this much of the hub's clock.
@@ -70,7 +70,7 @@ const SYMBOL_MAX: usize = 2_000_000;
 const SYMBOL_CACHE: usize = 512;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// What a frame shows of one file.

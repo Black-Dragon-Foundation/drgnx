@@ -109,31 +109,35 @@ pub fn run(
     let pid = child.id();
     if let (Some(text), Some(mut w)) = (stdin, child.stdin.take()) {
         let text = text.to_vec();
-        std::thread::spawn(move || {
-            crate::soft::done(w.write_all(&text), "run");
-        });
+        crate::soft::done(
+            saman::spawn_thread("ratatoskr:run", move || {
+                crate::soft::done(w.write_all(&text), "run");
+            }),
+            "thread",
+        );
     }
     let drain = |r: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
+        saman::spawn_thread("ratatoskr:run", move || {
             let mut buf = Vec::new();
             if let Some(mut r) = r {
                 crate::soft::done(r.read_to_end(&mut buf), "run");
             }
             buf
         })
+        .map_err(|e| e.message().to_owned())
     };
     let out = drain(
         child
             .stdout
             .take()
             .map(|r| Box::new(r) as Box<dyn Read + Send>),
-    );
+    )?;
     let err = drain(
         child
             .stderr
             .take()
             .map(|r| Box::new(r) as Box<dyn Read + Send>),
-    );
+    )?;
     // a thread of its own waits for git: real time, whatever clock the hub runs on
     let end = deadline.map(|d| crate::clock::real_now() + d);
     let status = loop {

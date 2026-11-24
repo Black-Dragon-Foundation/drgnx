@@ -8,6 +8,7 @@
 
 use super::container::{self, NetNames};
 use crate::agents::launch::NetCell;
+use crate::clock::Spawned;
 use crate::shell_env::ShellEnv;
 use ferja::owner::{self, End, Sidecar};
 use gleipnir::{Refusal, Rule};
@@ -16,7 +17,6 @@ use std::ffi::OsString;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::task::JoinHandle;
 
 /// What a job's `why` file starts with when the hub's relay, not the job, ended it.
 pub const INFRA: &str = "infra: proxy";
@@ -129,12 +129,12 @@ pub struct JobNetwork {
     sidecar: Option<Sidecar>,
     names: NetNames,
     job: String,
-    channel: JoinHandle<End>,
-    log: JoinHandle<()>,
+    channel: Spawned<End>,
+    log: Spawned<()>,
     /// The proxy's events (its refusals), until [`JobNetwork::take_events`] takes them.
     events: Option<tokio::sync::mpsc::Receiver<gleipnir::net::proxy::ProxyEvent>>,
     /// The loop that turns them into cards ([`super::hostgrants`]), ended with the relay.
-    asker: Option<JoinHandle<()>>,
+    asker: Option<Spawned<()>>,
     podman: PathBuf,
     env: Vec<(OsString, OsString)>,
 }
@@ -159,7 +159,7 @@ impl JobNetwork {
     }
 
     /// The card loop, which [`JobNetwork::end`] ends with the relay.
-    pub fn set_asker(&mut self, task: JoinHandle<()>) {
+    pub fn set_asker(&mut self, task: Spawned<()>) {
         self.asker = Some(task);
     }
 
@@ -295,7 +295,7 @@ pub async fn prepare_net(
     let (streams_tx, streams_rx) = tokio::sync::mpsc::channel(owner::STREAMS_ROOM);
     let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(16);
     let job = id.to_string();
-    tokio::spawn(async move {
+    crate::clock::spawn_untracked(module_path!(), async move {
         while let Some(e) = events_rx.recv().await {
             tracing::warn!("job {job}: the relay reports {e:?}");
         }
@@ -310,7 +310,7 @@ pub async fn prepare_net(
     let px_log = ferja::shell::Log::default();
     let log_file = crate::fsio::append(log, true).map(tokio::fs::File::from_std);
     let drained = px_log.clone();
-    let log = tokio::spawn(async move {
+    let log = crate::clock::spawn_untracked(module_path!(), async move {
         if let Ok(f) = log_file {
             drained.drain_to(f).await;
         }
@@ -337,7 +337,7 @@ pub async fn prepare_net(
             px_log,
         )),
     };
-    let channel = tokio::spawn(carried);
+    let channel = crate::clock::spawn_untracked(module_path!(), carried);
     let job_net = container::JobNet {
         sidecar: names.sidecar.clone(),
     };
@@ -412,11 +412,11 @@ mod tests {
                     .unwrap(),
                 job: container::name_of("x1").unwrap(),
                 // the channel holds the sidecar's stdio while the relay runs
-                channel: tokio::spawn(async move {
+                channel: crate::clock::spawn_untracked(module_path!(), async move {
                     let _io = io;
                     std::future::pending::<End>().await
                 }),
-                log: tokio::spawn(async {}),
+                log: crate::clock::spawn_untracked(module_path!(), async {}),
                 events: Some(prx),
                 asker: None,
                 podman,

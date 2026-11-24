@@ -107,7 +107,7 @@ fn last(v: &Value) -> &str {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// Whether E is GCE's "not found".

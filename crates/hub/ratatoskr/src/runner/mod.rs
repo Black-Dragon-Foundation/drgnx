@@ -339,7 +339,7 @@ pub struct Runs {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 impl Runs {
@@ -2949,7 +2949,9 @@ mod resume_tests {
             let task = format!("{JOB}#1");
             f.core.runs.set_busy(&task, Some("starting"));
             let (f2, c2) = (f.clone(), c.clone());
-            let stopping = tokio::spawn(async move { stop(&f2, &c2, by_id()).await });
+            let stopping = crate::clock::spawn_untracked(module_path!(), async move {
+                stop(&f2, &c2, by_id()).await
+            });
             // the stop's write lands; then it has every chance to answer early (counted yields, no clock)
             while status_of(&f).await != "stopped" {
                 tokio::task::yield_now().await;
@@ -2985,7 +2987,7 @@ mod resume_tests {
             let task = format!("{JOB}#1");
             let mark = BusyMark::set(&f, &task, "merging");
             assert_eq!(f.core.runs.busy_of(&task), Some("merging"));
-            let died = tokio::spawn(async move {
+            let died = crate::clock::spawn_untracked(module_path!(), async move {
                 let _mark = mark;
                 panic!("a merge that panics");
             })

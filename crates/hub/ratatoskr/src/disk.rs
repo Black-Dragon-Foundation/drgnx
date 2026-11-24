@@ -15,7 +15,7 @@ type Job = Box<dyn FnOnce() -> std::io::Result<()> + Send>;
 type Report = Arc<dyn Fn(&str, std::io::Error) + Send + Sync>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 #[derive(Default)]

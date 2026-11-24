@@ -728,7 +728,7 @@ impl Default for Say {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// What a session holds of [`Say`]: its turn's end goes to [`run`] when it is a planning session.

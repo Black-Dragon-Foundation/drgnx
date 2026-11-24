@@ -154,13 +154,14 @@ fn a_repository_s_watch_reads_again_after_git_changes_it() {
     let (tx, rx) = channel();
     let (reads_tx, reads) = channel();
     let (root, poke) = (dir.clone(), tx.clone());
-    let watch = std::thread::spawn(move || {
+    let watch = saman::spawn_thread("ratatoskr:tests", move || {
         watch_repo(&root, tx, rx, &mut || {
             // what the hub's read does: a status read, which must not count as a change
             crate::soft::done(read_status(&root), "read_status");
             reads_tx.send(()).is_ok()
         });
-    });
+    })
+    .unwrap();
     // the watch is set once a change in the gitdir is read; then the probe's burst is drained
     skuld::wait_until("the watch is set", 10, || {
         crate::fsio::write(dir.join(".git").join("description"), "probe\n").unwrap();

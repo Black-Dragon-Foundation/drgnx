@@ -213,7 +213,7 @@ pub struct Door {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 impl Door {
@@ -1103,7 +1103,7 @@ mod tests {
             let path = f.to_string_lossy().into_owned();
             let d2 = door.clone();
             let (r2, e2) = (root.clone(), eff.clone());
-            let w = tokio::spawn(async move {
+            let w = crate::clock::spawn_untracked(module_path!(), async move {
                 let edit = WriteKind::Edit {
                     old: "a".into(),
                     new: "b".into(),
@@ -1137,7 +1137,9 @@ mod tests {
                 new: "b".into(),
             };
             let (d2, r2, e2, p2) = (door.clone(), root.clone(), eff.clone(), path.clone());
-            let first = tokio::spawn(async move { d2.write("s1", &r2, &e2, &p2, edit()).await });
+            let first = crate::clock::spawn_untracked(module_path!(), async move {
+                d2.write("s1", &r2, &e2, &p2, edit()).await
+            });
             tokio::task::yield_now().await;
             let sent = events(&out);
             assert_eq!(sent[0]["event"], "pair-apply");
@@ -1145,7 +1147,11 @@ mod tests {
             // the user's turn waits behind the write in the editor
             let d3 = door.clone();
             let f3 = f.clone();
-            let turn = tokio::spawn(async move { d3.user_turn(&f3).await });
+            let turn =
+                crate::clock::spawn_untracked(
+                    module_path!(),
+                    async move { d3.user_turn(&f3).await },
+                );
             tokio::task::yield_now().await;
             assert!(!turn.is_finished(), "the turn waits for the chat's write");
             assert!(door.answer(
@@ -1164,7 +1170,9 @@ mod tests {
             assert!(first.await.unwrap().is_ok());
             // a chat write during the turn waits for its end
             let (d4, r4, e4, p4) = (door.clone(), root.clone(), eff.clone(), path.clone());
-            let second = tokio::spawn(async move { d4.write("s1", &r4, &e4, &p4, edit()).await });
+            let second = crate::clock::spawn_untracked(module_path!(), async move {
+                d4.write("s1", &r4, &e4, &p4, edit()).await
+            });
             tokio::task::yield_now().await;
             assert!(
                 events(&out).is_empty(),
@@ -1181,13 +1189,21 @@ mod tests {
             let a = door.user_turn(&other).await;
             let d5 = door.clone();
             let o5 = other.clone();
-            let gave_up = tokio::spawn(async move { d5.user_turn(&o5).await });
+            let gave_up =
+                crate::clock::spawn_untracked(
+                    module_path!(),
+                    async move { d5.user_turn(&o5).await },
+                );
             tokio::task::yield_now().await;
             gave_up.abort();
             crate::soft::done(gave_up.await, "door");
             drop(a);
             let d6 = door.clone();
-            let next = tokio::spawn(async move { d6.user_turn(&other).await });
+            let next =
+                crate::clock::spawn_untracked(
+                    module_path!(),
+                    async move { d6.user_turn(&other).await },
+                );
             tokio::task::yield_now().await;
             assert!(
                 next.is_finished(),
@@ -1214,7 +1230,9 @@ mod tests {
             let path = f.to_string_lossy().into_owned();
             let d2 = door.clone();
             let (r2, p2, e2) = (root.clone(), path.clone(), eff.clone());
-            let first = tokio::spawn(async move { d2.write("s1", &r2, &e2, &p2, edit()).await });
+            let first = crate::clock::spawn_untracked(module_path!(), async move {
+                d2.write("s1", &r2, &e2, &p2, edit()).await
+            });
             // the write runs to its wait on the editor's answer without yielding: one yield lets it get there
             tokio::task::yield_now().await;
             let sent = events(&out);
@@ -1250,7 +1268,9 @@ mod tests {
             door.hold("s1", false);
             let d3 = door.clone();
             let (r3, p3, e3) = (root.clone(), path.clone(), eff.clone());
-            let _later = tokio::spawn(async move { d3.write("s1", &r3, &e3, &p3, edit()).await });
+            let _later = crate::clock::spawn_untracked(module_path!(), async move {
+                d3.write("s1", &r3, &e3, &p3, edit()).await
+            });
             tokio::task::yield_now().await;
             let sent = events(&out);
             assert_eq!(sent.len(), 1, "{sent:?}");
@@ -1281,7 +1301,9 @@ mod tests {
             );
             let d2 = door.clone();
             let (r2, p2, e2) = (root.clone(), path.clone(), eff.clone());
-            let first = tokio::spawn(async move { d2.write("s1", &r2, &e2, &p2, edit()).await });
+            let first = crate::clock::spawn_untracked(module_path!(), async move {
+                d2.write("s1", &r2, &e2, &p2, edit()).await
+            });
             tokio::task::yield_now().await;
             let sent = events(&out);
             assert_eq!(sent.len(), 1, "{sent:?}");

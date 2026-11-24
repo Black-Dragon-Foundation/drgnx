@@ -285,19 +285,22 @@ pub fn run(args: WorkerArgs) -> i32 {
     }
 
     let (tx, rx) = channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(std::io::stdin()).lines() {
-            let Ok(line) = line else { break };
-            let msg = match serde_json::from_str::<Value>(&line) {
-                Ok(v) => Msg::Line(v),
-                Err(e) => Msg::Bad(e.to_string()),
-            };
-            if tx.send(msg).is_err() {
-                return;
+    crate::soft::done(
+        saman::spawn_thread("ratatoskr:worker", move || {
+            for line in BufReader::new(std::io::stdin()).lines() {
+                let Ok(line) = line else { break };
+                let msg = match serde_json::from_str::<Value>(&line) {
+                    Ok(v) => Msg::Line(v),
+                    Err(e) => Msg::Bad(e.to_string()),
+                };
+                if tx.send(msg).is_err() {
+                    return;
+                }
             }
-        }
-        crate::soft::done(tx.send(Msg::End), "tx send");
-    });
+            crate::soft::done(tx.send(Msg::End), "tx send");
+        }),
+        "thread",
+    );
 
     let mut w = Work {
         spec,
@@ -669,22 +672,25 @@ impl WorkerEmbedder {
         let pending = Arc::new(Mutex::new(Pending::default()));
         let (theirs, facts) = (pending.clone(), self.facts.clone());
         // A thread, not a task: it waits on the child's pipe, outside the hub's clock, and ends with the child.
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                let Ok(v) = serde_json::from_str::<Value>(&line) else {
-                    continue;
-                };
-                answer(&theirs, &facts, v);
-            }
-            if let Ok(mut p) = theirs.lock() {
-                p.dead = true;
-                for (_, w) in p.waiting.drain() {
-                    crate::soft::done(w.send(Reply::Crashed), "w send");
+        crate::soft::done(
+            saman::spawn_thread("ratatoskr:worker", move || {
+                for line in BufReader::new(stdout).lines() {
+                    let Ok(line) = line else { break };
+                    let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                        continue;
+                    };
+                    answer(&theirs, &facts, v);
                 }
-            }
-            crate::soft::done(child.wait(), "worker");
-        });
+                if let Ok(mut p) = theirs.lock() {
+                    p.dead = true;
+                    for (_, w) in p.waiting.drain() {
+                        crate::soft::done(w.send(Reply::Crashed), "w send");
+                    }
+                }
+                crate::soft::done(child.wait(), "worker");
+            }),
+            "thread",
+        );
         Ok(Live {
             stdin,
             pending,

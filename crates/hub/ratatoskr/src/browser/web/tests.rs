@@ -104,9 +104,9 @@ async fn echo() -> SocketAddr {
         .await
         .unwrap();
     let a = l.local_addr().unwrap();
-    tokio::spawn(async move {
+    crate::clock::spawn_untracked(module_path!(), async move {
         while let Ok((mut c, _)) = l.accept().await {
-            tokio::spawn(async move {
+            crate::clock::spawn_untracked(module_path!(), async move {
                 let (mut r, mut w) = c.split();
                 crate::soft::done(tokio::io::copy(&mut r, &mut w).await, "tokio::io::copy");
             });

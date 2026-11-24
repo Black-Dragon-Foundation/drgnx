@@ -23,24 +23,22 @@ pub struct WorkDb {
 
 impl WorkDb {
     /// The thread for the `work.db` at PATH (which need not exist).  It ends when the last `WorkDb` is dropped.
-    pub fn spawn(path: PathBuf) -> std::io::Result<WorkDb> {
+    pub fn spawn(path: PathBuf) -> villa::Result<WorkDb> {
         let (tx, mut rx) = mpsc::channel::<Job>(64);
-        std::thread::Builder::new()
-            .name("work-db".into())
-            .spawn(move || {
-                let mut conn: Option<urdr::Connection> = None;
-                while let Some(job) = rx.blocking_recv() {
-                    if conn.is_none() && path.exists() {
-                        match urdr::open_readonly(&path) {
-                            Ok(c) => conn = Some(c),
-                            Err(e) => {
-                                tracing::warn!("cannot open {} read-only: {e}", path.display())
-                            }
+        saman::spawn_thread("work-db", move || {
+            let mut conn: Option<urdr::Connection> = None;
+            while let Some(job) = rx.blocking_recv() {
+                if conn.is_none() && path.exists() {
+                    match urdr::open_readonly(&path) {
+                        Ok(c) => conn = Some(c),
+                        Err(e) => {
+                            tracing::warn!("cannot open {} read-only: {e}", path.display())
                         }
                     }
-                    job(conn.as_ref());
                 }
-            })?;
+                job(conn.as_ref());
+            }
+        })?;
         Ok(WorkDb { tx })
     }
 

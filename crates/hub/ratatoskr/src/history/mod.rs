@@ -41,7 +41,7 @@ use origin::Origins;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use verdandi::{BranchId, DocId, History, PeerId, Settler, WorktreeId};
 
 /// One worktree: where it is, the git directory its history is read through, and the commit its branch starts from.

@@ -214,7 +214,7 @@ fn a_stop_on_the_test_clock_answers_an_end_recorded_after_its_first_look() {
         let id = r.start(s).await.unwrap();
         let inner = r.inner.get().unwrap().clone();
         saman::lock(&inner.finishing).insert(id.clone());
-        let stop = tokio::spawn({
+        let stop = crate::clock::spawn_untracked(module_path!(), {
             let (inner, id) = (inner.clone(), id.clone());
             async move { inner.stop(&id).await }
         });
@@ -1475,7 +1475,7 @@ fn waiting_for_a_process_ends_with_the_process() {
             .unwrap();
         let pid = child.id() as i32;
         let start = draugr::start_time(pid).unwrap();
-        let waiter = tokio::spawn(wait_gone(pid, start));
+        let waiter = crate::clock::spawn_untracked(module_path!(), wait_gone(pid, start));
         // The waiter runs, on this single-threaded runtime, as soon as this task waits, up to its first wait: the process's
         // end (everything before that is synchronous). So after a yield it is waiting, and the process is alive.
         tokio::task::yield_now().await;
@@ -2608,7 +2608,7 @@ fn paced_guard(root: &Path, more_output: bool) -> Runner {
                     let at = len(&log);
                     // on a blocking thread: the wait is a poll on the log's size, and the runtime keeps running
                     crate::soft::done(
-                        tokio::task::spawn_blocking(move || {
+                        crate::clock::blocking(move || {
                             skuld::wait_until("the job's next output", 60, || {
                                 (len(&log) > at).then_some(())
                             })

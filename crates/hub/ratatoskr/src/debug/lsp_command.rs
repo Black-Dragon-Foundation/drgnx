@@ -19,7 +19,7 @@ use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// How long the server has to answer `initialize`, to become ready (the first start imports the project), to answer

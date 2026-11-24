@@ -228,12 +228,12 @@ mod tests {
         let listener = UnixListener::bind(&socket).unwrap();
         let taken = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = taken.clone();
-        std::thread::spawn(move || {
+        saman::spawn_thread("ratatoskr:client", move || {
             for s in listener.incoming().flatten() {
                 count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 // a thread per connection: one that stays open must not hold up the accepts behind it
                 let cap = cap.clone();
-                std::thread::spawn(move || {
+                saman::spawn_thread("ratatoskr:client", move || {
                     let mut w = s.try_clone().unwrap();
                     let hub_nonce = "c".repeat(32);
                     crate::soft::done(
@@ -260,9 +260,11 @@ mod tests {
                         };
                         crate::soft::done(writeln!(w, "{answer}"), "writeln");
                     }
-                });
+                })
+                .unwrap();
             }
-        });
+        })
+        .unwrap();
         (socket, taken)
     }
 

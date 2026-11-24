@@ -312,12 +312,13 @@ fn reread_everywhere(f: &Front, root: &Path) {
         return;
     };
     let root = root.to_path_buf();
-    std::thread::spawn(move || {
+    saman::spawn_thread("ratatoskr:scm", move || {
         let Some(f) = front.upgrade() else { return };
         for (conn, view) in f.core.views.scms.showing(&root) {
             reread(&f, conn, &view, Some(std::slice::from_ref(&root)));
         }
-    });
+    })
+    .unwrap();
 }
 
 /// Scan CONN's VIEW's folders (generation GENERATION), read every repository, then watch them, on this thread.
@@ -462,10 +463,8 @@ pub fn subscribe(f: &Front, c: &Caller, p: Subscribe) -> Result<bool, Error> {
     };
     f.core.views.scm_publish(f, c.conn_id, &p.view);
     let (conn, view) = (c.conn_id, p.view);
-    std::thread::Builder::new()
-        .name("scm-scan".into())
-        .spawn(move || scan(front, conn, view, generation))
-        .map_err(|e| invalid("view", &e.to_string()))?;
+    saman::spawn_thread("scm-scan", move || scan(front, conn, view, generation))
+        .map_err(|e| invalid("view", e.message()))?;
     Ok(true)
 }
 
@@ -517,12 +516,13 @@ pub fn set(f: &Front, c: &Caller, p: Set) -> Result<bool, Error> {
     if all || !again.is_empty() {
         let front = f.core.views.front_weak();
         let (conn, view) = (c.conn_id, p.view);
-        std::thread::spawn(move || {
+        saman::spawn_thread("ratatoskr:scm", move || {
             let Some(f) = front.and_then(|w| w.upgrade()) else {
                 return;
             };
             reread(&f, conn, &view, (!all).then_some(again.as_slice()));
-        });
+        })
+        .unwrap();
     }
     Ok(true)
 }
@@ -714,44 +714,42 @@ pub fn remote(f: &Front, c: &Caller, p: Remote) -> Result<RemoteId, Error> {
         };
         f.send_to(conn, "scm-remote", json!(e));
     };
-    std::thread::Builder::new()
-        .name("scm-remote".into())
-        .spawn(move || {
-            if let Some(f) = front.upgrade() {
-                event(&f, "running", None);
+    saman::spawn_thread("scm-remote", move || {
+        if let Some(f) = front.upgrade() {
+            event(&f, "running", None);
+        }
+        let steps: Vec<Vec<String>> = match op {
+            RemoteOp::Push => vec![vec!["push".into()]],
+            RemoteOp::Pull => vec![vec!["pull".into()]],
+            RemoteOp::Fetch => vec![vec!["fetch".into()]],
+            RemoteOp::Sync => vec![vec!["pull".into()], vec!["push".into()]],
+            RemoteOp::Publish => {
+                vec![vec![
+                    "push".into(),
+                    "-u".into(),
+                    publish_remote(&root2),
+                    "HEAD".into(),
+                ]]
             }
-            let steps: Vec<Vec<String>> = match op {
-                RemoteOp::Push => vec![vec!["push".into()]],
-                RemoteOp::Pull => vec![vec!["pull".into()]],
-                RemoteOp::Fetch => vec![vec!["fetch".into()]],
-                RemoteOp::Sync => vec![vec!["pull".into()], vec!["push".into()]],
-                RemoteOp::Publish => {
-                    vec![vec![
-                        "push".into(),
-                        "-u".into(),
-                        publish_remote(&root2),
-                        "HEAD".into(),
-                    ]]
-                }
-            };
-            let mut result = Ok(Vec::new());
-            for s in steps {
-                let args: Vec<&str> = s.iter().map(String::as_str).collect();
-                result = run::git(&root2, As::User, &args, None, None, Some(&cancel));
-                if result.is_err() {
-                    break;
-                }
+        };
+        let mut result = Ok(Vec::new());
+        for s in steps {
+            let args: Vec<&str> = s.iter().map(String::as_str).collect();
+            result = run::git(&root2, As::User, &args, None, None, Some(&cancel));
+            if result.is_err() {
+                break;
             }
-            let Some(f) = front.upgrade() else { return };
-            lock(&f.core.views.scms.remotes).remove(&id);
-            match result {
-                Ok(_) => event(&f, "done", None),
-                Err(e) if e == run::STOPPED => event(&f, "stopped", None),
-                Err(e) => event(&f, "failed", Some(e)),
-            }
-            reread_everywhere(&f, &root2);
-        })
-        .map_err(|e| invalid("root", &e.to_string()))?;
+        }
+        let Some(f) = front.upgrade() else { return };
+        lock(&f.core.views.scms.remotes).remove(&id);
+        match result {
+            Ok(_) => event(&f, "done", None),
+            Err(e) if e == run::STOPPED => event(&f, "stopped", None),
+            Err(e) => event(&f, "failed", Some(e)),
+        }
+        reread_everywhere(&f, &root2);
+    })
+    .map_err(|e| invalid("root", &e.to_string()))?;
     Ok(RemoteId { id })
 }
 

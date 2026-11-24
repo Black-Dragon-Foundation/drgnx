@@ -40,14 +40,29 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    std::thread::Builder::new()
-        .name(name.to_string())
-        .spawn(f)
-        .map_err(|e| {
-            villa::Error::unavailable("The editor could not start a thread.")
-                .with_detail(format!("starting thread {name}"))
-                .with_source(e)
-        })
+    spawn_thread_with_stack(name, None, f)
+}
+
+/// [`spawn_thread`] with a stack of STACK bytes (`None`: the system's default), for a thread that needs a deep or a
+/// deliberately small stack.
+pub fn spawn_thread_with_stack<F, T>(
+    name: &str,
+    stack: Option<usize>,
+    f: F,
+) -> villa::Result<std::thread::JoinHandle<T>>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let mut b = std::thread::Builder::new().name(name.to_string());
+    if let Some(bytes) = stack {
+        b = b.stack_size(bytes);
+    }
+    b.spawn(f).map_err(|e| {
+        villa::Error::unavailable("The editor could not start a thread.")
+            .with_detail(format!("starting thread {name}"))
+            .with_source(e)
+    })
 }
 
 /// The work pool's runtime.

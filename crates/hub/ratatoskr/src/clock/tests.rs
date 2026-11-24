@@ -14,7 +14,7 @@ fn log() -> Log {
 }
 
 fn seen(l: &Log) -> Vec<&'static str> {
-    saman::lock(&l).clone()
+    saman::lock(l).clone()
 }
 
 #[test]
@@ -432,7 +432,7 @@ fn an_advance_waits_for_a_real_wait_inside_a_clock_timeout() {
                 saman::lock(&mine).push("after");
             });
             advance(Duration::ZERO).await;
-            tokio::spawn(async move {
+            crate::clock::spawn_untracked(module_path!(), async move {
                 for _ in 0..20 {
                     tokio::task::yield_now().await;
                 }

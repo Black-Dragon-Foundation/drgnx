@@ -176,7 +176,7 @@ pub struct HubIo {
 }
 
 /// Aborts the connection's task when the request is done or dropped (the host aborts a request past its deadline).
-struct Abort(tokio::task::JoinHandle<()>);
+struct Abort(crate::clock::Spawned<()>);
 
 impl Drop for Abort {
     fn drop(&mut self) {

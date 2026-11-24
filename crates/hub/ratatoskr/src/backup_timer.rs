@@ -248,7 +248,11 @@ mod tests {
             .unwrap();
         rt.block_on(async {
             assert!(begin(), "the first nightly starts");
-            let panicked = tokio::spawn(guarded(async { panic!("the copy panicked") })).await;
+            let panicked = crate::clock::spawn_untracked(
+                module_path!(),
+                guarded(async { panic!("the copy panicked") }),
+            )
+            .await;
             assert!(panicked.is_err(), "the copy task panicked");
             assert!(begin(), "the next nightly can start after a panic");
             finish();

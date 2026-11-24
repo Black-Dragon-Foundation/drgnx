@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// A view's record and the threads it last read, by (connection, view).

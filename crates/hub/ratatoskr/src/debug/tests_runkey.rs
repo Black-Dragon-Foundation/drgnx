@@ -28,7 +28,7 @@ fn path(p: &str) -> OwnedObjectPath {
 }
 
 fn note(s: &Shared, call: &str) {
-    saman::lock(&s).calls.push(call.to_owned());
+    saman::lock(s).calls.push(call.to_owned());
 }
 
 struct Service(Shared);
@@ -159,7 +159,7 @@ fn shared(f: impl FnOnce(&mut State)) -> Shared {
 }
 
 fn asked(s: &Shared) -> Vec<String> {
-    saman::lock(&s)
+    saman::lock(s)
         .calls
         .iter()
         .filter(|c| matches!(c.as_str(), "Unlock" | "CreateCollection" | "Prompt"))

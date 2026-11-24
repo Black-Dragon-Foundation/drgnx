@@ -18,7 +18,7 @@ use norn::write::work::{Source, StepDetail};
 use runstav::methods::work as wire;
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 /// The drgnx MCP tools that record a conclusion.
 pub const TOOLS: &[&str] = &["record_decision", "note_add"];

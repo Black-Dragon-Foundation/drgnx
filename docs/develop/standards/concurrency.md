@@ -14,7 +14,8 @@ let mut guard = saman::lock(&state);     // also after a holder panicked
 ```
 
 - A thread that must be an OS thread (a blocking read of a descriptor, a test's second thread) is started with
-  `saman::spawn_thread(name, f)`, which names it and returns the `JoinHandle` (or an `unavailable` error).
+  `saman::spawn_thread(name, f)`, which names it and returns the `JoinHandle` (or an `unavailable` error);
+  `saman::spawn_thread_with_stack(name, Some(bytes), f)` gives it a stack of its own size.
 - `Task` cancels on drop. `task.detach("why")` lets one run on, and must say why.
 - `Cancel::child()` is cancelled with its parent; work checks `cancelled().await` at its awaits.
 - The UI loop runs posted closures with `UiLoop::run_pending`, never waiting, each under the `Watchdog`: over 8 ms is

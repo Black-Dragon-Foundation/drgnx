@@ -64,11 +64,11 @@ pub struct Session(Arc<Shared>);
 struct Shared {
     runner: String,
     out: mpsc::UnboundedSender<Frame>,
-    tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    tasks: std::sync::Mutex<Vec<crate::clock::Spawned<()>>>,
 }
 
 impl Shared {
-    fn tasks(&self) -> std::sync::MutexGuard<'_, Vec<tokio::task::JoinHandle<()>>> {
+    fn tasks(&self) -> std::sync::MutexGuard<'_, Vec<crate::clock::Spawned<()>>> {
         saman::lock(&self.tasks)
     }
 }

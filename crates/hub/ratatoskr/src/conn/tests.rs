@@ -49,7 +49,7 @@ fn a_write_is_reported_after_its_push() {
         let (ours, theirs) = UnixStream::pair().unwrap();
         let (_r, w) = ours.into_split();
         let out = Arc::new(Outbox::new(1));
-        let writer = tokio::spawn(write_loop(w, out.clone()));
+        let writer = crate::clock::spawn_untracked(module_path!(), write_loop(w, out.clone()));
         for l in ["one\n", "two\n", "three\n"] {
             assert!(out.push(l.into()));
         }
@@ -87,7 +87,7 @@ fn a_refused_write_is_reported_once_and_reading_goes_on() {
         drop(theirs);
         let (_r, w) = ours.into_split();
         let out = Arc::new(Outbox::new(1));
-        let writer = tokio::spawn(write_loop(w, out.clone()));
+        let writer = crate::clock::spawn_untracked(module_path!(), write_loop(w, out.clone()));
         assert!(out.push("one\n".into()));
         assert!(writer.await.unwrap().is_none(), "the client left");
         let events = out.events();

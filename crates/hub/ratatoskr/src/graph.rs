@@ -119,7 +119,7 @@ fn show(p: &Path) -> String {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 fn opt<T>(r: Result<T, urdr::SqliteError>) -> Result<Option<T>, urdr::SqliteError> {
@@ -2495,7 +2495,9 @@ mod tests {
             .unwrap();
             let (reached, go) = hooks::arm(race.writer().path());
             let (w, coord) = (race.w.clone(), race.coord.clone());
-            let scan = tokio::spawn(async move { put_parsed(&w, &coord, p).await });
+            let scan = crate::clock::spawn_untracked(module_path!(), async move {
+                put_parsed(&w, &coord, p).await
+            });
             reached.await.unwrap();
             race.allow(&[]);
             let revoked = race.reload().await;
@@ -2553,7 +2555,9 @@ mod tests {
             .unwrap();
             let (reached, go) = hooks::arm(race.writer().path());
             let (w, coord) = (race.w.clone(), race.coord.clone());
-            let rec = tokio::spawn(async move { record(&w, &coord, &user(), p).await });
+            let rec = crate::clock::spawn_untracked(module_path!(), async move {
+                record(&w, &coord, &user(), p).await
+            });
             reached.await.unwrap();
             crate::fsio::write(
                 race.config.join(norn::deny::DENY_FILE),

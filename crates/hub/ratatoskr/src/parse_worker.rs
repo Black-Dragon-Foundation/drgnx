@@ -310,10 +310,13 @@ pub mod fixture {
             let (req_r, req_w) = std::io::pipe().map_err(|e| e.to_string())?;
             let (rep_r, rep_w) = std::io::pipe().map_err(|e| e.to_string())?;
             let (lib, grammar, sha) = (s.lib.clone(), s.grammar.clone(), s.sha256.clone());
-            std::thread::spawn(move || {
-                let (mut r, mut w) = (req_r, rep_w);
-                serve(&lib, &grammar, &sha, &mut r, &mut w);
-            });
+            crate::soft::done(
+                saman::spawn_thread("ratatoskr:parse_worker", move || {
+                    let (mut r, mut w) = (req_r, rep_w);
+                    serve(&lib, &grammar, &sha, &mut r, &mut w);
+                }),
+                "thread",
+            );
             Ok(Started {
                 stdin: Box::new(req_w),
                 stdout: Box::new(rep_r),

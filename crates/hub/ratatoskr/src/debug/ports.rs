@@ -316,7 +316,7 @@ pub fn output_within(
         .map_err(|e| villa::Error::invalid(format!("{name}: {e}")))?;
     // read both pipes as it runs: a full pipe would stop it before it exits
     let drain = |p: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
+        saman::spawn_thread("ratatoskr:ports", move || {
             let mut buf = Vec::new();
             if let Some(mut p) = p {
                 crate::soft::done(p.read_to_end(&mut buf), "ports");
@@ -329,13 +329,13 @@ pub fn output_within(
             .stdout
             .take()
             .map(|p| Box::new(p) as Box<dyn Read + Send>),
-    );
+    )?;
     let err = drain(
         child
             .stderr
             .take()
             .map(|p| Box::new(p) as Box<dyn Read + Send>),
-    );
+    )?;
     let start = crate::clock::real_now();
     let status = loop {
         match child.try_wait() {

@@ -1042,15 +1042,18 @@ impl Sessions {
         let tools = list.len();
         let (tools_tx, tools_rx) = tokio::sync::watch::channel(list.clone());
         let ctx: Arc<Ctx> = Arc::new((self.tools.clone(), row.identity()));
-        tokio::spawn(accept(
-            listener,
-            row.sid.clone(),
-            ctx,
-            cancel.clone(),
-            self.uid,
-            fixed(list),
-            Some(tools_rx),
-        ));
+        crate::clock::spawn_untracked(
+            module_path!(),
+            accept(
+                listener,
+                row.sid.clone(),
+                ctx,
+                cancel.clone(),
+                self.uid,
+                fixed(list),
+                Some(tools_rx),
+            ),
+        );
         let search = self.listen_search(&row, &dir, &cancel);
         let plugins = self.listen_plugins(&row, &dir, &cancel);
         tracing::info!(

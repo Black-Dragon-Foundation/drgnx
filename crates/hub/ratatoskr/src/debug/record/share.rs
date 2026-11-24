@@ -382,11 +382,11 @@ fn git(repo: &Path, args: &[&str], input: Option<&[u8]>) -> villa::Result<Vec<u8
         .map_err(|e| villa::Error::invalid(format!("git: {e}")))?;
     let feed = input.map(<[u8]>::to_vec);
     let stdin = child.stdin.take();
-    let writer = std::thread::spawn(move || {
+    let writer = saman::spawn_thread("ratatoskr:share", move || {
         if let (Some(mut s), Some(b)) = (stdin, feed) {
             crate::soft::done(s.write_all(&b), "share");
         }
-    });
+    })?;
     let out = child
         .wait_with_output()
         .map_err(|e| villa::Error::io(format!("git: {e}")))?;

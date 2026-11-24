@@ -452,20 +452,18 @@ pub fn letters(f: &Front, c: &Caller, p: LettersParams) -> Result<bool, Error> {
             let (w_front, w_root, w_view, kept) =
                 (front.clone(), root.clone(), view.clone(), shown.clone());
             let watch_tx = tx.clone();
-            std::thread::Builder::new()
-                .name("git-watch".into())
-                .spawn(move || {
-                    watch_repo(&w_root, watch_tx, rx, &mut || {
-                        let Some(f) = w_front.upgrade() else {
-                            return false;
-                        };
-                        let read = f.core.views.letters.number();
-                        let shown = lock(&kept).clone();
-                        read_and_publish(&f, conn, &w_view, &w_root, &shown, read);
-                        true
-                    });
-                })
-                .map_err(|e| invalid("view", &e.to_string()))?;
+            saman::spawn_thread("git-watch", move || {
+                watch_repo(&w_root, watch_tx, rx, &mut || {
+                    let Some(f) = w_front.upgrade() else {
+                        return false;
+                    };
+                    let read = f.core.views.letters.number();
+                    let shown = lock(&kept).clone();
+                    read_and_publish(&f, conn, &w_view, &w_root, &shown, read);
+                    true
+                });
+            })
+            .map_err(|e| invalid("view", e.message()))?;
             if let Some(old) = watches.insert(
                 (conn, root.clone()),
                 Watch {
@@ -479,14 +477,12 @@ pub fn letters(f: &Front, c: &Caller, p: LettersParams) -> Result<bool, Error> {
         }
     }
     drop(watches);
-    std::thread::Builder::new()
-        .name("git-letters".into())
-        .spawn(move || {
-            if let Some(f) = front.upgrade() {
-                read_and_publish(&f, conn, &view, &root, &shown, read);
-            }
-        })
-        .map_err(|e| invalid("view", &e.to_string()))?;
+    saman::spawn_thread("git-letters", move || {
+        if let Some(f) = front.upgrade() {
+            read_and_publish(&f, conn, &view, &root, &shown, read);
+        }
+    })
+    .map_err(|e| invalid("view", e.message()))?;
     Ok(true)
 }
 

@@ -19,7 +19,7 @@ impl Sink for Events {
 fn fake_worker(socket: &Path, proto: (u32, u32)) -> mpsc::UnboundedReceiver<In> {
     let l = UnixListener::bind(socket).unwrap();
     let (tx, rx) = mpsc::unbounded_channel();
-    tokio::spawn(async move {
+    crate::clock::spawn_untracked(module_path!(), async move {
         let (s, _) = l.accept().await.unwrap();
         let (r, mut w) = s.into_split();
         let hello = Out::Hello {
@@ -393,7 +393,7 @@ fn a_clipboard_read_reaches_the_owner_and_its_answer_the_worker() {
         let rec = record(dir, "aa", "s1");
         let l = UnixListener::bind(&rec.socket).unwrap();
         let (heard_tx, mut heard) = mpsc::unbounded_channel();
-        let worker = tokio::spawn(async move {
+        let worker = crate::clock::spawn_untracked(module_path!(), async move {
             let (s, _) = l.accept().await.unwrap();
             let (r, mut w) = s.into_split();
             for out in [
@@ -469,7 +469,7 @@ fn exit_reaches_the_owner_and_the_record_goes() {
         let dir = tmp.path();
         let rec = record(dir, "aa", "s1");
         let l = UnixListener::bind(&rec.socket).unwrap();
-        let worker = tokio::spawn(async move {
+        let worker = crate::clock::spawn_untracked(module_path!(), async move {
             let (s, _) = l.accept().await.unwrap();
             let (_r, mut w) = s.into_split();
             for out in [
@@ -595,9 +595,9 @@ fn wait_exit_gives_a_command_end_s_status_or_the_program_s_exit() {
 
 /// A fake worker on SOCKET that says hello, then goes away at the first status question without answering it (a
 /// worker whose program ended between the question and its answer).
-fn worker_gone_at_status(socket: &Path) -> tokio::task::JoinHandle<()> {
+fn worker_gone_at_status(socket: &Path) -> crate::clock::Spawned<()> {
     let l = UnixListener::bind(socket).unwrap();
-    tokio::spawn(async move {
+    crate::clock::spawn_untracked(module_path!(), async move {
         let (s, _) = l.accept().await.unwrap();
         let (r, mut w) = s.into_split();
         let hello = Out::Hello {
@@ -638,7 +638,7 @@ fn a_worker_that_ends_unanswered_releases_the_list() {
 fn worker_reading_clipboard(socket: &Path, req: u64) -> mpsc::UnboundedReceiver<In> {
     let l = UnixListener::bind(socket).unwrap();
     let (tx, rx) = mpsc::unbounded_channel();
-    tokio::spawn(async move {
+    crate::clock::spawn_untracked(module_path!(), async move {
         let (s, _) = l.accept().await.unwrap();
         let (r, mut w) = s.into_split();
         let hello = Out::Hello {

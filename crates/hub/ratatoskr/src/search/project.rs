@@ -319,7 +319,7 @@ struct Inner {
     /// The worktree overlays' state in the hub, by tree.
     trees: Mutex<HashMap<hrafn::TreeId, Live>>,
     /// The trees' running work (seeds, checks, re-checks, sweeps).
-    jobs: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    jobs: Mutex<Vec<crate::clock::Spawned<()>>>,
     /// The history feed is attached.
     fed: std::sync::atomic::AtomicBool,
     /// When the trees were last swept.
@@ -335,7 +335,7 @@ struct Inner {
 /// One project's index. Dropping it stops tier 2; its workers exit when their stdin closes.
 pub struct Project {
     inner: Arc<Inner>,
-    tier2: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    tier2: Mutex<Option<crate::clock::Spawned<()>>>,
 }
 
 impl Drop for Project {
@@ -923,7 +923,7 @@ impl Project {
     /// Waits until no seed, check, re-check or sweep of the trees runs.
     pub async fn settle_trees(&self) {
         loop {
-            let jobs: Vec<tokio::task::JoinHandle<()>> = match self.inner.jobs.lock() {
+            let jobs: Vec<crate::clock::Spawned<()>> = match self.inner.jobs.lock() {
                 Ok(mut j) => j.drain(..).collect(),
                 Err(_) => return,
             };
@@ -942,7 +942,7 @@ impl Project {
     pub fn feed(
         &self,
         mut rx: tokio::sync::broadcast::Receiver<crate::history::FileVersion>,
-    ) -> Option<tokio::task::JoinHandle<()>> {
+    ) -> Option<crate::clock::Spawned<()>> {
         use tokio::sync::broadcast::error::{RecvError, TryRecvError};
         if self
             .inner

@@ -40,7 +40,7 @@ pub struct JobKeys {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// The `why` of a job whose key never came.
@@ -173,7 +173,7 @@ pub fn static_key_name(podman_arch: &str) -> String {
 /// A job's key socket: removed, and its answers stopped, when dropped.
 pub struct Socket {
     path: PathBuf,
-    task: tokio::task::JoinHandle<()>,
+    task: crate::clock::Spawned<()>,
 }
 
 impl Socket {
@@ -347,7 +347,7 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
             let p = path.clone();
-            let (a, b, c, e) = tokio::task::spawn_blocking(move || {
+            let (a, b, c, e) = crate::clock::blocking(move || {
                 (
                     ask(&p, "get TOKEN"),
                     ask(&p, "get TOKEN"),
@@ -393,7 +393,7 @@ mod tests {
                 d.path(),
                 Duration::from_secs(2),
             );
-            let late = tokio::spawn({
+            let late = crate::clock::spawn_untracked(module_path!(), {
                 let jk = jk.clone();
                 async move { jk.answer("get LATE").await }
             });

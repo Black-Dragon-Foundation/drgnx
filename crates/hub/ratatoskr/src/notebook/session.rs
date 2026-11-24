@@ -94,7 +94,7 @@ pub struct Session {
     stdin: mpsc::Sender<ZmqMessage>,
     control: mpsc::Sender<ZmqMessage>,
     limits: Limits,
-    tasks: Vec<tokio::task::JoinHandle<()>>,
+    tasks: Vec<crate::clock::Spawned<()>>,
 }
 
 fn dealer(identity: &[u8]) -> Result<DealerSocket, String> {
@@ -352,7 +352,7 @@ fn reader<R: Recv>(
     dropped: Arc<Dropped>,
     key: Key,
     limits: Limits,
-) -> tokio::task::JoinHandle<()> {
+) -> crate::clock::Spawned<()> {
     crate::clock::spawn(format!("notebook-{}-reader", channel.name()), async move {
         // the start of the window, the messages that did not verify in it, their bytes
         let mut bad = (crate::clock::now(), 0usize, 0usize);

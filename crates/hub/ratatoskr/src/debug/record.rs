@@ -399,7 +399,7 @@ pub struct Records {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// A name safe as a file name and in a ref.

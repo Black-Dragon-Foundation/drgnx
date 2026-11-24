@@ -49,15 +49,18 @@ fn write_frame(w: &mut impl Write, v: &Value) {
 fn serve_dap(listener: std::net::TcpListener) {
     for conn in listener.incoming() {
         let Ok(s) = conn else { return };
-        std::thread::spawn(move || {
-            let mut r = std::io::BufReader::new(s.try_clone().expect("clone"));
-            let mut w = s;
-            while let Some(req) = read_frame(&mut r) {
-                let reply = json!({"seq": 1, "type": "response", "request_seq": req["seq"], "success": true,
+        crate::soft::done(
+            saman::spawn_thread("ratatoskr:lsp_mock", move || {
+                let mut r = std::io::BufReader::new(s.try_clone().expect("clone"));
+                let mut w = s;
+                while let Some(req) = read_frame(&mut r) {
+                    let reply = json!({"seq": 1, "type": "response", "request_seq": req["seq"], "success": true,
                                    "command": req["command"], "body": {"supportsConfigurationDoneRequest": true}});
-                write_frame(&mut w, &reply);
-            }
-        });
+                    write_frame(&mut w, &reply);
+                }
+            }),
+            "thread",
+        );
     }
 }
 
@@ -112,7 +115,10 @@ pub fn main(mode: &str, arg: Option<&str>) -> i32 {
                         _ => {
                             let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
                             let port = l.local_addr().expect("addr").port();
-                            std::thread::spawn(move || serve_dap(l));
+                            crate::soft::done(
+                                saman::spawn_thread("ratatoskr:lsp_mock", move || serve_dap(l)),
+                                "thread",
+                            );
                             json!(port)
                         }
                     },

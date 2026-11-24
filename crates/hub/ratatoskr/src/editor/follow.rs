@@ -322,7 +322,7 @@ impl Core {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// The shell: the core under a lock, the hub's clock in ms from its start, the events and the deadlines.

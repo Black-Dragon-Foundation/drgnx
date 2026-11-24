@@ -96,8 +96,8 @@ async fn key_of(folder: &Path, id: &str) -> Key {
 }
 
 /// Answer `kernel_info_request` on shell with a reply and publish a `status`, until told to stop; hand the socket back after.
-fn serve_ready(mut p: Peer, key: Key) -> tokio::task::JoinHandle<Peer> {
-    tokio::spawn(async move {
+fn serve_ready(mut p: Peer, key: Key) -> crate::clock::Spawned<Peer> {
+    crate::clock::spawn_untracked(module_path!(), async move {
         loop {
             let f = frames(p.shell.recv().await.unwrap());
             let req = wire::decode(&key, &f).unwrap();
@@ -175,7 +175,7 @@ fn a_kernel_is_ready_when_it_answers_kernel_info_and_publishes_a_status() {
         let d = tmp();
         let folder = private_folder(&d.path().join("s")).unwrap();
         let peer = bind(&folder, "c").await;
-        let serving = tokio::spawn({
+        let serving = crate::clock::spawn_untracked(module_path!(), {
             let folder = folder.clone();
             async move { serve_ready(peer, key_of(&folder, "c").await).await.unwrap() }
         });
@@ -211,7 +211,7 @@ fn a_status_lost_before_the_subscription_took_hold_is_asked_for_again() {
         let folder = private_folder(&d.path().join("s")).unwrap();
         let mut peer = bind(&folder, "c").await;
         let key = key_of_later(&folder, "c");
-        tokio::spawn(async move {
+        crate::clock::spawn_untracked(module_path!(), async move {
             let key = key.await;
             let mut first = true;
             loop {
@@ -261,7 +261,9 @@ fn a_kernel_killed_from_outside_is_reported_as_exited() {
         let folder = private_folder(&d.path().join("s")).unwrap();
         let peer = bind(&folder, "d").await;
         let f2 = folder.clone();
-        tokio::spawn(async move { serve_ready(peer, key_of(&f2, "d").await).await });
+        crate::clock::spawn_untracked(module_path!(), async move {
+            serve_ready(peer, key_of(&f2, "d").await).await
+        });
         let mut k = Kernel::start(
             &spec("sleep 600", Interrupt::Signal),
             &folder,
@@ -300,7 +302,9 @@ fn interrupt_is_a_signal_to_the_group_or_a_control_message() {
         );
         let peer = bind(&folder, "e").await;
         let f2 = folder.clone();
-        tokio::spawn(async move { serve_ready(peer, key_of(&f2, "e").await).await });
+        crate::clock::spawn_untracked(module_path!(), async move {
+            serve_ready(peer, key_of(&f2, "e").await).await
+        });
         let k = Kernel::start(
             &spec(&script, Interrupt::Signal),
             &folder,
@@ -321,14 +325,15 @@ fn interrupt_is_a_signal_to_the_group_or_a_control_message() {
         // message mode: the request reaches control, nothing is signalled
         let peer = bind(&folder, "f").await;
         let f2 = folder.clone();
-        let key_task = tokio::spawn(async move { key_of(&f2, "f").await });
+        let key_task =
+            crate::clock::spawn_untracked(module_path!(), async move { key_of(&f2, "f").await });
         let marker2 = d.path().join("got-int-2");
         let script2 = format!(
             "trap 'echo got > {}' INT; while :; do sleep 0.05; done",
             marker2.display()
         );
         let f3 = folder.clone();
-        let start = tokio::spawn({
+        let start = crate::clock::spawn_untracked(module_path!(), {
             let d = d.path().to_path_buf();
             async move {
                 Kernel::start(&spec(&script2, Interrupt::Message), &f3, "f", &d, quick()).await
@@ -362,8 +367,8 @@ fn a_kernel_that_floods_the_hub_is_killed() {
     let mut peer = bind(&folder, "g").await;
     let key = {
         let f2 = folder.clone();
-        let k = tokio::spawn(async move { key_of(&f2, "g").await });
-        let start = tokio::spawn({
+        let k = crate::clock::spawn_untracked(module_path!(), async move { key_of(&f2, "g").await });
+        let start = crate::clock::spawn_untracked(module_path!(), {
             let (folder, d) = (folder.clone(), d.path().to_path_buf());
             let t = Timeouts {
                 limits: Limits {
@@ -468,7 +473,7 @@ fn a_start_that_is_dropped_part_way_kills_the_kernel_it_began() {
         let pidfile = d.path().join("pid");
         let script = format!("echo $$ > {}; sleep 600 & wait", pidfile.display());
         let (folder2, cwd) = (folder.clone(), d.path().to_path_buf());
-        let start = tokio::spawn(async move {
+        let start = crate::clock::spawn_untracked(module_path!(), async move {
             Kernel::start(
                 &spec(&script, Interrupt::Signal),
                 &folder2,
@@ -521,7 +526,9 @@ fn workers_a_kernel_forked_go_with_it_and_nothing_is_signalled_after_it_is_gone(
         let workers = d.path().join("worker");
         let peer = bind(&folder, "w").await;
         let f2 = folder.clone();
-        tokio::spawn(async move { serve_ready(peer, key_of(&f2, "w").await).await });
+        crate::clock::spawn_untracked(module_path!(), async move {
+            serve_ready(peer, key_of(&f2, "w").await).await
+        });
         let script = format!(
             "sleep 600 & echo $! > {}; exec sleep 600",
             workers.display()
@@ -590,7 +597,9 @@ fn kill_and_the_wait_after_a_kill_are_bounded_by_exited_within() {
         let folder = private_folder(&d.path().join("s")).unwrap();
         let peer = bind(&folder, "bw").await;
         let f2 = folder.clone();
-        tokio::spawn(async move { serve_ready(peer, key_of(&f2, "bw").await).await });
+        crate::clock::spawn_untracked(module_path!(), async move {
+            serve_ready(peer, key_of(&f2, "bw").await).await
+        });
         let k = Kernel::start(
             &spec("sleep 600", Interrupt::Signal),
             &folder,

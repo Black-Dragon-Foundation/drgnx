@@ -13,7 +13,7 @@ use huginn::read::{Limits, read_all};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{LazyLock, Mutex};
 use std::time::SystemTime;
 
 /// The newest version of the file this hub reads (`drgnx-trust-folders-version`).

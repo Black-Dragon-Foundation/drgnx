@@ -406,7 +406,7 @@ struct KeySocket {
 /// A running keyed job's key socket (removed when the job ends) and the task that redacts its output into its log.
 struct Keyed {
     _socket: Option<keys::Socket>,
-    pump: tokio::task::JoinHandle<()>,
+    pump: crate::clock::Spawned<()>,
 }
 
 /// How long a keyed job's log may take to drain once its process has ended (a child it left may hold the pipe).

@@ -43,7 +43,10 @@ impl Fx {
             headless_shell: false,
             stop_grace: STOP_GRACE,
         };
-        std::thread::spawn(move || host::serve(&cfg, end.into(), ready_w.into()));
+        saman::spawn_thread("ratatoskr:tests", move || {
+            host::serve(&cfg, end.into(), ready_w.into())
+        })
+        .unwrap();
         let mut line = String::new();
         ready.read_to_string(&mut line).unwrap();
         assert_eq!(line, "ready\n");

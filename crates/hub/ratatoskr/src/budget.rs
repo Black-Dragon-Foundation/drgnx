@@ -33,7 +33,7 @@ use runstav::wire::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::mpsc;
 
 /// The window a pace is read over, in seconds.
@@ -308,7 +308,7 @@ impl Default for Budgets {
 const KV: &str = "budgets";
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// KEY and its ancestors, nearest first.
@@ -576,7 +576,9 @@ impl Budgets {
         let Ok(text) = serde_json::to_string(&self.saved()) else {
             return;
         };
-        tokio::spawn(async move { crate::gateway::kv_set(&db, KV, &text).await });
+        crate::clock::spawn_untracked(module_path!(), async move {
+            crate::gateway::kv_set(&db, KV, &text).await
+        });
     }
 
     /// SCOPE's limits are LIMITS (empty clears); the limits already reached are reported again.

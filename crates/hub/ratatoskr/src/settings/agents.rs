@@ -33,7 +33,7 @@ pub struct Editors {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// How many bytes may wait in a client's queue before [`Editors::send_to_lossy`] drops an event (a quarter of the queue's limit).
@@ -420,7 +420,9 @@ mod tests {
             assert!(e.present());
             let waiting = {
                 let e = e.clone();
-                tokio::spawn(async move { e.propose(proposed(5), Duration::from_secs(10)).await })
+                crate::clock::spawn_untracked(module_path!(), async move {
+                    e.propose(proposed(5), Duration::from_secs(10)).await
+                })
             };
             // the event goes out first: on this single-threaded runtime the spawned `propose` runs as soon as this task
             // yields, and it sends the event before its first wait (the answer's)
@@ -478,7 +480,7 @@ mod tests {
             e.subscribe(3, out.clone());
             let waiting = {
                 let e = e.clone();
-                tokio::spawn(async move {
+                crate::clock::spawn_untracked(module_path!(), async move {
                     e.explain(
                         SettingScope::Shared,
                         Some(vec!["tab-width".into()]),

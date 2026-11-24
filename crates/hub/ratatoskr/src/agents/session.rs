@@ -72,7 +72,7 @@ pub(crate) const SESSION_NET: launch::NetCell = launch::NetCell::ProviderOnly;
 const WHEEL_SAVE_WAIT: Duration = Duration::from_secs(5);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 fn now() -> f64 {
@@ -8073,7 +8073,7 @@ mod tests {
                 traces: None,
                 predict: None,
             };
-            tokio::spawn(write_steps(rx, sink, ctx, None));
+            crate::clock::spawn_untracked(module_path!(), write_steps(rx, sink, ctx, None));
             let open = |class, tool: Option<&str>| OpenStep {
                 class,
                 start: 10.0,
@@ -8217,7 +8217,7 @@ mod tests {
                 .unwrap();
             }
             let before = writer.signals.writes();
-            tokio::spawn(write_steps(rx, sink, ctx, None));
+            crate::clock::spawn_untracked(module_path!(), write_steps(rx, sink, ctx, None));
             let mut seqs = Vec::new();
             for _ in 0..50 {
                 seqs.push(seen.recv().await.unwrap().step.seq);
@@ -8268,7 +8268,7 @@ mod tests {
                 traces: None,
                 predict: None,
             };
-            tokio::spawn(write_steps(rx, sink, ctx, None));
+            crate::clock::spawn_untracked(module_path!(), write_steps(rx, sink, ctx, None));
             for cost in [Some(0.15), None] {
                 tx.send(ClosedStep {
                     open: OpenStep {
@@ -8373,7 +8373,7 @@ mod tests {
                 traces: None,
                 predict: None,
             };
-            tokio::spawn(write_steps(rx, sink, ctx, None));
+            crate::clock::spawn_untracked(module_path!(), write_steps(rx, sink, ctx, None));
             for (kind, end) in [("edit", 11.0), ("read", 12.0)] {
                 tx.send(ClosedStep {
                     open: OpenStep {
@@ -8483,8 +8483,11 @@ mod tests {
                 predict: None,
             };
             let (claimed, rx_claimed) = tokio::sync::mpsc::unbounded_channel();
-            tokio::spawn(claim_steps(rx, claimed, ctx.clone(), None));
-            tokio::spawn(write_steps(rx_claimed, sink, ctx, None));
+            crate::clock::spawn_untracked(
+                module_path!(),
+                claim_steps(rx, claimed, ctx.clone(), None),
+            );
+            crate::clock::spawn_untracked(module_path!(), write_steps(rx_claimed, sink, ctx, None));
             // the step names note.txt as the mock does (relative) and a.txt as Claude does (absolute, in a diff)
             let abs = work.join("a.txt").to_string_lossy().into_owned();
             tx.send(ClosedStep {
@@ -8578,7 +8581,7 @@ mod tests {
                 history: None,
             };
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            tokio::spawn(write_steps(rx, sink, ctx, None));
+            crate::clock::spawn_untracked(module_path!(), write_steps(rx, sink, ctx, None));
             let cell = crate::timeline::EditCell::default();
             tx.send(ClosedStep {
                 open: OpenStep {
@@ -8668,7 +8671,7 @@ mod tests {
             history: None,
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let done = tokio::spawn(write_steps(rx, sink, ctx, None));
+        let done = crate::clock::spawn_untracked(module_path!(), write_steps(rx, sink, ctx, None));
         let open = |class, kind: Option<&str>, start| OpenStep {
             class,
             start,

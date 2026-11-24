@@ -241,7 +241,7 @@ mod tests {
     fn stub(dir: &Path, answer: Value) -> (PathBuf, std::thread::JoinHandle<Vec<Value>>) {
         let socket = dir.join("hub-x.sock");
         let listener = UnixListener::bind(&socket).unwrap();
-        let hub = std::thread::spawn(move || {
+        let hub = saman::spawn_thread("ratatoskr:bridge", move || {
             let (s, _) = listener.accept().unwrap();
             let mut w = s.try_clone().unwrap();
             writeln!(
@@ -266,7 +266,8 @@ mod tests {
                 seen.push(v);
             }
             seen
-        });
+        })
+        .unwrap();
         (socket, hub)
     }
 

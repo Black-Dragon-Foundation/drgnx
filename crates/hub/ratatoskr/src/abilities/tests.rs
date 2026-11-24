@@ -163,7 +163,7 @@ impl Rig {
 /// Until one call waits on a card; a call that ends first (it panicked, say) fails the test instead of hanging it.
 async fn until_waiting<T: std::fmt::Debug>(
     waiting: &mut tokio::sync::watch::Receiver<usize>,
-    call: &mut tokio::task::JoinHandle<T>,
+    call: &mut crate::clock::Spawned<T>,
 ) {
     skuld::while_running("the call's card", call, waiting.wait_for(|n| *n == 1))
         .await
@@ -355,7 +355,9 @@ fn ask_cell_makes_a_card_and_waits_for_the_answer() {
         assert_eq!(names(&list), ["echo-ability_echo"], "an Ask is offered");
         let mut waiting = r.f.core.plugins.waiting();
         let ctx = r.ctx("s1", &who);
-        let mut call = tokio::spawn(async move { run(&list, &ctx, json!({"x": 1})).await });
+        let mut call = crate::clock::spawn_untracked(module_path!(), async move {
+            run(&list, &ctx, json!({"x": 1})).await
+        });
         until_waiting(&mut waiting, &mut call).await;
         let cards = r.cards().await;
         assert_eq!(cards.len(), 1, "{cards:?}");
@@ -382,7 +384,9 @@ fn an_ask_waits_past_30_s() {
         let list = offered(&r.f, "s1", &who).await;
         let mut waiting = r.f.core.plugins.waiting();
         let ctx = r.ctx("s1", &who);
-        let mut call = tokio::spawn(async move { run(&list, &ctx, json!({})).await });
+        let mut call = crate::clock::spawn_untracked(module_path!(), async move {
+            run(&list, &ctx, json!({})).await
+        });
         until_waiting(&mut waiting, &mut call).await;
         tokio::time::pause();
         tokio::time::advance(Duration::from_secs(95)).await;
@@ -408,7 +412,9 @@ fn the_ask_card_is_withdrawn_when_the_call_ends() {
         let mut waiting = r.f.core.plugins.waiting();
         let mut withdrawn = r.f.core.plugins.withdrawn();
         let ctx = r.ctx("s1", &who);
-        let mut call = tokio::spawn(async move { run(&list, &ctx, json!({})).await });
+        let mut call = crate::clock::spawn_untracked(module_path!(), async move {
+            run(&list, &ctx, json!({})).await
+        });
         until_waiting(&mut waiting, &mut call).await;
         // the client cancels the MCP call: the server drops the call's future
         call.abort();
@@ -605,7 +611,9 @@ fn change_before_an_ability_is_shown_on_its_card() {
         let list = offered(&r.f, "s1", &who).await;
         let mut waiting = r.f.core.plugins.waiting();
         let ctx = r.ctx("s1", &who);
-        let mut call = tokio::spawn(async move { run(&list, &ctx, json!({"a": 1})).await });
+        let mut call = crate::clock::spawn_untracked(module_path!(), async move {
+            run(&list, &ctx, json!({"a": 1})).await
+        });
         until_waiting(&mut waiting, &mut call).await;
         let cards = r.cards().await;
         assert_eq!(cards.len(), 1, "{cards:?}");

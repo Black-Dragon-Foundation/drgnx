@@ -59,7 +59,7 @@ fn internal(e: impl std::fmt::Display) -> Error {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// The lower-case hex of a hash.

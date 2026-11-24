@@ -874,7 +874,7 @@ fn run_probe_reads_the_status_without_holding_the_runtime_thread() {
             layers: None,
             browser: false,
         };
-        let task = tokio::spawn(async move {
+        let task = crate::clock::spawn_untracked(module_path!(), async move {
             let go = tokio::net::unix::pipe::Receiver::from_file(std::fs::File::from(
                 OwnedFd::from(go_r),
             ))

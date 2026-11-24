@@ -432,7 +432,7 @@ mod name_and_pull_tests {
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let forks = {
             let stop = stop.clone();
-            std::thread::spawn(move || {
+            saman::spawn_thread("ratatoskr:container", move || {
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                     crate::soft::done(
                         crate::proc::Command::new("true").status(),
@@ -440,6 +440,7 @@ mod name_and_pull_tests {
                     );
                 }
             })
+            .unwrap()
         };
         let mut busy = vec![];
         for i in 0..200 {

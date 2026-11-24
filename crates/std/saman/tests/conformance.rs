@@ -170,6 +170,17 @@ fn a_spawned_thread_has_its_name_and_gives_its_result() {
 }
 
 #[test]
+fn a_thread_gets_the_stack_it_asked_for() {
+    // 8 MiB of frame does not fit the default 2 MiB stack of a spawned thread, and does in 16 MiB
+    let t = saman::spawn_thread_with_stack("saman-test-stack", Some(16 << 20), || {
+        let frame = std::hint::black_box([1u8; 8 << 20]);
+        frame.iter().map(|b| u64::from(*b)).sum::<u64>()
+    })
+    .unwrap();
+    assert_eq!(t.join().unwrap(), 8 << 20);
+}
+
+#[test]
 fn an_ambient_task_runs_on_the_callers_runtime_and_is_cancelled_when_dropped() {
     let ex = Executor::new(2).unwrap();
     let (tx, rx) = mpsc::channel();

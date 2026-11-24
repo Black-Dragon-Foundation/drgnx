@@ -363,7 +363,7 @@ pub struct Debug {
 }
 
 fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 impl Debug {

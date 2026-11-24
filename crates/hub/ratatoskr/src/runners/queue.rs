@@ -3460,27 +3460,30 @@ impl Queue {
             r.attempt,
             runner.to_string(),
         );
-        std::thread::spawn(move || {
-            let log = std::fs::read(&path).unwrap_or_default();
-            let found = redact::notices(&log);
-            // one notice per log: the first line, and how many more
-            if let Some(first) = found.first() {
-                let text = match found.len() - 1 {
-                    0 => first.clone(),
-                    more => format!("{first} (and {more} more lines)"),
-                };
-                keys.tell_event(
-                    "notice",
-                    json!({
-                        "source": "hub",
-                        "severity": "warn",
-                        "id": format!("runners-log-{job}-{attempt}"),
-                        "life": "event",
-                        "text": format!("job {job} on {runner}: {text}"),
-                    }),
-                );
-            }
-        });
+        crate::soft::done(
+            saman::spawn_thread("ratatoskr:queue", move || {
+                let log = std::fs::read(&path).unwrap_or_default();
+                let found = redact::notices(&log);
+                // one notice per log: the first line, and how many more
+                if let Some(first) = found.first() {
+                    let text = match found.len() - 1 {
+                        0 => first.clone(),
+                        more => format!("{first} (and {more} more lines)"),
+                    };
+                    keys.tell_event(
+                        "notice",
+                        json!({
+                            "source": "hub",
+                            "severity": "warn",
+                            "id": format!("runners-log-{job}-{attempt}"),
+                            "life": "event",
+                            "text": format!("job {job} on {runner}: {text}"),
+                        }),
+                    );
+                }
+            }),
+            "thread",
+        );
     }
 
     /// Starts admitted attempt R on RUNNER ([`Queue::start_frame`]). A keyed job's log is redacted from its first byte.

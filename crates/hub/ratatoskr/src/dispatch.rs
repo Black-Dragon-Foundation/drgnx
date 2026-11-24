@@ -463,7 +463,7 @@ pub(crate) mod tests {
         fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
             CAPTURE.with(|c| {
                 if let Some(buf) = &*c.borrow() {
-                    saman::lock(&buf).extend_from_slice(b);
+                    saman::lock(buf).extend_from_slice(b);
                 }
             });
             Ok(b.len())

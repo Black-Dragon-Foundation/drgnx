@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// The Changes views of every connection: the groups each last read.

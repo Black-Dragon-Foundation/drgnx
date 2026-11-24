@@ -113,6 +113,26 @@ fn the_real_clock_ignores_the_installed_one() {
     assert!(spent >= Duration::from_millis(5) && spent < Duration::from_secs(60));
 }
 
+/// `real::wall` is the system's time of day whatever clock is installed: a virtual clock's base is not the virtual time.
+#[test]
+fn the_real_wall_ignores_the_installed_clock() {
+    let clock = stund::Manual::default();
+    let _on = clock.on_this_thread();
+    clock.advance(Duration::from_secs(3600));
+    assert_ne!(
+        stund::wall(),
+        stund::real::wall(),
+        "the installed clock is virtual"
+    );
+    let since = stund::real::wall()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    assert!(
+        since > Duration::from_secs(1_700_000_000),
+        "the system's time of day, not the manual clock's"
+    );
+}
+
 #[test]
 fn next_due_is_the_wait_to_the_earliest_timer() {
     let clock = stund::Manual::default();

@@ -468,7 +468,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     let tick = idle::TICK;
     crate::clock::spawn("idle:run", idle::run(front.clone(), tick));
     for (l, s) in agents {
-        tokio::spawn(accept(l, front.clone(), s));
+        crate::clock::spawn_untracked(module_path!(), accept(l, front.clone(), s));
     }
     tracing::info!(
         pid = front.pid,
@@ -676,7 +676,7 @@ const STOP_NOTE_EVERY: Duration = Duration::from_secs(5);
 struct Stopping {
     what: &'static str,
     queued: Box<dyn Fn() -> usize + Send>,
-    join: tokio::task::JoinHandle<()>,
+    join: crate::clock::Blocking<()>,
 }
 
 impl Stopping {
@@ -689,7 +689,7 @@ impl Stopping {
         Stopping {
             what,
             queued: Box::new(queued),
-            join: tokio::task::spawn_blocking(stop),
+            join: crate::clock::blocking(stop),
         }
     }
 }

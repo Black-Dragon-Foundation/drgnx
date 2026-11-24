@@ -264,12 +264,12 @@ fn a_write_that_waits_on_the_disk_holds_no_worker() {
         // the write is queued and the task that asked for it ends, on a worker, while the write waits on the disk (a write
         // done in the task held its worker and the state lock until a reader came: the test hung here)
         let w = s.clone();
-        tokio::spawn(async move { w.persist_queue() })
+        crate::clock::spawn_untracked(module_path!(), async move { w.persist_queue() })
             .await
             .unwrap();
         // the state is free for the next reader, on a worker
         let r = s.clone();
-        tokio::spawn(async move {
+        crate::clock::spawn_untracked(module_path!(), async move {
             r.observe();
         })
         .await

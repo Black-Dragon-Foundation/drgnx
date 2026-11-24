@@ -531,7 +531,10 @@ mod tests {
             });
         }
         // spawn returns only after the child's exec, so it runs beside the test
-        let child = std::thread::spawn(move || cmd.spawn().unwrap().wait().unwrap());
+        let child = saman::spawn_thread("ratatoskr:lock", move || {
+            cmd.spawn().unwrap().wait().unwrap()
+        })
+        .unwrap();
         let mut b = [0u8; 1];
         // SAFETY: a read of one byte into B from the pipe made above
         assert_eq!(unsafe { libc::read(ready[0], b.as_mut_ptr().cast(), 1) }, 1);

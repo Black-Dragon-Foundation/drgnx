@@ -128,7 +128,7 @@ pub struct Terms {
 }
 
 fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 fn new_id() -> String {
@@ -268,9 +268,10 @@ impl Terms {
             .map_err(|e| villa::Error::invalid(format!("{program}: {e}")))?;
         let pid = child.id() as i32;
         // reaped by a thread of its own while this hub lives; after a restart, by init
-        std::thread::spawn(move || {
+        saman::spawn_thread("ratatoskr:mod", move || {
             crate::soft::done(child.wait(), "mod");
-        });
+        })
+        .unwrap();
         let start_time = draugr::start_time(pid).unwrap_or(0);
         let mut rec = Record {
             id: id.clone(),

@@ -29,7 +29,7 @@ use runstav::registry::Class;
 use runstav::wire::Error;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use vegvisir::schedule::{self, SchedRow};
 use vegvisir::trail::{self, NowLine, TrailFilter, Window, Zone};
 
@@ -153,7 +153,7 @@ pub struct Trails {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 impl Trails {

@@ -26,7 +26,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 /// `presence-stale-after`: an entry older than this is history, unless it is its session's latest.
@@ -538,7 +538,7 @@ pub struct Live {
 pub type Listener = Arc<dyn Fn(&[RepoPath]) + Send + Sync>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 fn wire(e: &Entry) -> PresenceEntry {

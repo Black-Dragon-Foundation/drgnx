@@ -9,10 +9,10 @@ use gleipnir::trace::{self as gt, Handed, ListenOptions, Offer, Scope};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// How a session's shell steps are traced.
@@ -125,7 +125,7 @@ fn check_ignore(root: &Path, paths: &[PathBuf]) -> BTreeSet<PathBuf> {
     }
     // written from a thread: git answers as it reads, and a full stdout pipe would stop it
     let stdin = child.stdin.take();
-    let writer = std::thread::spawn(move || {
+    let writer = saman::spawn_thread("ratatoskr:shell", move || {
         if let Some(mut s) = stdin {
             crate::soft::done(s.write_all(&input), "shell");
         }
@@ -134,7 +134,7 @@ fn check_ignore(root: &Path, paths: &[PathBuf]) -> BTreeSet<PathBuf> {
     if let Some(mut s) = child.stdout.take() {
         crate::soft::done(s.read_to_end(&mut out), "shell");
     }
-    crate::soft::done(writer.join(), "shell");
+    crate::soft::done(writer.map(|w| w.join()), "shell");
     crate::soft::done(child.wait(), "shell");
     out.split(|b| *b == 0)
         .filter(|s| !s.is_empty())
@@ -158,7 +158,7 @@ pub struct SessionTrace {
     writer: crate::coord::Writer,
     front: Weak<Front>,
     socket: Option<PathBuf>,
-    server: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    server: Mutex<Option<crate::clock::Spawned<()>>>,
 }
 
 /// Every session's tracing, and each worktree's learned skips.
@@ -204,7 +204,10 @@ impl Traces {
         if let Some(sock) = &socket {
             let listener = crate::sessions::bind_socket(sock)?;
             let me = st.clone();
-            *lock(&st.server) = Some(tokio::spawn(serve(listener, me)));
+            *lock(&st.server) = Some(crate::clock::spawn_untracked(
+                module_path!(),
+                serve(listener, me),
+            ));
         }
         lock(&self.sessions).insert(sid.to_string(), st.clone());
         Ok(st)
@@ -257,7 +260,7 @@ async fn serve(listener: tokio::net::UnixListener, st: Arc<SessionTrace>) {
         };
         let open = st.open_command();
         let me = st.clone();
-        tokio::task::spawn_blocking(move || {
+        crate::clock::blocking(move || {
             if stream.set_nonblocking(false).is_ok() {
                 me.offered(stream, open);
             }

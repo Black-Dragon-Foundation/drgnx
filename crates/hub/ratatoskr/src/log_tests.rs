@@ -30,12 +30,13 @@ fn a_stderr_nobody_reads_holds_no_worker_and_its_dropped_lines_are_told() {
     rt.block_on(rt.spawn(async {})).unwrap();
     assert!(to.dropped() > 0, "the queue took every line");
     // the reader comes: a later line that finds room tells the count first
-    let read = std::thread::spawn(move || {
+    let read = saman::spawn_thread("ratatoskr:log_tests", move || {
         let mut r = r;
         let mut text = String::new();
         r.read_to_string(&mut text).unwrap();
         text
-    });
+    })
+    .unwrap();
     skuld::wait_until("the dropped lines told", 30, || {
         tracing::subscriber::with_default(subscriber(&to), || tracing::warn!("after"));
         (to.told() == to.dropped()).then_some(())

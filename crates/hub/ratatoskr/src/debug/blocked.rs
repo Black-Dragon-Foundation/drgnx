@@ -400,14 +400,14 @@ async fn start_debuggee(spec: Spec) -> villa::Result<draugr::Child> {
 struct Pair {
     adapter: draugr::Child,
     debuggee: Arc<Mutex<Option<draugr::Child>>>,
-    starter: Option<tokio::task::JoinHandle<()>>,
+    starter: Option<crate::clock::Spawned<()>>,
     /// What the session's end says besides the adapter's stderr: why the program was not started, the end of its
     /// stderr once it is gone.
     notes: Arc<Mutex<Vec<String>>>,
 }
 
 fn note(notes: &Mutex<Vec<String>>, n: String) {
-    saman::lock(&notes).push(n);
+    saman::lock(notes).push(n);
 }
 
 impl Proc for Pair {

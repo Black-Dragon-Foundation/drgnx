@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 /// The open projects' histories, and which hub each tracked buffer belongs to.
 #[derive(Default)]
@@ -24,7 +24,7 @@ pub struct Hubs {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// P with its `.` and `..` components taken away by name (no link is read): a linked worktree's `commondir` (`../..`)

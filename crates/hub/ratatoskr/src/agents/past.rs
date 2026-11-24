@@ -44,7 +44,7 @@ const LIST: usize = 2000;
 pub const VIEW: &str = "agent-history/";
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 fn err(message: impl ToString) -> Error {

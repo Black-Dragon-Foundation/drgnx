@@ -52,7 +52,7 @@ const END_FLUSH: Duration = Duration::from_secs(1);
 fn lock_conns(
     m: &Mutex<HashMap<u64, Arc<Outbox>>>,
 ) -> std::sync::MutexGuard<'_, HashMap<u64, Arc<Outbox>>> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// What every connection shares.
@@ -1694,43 +1694,35 @@ mod tests {
     /// coordination servers) runs with its whole frame on it.
     #[test]
     fn every_method_is_served_within_a_small_stack() {
-        std::thread::Builder::new()
-            .name("small-stack".into())
-            .stack_size(DISPATCH_STACK)
-            .spawn(|| {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
-                rt.block_on(async {
-                    let dir = tempfile::tempdir().unwrap();
-                    let f = front(dir.path());
-                    let mut s = Session::new(f.next_conn(), Socket::Main);
-                    s.class = Class::User;
-                    let out = Arc::new(Outbox::new(s.conn));
-                    let mut tried = Vec::new();
-                    for m in registry::registry() {
-                        if ["shutdown", "restart"].contains(&m.name)
-                            || (m.decode)(&json!({})).is_err()
-                        {
-                            continue;
-                        }
-                        tried.push(m.name);
-                        let line = json!({"id": 1, "method": m.name, "params": {}}).to_string();
-                        tokio::time::timeout(Duration::from_secs(10), f.line(&mut s, &out, &line))
-                            .await
-                            .unwrap_or_else(|_| panic!("{} was not answered within 10 s", m.name));
-                        answers(&out);
+        saman::spawn_thread_with_stack("small-stack", Some(DISPATCH_STACK), || {
+            saman::block_on_current(async {
+                let dir = tempfile::tempdir().unwrap();
+                let f = front(dir.path());
+                let mut s = Session::new(f.next_conn(), Socket::Main);
+                s.class = Class::User;
+                let out = Arc::new(Outbox::new(s.conn));
+                let mut tried = Vec::new();
+                for m in registry::registry() {
+                    if ["shutdown", "restart"].contains(&m.name) || (m.decode)(&json!({})).is_err()
+                    {
+                        continue;
                     }
-                    // the dispatchers on the way: the front's, the agent core's, the store's, the coordination writes
-                    for name in ["ping", "agents/list", "graph/backup", "coord/prune"] {
-                        assert!(tried.contains(&name), "{name} not tried: {tried:?}");
-                    }
-                });
-            })
-            .unwrap()
-            .join()
-            .unwrap();
+                    tried.push(m.name);
+                    let line = json!({"id": 1, "method": m.name, "params": {}}).to_string();
+                    tokio::time::timeout(Duration::from_secs(10), f.line(&mut s, &out, &line))
+                        .await
+                        .unwrap_or_else(|_| panic!("{} was not answered within 10 s", m.name));
+                    answers(&out);
+                }
+                // the dispatchers on the way: the front's, the agent core's, the store's, the coordination writes
+                for name in ["ping", "agents/list", "graph/backup", "coord/prune"] {
+                    assert!(tried.contains(&name), "{name} not tried: {tried:?}");
+                }
+            });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
     }
 
     #[test]
@@ -1851,7 +1843,9 @@ mod tests {
                 norn::tools::Identity::outside("claude", std::process::id(), None, None).unwrap();
             let served = {
                 let f = f.clone();
-                tokio::spawn(async move { f.mcp.serve_outside(who, None, r, w).await })
+                crate::clock::spawn_untracked(module_path!(), async move {
+                    f.mcp.serve_outside(who, None, r, w).await
+                })
             };
             f.end_connections().await;
             // the bridge reads its end of file at the hub's end, not at the process's exit (the bound is only the failure)

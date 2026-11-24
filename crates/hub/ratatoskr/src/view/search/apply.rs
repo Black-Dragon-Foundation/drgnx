@@ -87,7 +87,7 @@ struct St {
 }
 
 fn lock(m: &Mutex<St>) -> std::sync::MutexGuard<'_, St> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 impl Changes {

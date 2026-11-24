@@ -853,10 +853,11 @@ mod tests {
             let takers: Vec<_> = (0..8)
                 .map(|i| {
                     let (root, wt, barrier) = (root.clone(), wt.clone(), barrier.clone());
-                    std::thread::spawn(move || {
+                    saman::spawn_thread("ratatoskr:snapshot", move || {
                         barrier.wait();
                         write_tree(&root, &wt, &format!("k{i}"), &[]).map(|(_, t)| t)
                     })
+                    .unwrap()
                 })
                 .collect();
             let trees: Vec<String> = takers
@@ -1079,7 +1080,7 @@ mod tests {
         mkfifo(&wt.join(".git/HEAD"));
         let (tx, rx) = std::sync::mpsc::channel();
         let p = wt.clone();
-        std::thread::spawn(move || tx.send(head_of(&p)).unwrap());
+        saman::spawn_thread("ratatoskr:snapshot", move || tx.send(head_of(&p)).unwrap()).unwrap();
         let got = rx
             .recv_timeout(std::time::Duration::from_secs(60))
             .expect("a FIFO at HEAD blocked the read");

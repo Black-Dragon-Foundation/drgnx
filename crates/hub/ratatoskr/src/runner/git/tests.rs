@@ -103,7 +103,7 @@ fn hub(e: &Env, mode: TreeMode, p: Policy, db: Option<urdr::Handle>) -> HubGit {
 
 /// Accept every path of the task as it is now.
 async fn accept_all(h: &HubGit, e: &Env, t: &TaskTree, marks: &Mutex<BTreeMap<String, String>>) {
-    *saman::lock(&marks) = h.diff_hashes(&e.repo, t).await.unwrap();
+    *saman::lock(marks) = h.diff_hashes(&e.repo, t).await.unwrap();
 }
 
 // Policies must be shared with the test to set marks: wrap in Arc through a small adapter.
@@ -287,7 +287,7 @@ fn mkfifo(p: &Path) {
 #[test]
 fn a_fifo_at_a_ref_file_never_blocks_the_hub() {
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    saman::spawn_thread("ratatoskr:tests", move || {
         let e = env();
         let (h, _) = shared(&e, TreeMode::Snapshot, Policy::default(), None);
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -315,7 +315,8 @@ fn a_fifo_at_a_ref_file_never_blocks_the_hub() {
             "tests",
         );
         tx.send((tip, packed)).unwrap();
-    });
+    })
+    .unwrap();
     let got = rx
         .recv_timeout(Duration::from_secs(60))
         .expect("a FIFO at a ref file blocked the hub's read");
@@ -574,7 +575,7 @@ fn no_plain_git_in_a_ledger_folder() {
         let r = h.write_bundle(&t, false).await.unwrap_err();
         assert!(r.stderr.contains("sandboxed"), "{r:?}");
         assert!(h.write_bundle(&t, true).await.is_ok());
-        tokio::task::spawn_blocking(move || store.shutdown())
+        crate::clock::blocking(move || store.shutdown())
             .await
             .unwrap();
     })

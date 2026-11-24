@@ -396,7 +396,7 @@ mod tests {
             set("10\n");
             let stops = Arc::new(AtomicUsize::new(0));
             let seen = stops.clone();
-            let watch = tokio::spawn({
+            let watch = crate::clock::spawn_untracked(module_path!(), {
                 let file = file.clone();
                 async move {
                     watch_memory_file(&file, 100, 75, Duration::from_millis(5), move || {
@@ -419,11 +419,9 @@ mod tests {
             };
             // a window in which the watch (on this runtime's thread) keeps reading and must not stop the browser again
             let window = |nothing: &'static str| async move {
-                tokio::task::spawn_blocking(move || {
-                    skuld::window(Duration::from_millis(200), nothing)
-                })
-                .await
-                .unwrap();
+                crate::clock::blocking(move || skuld::window(Duration::from_millis(200), nothing))
+                    .await
+                    .unwrap();
             };
             set("80\n");
             until(1).await;

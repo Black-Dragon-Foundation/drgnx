@@ -354,12 +354,10 @@ impl Hub {
         if s.offer(root, view, spec, crate::clock::now()) {
             let (s, root) = (Arc::clone(s), root.to_path_buf());
             crate::soft::done(
-                std::thread::Builder::new()
-                    .name("search-recent".into())
-                    .spawn(move || {
-                        crate::soft::done(s.flush(&root), "methods");
-                    }),
-                "std::thread::Builder::new",
+                saman::spawn_thread("search-recent", move || {
+                    crate::soft::done(s.flush(&root), "methods");
+                }),
+                "search-recent",
             );
         }
     }

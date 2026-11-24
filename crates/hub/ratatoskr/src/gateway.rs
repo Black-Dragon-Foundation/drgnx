@@ -89,7 +89,7 @@ fn write<T>(l: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 /// One registration as the hub keeps it.
@@ -321,7 +321,10 @@ impl Gate {
             let in_flight = gw.in_flight();
             crate::clock::outside("gateway:requests", move || in_flight.get());
         }
-        tokio::spawn(bifrost::listen::serve_tcp(gw, listener, port));
+        crate::clock::spawn_untracked(
+            module_path!(),
+            bifrost::listen::serve_tcp(gw, listener, port),
+        );
         tracing::info!(port, "the gateway on 127.0.0.1:{port}");
         Ok(rx)
     }
@@ -620,7 +623,7 @@ impl Gate {
         let gw = self.engine()?.0.clone();
         let id = ListenerId::Session(sid.to_owned());
         sessions.gateway_socket(sid, move |l: UnixListener, cancel: CancellationToken| {
-            tokio::spawn(async move {
+            crate::clock::spawn_untracked(module_path!(), async move {
                 tokio::select! {
                     () = cancel.cancelled() => {}
                     () = bifrost::listen::serve_unix(gw, l, id) => {}

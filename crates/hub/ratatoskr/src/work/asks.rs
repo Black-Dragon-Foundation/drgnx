@@ -20,7 +20,7 @@ use norn::write::work::AskNew;
 use runstav::registry::Class;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 /// The kinds an `asked` link reaches from an ask.
 pub const LINKED: &[&str] = &["spec", "plan", "task", "session"];

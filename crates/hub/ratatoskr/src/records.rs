@@ -71,7 +71,7 @@ struct State {
     bases: HashMap<PathBuf, Bases>,
     /// Path -> its lock: one merge of a file at a time.
     gates: HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>,
-    timers: HashMap<PathBuf, tokio::task::JoinHandle<()>>,
+    timers: HashMap<PathBuf, crate::clock::Spawned<()>>,
     #[cfg(test)]
     before_write: Option<BeforeWrite>,
 }
@@ -99,7 +99,7 @@ fn meta() -> TxMeta {
 }
 
 fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
-    saman::lock(&m)
+    saman::lock(m)
 }
 
 fn kind_name(k: RecordKind) -> String {
