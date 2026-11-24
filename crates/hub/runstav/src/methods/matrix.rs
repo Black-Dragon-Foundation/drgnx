@@ -364,6 +364,22 @@ pub struct MatrixView {
     pub cells: Vec<CellRow>,
     #[serde(default, deserialize_with = "null_as_empty")]
     pub effective: Vec<EffectiveRow>,
+    /// What an outside agent (one the user bound) can never be given, whatever a layer says.
+    #[serde(default)]
+    pub outside: OutsideCaps,
+}
+
+/// The caps on outside agents, read from the constants the gate itself uses (no layer, column or override changes
+/// them).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutsideCaps {
+    /// The actions an outside agent never gets.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub never: Vec<Action>,
+    /// The actions that are at most Ask for an outside agent on a record it did not create (an Allow reads as Ask).
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub ask_at_most: Vec<Action>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

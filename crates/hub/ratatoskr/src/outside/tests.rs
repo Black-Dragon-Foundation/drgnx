@@ -520,9 +520,24 @@ fn an_outside_write_is_a_tx_with_its_ext_actor() {
     })
 }
 
-/// [Review Focus 5] Through the tools' `exec` an outside actor reaches the four methods only.
+/// The outside methods and tools are the concatenation of each area's slice (the record area's today), and the
+/// tool and method lists name the same four things.
 #[test]
-fn an_outside_actor_reaches_only_four_methods_through_exec() {
+fn the_outside_list_is_the_concatenation_of_the_area_slices() {
+    assert_eq!(outside_methods(), OUTSIDE_RECORD_METHODS);
+    assert_eq!(
+        norn::tools::outside_tool_names(),
+        norn::tools::OUTSIDE_RECORD_TOOLS
+    );
+    assert_eq!(
+        outside_methods(),
+        ["plans/get", "plans/write", "records/read", "records/write"]
+    );
+}
+
+/// [Review Focus 5] Through the tools' `exec` an outside actor reaches only the listed methods.
+#[test]
+fn an_outside_actor_reaches_only_the_listed_methods_through_exec() {
     saman::Executor::new(2).unwrap().block_on(async move {
         let w = world();
         w.bind("claude", &w.root, "manager").await;
@@ -571,10 +586,12 @@ fn an_outside_actor_reaches_only_four_methods_through_exec() {
             let e = w.exec(id, method, p).await.unwrap_err();
             assert!(e.contains("not open to an outside agent"), "{method}: {e}");
         }
-        assert_eq!(
-            OUTSIDE_METHODS,
-            ["plans/get", "plans/write", "records/read", "records/write"]
-        );
+        // each listed method passes the allowlist (what it answers beyond that is the method's own business)
+        for method in outside_methods() {
+            if let Err(e) = w.exec(id, method, json!({})).await {
+                assert!(!e.contains("not open to an outside agent"), "{method}: {e}");
+            }
+        }
     })
 }
 
@@ -678,7 +695,11 @@ fn a_bound_outside_agent_lists_the_four_tools() {
             .iter()
             .map(|t| t.name().to_owned())
             .collect();
-        want.extend(norn::tools::OUTSIDE_TOOLS.iter().map(|s| (*s).to_owned()));
+        want.extend(
+            norn::tools::outside_tool_names()
+                .iter()
+                .map(|s| (*s).to_owned()),
+        );
         assert_eq!(names, want);
     })
 }
@@ -703,7 +724,7 @@ fn an_unbound_one_lists_todays_tools() {
         assert!(
             !names
                 .iter()
-                .any(|n| norn::tools::OUTSIDE_TOOLS.contains(&n.as_str()))
+                .any(|n| norn::tools::outside_tool_names().contains(&n.as_str()))
         );
     })
 }

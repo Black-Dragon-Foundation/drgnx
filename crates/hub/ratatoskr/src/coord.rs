@@ -712,8 +712,9 @@ impl Hub for ToolHub {
                 .get()
                 .and_then(std::sync::Weak::upgrade)
                 .ok_or("jobs are not ready: the hub is starting")?;
-            // `agent_core::serve` checks no registry class: an outside actor reaches its four methods only
-            if crate::outside::is_ext(&sid) && !crate::outside::OUTSIDE_METHODS.contains(&method) {
+            // `agent_core::serve` checks no registry class: an outside actor reaches its listed methods only
+            if crate::outside::is_ext(&sid) && !crate::outside::outside_methods().contains(&method)
+            {
                 return Err(format!("{method} is not open to an outside agent"));
             }
             let m = registry::find(method).ok_or_else(|| format!("no method {method}"))?;

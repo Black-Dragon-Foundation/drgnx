@@ -33070,6 +33070,29 @@
             ],
             "type": "object"
           },
+          "OutsideCaps": {
+            "additionalProperties": false,
+            "description": "The caps on outside agents, read from the constants the gate itself uses (no layer, column or override changes\nthem).",
+            "properties": {
+              "ask_at_most": {
+                "default": [],
+                "description": "The actions that are at most Ask for an outside agent on a record it did not create (an Allow reads as Ask).",
+                "items": {
+                  "$ref": "#/$defs/Action"
+                },
+                "type": "array"
+              },
+              "never": {
+                "default": [],
+                "description": "The actions an outside agent never gets.",
+                "items": {
+                  "$ref": "#/$defs/Action"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
           "Preset": {
             "description": "The three shipped presets.",
             "enum": [
@@ -33210,6 +33233,14 @@
               "$ref": "#/$defs/EffectiveRow"
             },
             "type": "array"
+          },
+          "outside": {
+            "$ref": "#/$defs/OutsideCaps",
+            "default": {
+              "ask_at_most": [],
+              "never": []
+            },
+            "description": "What an outside agent (one the user bound) can never be given, whatever a layer says."
           },
           "preset": {
             "$ref": "#/$defs/Preset"

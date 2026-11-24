@@ -61,6 +61,11 @@ pub const ENTITY_KINDS: &[&str] = &[
     "anchor",
     // the user's binding of outside agents of a kind in a folder to a role (`crate::bindings`)
     "binding",
+    // a recorded run: a merge-gate check (urdr), a live recording (urdr); later agent or training runs. Written
+    // only by the hub (`Class::System`, `crate::grants::register`)
+    "run",
+    // B1: id `stream:<n>`, data `{store_id, branch?, task?}`
+    "stream",
 ];
 
 const ANY: &[&str] = &["*"];
@@ -157,6 +162,9 @@ pub const LINKS: &[LinkKind] = &[
         false,
     ),
     link("replies_to", &["comment"], &["comment"], false),
+    // a run is for a task, a commit or a plan; a stream follows a task
+    link("ran_for", &["run"], &["task", "commit", "plan"], false),
+    link("stream_of", &["stream"], TASK, false),
 ];
 
 /// Whether KIND is one of [`ENTITY_KINDS`].
@@ -223,7 +231,9 @@ mod tests {
                 "debug_hypothesis",
                 "comment",
                 "anchor",
-                "binding"
+                "binding",
+                "run",
+                "stream"
             ]
         );
         let rows: Vec<(&str, Vec<&str>, Vec<&str>, bool)> = LINKS
@@ -307,6 +317,13 @@ mod tests {
                 false,
             ),
             ("replies_to", vec!["comment"], vec!["comment"], false),
+            (
+                "ran_for",
+                vec!["run"],
+                vec!["task", "commit", "plan"],
+                false,
+            ),
+            ("stream_of", vec!["stream"], vec!["task"], false),
         ];
         assert_eq!(rows, expect);
         // Every named end is an entity kind, and only the two readiness links affect ready.
@@ -321,6 +338,22 @@ mod tests {
             .map(|l| l.name)
             .collect();
         assert_eq!(ready, ["blocks", "parent_of"]);
+    }
+
+    #[test]
+    fn run_and_stream_are_known_kinds_with_their_links() {
+        assert!(is_entity_kind("run") && is_entity_kind("stream"));
+        for to in ["task", "commit", "plan"] {
+            assert!(link_allowed("ran_for", "run", to), "{to}");
+        }
+        assert!(!link_allowed("ran_for", "run", "spec"));
+        assert!(!link_allowed("ran_for", "task", "task"));
+        assert!(link_allowed("stream_of", "stream", "task"));
+        assert!(!link_allowed("stream_of", "stream", "plan"));
+        assert!(!link_allowed("stream_of", "run", "task"));
+        // neither joins the readiness graph
+        assert!(!link_kind("ran_for").unwrap().affects_ready);
+        assert!(!link_kind("stream_of").unwrap().affects_ready);
     }
 
     #[test]

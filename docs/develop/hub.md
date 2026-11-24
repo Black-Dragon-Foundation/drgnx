@@ -715,7 +715,7 @@ implementation. `card list|settle` (`graph/sql` over the `card` table; `cards/se
 the shape of a status word; the tracker's `STATUSES` is the one set and the hub names it when it refuses a word. A task
 of an imported or scanned plan file is read-only to `tasks/write` (`norn::tracker::is_parsed`: the file's view owns its
 status, "this comes from FILE"); `plans/write` is its only door. The outside bridge serves `plans/get|write` and
-`records/read|write` only (`OUTSIDE_METHODS`); the test `outside::tests` pins that `cards/settle`, `messages/send`,
+`records/read|write` only (`outside::outside_methods()`); the test `outside::tests` pins that `cards/settle`, `messages/send`,
 `tasks/write`, `graph/put-parsed|grants|settings|excise|revert` and `job/approve` are refused to it.
 
 ### The reaper
