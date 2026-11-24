@@ -81,13 +81,14 @@ pub enum CopyKind {
 }
 
 impl SlotFamily {
-    /// The slot key of a job: its project, trust and role; one toolchain and the whole tree for now. The runner names
-    /// its slots by it, and the hub knows from it whether a runner's `ready` lists the job's slot family.
+    /// The slot key of a job: its project, trust, toolchain identity (the image's platform digest; empty when the job
+    /// names none) and role; the whole tree for now. The runner names its slots by it, and the hub knows from it
+    /// whether a runner's `ready` lists the job's slot family.
     pub fn of(spec: &forseti::JobSpec) -> SlotFamily {
         SlotFamily {
             project: spec.project.as_str().to_string(),
             trust: spec.trust,
-            toolchain: String::new(),
+            toolchain: spec.derived.toolchain.clone().unwrap_or_default(),
             cone: String::new(),
             role: spec.role,
         }

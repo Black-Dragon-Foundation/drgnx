@@ -9,7 +9,7 @@
 //! runner check NAME | bench NAME | unbench NAME
 //! runner trust NAME mine|my-cloud|shared
 //! runner profile NAME dedicated|workstation [--reserve-mib N] [--island CPUS]   (applied at once)
-//! runner feature NAME sandbox|udmabuf|render|kvm on|off --project P   (a container feature for one project's jobs there)
+//! runner feature NAME sandbox|udmabuf|render|kvm|ptrace on|off --project P   (a container feature for one project's jobs there)
 //! runner remove NAME [--yes]
 //! runner audit [--key K] [--job J]          (the keys sent to jobs and read by them, oldest first)
 //! runner disk [NAME] [--json]               (each runner's disk: free, the quota, btrfs, per kind, every item)
@@ -302,12 +302,12 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<RunnerCo
         "feature" => {
             want(
                 3,
-                "feature NAME sandbox|udmabuf|render|kvm on|off --project P",
+                "feature NAME sandbox|udmabuf|render|kvm|ptrace on|off --project P",
             )?;
             let feature = one_of(
                 "feature",
                 words[1].clone(),
-                &["sandbox", "udmabuf", "render", "kvm"],
+                &["sandbox", "udmabuf", "render", "kvm", "ptrace"],
             )
             .map_err(|e| villa::Error::invalid(e.to_string()))?;
             let on = one_of("on|off", words[2].clone(), &["on", "off"])

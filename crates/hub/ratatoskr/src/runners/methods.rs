@@ -7,7 +7,9 @@
 use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Empty;
-use runstav::methods::jobs_q::{Project, ProjectAddParams, ProjectRemoveParams, Projects};
+use runstav::methods::jobs_q::{
+    AllowParams, Allowed, Project, ProjectAddParams, ProjectRemoveParams, Projects,
+};
 use runstav::methods::runners::{
     AddParams, Audit, AuditParams, ByName, DiskClass, DiskEntry, DiskParams, Disks, FeatureParams,
     KeyNames, KeysParams, MachineDisk, PinParams, ProbeParams, Probed, ReclaimParams, Reclaimed,
@@ -59,6 +61,36 @@ pub async fn project_list(f: &Front, _: &Caller, _: Empty) -> Result<Projects, E
     let list = saman::lock(projects).list();
     Ok(Projects {
         projects: list.into_iter().map(project_view).collect(),
+    })
+}
+
+/// `jobs/allow`: a value added to or removed from PROJECT's allow-list of a class, or the list read. The method is the
+/// user's alone (an agent connection is refused by its class before this runs), so no class needs a check of its own:
+/// `host` included.
+pub async fn allow(f: &Front, _: &Caller, p: AllowParams) -> Result<Allowed, Error> {
+    let queue = crate::exec::queue(f)?;
+    let project = forseti::ProjectId(p.project.into_inner());
+    let class = p.class.into_inner();
+    let values = match p.value {
+        Some(v) => queue
+            .set_allow(&project, &class, v.as_str(), p.on)
+            .map_err(|e| invalid_at(e, "class"))?,
+        None => {
+            if !crate::runners::allow::CLASSES.contains(&class.as_str()) {
+                return Err(invalid_at(
+                    villa::Error::invalid(format!(
+                        "{class:?} is not an allow class: image, tool, host or fetch"
+                    )),
+                    "class",
+                ));
+            }
+            queue.allow_list(&project, &class)
+        }
+    };
+    Ok(Allowed {
+        project: project.0,
+        class,
+        values,
     })
 }
 

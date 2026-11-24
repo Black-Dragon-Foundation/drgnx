@@ -285,6 +285,9 @@ fn podman_run(id: &str, source: &Path, target: &Path, memory: &str, cmd: &[&str]
             caches: vec![],
             git_ro: None,
             jobserver: None,
+            uses: vec![],
+            out: None,
+            env: vec![],
         }),
     };
     let ra = RunnerArgs::runner(PREFIX, "hubtest", &slices::job_slice(ROOT, id).unwrap());
@@ -1291,6 +1294,9 @@ fn sandbox_unmasks_proc_under_the_runners_argv() {
                 caches: vec![],
                 git_ro: None,
                 jobserver: None,
+                uses: vec![],
+                out: None,
+                env: vec![],
             }),
         };
         let mut ra = RunnerArgs::runner(PREFIX, "hubtest", &slices::job_slice(ROOT, id).unwrap());

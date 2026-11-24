@@ -1505,6 +1505,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no |
 | `job/stop` | user | `{id: Id}` | `JobSummary` | yes |
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
+| `jobs/allow` | user | `{class: string, on?: boolean, project: string, value?: string}` | `{class: string, project: string, values?: [string]}` | yes |
 | `jobs/project-add` | user | `{name?: string, path: AbsPath}` | `{id: string, name: string, origin: string, roots?: [string]}` | yes |
 | `jobs/project-list` | user | `{}` | `{projects?: [Project]}` | no |
 | `jobs/project-remove` | user | `{id: string}` | `boolean` | yes |
@@ -5554,6 +5555,14 @@ use's `build` spec, and the consumer needs it). Two submits of one key make one 
   consumer's role.
 - **A build that fails or is cancelled** clears its `building` row and fails its consumers through `needs` as
   `infra: artifact KIND KEY12 failed (job J)`. A restart clears a `building` row whose job is gone.
+- **Images** (`runners::images`): the registry is asked for this tree's tag only, once per tag (`TagDigests`); a digest
+  means a pull by digest, none means the runner builds. The older image under another tag is never offered.
+- **Allow-lists** (`runners::allow`, `jobs/allow`): per project and class (`image`, `tool`, `host`, `fetch`), in
+  `runtime.db`'s `kv` as `allow/<project>/<class>`. An `image` entry is an index or a platform digest (an index allows
+  the platforms it lists). A job that pulls a digest its project has not allowed waits `NotAllowed` with the command that
+  allows it. Only the user's connection may call `jobs/allow`; an agent is refused, `host` included. `ptrace` is a runner
+  feature like `sandbox`: `runners/feature` refuses it on a `shared` or `my-cloud` runner, and the queue offers it only
+  on a `mine` one that has it enabled for the job's project.
 - **The pack** (`jobpack::discover`): an author's run reads `.drgnx/jobs.toml` from the frozen tree, a gate from the
   base commit; then the overlay. A job from the overlay (`Placement::pack_overlay`) is held off every runner that is not
   `mine`: "its overlay stays on your own runners". `jobpack::key_inputs` assembles an entry's key inputs.

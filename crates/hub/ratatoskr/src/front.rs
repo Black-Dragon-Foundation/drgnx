@@ -897,6 +897,7 @@ impl Front {
             | Params::HistoryRevertHunk(_)
             | Params::RunnersUnbench(_)
             | Params::RunnersFeature(_)
+            | Params::JobsAllow(_)
             | Params::JobsProjectAdd(_)
             | Params::JobsProjectList(_)
             | Params::JobsProjectRemove(_)

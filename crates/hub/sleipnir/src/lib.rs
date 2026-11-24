@@ -14,6 +14,8 @@
 //! - `runner` (default): the binary's modes.
 //! - `test-hooks`: test-only entry points, compiled away otherwise.
 
+#[cfg(feature = "sync")]
+pub mod artifact;
 #[cfg(all(feature = "runner", target_os = "linux"))]
 pub mod bench;
 #[cfg(feature = "linux")]

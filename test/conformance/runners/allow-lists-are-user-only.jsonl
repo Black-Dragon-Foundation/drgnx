@@ -1,0 +1,15 @@
+{"scenario": "runners/allow-lists-are-user-only", "requires": ["v1", "test-hooks"], "doc": "[B] a project's allow-lists are the user's: the user's connection adds a host entry and reads it back, and the list of another project stays empty; an agent's connection is not-allowed to add one (host included) or read."}
+{"do": "root"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "jobs/allow", "params": {"project": "p1", "class": "host", "value": "make-docs"}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed"}}, "within_ms": 10000}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "jobs/allow", "params": {"project": "p1", "class": "host"}}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "error": {"code": "not-allowed"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "jobs/allow", "params": {"project": "p1", "class": "host", "value": "make-docs"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"project": "p1", "class": "host", "values": ["make-docs"]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "jobs/allow", "params": {"project": "p2", "class": "host"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"project": "p2", "class": "host", "values": []}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "jobs/allow", "params": {"project": "p1", "class": "bogus", "value": "x"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params"}}, "within_ms": 10000}

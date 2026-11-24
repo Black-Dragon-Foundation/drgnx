@@ -29348,6 +29348,73 @@
       "classes": [
         "user"
       ],
+      "doc": "what a project's jobs may pull or run: a value added to or removed from its image, tool, host or fetch allow-list, or the list read; only the user's own connection may, an agent is refused",
+      "name": "jobs/allow",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`jobs/allow`'s params: PROJECT's CLASS allow-list (`image`, `tool`, `host` or `fetch`). With a `value` it is added\n(`on`) or removed; without one the list is only read.",
+        "properties": {
+          "class": {
+            "maxLength": 16,
+            "type": "string"
+          },
+          "on": {
+            "default": true,
+            "type": "boolean"
+          },
+          "project": {
+            "description": "The project's id (`jobs/project-list`).",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project",
+          "class"
+        ],
+        "title": "AllowParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`jobs/allow`'s answer: the list as it is now.",
+        "properties": {
+          "class": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "values": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "project",
+          "class"
+        ],
+        "title": "Allowed",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a repository registered as a project: its root commits and origin recorded; every clone and worktree of it maps to its id. A shallow clone, or the same repository registered again, is refused",
       "name": "jobs/project-add",
       "params": {

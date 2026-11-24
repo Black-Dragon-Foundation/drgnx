@@ -485,6 +485,9 @@ mod relay_keys {
                 caches: vec![],
                 git_ro: None,
                 jobserver: None,
+                uses: vec![],
+                out: None,
+                env: vec![],
             }),
         };
         podman::argv(&req, &caps(id), &ra())

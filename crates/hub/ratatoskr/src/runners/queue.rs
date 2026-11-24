@@ -598,6 +598,8 @@ struct St {
     prefs: BTreeMap<String, Machine>,
     /// Every machine's disk as its runner reports it, the pins sent and the orders (editing-model design §4.8).
     disk: super::disk::DiskRegister,
+    /// What each project allows its jobs to pull or run ([`super::allow`]).
+    allow: super::allow::Allow,
     /// When this machine's next disk pass is due (seconds since the epoch; every ten minutes).
     local_disk_next: u64,
     /// This tick's drains (design §5.6): each machine a whole-machine timing run has, while it waits to start there
@@ -1172,7 +1174,22 @@ pub fn wait_text(r: &WaitReason) -> String {
         WaitReason::AwaitingConfirm => "its runner waits for your confirm".into(),
         WaitReason::NoRunner => "no machine may take it".into(),
         WaitReason::NotRegistered(why) => why.clone(),
+        WaitReason::NotAllowed(why) => why.clone(),
     }
+}
+
+/// Why JOB may not be placed for its project's allow-lists, with the command that allows it: the digest it pulls is on
+/// no `image` list of its project (an index entry allows the platforms it lists). A job that pulls nothing is allowed.
+fn not_allowed(allow: &super::allow::Allow, job: &Job) -> Option<WaitReason> {
+    let image = job.spec.derived.build.as_ref()?.image.as_ref()?;
+    let digest = image.digest.as_deref()?;
+    let project = &job.spec.project;
+    (!allow.image_allowed(project, digest, image.index.as_deref())).then(|| {
+        WaitReason::NotAllowed(format!(
+            "it pulls {digest} from {}, which {project} does not allow: `drgnx jobs allow {project} image {digest}`",
+            image.repo
+        ))
+    })
 }
 
 /// The verdict in a runner's `result.json`.
@@ -1506,6 +1523,37 @@ impl Queue {
         if let Some(r) = self.lock().runners.get_mut(name) {
             r.features = features;
         }
+    }
+
+    /// The allow-lists as `runtime.db` holds them (`kv` rows `allow/<project>/<class>`), loaded once at the start.
+    pub fn load_allow(&self, rows: Vec<(String, String)>) {
+        self.lock().allow = super::allow::Allow::from_kv(rows);
+    }
+
+    /// VALUE added to (ON) or removed from PROJECT's CLASS allow-list, kept in `runtime.db`; the list after.
+    pub fn set_allow(
+        &self,
+        project: &ProjectId,
+        class: &str,
+        value: &str,
+        on: bool,
+    ) -> villa::Result<Vec<String>> {
+        let (list, json) = self.lock().allow.set(project, class, value, on)?;
+        let key = super::allow::kv_key(project.as_str(), class);
+        self.persist(Box::new(move |c| {
+            c.execute(
+                "insert into kv(key, value) values (?1, ?2) on conflict(key) do update set value = excluded.value",
+                [&key, &json],
+            )
+            .map(|_| ())?;
+            Ok(())
+        }));
+        Ok(list)
+    }
+
+    /// PROJECT's CLASS allow-list.
+    pub fn allow_list(&self, project: &ProjectId, class: &str) -> Vec<String> {
+        self.lock().allow.list(project, class)
     }
 
     /// Runner NAME's opt-in features per project, as the registry's record has them.
@@ -2808,6 +2856,12 @@ impl Queue {
         if q.s.place.unregistered.is_some() {
             return (cands, held_off, no_room);
         }
+        // a digest its project has not allowed is pulled nowhere, here included: it waits and says what allows it
+        if let Some(why) = not_allowed(&st.allow, job) {
+            held_off = Some(wait_text(&why));
+            cands.clear();
+            return (cands, held_off, no_room);
+        }
         for (name, r) in &st.runners {
             if r.r.trust == RunnerTrust::Shared
                 && let Some(why) = &q.shared_why
@@ -3011,6 +3065,7 @@ impl Queue {
                         .filter(|_| !st.runners.is_empty() && q.s.place.may_leave())
                         .map(|why| wait_text(&WaitReason::NotRegistered(why)));
                 let why = unregistered
+                    .or_else(|| not_allowed(&st.allow, job).map(|w| wait_text(&w)))
                     .or_else(|| forseti::place::why_here(job, &cands, &ctx))
                     .or(held_off);
                 // trust alone keeps it off every runner: the design's "runs here: …" words say why
@@ -3656,8 +3711,16 @@ impl Queue {
                 j.s.inputs
                     .is_some()
                     .then(|| sleipnir::sync::slot::SlotFamily::of(&j.s.spec).id());
+            // the artifacts a job names are kept while it is queued (pinned) or running (active), in the role's partition
+            let arts: Vec<String> =
+                j.s.spec
+                    .artifacts
+                    .iter()
+                    .flat_map(|u| forseti::artifact::item_ids(j.s.spec.project.as_str(), &u.key))
+                    .collect();
             match st.attempts.current(id) {
                 Some((n, a)) if a.runner == runner && a.state.open() => {
+                    running.extend(arts);
                     running.insert(format!("jobs/{id}.{n}"));
                     if let Some(sid) = sid {
                         running.insert(format!("slot:{sid}"));
@@ -3665,6 +3728,7 @@ impl Queue {
                     }
                 }
                 _ if matches!(j.state, QState::Queued) => {
+                    needed.extend(arts);
                     needed.extend(sid.map(|s| format!("slot:{s}")))
                 }
                 _ => {}
@@ -4431,6 +4495,7 @@ fn advertised(
             (Feature::Sandbox, None),
             (Feature::Udmabuf, Some("udmabuf")),
             (Feature::Render, Some("gpu")),
+            (Feature::Ptrace, None),
         ] {
             if on(feature) && device.is_none_or(has) {
                 f.push(feature.name().into());
@@ -5682,6 +5747,73 @@ mod tests {
             assert_eq!(placed(&q, 100), None);
             enable(&q, &[(Feature::Udmabuf, "drgnx")]);
             assert_eq!(placed(&q, 101).as_deref(), Some("r1"));
+        })
+    }
+
+    // [D] pure: a job that pulls an image digest its project has not allowed waits `not allowed` with the command that
+    // allows it; allowing it (or its index) places it; another project's list does not help
+    #[test]
+    fn an_image_not_on_the_list_waits_not_allowed_with_a_card() {
+        saman::block_on_current(async move {
+            let dir = tempfile::tempdir().unwrap();
+            let (q, _rx) = test_queue(dir.path(), None, true);
+            add(&q, "r1", 600);
+            hello(&q, "r1", true, 100);
+            let mut s = job("x1", Priority::P3, 64);
+            s.spec.project = ProjectId::from("drgnx");
+            s.spec.derived.build = Some(forseti::ArtifactBuild {
+                kind: "image".into(),
+                key: forseti::ArtifactKey("a".repeat(64)),
+                name: "ci".into(),
+                steps: vec![],
+                keep: None,
+                image: Some(forseti::ImageBuild {
+                    containerfile: "Containerfile".into(),
+                    context: ".".into(),
+                    repo: "registry.example/img".into(),
+                    digest: Some("sha256:plat".into()),
+                    index: Some("sha256:idx".into()),
+                    allow: vec![],
+                }),
+            });
+            q.submit(s, 100);
+            assert_eq!(placed(&q, 100), None);
+            let why = q.row("x1").unwrap().waiting.unwrap();
+            assert!(
+                why.contains("sha256:plat")
+                    && why.contains("drgnx jobs allow drgnx image sha256:plat"),
+                "{why}"
+            );
+            q.set_allow(&ProjectId::from("other"), "image", "sha256:idx", true)
+                .unwrap();
+            assert_eq!(placed(&q, 101), None, "another project's list");
+            q.set_allow(&ProjectId::from("drgnx"), "image", "sha256:idx", true)
+                .unwrap();
+            assert_eq!(
+                placed(&q, 102).as_deref(),
+                Some("r1"),
+                "the index allows its platform"
+            );
+        })
+    }
+
+    // [D] pure: `ptrace` is offered only by a `mine` runner whose user enabled it for the job's project; a shared or
+    // my-cloud runner never offers it, even if the opt-in row is there
+    #[test]
+    fn ptrace_is_offered_only_on_mine_for_its_project() {
+        saman::block_on_current(async move {
+            let (_d, q) = feature_queue(&["podman"], &["ptrace"], "drgnx");
+            assert_eq!(placed(&q, 100), None, "not enabled");
+            enable(&q, &[(Feature::Ptrace, "other")]);
+            assert_eq!(placed(&q, 101), None, "another project's opt-in");
+            enable(&q, &[(Feature::Ptrace, "drgnx")]);
+            assert_eq!(placed(&q, 102).as_deref(), Some("r1"));
+            for t in [RunnerTrust::MyCloud, RunnerTrust::Shared] {
+                let (_d, q) = feature_queue(&["podman"], &["ptrace"], "drgnx");
+                q.set_runner("r1", t, Accept::All);
+                enable(&q, &[(Feature::Ptrace, "drgnx")]);
+                assert_eq!(placed(&q, 100), None, "{t:?}");
+            }
         })
     }
 

@@ -14,6 +14,8 @@ use forseti::{Limits, MachineState, Profile};
 use std::io;
 use std::path::Path;
 
+#[cfg(target_os = "linux")]
+mod artifacts;
 #[cfg(target_os = "macos")]
 mod darwin;
 #[cfg(target_os = "linux")]
@@ -172,6 +174,16 @@ pub trait Platform {
     /// The most instances one slot family may have here (`runner.conf` `[slots] max_slots`).
     fn max_slots(&self) -> u32 {
         crate::sync::slot::DEFAULT_MAX_SLOTS
+    }
+    /// An artifact build of SPEC in DIR ended: PASSED commits what it made into the store, else drops it. A platform
+    /// without artifacts has nothing to do.
+    fn artifact_done(
+        &self,
+        _dir: &Path,
+        _spec: &forseti::JobSpec,
+        _passed: bool,
+    ) -> villa::Result<()> {
+        Ok(())
     }
     /// What the runner's disk can move, MiB/s (`runner.conf` `[io] device_mbps`); none: unknown.
     fn io_device_mbps(&self) -> Option<f64> {

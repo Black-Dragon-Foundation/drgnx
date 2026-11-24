@@ -1,14 +1,16 @@
-//! Caches on a runner, partitioned by trust (docs/develop/sleipnir.md, "Disk and caches"; design 6.3).
+//! Caches on a runner, partitioned by trust and by role (docs/develop/sleipnir.md, "Disk and caches"; design 6.3).
 //!
-//! Every writable cache a job's suite declares is a folder `<root>/cache/<project>/<trust>/<name>/`, so a job of one
-//! job trust never reads what a job of another wrote. `private+keys` jobs also get a fresh target dir of their own,
-//! never the slot's, so a keyed release job never runs what an unkeyed job's `build.rs` left. Package caches (dnf and
-//! the like) get one folder per running job: two runs on one dnf cache fail.
+//! Every writable cache a job's suite declares is a folder `<root>/cache/<project>/<trust>/<role>/<name>/`, so a job of
+//! one job trust never reads what a job of another wrote, and a gate never reads what an author's run wrote: an
+//! author's job writes its own partition and sees the gate's read-only ([`Mount::gate_ro`]); a gate sees only its own.
+//! `private+keys` jobs also get a fresh target dir of their own, never the slot's, so a keyed release job never runs
+//! what an unkeyed job's `build.rs` left. A `private` cache is one empty folder per running job (a dnf cache: two runs
+//! on one fail); a `locked` one is shared and the hub lets one job hold it at a time.
 
 use std::path::{Path, PathBuf};
 
-use forseti::JobTrust;
 use forseti::disk::{DiskItem, ItemKind};
+use forseti::{JobTrust, Role, Sharing};
 
 use super::register::Register;
 use super::slot::trust_word;
@@ -18,7 +20,7 @@ pub const TARGET_INSIDE: &str = "/target";
 
 /// One word of a cache's path as one path component: letters, digits, `_`, `-` and `.` (not first) stay, every other
 /// byte is `%XX`, so no two words share a folder and none leaves its parent.
-fn component(word: &str) -> String {
+pub(crate) fn component(word: &str) -> String {
     if word.is_empty() {
         return "%".into();
     }
@@ -33,9 +35,12 @@ fn component(word: &str) -> String {
     s
 }
 
-/// The folder of cache `name` for `project`'s jobs of trust `trust`.
-pub fn dir(root: &Path, project: &str, trust: JobTrust, name: &str) -> PathBuf {
-    trust_dir(root, project, trust).join(component(name))
+/// The folder of cache `name` for `project`'s jobs of trust `trust` and role `role`: `cache_dir`'s partition. The role is
+/// in the path, so no job of one role reads the other's.
+pub fn dir(root: &Path, project: &str, trust: JobTrust, role: Role, name: &str) -> PathBuf {
+    trust_dir(root, project, trust)
+        .join(role.name())
+        .join(component(name))
 }
 
 /// `<root>/cache/<project>/<trust>`.
@@ -45,24 +50,26 @@ fn trust_dir(root: &Path, project: &str, trust: JobTrust) -> PathBuf {
         .join(trust_word(trust))
 }
 
-/// How a declared cache is shared.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CacheKind {
-    /// By every job of the project at that trust (cargo home, ccache, the Lisp cache).
-    Shared,
-    /// One per running job (dnf and other package caches).
-    PerJob,
-}
-
-/// A cache a job's suite declares, and where it goes inside the container.
+/// A cache a job declares, and where it goes inside the container.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SuiteCache {
     pub name: String,
     pub inside: String,
-    pub kind: CacheKind,
-    /// Above this many bytes the guard trims the cache between jobs (the compiler cache:
+    pub sharing: Sharing,
+    /// Above this many bytes the guard trims the cache between jobs (a compiler cache's default is
     /// [`forseti::disk::COMPILER_CACHE_GB`]); none: only its age and the floor decide.
     pub budget_bytes: Option<u64>,
+}
+
+impl From<&forseti::CacheSpec> for SuiteCache {
+    fn from(c: &forseti::CacheSpec) -> SuiteCache {
+        SuiteCache {
+            name: c.name.clone(),
+            inside: c.inside.clone(),
+            sharing: c.sharing,
+            budget_bytes: c.budget_bytes(),
+        }
+    }
 }
 
 /// What `mounts_for` needs to know of a job.
@@ -71,6 +78,8 @@ pub struct CacheJob<'a> {
     pub root: &'a Path,
     pub project: &'a str,
     pub trust: JobTrust,
+    /// An author's run or a gate's: which partition the job writes.
+    pub role: Role,
     /// The attempt's id, `<job>.<attempt>`: its folder is `<root>/jobs/<id>/`.
     pub id: &'a str,
     /// The slot's target dir.
@@ -89,6 +98,9 @@ pub struct Mount {
     pub host: PathBuf,
     pub inside: String,
     pub kind: MountKind,
+    /// An author's job also sees the gate's partition of the cache, read-only: its folder and the cache's name. A
+    /// gate's job, and a `private` cache, have none.
+    pub gate_ro: Option<(PathBuf, String)>,
 }
 
 /// The job's target dir (first) and one mount per declared cache.
@@ -101,21 +113,32 @@ pub fn mounts_for(job: &CacheJob, suite_caches: &[SuiteCache]) -> Vec<Mount> {
         host: target,
         inside: TARGET_INSIDE.into(),
         kind: MountKind::Target,
+        gate_ro: None,
     }];
     for c in suite_caches {
-        let host = match c.kind {
-            CacheKind::Shared => dir(job.root, job.project, job.trust, &c.name),
+        let (host, gate_ro) = match c.sharing {
+            Sharing::Shared | Sharing::Locked => (
+                dir(job.root, job.project, job.trust, job.role, &c.name),
+                (job.role == Role::Author).then(|| {
+                    (
+                        dir(job.root, job.project, job.trust, Role::Gate, &c.name),
+                        c.name.clone(),
+                    )
+                }),
+            ),
             // `@` is never left as it is in a word, so `<name>@<id>` is no other cache's folder
-            CacheKind::PerJob => trust_dir(job.root, job.project, job.trust).join(format!(
-                "{}@{}",
-                component(&c.name),
-                component(job.id)
-            )),
+            Sharing::Private => (
+                trust_dir(job.root, job.project, job.trust)
+                    .join(job.role.name())
+                    .join(format!("{}@{}", component(&c.name), component(job.id))),
+                None,
+            ),
         };
         out.push(Mount {
             host,
             inside: c.inside.clone(),
             kind: MountKind::Cache,
+            gate_ro,
         });
     }
     out
@@ -163,10 +186,21 @@ mod tests {
     const TRUSTS: [JobTrust; 3] = [JobTrust::Public, JobTrust::Private, JobTrust::PrivateKeys];
 
     fn job<'a>(root: &'a Path, trust: JobTrust, id: &'a str, target: &'a Path) -> CacheJob<'a> {
+        role_job(root, trust, Role::Gate, id, target)
+    }
+
+    fn role_job<'a>(
+        root: &'a Path,
+        trust: JobTrust,
+        role: Role,
+        id: &'a str,
+        target: &'a Path,
+    ) -> CacheJob<'a> {
         CacheJob {
             root,
             project: "drgnx",
             trust,
+            role,
             id,
             slot_target: target,
         }
@@ -177,13 +211,13 @@ mod tests {
             SuiteCache {
                 name: "cargo-home".into(),
                 inside: "/cargo".into(),
-                kind: CacheKind::Shared,
+                sharing: Sharing::Shared,
                 budget_bytes: Some(10 << 30),
             },
             SuiteCache {
                 name: "dnf".into(),
                 inside: "/var/cache/dnf".into(),
-                kind: CacheKind::PerJob,
+                sharing: Sharing::Private,
                 budget_bytes: None,
             },
         ]
@@ -195,10 +229,10 @@ mod tests {
         let root = Path::new("/r");
         let dirs: Vec<PathBuf> = TRUSTS
             .iter()
-            .map(|&t| dir(root, "p", t, "ccache"))
+            .map(|&t| dir(root, "p", t, Role::Gate, "ccache"))
             .collect();
-        assert_eq!(dirs[0], root.join("cache/p/public/ccache"));
-        assert_eq!(dirs[2], root.join("cache/p/private+keys/ccache"));
+        assert_eq!(dirs[0], root.join("cache/p/public/gate/ccache"));
+        assert_eq!(dirs[2], root.join("cache/p/private+keys/gate/ccache"));
         for (i, a) in dirs.iter().enumerate() {
             for b in &dirs[i + 1..] {
                 assert!(!a.starts_with(b) && !b.starts_with(a), "{a:?} and {b:?}");
@@ -208,10 +242,10 @@ mod tests {
         let words = ["a/b", "a_b", "a%2Fb", "..", ".", "", ".x", "-x"];
         let mut seen = Vec::new();
         for w in words {
-            let d = dir(root, w, JobTrust::Public, w);
+            let d = dir(root, w, JobTrust::Public, Role::Author, w);
             assert_eq!(
                 d.components().count(),
-                root.components().count() + 4,
+                root.components().count() + 5,
                 "{w:?}: {d:?}"
             );
             assert!(d.starts_with(root.join("cache")));
@@ -290,8 +324,8 @@ mod tests {
         register(&mut reg, &j, &caches(), &ms, 7).unwrap();
         let items = reg.items();
         assert_eq!(items.len(), 2, "{items:?}");
-        let (cargo, rel) = reg.get("cache:cache/drgnx/public/cargo-home").unwrap();
-        assert_eq!(rel, Path::new("cache/drgnx/public/cargo-home"));
+        let (cargo, rel) = reg.get("cache:cache/drgnx/public/gate/cargo-home").unwrap();
+        assert_eq!(rel, Path::new("cache/drgnx/public/gate/cargo-home"));
         assert_eq!(
             (cargo.kind, cargo.budget_bytes, cargo.trust, cargo.last_used),
             (ItemKind::Cache, Some(10 << 30), JobTrust::Public, 7)
@@ -305,5 +339,92 @@ mod tests {
         let other = Path::new("/elsewhere");
         let far = mounts_for(&job(other, JobTrust::Public, "a.1", &target), &caches());
         assert!(register(&mut reg, &j, &caches(), &far, 8).is_err());
+    }
+
+    // [D] pure
+    #[test]
+    fn a_gate_never_mounts_the_author_partition() {
+        let root = Path::new("/r");
+        let target = root.join("slots-target/abc");
+        let gate = mounts_for(
+            &role_job(root, JobTrust::Public, Role::Gate, "g.1", &target),
+            &caches(),
+        );
+        let author = mounts_for(
+            &role_job(root, JobTrust::Public, Role::Author, "a.1", &target),
+            &caches(),
+        );
+        let cargo = |ms: &[Mount]| ms.iter().find(|m| m.inside == "/cargo").unwrap().clone();
+        let (g, a) = (cargo(&gate), cargo(&author));
+        // a gate's cache is its own partition and nothing of the author's is in its mounts
+        assert_eq!(g.host, root.join("cache/drgnx/public/gate/cargo-home"));
+        assert_eq!(g.gate_ro, None);
+        for m in &gate {
+            assert!(
+                !m.host.starts_with(root.join("cache/drgnx/public/author")),
+                "{m:?}"
+            );
+            assert!(
+                m.gate_ro
+                    .as_ref()
+                    .is_none_or(|(h, _)| !h.starts_with(root.join("cache/drgnx/public/author")))
+            );
+        }
+        // an author writes its own partition and may read the gate's
+        assert_eq!(a.host, root.join("cache/drgnx/public/author/cargo-home"));
+        assert_eq!(
+            a.gate_ro,
+            Some((g.host.clone(), "cargo-home".to_string())),
+            "the author sees the gate's partition read-only"
+        );
+        assert!(!a.host.starts_with(&g.host) && !g.host.starts_with(&a.host));
+        // a private cache has no gate partition to read: it is empty per job
+        let dnf = author
+            .iter()
+            .find(|m| m.inside == "/var/cache/dnf")
+            .unwrap();
+        assert_eq!(dnf.gate_ro, None);
+        assert!(dnf.host.starts_with(root.join("cache/drgnx/public/author")));
+    }
+
+    // [D] pure
+    #[test]
+    fn a_locked_cache_is_one_shared_folder() {
+        let root = Path::new("/r");
+        let target = root.join("slots-target/abc");
+        let locked = vec![SuiteCache {
+            name: "store".into(),
+            inside: "/store".into(),
+            sharing: Sharing::Locked,
+            budget_bytes: None,
+        }];
+        let a = mounts_for(
+            &role_job(root, JobTrust::Private, Role::Gate, "a.1", &target),
+            &locked,
+        );
+        let b = mounts_for(
+            &role_job(root, JobTrust::Private, Role::Gate, "b.1", &target),
+            &locked,
+        );
+        assert_eq!(
+            a[1].host, b[1].host,
+            "the hub makes the second job wait; the folder is one"
+        );
+    }
+
+    // [D] pure
+    #[test]
+    fn a_compiler_cache_registers_with_the_default_budget() {
+        let spec = forseti::CacheSpec {
+            name: "objects".into(),
+            inside: "/objects".into(),
+            kind: Some("compiler".into()),
+            sharing: Sharing::Shared,
+            budget_gib: None,
+            env: vec![],
+            readonly_env: vec![],
+        };
+        let c = SuiteCache::from(&spec);
+        assert_eq!(c.budget_bytes, Some(forseti::disk::COMPILER_CACHE_GB << 30));
     }
 }
