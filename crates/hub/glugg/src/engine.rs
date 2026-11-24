@@ -84,11 +84,12 @@ pub struct Engine {
     held: Vec<u8>,
 }
 
-fn ok(rc: GhosttyResult, what: &str) -> Result<(), String> {
+fn ok(rc: GhosttyResult, what: &str) -> villa::Result<()> {
     if rc == GHOSTTY_SUCCESS {
         Ok(())
     } else {
-        Err(format!("{what}: libghostty-vt error {rc}"))
+        Err(villa::Error::internal("The terminal engine failed.")
+            .with_detail(format!("{what}: libghostty-vt error {rc}")))
     }
 }
 
@@ -370,7 +371,7 @@ impl Engine {
         cell: (u32, u32),
         scrollback: usize,
         scrollback_bytes: usize,
-    ) -> Result<Engine, String> {
+    ) -> villa::Result<Engine> {
         install_png_decoder();
         let mut e = Engine {
             term: null_mut(),
@@ -687,7 +688,7 @@ impl Engine {
             .unwrap_or(0)
     }
 
-    pub fn resize(&mut self, cols: u16, rows: u16, cell: (u32, u32)) -> Result<(), String> {
+    pub fn resize(&mut self, cols: u16, rows: u16, cell: (u32, u32)) -> villa::Result<()> {
         let (cols, rows) = (cols.max(1), rows.max(1));
         // SAFETY: a live terminal.
         ok(

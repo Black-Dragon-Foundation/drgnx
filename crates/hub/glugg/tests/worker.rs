@@ -870,7 +870,7 @@ fn a_clipboard_read_is_asked_of_the_hub_and_answered_with_its_text() {
         config: vec![(name.to_string(), v)],
     };
     let hub_says = |b: UnixStream, text: Option<&'static str>| {
-        std::thread::spawn(move || {
+        saman::spawn_thread("clipboard-hub", move || {
             let mut line = String::new();
             BufReader::new(b.try_clone().unwrap())
                 .read_line(&mut line)
@@ -889,6 +889,7 @@ fn a_clipboard_read_is_asked_of_the_hub_and_answered_with_its_text() {
             };
             writeln!(b, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
         })
+        .unwrap()
     };
     let mut w = worker(20, 2, 10);
     let (a, b) = UnixStream::pair().unwrap();
@@ -939,11 +940,12 @@ fn a_clipboard_read_waits_for_the_hub_and_its_end_denies() {
     use std::io::Read;
     use std::os::unix::net::UnixStream;
     let (a, mut b) = UnixStream::pair().unwrap();
-    let hub = std::thread::spawn(move || {
+    let hub = saman::spawn_thread("clipboard-ask-hub", move || {
         let mut line = [0u8; 64];
         let n = b.read(&mut line).unwrap();
         String::from_utf8_lossy(&line[..n]).into_owned()
-    });
+    })
+    .unwrap();
     let mut asker = Asker::new(a);
     assert_eq!(asker.ask(true), None);
     assert!(hub.join().unwrap().contains("\"t\":\"clipboard-read\""));
@@ -972,15 +974,28 @@ fn settings_reach_the_engine() {
     w.output(b"\x05", 1000);
     assert_eq!(w.take_pty(), b"drgnx");
     // a program reads the editor's background back (OSC 11)
+    let theme = mot::Theme::builtin().swap_remove(0);
+    let (fg, bg) = (
+        theme.colour(mot::Token::Fg),
+        theme.colour(mot::Token::Panel),
+    );
+    let hex = |c: mot::Rgba| format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b);
+    // OSC 11's answer doubles each channel's two digits (`rgb:RRRR/GGGG/BBBB`)
+    let osc = |c: mot::Rgba| {
+        format!(
+            "{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}",
+            c.r, c.g, c.b
+        )
+    };
     w.handle(
-        cfg("colours", serde_json::json!(["#102030", "#405060", ""])),
+        cfg("colours", serde_json::json!([hex(fg), hex(bg), ""])),
         2000,
     );
     w.output(b"\x1b]11;?\x07", 2000);
     let reply = String::from_utf8_lossy(&w.take_pty()).into_owned();
-    assert!(reply.contains("4040/5050/6060"), "{reply:?}");
+    assert!(reply.contains(&osc(bg)), "{reply:?}");
     // a whole palette (the 16 faces and the 240 generated colours): a program reads colour 100 and colour 5 back
-    let mut all = vec!["#102030".to_string(), "#405060".to_string(), String::new()];
+    let mut all = vec![hex(fg), hex(bg), String::new()];
     all.extend((0..256).map(|i| format!("#{:02x}{:02x}{:02x}", i, 255 - i, 7)));
     w.handle(cfg("colours", serde_json::json!(all)), 2500);
     w.take_pty();

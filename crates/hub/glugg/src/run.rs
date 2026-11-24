@@ -11,7 +11,7 @@ use rustix::net::RecvFlags;
 use std::io::{self, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::ExitStatusExt;
-use std::time::Instant;
+use stund::Instant;
 
 /// How long a worker whose program ended waits for a hub to tell, in seconds.
 const EXIT_WAIT_S: i64 = 30;
@@ -36,7 +36,7 @@ fn write_out(ctl: &mut UnixStream, out: Vec<Out>) -> io::Result<()> {
 /// peer as well.
 pub fn listen(path: &std::path::Path) -> io::Result<UnixListener> {
     use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::remove_file(path);
+    crate::removed(std::fs::remove_file(path), "a stale socket");
     let l = UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     Ok(l)
@@ -311,18 +311,22 @@ pub fn run(
             && ours(&c)
         {
             c.set_nonblocking(false)?;
-            let _ = write_out(&mut c, vec![hello()]);
+            if let Err(e) = write_out(&mut c, vec![hello()]) {
+                tracing::info!(error = %e, "the hub left before it was greeted");
+            }
             ctl = Some(c);
         }
     }
-    if let Some(c) = ctl.as_mut() {
-        let _ = write_out(
+    if let Some(c) = ctl.as_mut()
+        && let Err(e) = write_out(
             c,
             vec![Out::Exit {
                 code: exit.0,
                 signal: exit.1,
             }],
-        );
+        )
+    {
+        tracing::info!(error = %e, "the hub left before the exit was told");
     }
     Ok(exit)
 }

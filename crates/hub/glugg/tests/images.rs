@@ -132,6 +132,7 @@ fn png(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
         h,
         rgba: rgba.repeat((w * h) as usize),
     })
+    .unwrap()
 }
 
 fn b64(b: &[u8]) -> String {
@@ -245,7 +246,7 @@ fn an_iterm2_image_is_sized_in_cells() {
 /// A kitty temporary file (the spec's name rule) in the temp directory holding a red 8 × 8 PNG.
 fn temp_png(dir: &Path) -> PathBuf {
     let p = dir.join("tty-graphics-protocol-drgnx-test.png");
-    std::fs::write(&p, png(8, 8, [255, 0, 0, 255])).unwrap();
+    eitri::replace_file(&p, &png(8, 8, [255, 0, 0, 255])).unwrap();
     p
 }
 
@@ -274,7 +275,7 @@ fn a_remote_program_cannot_make_the_worker_read_local_files() {
         assert_eq!(m.slices().is_empty(), remote, "remote {remote}");
         // the file medium is off either way
         let f = tmp.path().join("plain.png");
-        std::fs::write(&f, png(8, 8, [0, 0, 255, 255])).unwrap();
+        eitri::replace_file(&f, &png(8, 8, [0, 0, 255, 255])).unwrap();
         let cmd = format!(
             "\x1b_Ga=T,t=f,f=100,q=2;{}\x1b\\",
             b64(f.to_string_lossy().as_bytes())

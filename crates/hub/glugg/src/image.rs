@@ -74,18 +74,21 @@ pub fn rgba_from(px: &[u8], channels: usize) -> Option<Vec<u8>> {
 }
 
 /// RGBA PNG bytes of PIXELS, fast compression (a canvas is written once and read by Emacs once).
-pub fn encode_png(p: &Pixels) -> Vec<u8> {
+pub fn encode_png(p: &Pixels) -> villa::Result<Vec<u8>> {
     let mut out = Vec::new();
     {
         let mut e = png::Encoder::new(&mut out, p.w, p.h);
         e.set_color(png::ColorType::Rgba);
         e.set_depth(png::BitDepth::Eight);
         e.set_compression(png::Compression::Fast);
-        if let Ok(mut w) = e.write_header() {
-            let _ = w.write_image_data(&p.rgba);
-        }
+        let mut w = e.write_header().map_err(png_failed)?;
+        w.write_image_data(&p.rgba).map_err(png_failed)?;
     }
-    out
+    Ok(out)
+}
+
+fn png_failed(e: png::EncodingError) -> villa::Error {
+    villa::Error::internal("An image could not be encoded.").with_source(e)
 }
 
 /// Where and how a placement is drawn, as the engine's render state reports it (pixel values use the cell size).
@@ -484,10 +487,12 @@ pub fn sixel_bound(data: &[u8]) -> (u64, u64) {
 }
 
 /// A sixel image decoded (P2 = 1: unset pixels transparent), or why not.
-pub fn decode_sixel(params: &[u8], data: &[u8], cap: u64) -> Result<Pixels, String> {
+pub fn decode_sixel(params: &[u8], data: &[u8], cap: u64) -> villa::Result<Pixels> {
     let (w, h) = sixel_bound(data);
     if !fits(w.max(1), h.max(1), cap) {
-        return Err(format!("sixel of up to {w}×{h} px is over the limit"));
+        return Err(villa::Error::refused(format!(
+            "A sixel image of up to {w}×{h} px is over the limit."
+        )));
     }
     let p: Vec<Option<u16>> = params
         .split(|&b| b == b';')
@@ -495,10 +500,14 @@ pub fn decode_sixel(params: &[u8], data: &[u8], cap: u64) -> Result<Pixels, Stri
         .collect();
     let at = |i: usize| p.get(i).copied().flatten();
     let settings = icy_sixel::DcsSettings::new(at(0), at(1), at(2));
-    let img = icy_sixel::SixelImage::decode_from_dcs(data, settings).map_err(|e| e.to_string())?;
+    let img = icy_sixel::SixelImage::decode_from_dcs(data, settings).map_err(|e| {
+        villa::Error::invalid("A sixel image could not be decoded.").with_detail(e.to_string())
+    })?;
     let (w, h) = (img.width as u32, img.height as u32);
     if !fits(w as u64, h as u64, cap) || img.pixels.len() != (w * h * 4) as usize {
-        return Err(format!("sixel of {w}×{h} px is over the limit"));
+        return Err(villa::Error::refused(format!(
+            "A sixel image of {w}×{h} px is over the limit."
+        )));
     }
     Ok(Pixels {
         w,
@@ -559,9 +568,11 @@ fn iterm_size(v: Option<&str>, cell: u32, full: u32) -> Option<u32> {
 }
 
 /// An iTerm2 image decoded and sized as ARGS ask (PNG, JPEG or GIF), or why not.
-pub fn decode_iterm(args: &ItermArgs, b64: &[u8], at: &At) -> Result<Pixels, String> {
+pub fn decode_iterm(args: &ItermArgs, b64: &[u8], at: &At) -> villa::Result<Pixels> {
     if !args.inline {
-        return Err("a file to save (inline=0): refused".into());
+        return Err(villa::Error::refused(
+            "A file to save (inline=0) is refused.",
+        ));
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(
@@ -570,13 +581,13 @@ pub fn decode_iterm(args: &ItermArgs, b64: &[u8], at: &At) -> Result<Pixels, Str
                 .filter(|b| !b.is_ascii_whitespace())
                 .collect::<Vec<_>>(),
         )
-        .map_err(|e| e.to_string())?;
-    let format = image::guess_format(&bytes).map_err(|e| e.to_string())?;
+        .map_err(|e| bad_iterm(&e))?;
+    let format = image::guess_format(&bytes).map_err(|e| bad_iterm(&e))?;
     if !matches!(
         format,
         image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::Gif
     ) {
-        return Err(format!("{format:?} is not shown"));
+        return Err(villa::Error::refused(format!("{format:?} is not shown.")));
     }
     let mut r = image::ImageReader::with_format(Cursor::new(&bytes), format);
     let mut limits = image::Limits::default();
@@ -584,13 +595,15 @@ pub fn decode_iterm(args: &ItermArgs, b64: &[u8], at: &At) -> Result<Pixels, Str
     limits.max_image_height = Some(SIDE_MAX);
     limits.max_alloc = Some(at.cap);
     r.limits(limits.clone());
-    let (w, h) = r.into_dimensions().map_err(|e| e.to_string())?;
+    let (w, h) = r.into_dimensions().map_err(|e| bad_iterm(&e))?;
     if !fits(w as u64, h as u64, at.cap) {
-        return Err(format!("{w}×{h} px is over the limit"));
+        return Err(villa::Error::refused(format!(
+            "An image of {w}×{h} px is over the limit."
+        )));
     }
     let mut r = image::ImageReader::with_format(Cursor::new(&bytes), format);
     r.limits(limits);
-    let img = r.decode().map_err(|e| e.to_string())?.into_rgba8();
+    let img = r.decode().map_err(|e| bad_iterm(&e))?.into_rgba8();
     let (w, h) = img.dimensions();
     let full = (at.cols as u32 * at.cell.0, at.rows as u32 * at.cell.1);
     let tw = iterm_size(args.width.as_deref(), at.cell.0, full.0);
@@ -607,9 +620,18 @@ pub fn decode_iterm(args: &ItermArgs, b64: &[u8], at: &At) -> Result<Pixels, Str
         (Some(tw), Some(th)) => (tw, th),
     };
     if !fits(target.0 as u64, target.1 as u64, at.cap) {
-        return Err(format!("{}×{} px is over the limit", target.0, target.1));
+        return Err(villa::Error::refused(format!(
+            "An image of {}×{} px is over the limit.",
+            target.0, target.1
+        )));
     }
-    fit(pixels, target, args.keep_aspect).ok_or_else(|| "resize".into())
+    fit(pixels, target, args.keep_aspect)
+        .ok_or_else(|| villa::Error::invalid("An image could not be resized."))
+}
+
+/// An iTerm2 image that could not be read: E is the decoder's own words.
+fn bad_iterm(e: &dyn std::fmt::Display) -> villa::Error {
+    villa::Error::invalid("An image could not be read.").with_detail(e.to_string())
 }
 
 /// iTerm2 sequences in order: `File=` is whole; `MultipartFile=` starts one that `FilePart=` chunks fill and `FileEnd`
@@ -717,7 +739,12 @@ mod tests {
         assert_eq!(sixel_bound(b"\"1;1;100;50#0!20~"), (100, 50));
         assert_eq!(sixel_bound(b"!65535~!65535~"), (131_070, 6));
         // a huge repeat is refused before any pixel is allocated
-        assert!(decode_sixel(b"0;1;0", b"!65535~!65535~", 64 << 20).is_err());
+        assert_eq!(
+            decode_sixel(b"0;1;0", b"!65535~!65535~", 64 << 20)
+                .unwrap_err()
+                .kind(),
+            villa::Kind::Refused
+        );
         let p = decode_sixel(b"0;1;0", b"#0;2;100;0;0#0~~", 64 << 20).unwrap();
         assert_eq!((p.w, p.h), (2, 6));
         assert_eq!(&p.rgba[..4], &[255, 0, 0, 255]);
@@ -730,7 +757,7 @@ mod tests {
             h: 2,
             rgba: (0..24).collect(),
         };
-        let png = encode_png(&p);
+        let png = encode_png(&p).unwrap();
         assert_eq!(decode_png(&png, 1 << 20), Some(p));
         assert_eq!(decode_png(&png, 8), None);
     }
@@ -788,16 +815,18 @@ mod tests {
             col: 0,
             cap: 64 << 20,
         };
-        assert!(
-            decode_iterm(&iterm_args(b"inline=0"), b"QUJD", &at)
-                .unwrap_err()
-                .contains("refused")
-        );
+        let refused = decode_iterm(&iterm_args(b"inline=0"), b"QUJD", &at).unwrap_err();
+        assert_eq!(refused.kind(), villa::Kind::Refused);
+        assert!(refused.message().contains("refused"));
+        // bytes that are no image are invalid, not refused
+        let bad = decode_iterm(&iterm_args(b"inline=1"), b"QUJD", &at).unwrap_err();
+        assert_eq!(bad.kind(), villa::Kind::Invalid);
         let png = encode_png(&Pixels {
             w: 40,
             h: 20,
             rgba: [0, 0, 255, 255].repeat(800),
-        });
+        })
+        .unwrap();
         let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
         let p = decode_iterm(&iterm_args(b"inline=1;width=2"), b64.as_bytes(), &at).unwrap();
         assert_eq!((p.w, p.h), (20, 10));
