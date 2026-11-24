@@ -16,6 +16,7 @@ eitri = { path = "../eitri", version = "0.1.0" }
 # NAME_NEVER, so a manifest can never name a host the web policy refuses by name
 gleipnir = { path = "../gleipnir", version = "0.1.0" }
 saman.workspace = true
+stig.workspace = true   # the name of the home variable a test child keeps (test_support)
 stund.workspace = true
 serde.workspace = true
 serde_json.workspace = true

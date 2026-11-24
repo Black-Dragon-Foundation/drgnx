@@ -106,6 +106,30 @@ fn copy(from: &Path, to: &Path) -> Result<(), String> {
     eitri::replace_file(to, &new).map_err(|e| format!("{}: {e}", to.display()))
 }
 
+/// The environment of a child a test starts (the fixtures' build, a test binary run again): the toolchain's and the cache's
+/// variables of SOURCE, nothing else of the test run's environment (a key in it never reaches the child), then SET.
+pub fn child_env(
+    source: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    set: &[(&str, &std::ffi::OsStr)],
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    draugr::env::build_from(
+        source,
+        &[
+            "PATH",
+            stig::HOME_VAR,
+            "TMPDIR",
+            "USER",
+            "RUSTC",
+            "RUSTFLAGS",
+            "RUSTDOC",
+        ],
+        &[
+            "CARGO", "RUSTUP", "SCCACHE", "MISE_", "DRGNX_", "LC_", "LANG",
+        ],
+        set,
+    )
+}
+
 /// Builds the crate at `crate_dir` into `<out>/<label>`, then runs `install` on that folder, all under the lock.
 fn build(
     crate_dir: &Path,
@@ -142,22 +166,7 @@ fn build(
     if crate_dir.join("Cargo.lock").is_file() {
         args.push("--locked".into());
     }
-    // the build gets the toolchain's and the cache's variables, nothing else of the test run's environment
-    let env = draugr::env::build(
-        &[
-            "PATH",
-            "HOME",
-            "TMPDIR",
-            "USER",
-            "RUSTC",
-            "RUSTFLAGS",
-            "RUSTDOC",
-        ],
-        &[
-            "CARGO", "RUSTUP", "SCCACHE", "MISE_", "DRGNX_", "LC_", "LANG",
-        ],
-        &[],
-    );
+    let env = child_env(std::env::vars_os(), &[]);
     let spec = Spec {
         program: program.into(),
         args,
@@ -186,6 +195,27 @@ fn build(
 mod tests {
     use super::*;
     use crate::{parse, scan};
+
+    // Pattern D (pure): a made-up environment in, the child's out; no process.
+    #[test]
+    fn a_variable_outside_the_allowlist_never_reaches_a_test_child() {
+        use std::ffi::{OsStr, OsString};
+        let source = [
+            ("OPENROUTER_API_KEY", "canary"),
+            ("CARGO_HOME", "/cargo"),
+            ("PATH", "/bin"),
+        ]
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)));
+        let env = child_env(source, &[("BROKKR_CHILD", OsStr::new("1"))]);
+        let names: Vec<_> = env.iter().map(|(k, _)| k.to_string_lossy()).collect();
+        assert!(
+            !names.iter().any(|k| k == "OPENROUTER_API_KEY"),
+            "{names:?}"
+        );
+        assert!(names.iter().any(|k| k == "CARGO_HOME"), "{names:?}");
+        assert!(names.iter().any(|k| k == "PATH"), "{names:?}");
+        assert!(names.iter().any(|k| k == "BROKKR_CHILD"), "{names:?}");
+    }
 
     // Pattern D (pure): reads files and parses them; no build, no clock.
     #[test]

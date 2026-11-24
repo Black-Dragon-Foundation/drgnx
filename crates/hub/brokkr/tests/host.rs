@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use brokkr::limits::{MAX_JSON_BYTES, MAX_LOG_BYTES};
-use brokkr::test_support::fixture;
+use brokkr::test_support::{child_env, fixture};
 use brokkr::{
     BoxFuture, CallError, Host, HostError, HostIo, HttpReq, HttpResp, Installed, Kv, Level, Limits,
     Plugin, Point, REFUSED_HEADERS, Verdict, scan,
@@ -842,21 +842,7 @@ fn a_fault_outside_wasm_still_reaches_the_hubs_handler() {
 
 /// This test binary run again for the one test NAME with `CHILD_VAR` set, to its end.
 fn run_self(name: &str, child_var: &str) -> draugr::Output {
-    let env = draugr::env::build(
-        &[
-            "PATH",
-            "HOME",
-            "TMPDIR",
-            "USER",
-            "RUSTC",
-            "RUSTFLAGS",
-            "RUSTDOC",
-        ],
-        &[
-            "CARGO", "RUSTUP", "SCCACHE", "MISE_", "DRGNX_", "LC_", "LANG",
-        ],
-        &[(child_var, OsStr::new("1"))],
-    );
+    let env = child_env(std::env::vars_os(), &[(child_var, OsStr::new("1"))]);
     let spec = draugr::Spec {
         program: std::env::current_exe().unwrap(),
         args: ["--exact", name, "--nocapture", "--test-threads", "1"]
