@@ -14,9 +14,7 @@ use norn::tools::{Clock, Coord, Hub, Identity, SessionRow, tools};
 use serde_json::{Value, json};
 use urdr::Connection;
 
-fn fixtures() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../test/fixtures")
-}
+use crate::fixtures;
 
 /// A hub that answers no `agents/list` (as when none runs) and counts what it is told.
 #[derive(Default)]
@@ -49,7 +47,7 @@ impl World {
         let file = dir.path().join("work.db");
         {
             let c = Connection::open(&file).unwrap();
-            c.execute_batch(&std::fs::read_to_string(fixtures().join("work-db-6.sql")).unwrap())
+            c.execute_batch(&crate::read_file(fixtures().join("work-db-6.sql")))
                 .unwrap();
             for sql in setup {
                 c.execute_batch(sql).unwrap();
@@ -525,15 +523,12 @@ fn script(path: &Path, body: &str) {
 
 /// git for the fixture itself: no overrides, `HOME` in the temporary root.
 fn plain_git(home: &Path, cwd: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("/usr/bin/git")
-        .args(args)
-        .current_dir(cwd)
-        .env_clear()
-        .env("HOME", home)
-        .env("PATH", "/usr/bin:/bin")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
-        .unwrap();
+    let env = vec![
+        (stig::HOME_VAR.into(), home.as_os_str().to_owned()),
+        ("PATH".into(), "/usr/bin:/bin".into()),
+        ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+    ];
+    let out = crate::run_child("/usr/bin/git", args, cwd, env);
     assert!(out.status.success(), "git {args:?}");
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
@@ -548,7 +543,7 @@ async fn hello_git_read_runs_no_hook_or_fsmonitor() {
         &root,
         &["-c", "init.defaultBranch=main", "init", "-q", "repo"],
     );
-    std::fs::write(repo.join("a"), "a\n").unwrap();
+    crate::put_file(repo.join("a"), "a\n");
     plain_git(&root, &repo, &["add", "a"]);
     plain_git(
         &root,
@@ -598,7 +593,7 @@ async fn hello_git_read_runs_no_hook_or_fsmonitor() {
     assert!(
         !canary.exists(),
         "a hook or the fsmonitor ran: {:?}",
-        std::fs::read_to_string(&canary)
+        eitri::read_string(&canary, 1 << 20)
     );
     // the control: plain git runs the planted fsmonitor
     plain_git(&root, &repo, &["status", "--porcelain"]);
@@ -689,7 +684,7 @@ impl Scanned {
     /// The rows the statements insert, read back from a scratch schema-6 database.
     fn of(statements: &[&str]) -> Scanned {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch(&std::fs::read_to_string(fixtures().join("work-db-6.sql")).unwrap())
+        c.execute_batch(&crate::read_file(fixtures().join("work-db-6.sql")))
             .unwrap();
         for sql in statements {
             c.execute_batch(sql).unwrap();
@@ -1129,12 +1124,14 @@ async fn a_work_db_made_after_the_start_is_used_by_the_next_tool_call() {
     let next = dir.path().join("next.db");
     Connection::open(&next)
         .unwrap()
-        .execute_batch(&std::fs::read_to_string(fixtures().join("work-db-6.sql")).unwrap())
+        .execute_batch(&crate::read_file(fixtures().join("work-db-6.sql")))
         .unwrap();
     for ext in ["-wal", "-shm"] {
-        let _ = std::fs::remove_file(dir.path().join(format!("work.db{ext}")));
+        if let Err(e) = std::fs::remove_file(dir.path().join(format!("work.db{ext}"))) {
+            assert_eq!(e.kind(), std::io::ErrorKind::NotFound, "{ext}: {e}");
+        }
     }
-    std::fs::rename(&next, &file).unwrap();
+    eitri::rename_file(&next, &file).unwrap();
     let (error, text) = call_on(&coord, &who, "report_test", json!({"command": "make"})).await;
     assert!(!error, "{text}");
     let events: i64 = Connection::open(&file)

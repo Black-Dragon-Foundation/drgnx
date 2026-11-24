@@ -479,9 +479,12 @@ mod tests {
     #[test]
     fn a_secret_is_never_stored() {
         let (_d, _p, mut conn) = db();
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        // eitri refuses a link in any component of a path: the checkout's own are resolved first
+        let path = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
+            .unwrap()
             .join("../../../test/fixtures/secret-cases.json");
-        let table: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let table: Value =
+            serde_json::from_str(&eitri::read_string(&path, 1 << 20).unwrap()).unwrap();
         let cases = table["cases"].as_array().unwrap();
         assert!(cases.len() > 30);
         let id = "option:global:my-key";

@@ -247,7 +247,9 @@ impl CoordDb {
             return Ok(h);
         }
         let db = self.clone();
-        let _ = tokio::task::spawn_blocking(move || db.tick()).await;
+        if let Err(e) = saman::spawn_blocking("work-db-tick", move || db.tick()).await {
+            tracing::warn!(error = %e, "the store's tick did not finish");
+        }
         let got = self.state.lock().unwrap().handle.clone();
         got.ok_or_else(|| CoordError::NotReady("work.db is not open yet".into()))
     }
@@ -469,9 +471,12 @@ pub(crate) mod tests {
         let next = dir.path().join("next.db");
         let replace = |next: &Path| {
             for ext in ["-wal", "-shm"] {
-                let _ = std::fs::remove_file(dir.path().join(format!("work.db{ext}")));
+                crate::removed(
+                    std::fs::remove_file(dir.path().join(format!("work.db{ext}"))),
+                    "a stale work.db sidecar",
+                );
             }
-            std::fs::rename(next, &file).unwrap();
+            eitri::rename_file(next, &file).unwrap();
         };
         six(&next, "j#2");
         replace(&next);
@@ -500,7 +505,7 @@ pub(crate) mod tests {
         db.read(|c| Ok(c.query_row("select count(*) from meta", [], |r| r.get::<_, i64>(0))?))
             .await
             .unwrap();
-        tokio::task::spawn_blocking(move || writer.shutdown())
+        saman::spawn_blocking("writer-shutdown", move || writer.shutdown())
             .await
             .unwrap();
     }

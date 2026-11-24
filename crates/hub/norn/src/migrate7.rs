@@ -26,7 +26,7 @@ use std::fs;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -524,12 +524,12 @@ fn finish<T>(conn: &Connection, out: Result<T, Stop>) -> Result<T, Stop> {
         Ok(v) => match conn.execute_batch("commit") {
             Ok(()) => Ok(v),
             Err(e) => {
-                let _ = conn.execute_batch("rollback");
+                crate::rollback(conn);
                 Err(e.into())
             }
         },
         Err(e) => {
-            let _ = conn.execute_batch("rollback");
+            crate::rollback(conn);
             Err(e)
         }
     }
@@ -896,7 +896,7 @@ fn stamp(db: &Path) -> Stamp {
 static COPIES: Mutex<Vec<(PathBuf, Stamp, PathBuf)>> = Mutex::new(Vec::new());
 
 fn unix_now() -> f64 {
-    SystemTime::now()
+    stund::wall()
         .duration_since(UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
 }
@@ -933,9 +933,9 @@ fn backup(conn: &Connection, db: &Path, dir: &Path) -> Result<PathBuf, Stop> {
     let mut tmp = dest.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    let _ = fs::remove_file(&tmp);
+    crate::removed(fs::remove_file(&tmp), "a stale copy");
     if let Err(e) = conn.execute("vacuum into ?1", [tmp.to_string_lossy().as_ref()]) {
-        let _ = fs::remove_file(&tmp);
+        crate::removed(fs::remove_file(&tmp), "the failed copy");
         return Err(failed("VACUUM INTO", &e));
     }
     fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
@@ -949,7 +949,7 @@ fn backup(conn: &Connection, db: &Path, dir: &Path) -> Result<PathBuf, Stop> {
             checked.error.unwrap_or_default()
         )));
     }
-    fs::rename(&tmp, &dest).map_err(|e| failed("its rename", &e))?;
+    eitri::rename_file(&tmp, &dest).map_err(|e| failed("its rename", &e))?;
     copies.push((db.to_path_buf(), now, dest.clone()));
     Ok(dest)
 }
@@ -972,7 +972,9 @@ fn hook(path: &Path, step: &'static str) -> Result<(), Stop> {
             && let Some((at, file)) = v.split_once(':')
             && at == step
         {
-            let _ = fs::write(file, b"paused");
+            if let Err(e) = eitri::replace_file(Path::new(file), b"paused") {
+                tracing::warn!(error = %e, "the pause hook's file was not written");
+            }
             loop {
                 std::thread::park();
             }
@@ -1035,7 +1037,7 @@ fn norn_guard() -> Arc<Guard> {
 }
 
 fn migrate(conn: &mut Connection, path: &Path, opts: &MigrateOpts) -> Result<MigrateReport, Stop> {
-    let started = Instant::now();
+    let started = stund::Instant::now();
     match schema_of(conn).map_err(Stop::Failed)? {
         6 => {}
         s => {

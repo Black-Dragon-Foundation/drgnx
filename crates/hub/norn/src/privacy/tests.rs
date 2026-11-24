@@ -7,6 +7,11 @@ use crate::store::CoordDb;
 
 const CANARY: &str = "CANARY-9b-reading-4k2q";
 
+/// TEXT as the file at PATH, written through eitri.
+fn put_file(path: impl AsRef<Path>, text: impl AsRef<[u8]>) {
+    eitri::replace_file(path.as_ref(), text.as_ref()).unwrap();
+}
+
 /// The test seam where [`apply`] reads what the list denies: a test learns that the revoke got there.
 pub(super) mod hooks {
     use std::path::{Path, PathBuf};
@@ -27,7 +32,7 @@ pub(super) mod hooks {
         let mut armed = ARMED.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(i) = armed.iter().position(|(p, _)| p == db) {
             let (_, tell) = armed.remove(i);
-            let _ = tell.send(());
+            saman::delivered(tell.send(()), "the revoke's read hook");
         }
     }
 }
@@ -57,19 +62,17 @@ impl Fx {
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
-        std::fs::write(
+        put_file(
             self.config.join(ALLOW_FILE),
             json!({"version": 1, "paths": paths}).to_string(),
-        )
-        .unwrap();
+        );
     }
 
     fn deny_entries(&self, entries: Value) {
-        std::fs::write(
+        put_file(
             self.config.join(DENY_FILE),
             json!({"version": 1, "entries": entries}).to_string(),
-        )
-        .unwrap();
+        );
     }
 
     fn list(&self) -> Arc<DenyList> {
@@ -142,7 +145,7 @@ impl Fx {
         let export = self.dir.path().join("export/entities.jsonl");
         for f in [&backup, &export] {
             std::fs::create_dir_all(f.parent().unwrap()).unwrap();
-            std::fs::write(f, format!("an old copy: {CANARY}")).unwrap();
+            put_file(f, format!("an old copy: {CANARY}"));
         }
         (backup, export)
     }
@@ -154,12 +157,12 @@ async fn fx() -> Fx {
     let config = dir.path().join("config");
     std::fs::create_dir_all(home.join("org")).unwrap();
     std::fs::create_dir_all(&config).unwrap();
-    std::fs::write(home.join("org/reading.org"), format!("* {CANARY}\n")).unwrap();
-    std::fs::write(home.join("org/notes.org"), "* private\n").unwrap();
+    put_file(home.join("org/reading.org"), format!("* {CANARY}\n"));
+    put_file(home.join("org/notes.org"), "* private\n");
     let plans = dir.path().join("work/docs/plans");
     std::fs::create_dir_all(&plans).unwrap();
     let plan = std::fs::canonicalize(&plans).unwrap().join("p.md");
-    std::fs::write(&plan, "# P\n").unwrap();
+    put_file(&plan, "# P\n");
     let db = CoordDb::spawn(dir.path().join("work.db"));
     let writer = db.graph_writer().unwrap().clone();
     writer.tick().await;
@@ -205,7 +208,7 @@ async fn revoke_excises_what_came_in() {
     assert!(backup.exists() && export.exists());
     // the user's confirmed request deletes the backup; never the export, nor a file that is no copy
     let stray = f.dir.path().join("stray.db");
-    std::fs::write(&stray, "x").unwrap();
+    put_file(&stray, "x");
     assert_eq!(
         delete_copies(
             f.writer.path(),
@@ -361,7 +364,7 @@ async fn delete_copies_refuses_names_that_leave_the_data_folder() {
     let (backup, _) = f.plant_copies();
     let elsewhere = tempfile::tempdir().unwrap();
     let outside = elsewhere.path().join("work-pre7-2.db");
-    std::fs::write(&outside, "keep me").unwrap();
+    put_file(&outside, "keep me");
     // a link among the backups to a file outside, and the backup named through `..`
     let link = f.dir.path().join("backup/work-pre7-3.db");
     std::os::unix::fs::symlink(&outside, &link).unwrap();
@@ -393,7 +396,7 @@ async fn delete_copies_refuses_a_listed_copy_that_resolves_outside() {
     // file, and resolves outside, so only the canonical-path check keeps it
     let elsewhere = tempfile::tempdir().unwrap();
     let theirs = elsewhere.path().join("work-pre7-19990101.db");
-    std::fs::write(&theirs, "keep me").unwrap();
+    put_file(&theirs, "keep me");
     std::os::unix::fs::symlink(elsewhere.path(), f.dir.path().join("backup")).unwrap();
     let named = f.dir.path().join("backup/work-pre7-19990101.db");
     assert!(deletable_copies(f.writer.path()).contains(&named));
@@ -435,7 +438,7 @@ async fn an_added_deny_entry_excises_what_came_in() {
         0
     );
     // a deny file with a mistake keeps the built-ins and drops every opt-in: the reading list goes too
-    std::fs::write(f.config.join(DENY_FILE), "{not json").unwrap();
+    put_file(f.config.join(DENY_FILE), "{not json");
     let r = apply(&f.writer, f.list()).await.unwrap();
     assert_eq!(r.removed, [f.reading()]);
     assert_eq!(r.excised, 1);
@@ -460,12 +463,12 @@ async fn a_put_in_the_writer_during_a_revoke_is_excised() {
     let (held, in_writer) = tokio::sync::oneshot::channel::<()>();
     let (go, wait) = std::sync::mpsc::channel::<()>();
     let (writer, before) = (f.writer.clone(), f.list());
-    let put = tokio::spawn(async move {
+    let put = saman::spawn("a put held in the writer", async move {
         writer
             .write(TxMeta::new("scan:/w", Class::System, "scan"), move |tx| {
                 let a = parsed::put(tx, &before, req)?;
-                let _ = held.send(());
-                let _ = wait.recv();
+                saman::delivered(held.send(()), "the put's hold");
+                saman::delivered(wait.recv(), "the put's release");
                 Ok(a)
             })
             .await
@@ -475,7 +478,7 @@ async fn a_put_in_the_writer_during_a_revoke_is_excised() {
     f.allow(&[]);
     let read = hooks::arm(f.writer.path());
     let (writer, after) = (f.writer.clone(), f.list());
-    let revoke = tokio::spawn(async move { apply(&writer, after).await });
+    let revoke = saman::spawn("the revoke", async move { apply(&writer, after).await });
     read.await.unwrap();
     go.send(()).unwrap();
     let put = put.await.unwrap().unwrap();
@@ -489,8 +492,10 @@ async fn a_put_in_the_writer_during_a_revoke_is_excised() {
 #[test]
 fn the_applied_list_is_only_written_here() {
     // no other source names the key
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/privacy.rs");
+    // eitri refuses a link in any component of a path: the checkout's own are resolved first
+    let manifest = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let crates = manifest.parent().unwrap();
+    let here = manifest.join("src/privacy.rs");
     let mut stack = vec![crates.to_path_buf()];
     let mut others = Vec::new();
     while let Some(dir) = stack.pop() {
@@ -500,7 +505,7 @@ fn the_applied_list_is_only_written_here() {
                 stack.push(p);
             } else if p.extension().is_some_and(|x| x == "rs")
                 && p != here
-                && std::fs::read_to_string(&p).is_ok_and(|t| t.contains(APPLIED_KEY))
+                && eitri::read_string(&p, 16 << 20).is_ok_and(|t| t.contains(APPLIED_KEY))
             {
                 others.push(p);
             }

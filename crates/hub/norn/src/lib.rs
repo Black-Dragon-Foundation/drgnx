@@ -38,3 +38,21 @@ pub mod tools;
 pub mod tracker;
 pub mod trust;
 pub mod write;
+
+/// Undo the open transaction on CONN after a failure that is already being returned: a rollback that fails too is
+/// logged, and the first error stays the one the caller sees.
+pub(crate) fn rollback(conn: &urdr::Connection) {
+    if let Err(e) = conn.execute_batch("rollback") {
+        tracing::warn!(error = %e, "a rollback failed");
+    }
+}
+
+/// R, the result of removing a file nobody can act on the loss of: a file that is already gone is the wanted end; any
+/// other failure is logged under WHAT.
+pub(crate) fn removed(r: std::io::Result<()>, what: &str) {
+    if let Err(e) = r
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(error = %e, what, "a removal failed");
+    }
+}

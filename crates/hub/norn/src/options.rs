@@ -621,9 +621,11 @@ mod tests {
     }
 
     fn table() -> Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        // eitri refuses a link in any component of a path: the checkout's own are resolved first
+        let path = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
+            .unwrap()
             .join("../../../test/fixtures/settings-deny.json");
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+        serde_json::from_str(&eitri::read_string(&path, 1 << 20).unwrap()).unwrap()
     }
 
     fn strings(v: &Value) -> Vec<&str> {

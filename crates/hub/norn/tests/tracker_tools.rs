@@ -1067,8 +1067,7 @@ mod tools {
         let h = w.place("pa");
         let a = w.agent("a1", &h);
         create(&w, &a, "registers the project").await;
-        let (p, q) = (w.project_n(&h), w.place("pq"));
-        let _ = q;
+        let (p, _other_place) = (w.project_n(&h), w.place("pq"));
         let g = w
             .user_write(move |tx| {
                 Ok(grants::create(tx, Who::Project(p), What::All, Access::Read, None)?.id)

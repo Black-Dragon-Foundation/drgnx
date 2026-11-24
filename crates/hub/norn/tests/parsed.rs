@@ -39,11 +39,11 @@ fn fx() -> Fx {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     std::fs::create_dir_all(home.join("org")).unwrap();
-    std::fs::write(home.join("org/notes.org"), format!("* {CANARY} private\n")).unwrap();
+    crate::put_file(home.join("org/notes.org"), format!("* {CANARY} private\n"));
     let plans = dir.path().join("work/docs/plans");
     std::fs::create_dir_all(&plans).unwrap();
     let plan = plans.join("p.md");
-    std::fs::write(&plan, "# P\n### Task 1: one\n- [ ] a\n").unwrap();
+    crate::put_file(&plan, "# P\n### Task 1: one\n- [ ] a\n");
     let deny = DenyList::load(&home, &dir.path().join("config"));
     Fx {
         plan: plan.to_string_lossy().into_owned(),
@@ -1262,10 +1262,11 @@ fn a_copy_of_the_real_store_loses_no_link() {
     .unwrap();
     tx.commit_for_test().unwrap();
     let after = snap(&c);
-    println!(
+    annall::cli_out(&format!(
         "BEFORE links {:?}\nBEFORE entities {:?}\nAFTER links {:?}\nAFTER entities {:?}",
         before.0, before.1, after.0, after.1
-    );
+    ))
+    .unwrap();
     for (k, n) in &before.0 {
         let now = after.0.iter().find(|(a, _)| a == k).map_or(0, |x| x.1);
         if k != "parent_of" {

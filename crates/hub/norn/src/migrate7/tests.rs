@@ -4,7 +4,6 @@
 use super::*;
 
 use std::collections::BTreeMap;
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use urdr::graph::{Writer, WriterOpts, hist};
@@ -41,7 +40,7 @@ pub(super) mod hooks {
             .iter()
             .any(|(p, s)| p == db && *s == "check")
         {
-            std::fs::write(copy, b"not a database: a broken copy").unwrap();
+            eitri::replace_file(copy, b"not a database: a broken copy").unwrap();
         }
     }
 
@@ -581,8 +580,8 @@ fn interrupted_migration_leaves_schema_6() {
             config_dir: data.parent().unwrap().join("config"),
         };
         let mut c = writer_conn(&db);
-        let _ = run(&mut c, &db, &opts);
-        return;
+        let ended = run(&mut c, &db, &opts);
+        panic!("the migration ended ({ended:?}) without the pause hook holding it");
     }
     let fx = fixture();
     let census = |db: &Path| -> Vec<Vec<Value>> {
@@ -596,34 +595,46 @@ fn interrupted_migration_leaves_schema_6() {
         )
     };
     let before = census(&fx.db);
-    // The pause hook writes "paused" to its file: here the child's own stdout, a pipe to this test. Reading it returns
-    // when the child has paused, or at the end of the pipe when the child is gone without (nothing to poll for).
-    let (mut said, said_to) = std::io::pipe().unwrap();
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args([
+    // The pause hook writes "paused" to its file once the child is inside the transaction.
+    let paused = fx.db.with_file_name("paused");
+    let mut pause = std::ffi::OsString::from("entities:");
+    pause.push(&paused);
+    let env = draugr::env::build(
+        &["PATH", stig::HOME_VAR, "TMPDIR", "USER"],
+        &[
+            "CARGO", "RUSTUP", "SCCACHE", "MISE_", "DRGNX_", "LC_", "LANG",
+        ],
+        &[
+            (CHILD, fx.db.as_os_str()),
+            ("DRGNX_TEST_MIGRATE7_PAUSE", &pause),
+        ],
+    );
+    let spec = draugr::Spec {
+        program: std::env::current_exe().unwrap(),
+        args: [
             "--exact",
             "migrate7::tests::interrupted_migration_leaves_schema_6",
             "--test-threads=1",
-        ])
-        .env(CHILD, &fx.db)
-        .env("DRGNX_TEST_MIGRATE7_PAUSE", "entities:/dev/stdout")
-        .stdout(Stdio::from(said_to))
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let mut got = String::new();
-    while !got.contains("paused") {
-        let mut buf = [0u8; 256];
-        let n = std::io::Read::read(&mut said, &mut buf).unwrap();
-        if n == 0 {
-            let s = child.wait().unwrap();
-            panic!("the child ended before the pause: {s}; it said {got:?}");
-        }
-        got.push_str(&String::from_utf8_lossy(&buf[..n]));
-    }
-    // SIGKILL, mid-transaction.
-    child.kill().unwrap();
-    child.wait().unwrap();
+        ]
+        .map(Into::into)
+        .into(),
+        env,
+        cwd: None,
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
+    };
+    saman::block_on_current(async {
+        let mut child = draugr::spawn(spec).await.unwrap();
+        skuld::wait_until("the child pauses inside the transaction", 60, || {
+            paused.exists().then_some(())
+        });
+        // SIGKILL to the child's group, mid-transaction (a deadline already passed ends it at once).
+        child
+            .wait_deadline(std::time::Duration::ZERO)
+            .await
+            .unwrap();
+    });
     let after = census(&fx.db);
     assert_eq!(after, before);
     assert_eq!(after[0][4], json!("6"));
@@ -708,7 +719,7 @@ async fn a_failed_migration_is_not_retried() {
         .await
         .unwrap_err();
     assert!(matches!(e, WriteError::NotReady(_)), "{e:?}");
-    tokio::task::spawn_blocking(move || writer.shutdown())
+    saman::spawn_blocking("writer-shutdown", move || writer.shutdown())
         .await
         .unwrap();
     let c = Connection::open(&fx.db).unwrap();
@@ -1013,7 +1024,7 @@ async fn a_migrated_lease_stays_in_history() {
     assert_eq!(asof.ent.origin, Origin::Recorded);
     let now = entity::by_n(&read(), n).unwrap().unwrap();
     assert_eq!(now.lease.holder, None);
-    tokio::task::spawn_blocking(move || writer.shutdown())
+    saman::spawn_blocking("writer-shutdown", move || writer.shutdown())
         .await
         .unwrap();
 }
@@ -1118,7 +1129,7 @@ async fn excise_on_a_migrated_store_leaves_no_trace() {
     let kept = excise::kept_copies(&fx.db);
     assert!(kept.contains(&pre7), "{kept:?}");
     assert_eq!(excise::holding(&kept, &report.needles), vec![pre7]);
-    tokio::task::spawn_blocking(move || writer.shutdown())
+    saman::spawn_blocking("writer-shutdown", move || writer.shutdown())
         .await
         .unwrap();
 }

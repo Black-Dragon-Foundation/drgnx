@@ -27,9 +27,7 @@ use std::path::PathBuf;
 use urdr::Connection;
 use urdr::graph::{Class, TxMeta};
 
-fn fixtures() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../test/fixtures")
-}
+use crate::fixtures;
 
 /// "__REP:C:N__" is the character C, N times.
 fn expand(v: Value) -> Value {
@@ -362,7 +360,7 @@ async fn run(input: &Value) -> Replayed {
     let file = dir.path().join("work.db");
     {
         let conn = Connection::open(&file).unwrap();
-        conn.execute_batch(&std::fs::read_to_string(fixtures().join("work-db-6.sql")).unwrap())
+        conn.execute_batch(&crate::read_file(fixtures().join("work-db-6.sql")))
             .unwrap();
         for sql in input["setup"].as_array().unwrap() {
             conn.execute_batch(sql.as_str().unwrap()).unwrap();

@@ -6,10 +6,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::ffi::{OsStr, OsString};
 use std::hash::{BuildHasher, Hasher};
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -37,7 +34,14 @@ pub struct ProjectRef {
 const GIT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// The variables git keeps from the hub's environment (as `hello`'s, call 10).
-const GIT_ENV: [&str; 6] = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR"];
+const GIT_ENV: [&str; 6] = [
+    "PATH",
+    stig::HOME_VAR,
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+];
 
 /// What git said: its output when it succeeded, `None` when it ran and failed (not a repository, no `HEAD`).
 pub(crate) type GitAnswer = Result<Option<String>, String>;
@@ -78,53 +82,41 @@ fn git_at(program: &Path, dir: &Path, args: &[&str], timeout: Duration) -> GitAn
         .filter_map(|(k, v)| Some((k.to_str()?, v.as_os_str())))
         .collect();
     let env = draugr::env::build(&GIT_ENV, &[], &set);
-    let started = std::time::Instant::now();
-    let mut child = Command::new(program)
-        .args(&argv)
-        .current_dir(dir)
-        .env_clear()
-        .envs(env)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| fail(format!("cannot start: {e}")))?;
-    let spawned = started.elapsed();
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| fail("no stdout".into()))?;
-    let (send, recv) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut out = Vec::new();
-        let read = stdout.read_to_end(&mut out).map(|_| out);
-        let _ = send.send(read);
-    });
-    let Ok(out) = recv.recv_timeout(timeout) else {
-        // whether git itself was still running, or something else held its output open after it ended
-        let ended = child.try_wait().ok().flatten();
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(fail(format!(
-            "no answer within {} ms (started in {} ms; {})",
-            timeout.as_millis(),
-            spawned.as_millis(),
-            match ended {
-                Some(st) => format!("git had ended ({st}), its output still open"),
-                None => "git still running, killed".into(),
-            }
-        )));
+    let spec = draugr::Spec {
+        program: program.to_path_buf(),
+        args: argv,
+        env,
+        cwd: Some(dir.to_path_buf()),
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
     };
-    let out = out.map_err(|e| fail(format!("reading its output: {e}")))?;
-    let status = child
-        .wait()
-        .map_err(|e| fail(format!("waiting for it: {e}")))?;
-    if !status.success() {
+    // draugr ends git's whole process group once the timeout has passed
+    let out = run_blocking(spec, timeout).map_err(|e| match e.kind() {
+        std::io::ErrorKind::TimedOut => fail(format!(
+            "no answer within {} ms, git was killed",
+            timeout.as_millis()
+        )),
+        _ => fail(format!("cannot run: {e}")),
+    })?;
+    if !out.status.success() {
         return Ok(None);
     }
-    String::from_utf8(out)
+    String::from_utf8(out.stdout)
         .map(Some)
         .map_err(|_| fail("its output is not UTF-8".into()))
+}
+
+/// SPEC run to its end by `draugr::run` on a thread of its own, which makes a runtime: this is also called from a
+/// thread that already has one (a test's, a blocking pool's).
+pub(crate) fn run_blocking(
+    spec: draugr::Spec,
+    timeout: Duration,
+) -> std::io::Result<draugr::Output> {
+    saman::spawn_thread("norn-git", move || draugr::run(spec, timeout))
+        .map_err(std::io::Error::other)?
+        .join()
+        .map_err(|_| std::io::Error::other("the thread that runs the child panicked"))?
 }
 
 fn first_line(text: &str) -> Option<&str> {
@@ -133,7 +125,7 @@ fn first_line(text: &str) -> Option<&str> {
 
 /// `$HOME` as a truename.
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
+    std::env::var_os(stig::HOME_VAR)
         .filter(|h| !h.is_empty())
         .and_then(|h| std::fs::canonicalize(h).ok())
 }
@@ -142,7 +134,7 @@ fn home_dir() -> Option<PathBuf> {
 fn random_x() -> String {
     let mut h = RandomState::new().build_hasher();
     h.write_u128(
-        std::time::SystemTime::now()
+        stund::wall()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos()),
     );
@@ -426,31 +418,47 @@ impl ProjectCache {
 pub(crate) mod tests {
     use super::*;
     use crate::scope::testkit;
-    use std::process::Command;
     use urdr::graph::{Class, TxMeta};
 
     /// A git command for the fixtures: no global or system config, fixed names, dates from DATE (unix seconds).
     fn sh(dir: &Path, args: &[&str], date: Option<i64>) {
-        let mut cmd = Command::new("git");
-        cmd.args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
-            .args([
-                "-c",
-                "init.defaultBranch=main",
-                "-c",
-                "commit.gpgsign=false",
-            ])
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        if let Some(d) = date {
-            cmd.env("GIT_COMMITTER_DATE", format!("@{d} +0000"))
-                .env("GIT_AUTHOR_DATE", format!("@{d} +0000"));
+        let stamp = date.map(|d| std::ffi::OsString::from(format!("@{d} +0000")));
+        let mut set: Vec<(&str, &OsStr)> = vec![
+            ("GIT_CONFIG_NOSYSTEM", OsStr::new("1")),
+            ("GIT_CONFIG_GLOBAL", OsStr::new("/dev/null")),
+        ];
+        if let Some(s) = &stamp {
+            set.push(("GIT_COMMITTER_DATE", s));
+            set.push(("GIT_AUTHOR_DATE", s));
         }
-        let status = cmd.status().expect("git runs");
-        assert!(status.success(), "git {args:?} in {}", dir.display());
+        let mut argv: Vec<OsString> = [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "commit.gpgsign=false",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        argv.extend(args.iter().map(OsString::from));
+        let out = run_blocking(
+            draugr::Spec {
+                program: draugr::git::git_program().expect("a trusted git").path,
+                args: argv,
+                env: draugr::env::build(&["PATH"], &[], &set),
+                cwd: Some(dir.to_path_buf()),
+                stdin_null: true,
+                pass_fds: Vec::new(),
+                new_session: false,
+            },
+            Duration::from_secs(30),
+        )
+        .expect("git runs");
+        assert!(out.status.success(), "git {args:?} in {}", dir.display());
     }
 
     /// A repository NAME under BASE with one commit at DATE.
@@ -490,7 +498,7 @@ pub(crate) mod tests {
         assert!(before.id.starts_with("project:") && before.id.len() == "project:".len() + 12);
         assert_eq!(before.slug, "alpha");
         let beta = base.path().join("beta");
-        std::fs::rename(&alpha, &beta).unwrap();
+        eitri::rename_dir(&alpha, &beta).unwrap();
         let after = resolve(&beta).unwrap().expect("a repository");
         assert_eq!(after.id, before.id);
         assert_eq!(after.slug, "beta");

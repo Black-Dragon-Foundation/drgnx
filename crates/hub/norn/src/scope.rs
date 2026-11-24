@@ -176,7 +176,7 @@ impl StoreScope {
 }
 
 fn now_secs() -> f64 {
-    std::time::SystemTime::now()
+    stund::wall()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
 }

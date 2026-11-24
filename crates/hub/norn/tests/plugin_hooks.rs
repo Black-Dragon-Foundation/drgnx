@@ -131,7 +131,6 @@ async fn a_plugin_change_is_refused_where_the_site_takes_none_and_refreshed_wher
 #[ignore = "timing: the per-call cost of a before-tool point (run with --ignored --nocapture)"]
 async fn timing_before_tool_cost_per_call() {
     use norn::hooks::{combine, parse_rules, subscribed};
-    use std::time::Instant;
     const N: usize = 2000;
     let host = Host::new(Limits::default()).unwrap();
     let hooked = [load(&host, "deny-rm-hook")];
@@ -159,7 +158,7 @@ async fn timing_before_tool_cost_per_call() {
     ] {
         let mut us: Vec<u128> = Vec::with_capacity(N);
         for i in 0..N + 50 {
-            let t0 = Instant::now();
+            let t0 = stund::Instant::now();
             let rules = if with_rules {
                 parse_rules(&setting).unwrap()
             } else {
@@ -184,7 +183,10 @@ async fn timing_before_tool_cost_per_call() {
         }
         us.sort_unstable();
         let (p50, p95, max) = (us[N / 2], us[N * 95 / 100], us[N - 1]);
-        println!("before-tool cost, {shape}: p50 {p50} µs, p95 {p95} µs, max {max} µs ({N} calls)");
+        annall::cli_out(&format!(
+            "before-tool cost, {shape}: p50 {p50} µs, p95 {p95} µs, max {max} µs ({N} calls)"
+        ))
+        .unwrap();
         if !plugins.is_empty() {
             assert!(p95 < 5_000, "p95 {p95} µs");
         }

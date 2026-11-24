@@ -8,13 +8,13 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
 use mimir::BoxFuture;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::io::AsyncReadExt;
 
 use super::guard::{CoordTool, guarded, line, lisp_trim, text_cut};
 use super::{Coord, Ctx, Identity};
@@ -205,7 +205,7 @@ fn truename(path: &Path) -> PathBuf {
 
 /// `$HOME` as a truename, when set.
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
+    std::env::var_os(stig::HOME_VAR)
         .filter(|h| !h.is_empty())
         .map(|h| truename(Path::new(&h)))
 }
@@ -290,7 +290,14 @@ fn too_wide(root: &Path) -> bool {
 const GIT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// The variables git keeps from the hub's environment (call 10: `draugr::env::build`'s minimal environment).
-const GIT_ENV: [&str; 6] = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR"];
+const GIT_ENV: [&str; 6] = [
+    "PATH",
+    stig::HOME_VAR,
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+];
 
 /// git ARGS in DIR: the first line of its output, or `None` when git fails or takes over [`GIT_TIMEOUT`] (it is
 /// killed) (`drgnx-coord-mcp--git`).  Manager's call 10: the root-owned git with `draugr::git`'s overrides (no
@@ -310,25 +317,30 @@ async fn git(dir: &Path, args: &[&str]) -> Option<String> {
         .filter_map(|(k, v)| Some((k.to_str()?, v.as_os_str())))
         .collect();
     let env = draugr::env::build(&GIT_ENV, &[], &set);
-    let child = tokio::process::Command::new(&program.path)
-        .args(&argv)
-        .current_dir(dir)
-        .env_clear()
-        .envs(env)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .ok()?;
-    let out = tokio::time::timeout(GIT_TIMEOUT, child.wait_with_output())
-        .await
-        .ok()?
-        .ok()?;
-    if !out.status.success() {
+    let mut child = draugr::spawn(draugr::Spec {
+        program: program.path.clone(),
+        args: argv,
+        env,
+        cwd: Some(dir.to_path_buf()),
+        stdin_null: true,
+        pass_fds: Vec::new(),
+        new_session: false,
+    })
+    .await
+    .ok()?;
+    let mut stdout = child.take_stdout()?;
+    let mut bytes = Vec::new();
+    let read = stund::timeout(GIT_TIMEOUT, stdout.read_to_end(&mut bytes)).await;
+    if !matches!(read, Ok(Ok(_))) {
+        // git did not close its output in time: its whole group is ended and reaped
+        child.wait_deadline(Duration::ZERO).await.ok()?;
         return None;
     }
-    String::from_utf8_lossy(&out.stdout)
+    let status = child.wait_deadline(GIT_TIMEOUT).await.ok()??;
+    if !status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&bytes)
         .split('\n')
         .find(|l| !l.is_empty())
         .map(str::to_owned)

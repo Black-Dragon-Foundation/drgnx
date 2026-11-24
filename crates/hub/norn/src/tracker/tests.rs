@@ -687,7 +687,7 @@ async fn concurrent_label_adds_lose_none() {
         let db = db.clone();
         let id = id.clone();
         let who = agent(&format!("s{}", i % 3));
-        runs.push(tokio::spawn(async move {
+        runs.push(saman::spawn("a label write", async move {
             db.write(who.tx_meta("mcp:task_write/label"), move |tx| {
                 op(
                     tx,

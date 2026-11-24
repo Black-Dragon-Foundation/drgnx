@@ -208,8 +208,8 @@ fn meta() -> TxMeta {
 }
 
 fn now() -> f64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
+    stund::wall()
+        .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
 }
 
@@ -465,7 +465,7 @@ pub async fn tick(
     }
     let (h, c) = (home.to_path_buf(), config_dir.to_path_buf());
     let list = Arc::new(
-        tokio::task::spawn_blocking(move || DenyList::load(&h, &c))
+        saman::spawn_blocking("deny-list-load", move || DenyList::load(&h, &c))
             .await
             .ok()?,
     );

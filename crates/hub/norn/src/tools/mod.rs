@@ -267,7 +267,7 @@ pub struct GraphStore {
 impl Coord {
     pub fn new(db: CoordDb, hub: Arc<dyn Hub>) -> Coord {
         let clock: Clock = Arc::new(|| {
-            std::time::SystemTime::now()
+            stund::wall()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0.0, |d| d.as_secs_f64())
         });

@@ -75,7 +75,7 @@ impl Fx {
     fn write(&self, rel: &str, text: &str) {
         let path = self.home.join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, text).unwrap();
+        crate::put_file(path, text);
     }
 
     fn at(&self, rel: &str) -> String {
@@ -92,14 +92,13 @@ impl Fx {
 
     /// A schema-6 `work.db` holding canary nodes from `org/` (the fixture, with this HOME and these canaries).
     fn schema_6(&self) {
-        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../test/fixtures");
-        let canaries = fs::read_to_string(fixtures.join("work-db-6-canary.sql"))
-            .unwrap()
+        let fixtures = crate::fixtures();
+        let canaries = crate::read_file(fixtures.join("work-db-6-canary.sql"))
             .replace("@HOME@", &self.home.to_string_lossy())
             .replace("@NOTES@", &self.notes)
             .replace("@OTHER@", &self.other);
         let c = Connection::open(self.db()).unwrap();
-        c.execute_batch(&fs::read_to_string(fixtures.join("work-db-6.sql")).unwrap())
+        c.execute_batch(&crate::read_file(fixtures.join("work-db-6.sql")))
             .unwrap();
         c.execute_batch(&canaries).unwrap();
     }
@@ -336,7 +335,7 @@ async fn run_doors(fx: &Fx) -> Ran {
             None,
         ),
     ];
-    fs::write(tampered.join("entities.jsonl"), lines.join("\n") + "\n").unwrap();
+    crate::put_file(tampered.join("entities.jsonl"), lines.join("\n") + "\n");
     let writer = db.graph_writer().unwrap().clone();
     let import_deny = Arc::clone(&deny);
     let allow: Allow =
@@ -377,11 +376,10 @@ async fn run_doors(fx: &Fx) -> Ran {
         .await
         .unwrap();
     let config = fx.root.join("config/personal-notes-deny.json");
-    fs::write(
+    crate::put_file(
         &config,
         json!({"version": 1, "entries": [{"kind": "folder", "path": "~/docs"}]}).to_string(),
-    )
-    .unwrap();
+    );
     fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
     let now_deny = fx.deny();
     let export_dir = fx.root.join("export").join("all");
@@ -459,7 +457,7 @@ async fn rust_doors_never_store_the_canary() {
         4,
         "the migrated plan and task, the imported note and the recorded note are kept"
     );
-    let exported = fs::read_to_string(ran.export_dir.join("entities.jsonl")).unwrap();
+    let exported = crate::read_file(ran.export_dir.join("entities.jsonl"));
     assert!(exported.contains("note:recorded") && exported.contains("note:plain"));
     assert!(!exported.contains("note:kept-out"));
 
@@ -570,13 +568,17 @@ fn history_db_is_the_sixth_door() {
 
     let fx = Fx::new();
     let git = |args: &[&str]| {
-        let ok = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&fx.home)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .status()
-            .unwrap()
+        let env = draugr::env::build(
+            &["PATH"],
+            &[],
+            &[
+                ("GIT_CONFIG_GLOBAL", std::ffi::OsStr::new("/dev/null")),
+                ("GIT_CONFIG_NOSYSTEM", std::ffi::OsStr::new("1")),
+            ],
+        );
+        let program = draugr::git::git_program().unwrap().path;
+        let ok = crate::run_child(program, args, &fx.home, env)
+            .status
             .success();
         assert!(ok, "git {args:?}");
     };

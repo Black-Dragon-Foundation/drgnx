@@ -167,7 +167,10 @@ fn the_tool_list_fits_the_budget() {
     let outside = json!({"tools": listing(norn::tools::records::outside_tools())})
         .to_string()
         .len();
-    eprintln!("the outside tools: {outside} bytes (budget {BUDGET_OUTSIDE})");
+    annall::cli_err(&format!(
+        "the outside tools: {outside} bytes (budget {BUDGET_OUTSIDE})"
+    ))
+    .unwrap();
     assert!(
         outside <= BUDGET_OUTSIDE,
         "the outside tools are {outside} bytes, over {BUDGET_OUTSIDE}"
@@ -176,7 +179,10 @@ fn the_tool_list_fits_the_budget() {
     let debug = json!({"tools": listing(norn::tools::debug::tools())})
         .to_string()
         .len();
-    eprintln!("the debugger tools: {debug} bytes (budget {BUDGET_DEBUG})");
+    annall::cli_err(&format!(
+        "the debugger tools: {debug} bytes (budget {BUDGET_DEBUG})"
+    ))
+    .unwrap();
     assert!(
         debug <= BUDGET_DEBUG,
         "the debugger tools are {debug} bytes, over {BUDGET_DEBUG}"
@@ -218,9 +224,10 @@ fn the_tool_list_fits_the_budget() {
         "report_submit and the plan tools are {part1} bytes, over {BUDGET_PART1}"
     );
     // the numbers go in the ledger
-    eprintln!(
+    annall::cli_err(&format!(
         "tools/list for the 23 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 18, the jobs, part 1's three and extensions_suggest: {bytes16} (the 18 alone: budget {BUDGET_BYTES_16}; the 4 job tools {jobs} of {BUDGET_JOBS} + the 3 part-1 tools {part1} of {BUDGET_PART1} + extensions_suggest {ext} of {BUDGET_EXTENSIONS})"
-    );
+    ))
+    .unwrap();
     assert!(
         bytes <= BUDGET_BYTES,
         "tools/list is {bytes} bytes, over the {BUDGET_BYTES} budget: trim the descriptions"

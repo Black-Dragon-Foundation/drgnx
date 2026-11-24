@@ -18,6 +18,10 @@ runstav = { path = "../runstav", version = "0.1.0" }
 urdr = { path = "../urdr", version = "0.1.0" }
 mimir = { path = "../mimir", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }
+saman.workspace = true
+stund.workspace = true
+eitri.workspace = true
+stig.workspace = true  # `stig::HOME_VAR`: the name git's environment keeps
 huginn = { path = "../../core/huginn", version = "0.1.0" }  # settings_change reads an agent's value as data
 # the hook engine (hooks/): plugin manifests and their hook points
 brokkr = { path = "../brokkr", version = "0.1.0" }
@@ -39,6 +43,7 @@ urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 # tests/canary.rs: the hub's entity embedder (door 4) over the canary store (a dev-dependency cycle cargo allows)
 ratatoskr = { path = "../ratatoskr", version = "0.1.0" }
 tempfile.workspace = true
+annall.workspace = true  # the tests that print do it through `cli_out` / `cli_err`
 # tests/plugin_hooks.rs: the engine through the plugin host, over the fixture plugins
 brokkr = { path = "../brokkr", version = "0.1.0", features = ["test-support"] }
 # hooks::tests: the point's budget on paused time
