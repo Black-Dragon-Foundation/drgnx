@@ -45,6 +45,13 @@ pub fn write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Result<()> 
     eitri::replace_file(&absolute(path.as_ref())?, bytes.as_ref()).map_err(io_of)
 }
 
+/// [`write`] for a file others must not read: the new file has exactly MODE (less the umask).
+pub fn write_mode(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>, mode: u32) -> io::Result<()> {
+    #[cfg(test)]
+    disk::gate(path.as_ref());
+    eitri::replace_file_mode(&absolute(path.as_ref())?, bytes.as_ref(), mode).map_err(io_of)
+}
+
 /// The file at PATH as text (at most [`MAX_TEXT`]; not UTF-8 is `InvalidData`).
 pub fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
     #[cfg(test)]

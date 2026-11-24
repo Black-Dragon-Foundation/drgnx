@@ -168,14 +168,14 @@ impl Store {
             };
         }
         self.ensure()?;
-        eitri::replace_file_mode(
+        // through `fsio`, so a test can hold this write on the disk
+        crate::fsio::write_mode(
             &path,
             serde_json::json!({"queue": q, "paused": paused})
                 .to_string()
                 .as_bytes(),
             0o600,
         )
-        .map_err(std::io::Error::from)
     }
 
     pub fn load_queue(&self, sid: &str) -> (Queue, bool) {
