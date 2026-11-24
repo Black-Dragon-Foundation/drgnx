@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# block_on_paused, for tests on a paused clock (tokio's test-util)
+test-util = ["tokio/test-util"]
+
 [dependencies]
 villa.workspace = true
 stund.workspace = true

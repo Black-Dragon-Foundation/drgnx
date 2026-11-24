@@ -384,8 +384,7 @@ impl Probe for Slow {
 
 #[test]
 fn a_slow_adapter_gets_a_partial_graph_at_the_time_limit() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let (f, roots) = python();
         let limits = Limits {
             within: std::time::Duration::from_millis(1500),

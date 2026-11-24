@@ -193,8 +193,7 @@ fn last_states(ev: &Events) -> Vec<String> {
 
 #[test]
 fn the_state_event_says_which_sessions_attach() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut a = vec![
             json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}),
             json!({"expect": "attach", "ok": {}}),
@@ -243,8 +242,7 @@ fn the_state_event_says_which_sessions_attach() {
 
 #[test]
 fn the_state_event_follows_a_session_from_start_to_end() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut s = launch(vec![]);
         s.extend(end());
         let (d, ev, m, _) = setup(vec![s]);
@@ -266,8 +264,7 @@ fn the_state_event_follows_a_session_from_start_to_end() {
 
 #[test]
 fn only_the_starting_editor_is_told_to_open_the_file() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut s = launch(vec![
             json!({"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1}}),
             json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
@@ -311,8 +308,7 @@ fn only_the_starting_editor_is_told_to_open_the_file() {
 /// has done what the stop asked: the stop succeeds.
 #[test]
 fn a_parent_that_ends_while_its_children_stop_is_stopped() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut parent = launch(vec![json!({"reverse": "startDebugging",
         "arguments": {"request": "launch", "configuration": {"name": "worker", "__pendingTargetId": "t1"}}})]);
         parent.extend([
@@ -357,8 +353,7 @@ fn a_parent_that_ends_while_its_children_stop_is_stopped() {
 
 #[test]
 fn start_debugging_starts_a_child_and_children_stop_before_their_parent() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let order = Arc::new(Mutex::new(Vec::<String>::new()));
         let mut parent = launch(vec![json!({"reverse": "startDebugging",
         "arguments": {"request": "launch", "configuration": {"name": "worker", "__pendingTargetId": "t1"}}})]);
@@ -415,8 +410,7 @@ fn start_debugging_starts_a_child_and_children_stop_before_their_parent() {
 
 #[test]
 fn run_in_terminal_opens_a_terminal_for_the_starting_editor() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut s = launch(vec![json!({"reverse": "runInTerminal",
         "arguments": {"kind": "integrated", "cwd": "/p", "args": ["node", "app.js"]}, "answer": {"processId": 4242}})]);
         s.extend(end());
@@ -450,8 +444,7 @@ fn run_in_terminal_opens_a_terminal_for_the_starting_editor() {
 
 #[test]
 fn a_restart_without_the_request_starts_the_same_configuration_again() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut first = launch(vec![]);
         first.extend(end());
         let mut second = launch(vec![]);
@@ -482,8 +475,7 @@ fn a_restart_without_the_request_starts_the_same_configuration_again() {
 
 #[test]
 fn the_adapters_restart_value_goes_back_as_restart() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut first = launch(vec![
             json!({"event": "terminated", "body": {"restart": {"port": 9229}}}),
         ]);
@@ -517,8 +509,7 @@ fn the_adapters_restart_value_goes_back_as_restart() {
 
 #[test]
 fn the_hubs_end_stops_every_session_and_refuses_new_ones() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut a = launch(vec![]);
         a.extend(end());
         let mut b = launch(vec![]);
@@ -564,8 +555,7 @@ fn last_bps(ev: &Events, path: &str) -> Option<Value> {
 
 #[test]
 fn a_breakpoint_reaches_a_running_session_at_once_and_its_answer_is_shown() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut s = launch(vec![json!({"expect": "setBreakpoints",
         "args": {"source": {"path": "/p/app.js"}, "breakpoints": [{"line": 4}]},
         "ok": {"breakpoints": [{"id": 11, "verified": true, "line": 5}]}})]);
@@ -623,8 +613,7 @@ fn a_breakpoint_reaches_a_running_session_at_once_and_its_answer_is_shown() {
 
 #[test]
 fn a_session_starts_with_the_projects_breakpoints_cut_to_its_adapter() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let steps = vec![
             json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true,
                "supportsFunctionBreakpoints": true,
@@ -683,8 +672,7 @@ fn a_session_starts_with_the_projects_breakpoints_cut_to_its_adapter() {
 
 #[test]
 fn run_to_cursor_goes_at_the_next_stop() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let stop = |line: u32| {
             vec![
                 json!({"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1}}),
@@ -724,8 +712,7 @@ fn run_to_cursor_goes_at_the_next_stop() {
 
 #[test]
 fn the_store_is_kept_per_project_in_the_state_directory() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let dir = tempfile::tempdir().unwrap();
         let ev = Arc::new(Events::default());
         let terms = Arc::new(NoTerms(Mutex::default()));
@@ -752,8 +739,7 @@ fn the_store_is_kept_per_project_in_the_state_directory() {
 /// `exception` (its id, message, break mode and details), for the editor's exception card.
 #[test]
 fn an_exception_stop_carries_exception_info() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut s = vec![
             json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true, "supportsExceptionInfoRequest": true}}),
             json!({"expect": "launch", "ok": {}}),
@@ -793,8 +779,7 @@ fn an_exception_stop_carries_exception_info() {
 /// Without `exceptionInfo`, the stop's own description is the card's message; a stop that is not an exception has none.
 #[test]
 fn without_exception_info_the_description_is_the_message() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut s = launch(vec![
             json!({"event": "stopped", "body": {"reason": "exception", "threadId": 1, "description": "Uncaught TypeError"}}),
             json!({"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}),
@@ -822,8 +807,7 @@ fn without_exception_info_the_description_is_the_message() {
 /// A frame whose source has no file (`sourceReference`): `debug/source` asks the adapter for its text.
 #[test]
 fn a_source_reference_is_fetched_from_the_adapter() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut s = launch(vec![
             json!({"expect": "source", "args": {"sourceReference": 42, "source": {"sourceReference": 42}},
                "ok": {"content": "function f() {}\n", "mimeType": "text/javascript"}}),
@@ -862,8 +846,7 @@ fn a_source_reference_is_fetched_from_the_adapter() {
 /// with values, changed against the session's previous stop; the session's end forgets them.
 #[test]
 fn a_stop_publishes_its_inline_values() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let dir = std::env::temp_dir().join(format!("drgnx-inline-hub-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("app.py");
@@ -958,8 +941,7 @@ fn a_debugpy_child_connects_to_its_parent_adapters_listener() {
 /// the project's breakpoints as they are now, and runs on; without it the restarted program waits for ever.
 #[test]
 fn an_initialized_after_a_restart_configures_again_with_the_breakpoints_of_now() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let both =
             json!({"source": {"path": "/p/a.js"}, "breakpoints": [{"line": 3}, {"line": 5}]});
         let mut s = vec![
@@ -1007,8 +989,7 @@ fn an_initialized_after_a_restart_configures_again_with_the_breakpoints_of_now()
 
 #[test]
 fn toggle_all_turns_every_breakpoint_off_then_on_again() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let (d, _ev, _m, _) = setup(vec![]);
         d.breakpoints("/p", Some(add_bp("/p/a.py", 3, None)), None)
             .await;

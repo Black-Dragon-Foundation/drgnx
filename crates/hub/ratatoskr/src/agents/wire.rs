@@ -209,8 +209,7 @@ mod tests {
     /// opening sends them, cap again.
     #[test]
     fn pacer_caps_a_window_and_keeps_the_latest() {
-        saman::block_on_current(async move {
-            tokio::time::pause();
+        saman::block_on_paused(async move {
             let mut p = Pacer::default();
             let t0 = Instant::from_std(crate::clock::real_now());
             for i in 0..SNAPSHOTS_PER_WINDOW {
@@ -249,8 +248,7 @@ mod tests {
     /// [D] A session shown to the connection drops what waited for it.
     #[test]
     fn pacer_forgets_a_shown_session() {
-        saman::block_on_current(async move {
-            tokio::time::pause();
+        saman::block_on_paused(async move {
             let mut p = Pacer::default();
             let t0 = Instant::from_std(crate::clock::real_now());
             for i in 0..SNAPSHOTS_PER_WINDOW {

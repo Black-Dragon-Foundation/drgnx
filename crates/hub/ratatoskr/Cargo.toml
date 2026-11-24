@@ -175,6 +175,7 @@ urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 # `fixture`: the 30-agent fixture, for the map model's chain golden (work::map::tests)
 vegvisir = { path = "../vegvisir", version = "0.1.0", features = ["fixture"] }
 tokio = { workspace = true, features = ["test-util"] }  # paused time: the pacer's tests take their instants from it
+saman = { workspace = true, features = ["test-util"] }  # block_on_paused: the tests' runtimes start on a paused clock
 vor = { path = "../vor", version = "0.1.0", features = ["mock"] }  # the mock adapter for the debug sessions' tests
 skuld = { path = "../skuld", version = "0.1.0" }  # waits in tests; every order of a pure core (the connection's, a session's turn)
 rmcp = { workspace = true, features = ["client", "transport-async-rw"] }  # the MCP client of tests/search_query.rs (as mimir's interop test)

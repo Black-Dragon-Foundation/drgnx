@@ -669,8 +669,7 @@ fn worker_reading_clipboard(socket: &Path, req: u64) -> mpsc::UnboundedReceiver<
 
 #[test]
 fn an_unanswered_clipboard_read_is_denied_on_the_hubs_clock() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         // The worker's read waits for the editor; the hub answers "no" once CLIPBOARD_WAIT has passed on its own clock,
         // never sooner, so a test's clock (not the wall) decides when a read times out.
         let tmp = tempfile::tempdir().unwrap();

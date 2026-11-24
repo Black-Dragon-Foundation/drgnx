@@ -304,8 +304,7 @@ async fn until(mut cond: impl FnMut() -> bool) {
 
 #[test]
 fn what_is_refused_and_what_asks() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let (f, ev, _, _) = setup(vec![]);
         let mut a = ask(Change::Nothing);
         a.run = "nope".into();
@@ -320,8 +319,7 @@ fn what_is_refused_and_what_asks() {
 
 #[test]
 fn a_slow_point_asks_before_anything_is_made() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut r = run();
         r.stops[1].t_ms = 90_000;
         let ev = Arc::new(Events::default());
@@ -343,8 +341,7 @@ fn a_slow_point_asks_before_anything_is_made() {
 
 #[test]
 fn a_fork_goes_from_preparing_to_done_with_its_comparison() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let (f, ev, _, sealer) = setup(vec![script()]);
         let Made::Fork(id) = f.fork(ask(Change::Nothing)).unwrap() else {
             panic!("asked");
@@ -387,8 +384,7 @@ fn a_fork_goes_from_preparing_to_done_with_its_comparison() {
 /// fork send its attach: a launch there has debugpy open a listener the block's Seatbelt profile refuses.
 #[test]
 fn a_fork_sends_its_launchers_own_request() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let listen = json!({"request": "attach", "listen": {"host": "127.0.0.1", "port": 47001}});
         let mut s = script();
         s[1] = json!({"expect": "attach", "args": listen, "ok": {}});
@@ -419,8 +415,7 @@ fn a_fork_sends_its_launchers_own_request() {
 
 #[test]
 fn a_code_what_if_waits_for_its_edit_then_runs() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let (f, ev, trees, sealer) = setup(vec![script()]);
         let Made::Fork(id) = f.fork(ask(Change::Code)).unwrap() else {
             panic!("asked");
@@ -479,8 +474,7 @@ fn stop_at(path: &str, line: u32, reason: &str) -> Vec<Value> {
 
 #[test]
 fn a_trace_reaches_its_stop_with_the_env_and_files_it_was_given() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().to_path_buf();
         let tree = base.join("t1").join("w");
@@ -574,8 +568,7 @@ fn plain(tree: &Path, caps: Value, configure: Vec<Value>, body: Vec<Value>) -> V
 
 #[test]
 fn a_plain_run_finds_the_watched_exception_and_runs_past_others() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let dir = tempfile::tempdir().unwrap();
         let slot = dir.path().join("slots/b1/slot-1");
         std::fs::create_dir_all(&slot).unwrap();
@@ -625,8 +618,7 @@ fn a_plain_run_finds_the_watched_exception_and_runs_past_others() {
 
 #[test]
 fn a_plain_run_returns_a_probes_values_and_its_exit() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let dir = tempfile::tempdir().unwrap();
         let slot = dir.path().join("slots/b1/slot-2");
         std::fs::create_dir_all(&slot).unwrap();
@@ -670,8 +662,7 @@ fn a_plain_run_returns_a_probes_values_and_its_exit() {
 
 #[test]
 fn a_plain_run_past_its_time_box_is_timed_out_not_an_error() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let dir = tempfile::tempdir().unwrap();
         let slot = dir.path().join("slots/b1/slot-3");
         std::fs::create_dir_all(&slot).unwrap();
@@ -753,8 +744,7 @@ fn a_plain_run_takes_only_a_tree_strictly_under_the_slots_root() {
 /// runs.
 #[test]
 fn a_fix_is_run_in_a_fresh_tree_with_its_files() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let dir = tempfile::tempdir().unwrap();
         let tree = dir.path().join("x1/w");
         let py = tree.join("stock.py").display().to_string();
@@ -806,8 +796,7 @@ fn a_fix_is_run_in_a_fresh_tree_with_its_files() {
 /// A fork an agent made says whose it is in its view, which `view` reads back.
 #[test]
 fn a_forks_view_names_the_agent_that_made_it() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let (f, _, _, _) = setup(vec![]);
         assert!(f.view("f9").unwrap_err().message().contains("no fork f9"));
         let Made::Fork(id) = f.fork(ask(Change::Nothing)).unwrap() else {

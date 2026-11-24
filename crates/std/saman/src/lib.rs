@@ -179,6 +179,21 @@ pub fn block_on_current<F: Future>(fut: F) -> F::Output {
     }
 }
 
+/// FUT to its end on a new current-thread runtime whose clock starts paused: what `#[tokio::test(start_paused = true)]`
+/// gives a test. The clock is paused before the runtime starts, so timers fire on exact millisecond marks. A
+/// `tokio::time::pause()` inside FUT pauses part-way into a millisecond, and every timer then rounds up by 1 ms.
+#[cfg(feature = "test-util")]
+pub fn block_on_paused<F: Future>(fut: F) -> F::Output {
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+    {
+        Ok(rt) => rt.block_on(fut),
+        Err(e) => panic!("no current-thread runtime: {e}"),
+    }
+}
+
 /// FUT as a task named NAME on the runtime the caller is running in (an [`Executor`] task, a `#[tokio::test]`, a
 /// server's accept loop): for code that has no [`Executor`] of its own to call. Panics outside a runtime, as tokio's
 /// own spawn does. Dropping the [`Task`] cancels it.

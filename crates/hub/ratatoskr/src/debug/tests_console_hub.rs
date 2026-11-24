@@ -96,8 +96,7 @@ fn out(cat: &str, text: &str) -> Value {
 /// batch's 50 ms are up; the line still waiting for its newline goes when the session ends.
 #[test]
 fn output_goes_in_batches_and_the_rest_at_the_end() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let steps = vec![
             json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}),
             json!({"expect": "launch", "ok": {}}),
@@ -155,8 +154,7 @@ fn output_goes_in_batches_and_the_rest_at_the_end() {
 /// A line the hub says itself (a `postDebugTask` that failed) goes at once, in its category.
 #[test]
 fn a_line_the_hub_says_goes_at_once() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let ev = Arc::new(Events::default());
         let d = Debug::new(ev.clone(), Arc::new(NoTerms));
         d.console_say("s9", "postDebugTask failed: exit 2", "important");

@@ -336,8 +336,7 @@ fn hits(h: &[RunHit]) -> Vec<(String, String)> {
 /// The mockup's fork: line 20, hit 3; `item.reserve` set; the probe's hits split at the point; run to the end.
 #[test]
 fn hit_three_is_counted_by_the_hub_and_the_value_set_before_it_runs_on() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let item = json!([{"name": "item", "value": "Item(...)", "variablesReference": 11, "evaluateName": "item"}]);
         let mut s = launch(
             caps(),
@@ -434,8 +433,7 @@ fn counted_drive(m: Arc<Mocks>, before: usize) -> Drive {
 /// Pass 3 counted by the adapter: one stop, no continue before the point, the landing checked against the run.
 #[test]
 fn an_adapter_with_hit_conditions_counts_the_passes() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut s = counted_by_the_adapter();
         s.push(
             json!({"expect": "evaluate", "args": {"expression": THREAD}, "ok": {"result": "140"}}),
@@ -462,8 +460,7 @@ fn an_adapter_with_hit_conditions_counts_the_passes() {
 /// js-debug counts with a condition V8 runs (its `hitCondition` pauses at every pass).
 #[test]
 fn js_debug_counts_the_passes_in_a_condition() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut caps = caps();
         caps["supportsConditionalBreakpoints"] = json!(true);
         caps["supportsHitConditionalBreakpoints"] = json!(true);
@@ -504,8 +501,7 @@ fn js_debug_counts_the_passes_in_a_condition() {
 /// unreplayed value: the fork stops, saying so, and goes on when the user forks at this pass anyway.
 #[test]
 fn without_probes_the_landing_is_checked_against_the_recorded_stop() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let recorded = json!({"frames": [{"id": 1, "name": "f", "line": 20}],
                           "scopes": [{"scope": {"name": "Locals"},
                                       "variables": [{"name": "i", "value": "2", "variablesReference": 0},
@@ -624,8 +620,7 @@ fn varying_locals_are_those_that_change_between_the_runs_passes() {
 /// The adapter's count landed somewhere the run was not: the fork fails, naming both counts.
 #[test]
 fn a_landing_that_is_not_the_runs_pass_fails_loudly() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut s = counted_by_the_adapter();
         s.push(json!({"expect": "terminate", "ok": {}}));
         s.push(json!({"event": "terminated"}));
@@ -645,8 +640,7 @@ fn a_landing_that_is_not_the_runs_pass_fails_loudly() {
 /// `setExpression` when the adapter has it and the value an `evaluateName`.
 #[test]
 fn set_expression_is_preferred() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut c = caps();
         c["supportsSetExpression"] = json!(true);
         let mut s = launch(
@@ -701,8 +695,7 @@ fn set_expression_is_preferred() {
 /// A step stop: hit 2, then the two recorded `next`s.
 #[test]
 fn a_step_stop_is_reached_by_repeating_the_recorded_steps() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut s = launch(
             caps(),
             vec![json!({"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true}]}})],
@@ -740,8 +733,7 @@ fn a_step_stop_is_reached_by_repeating_the_recorded_steps() {
 /// A program that ends before hit N says how far it got.
 #[test]
 fn ending_before_hit_n_says_how_far_it_got() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut s = launch(
             caps(),
             vec![json!({"expect": "setBreakpoints", "ok": {"breakpoints": [{"verified": true}]}})],
@@ -773,8 +765,7 @@ fn ending_before_hit_n_says_how_far_it_got() {
 /// probe's next hit after the point.
 #[test]
 fn a_probe_on_the_fork_line_is_read_at_its_stops() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let p = vec![RunProbe {
             id: "total".into(),
             path: PY.into(),
@@ -841,8 +832,7 @@ fn a_probe_on_the_fork_line_is_read_at_its_stops() {
 /// js-debug: the program is a child session (`startDebugging`), whose stops count.
 #[test]
 fn js_debugs_child_session_is_where_it_stops() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let js = "/f/app.js";
         let root = vec![
             json!({"expect": "initialize", "ok": {"supportsConfigurationDoneRequest": true}}),

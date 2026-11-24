@@ -187,8 +187,7 @@ fn polite_end() -> Vec<Value> {
 
 #[test]
 fn the_launch_sequence_sends_breakpoints_and_configuration_done_before_the_launch_answer() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut start = start_of(Request::Launch, json!({"program": "/p/a.py"}));
         start.breakpoints = vec![
             session::SourceBps {
@@ -246,8 +245,7 @@ fn the_launch_sequence_sends_breakpoints_and_configuration_done_before_the_launc
 /// session never configures and the adapter never answers the attach (DBG-JS-WATCHDOG-1's hang).
 #[test]
 fn an_initialized_event_before_the_initialize_answer_still_configures() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let steps = vec![
             json!({"expect": INIT, "defer": true}),
             json!({"event": "initialized"}),
@@ -277,8 +275,7 @@ fn an_initialized_event_before_the_initialize_answer_still_configures() {
 
 #[test]
 fn a_failed_launch_ends_the_session_with_its_message() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let steps = vec![
             json!({"expect": INIT, "ok": {}}),
             json!({"expect": "launch", "fail": "No such file: /p/a.py"}),
@@ -297,8 +294,7 @@ fn a_failed_launch_ends_the_session_with_its_message() {
 
 #[test]
 fn a_stop_fetches_threads_frames_scopes_and_the_cheap_variables_in_one_epoch() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({"supportsTerminateRequest": true}));
         steps.extend(stop_fetch(1));
         steps.extend(polite_end());
@@ -330,8 +326,7 @@ fn a_stop_fetches_threads_frames_scopes_and_the_cheap_variables_in_one_epoch() {
 
 #[test]
 fn more_frames_come_twenty_at_a_time_while_total_frames_says_there_are_more() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({"supportsDelayedStackTraceLoading": true}));
         steps.extend([
         json!({"event": "stopped", "body": {"reason": "step", "threadId": 1}}),
@@ -362,8 +357,7 @@ fn more_frames_come_twenty_at_a_time_while_total_frames_says_there_are_more() {
 
 #[test]
 fn a_variables_reference_from_an_old_epoch_is_never_sent() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({}));
         steps.extend(stop_fetch(1));
         steps.extend([
@@ -401,8 +395,7 @@ fn a_variables_reference_from_an_old_epoch_is_never_sent() {
 
 #[test]
 fn invalidated_areas_are_fetched_again_in_the_same_epoch() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({}));
         steps.extend(stop_fetch(1));
         steps.extend([
@@ -430,8 +423,7 @@ fn invalidated_areas_are_fetched_again_in_the_same_epoch() {
 
 #[test]
 fn a_silent_adapter_gets_terminate_disconnect_sigterm_then_sigkill_on_time() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({"supportsTerminateRequest": true}));
         steps.extend([
             json!({"expect": "terminate", "silent": true}),
@@ -474,8 +466,7 @@ fn a_silent_adapter_gets_terminate_disconnect_sigterm_then_sigkill_on_time() {
 
 #[test]
 fn an_attach_session_disconnects_and_leaves_the_debuggee_running() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = vec![
             json!({"expect": INIT, "ok": {"supportsTerminateRequest": true, "supportsConfigurationDoneRequest": true}}),
             json!({"expect": "attach", "args": {"processId": 42}, "ok": {}}),
@@ -509,8 +500,7 @@ fn an_attach_session_disconnects_and_leaves_the_debuggee_running() {
 
 #[test]
 fn without_terminate_support_a_stop_starts_at_disconnect() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({}));
         steps.extend([
             json!({"expect": "disconnect", "args": {"terminateDebuggee": true}, "ok": {}}),
@@ -529,8 +519,7 @@ fn without_terminate_support_a_stop_starts_at_disconnect() {
 
 #[test]
 fn restart_uses_the_request_when_the_adapter_has_it() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({"supportsRestartRequest": true}));
         steps.extend([
             json!({"expect": "restart", "args": {"arguments": {"program": "/p/a.py"}}, "ok": {}}),
@@ -556,8 +545,7 @@ fn restart_uses_the_request_when_the_adapter_has_it() {
 
 #[test]
 fn restart_without_the_request_stops_and_asks_for_a_new_start() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({}));
         steps.extend([
             json!({"expect": "disconnect", "args": {"terminateDebuggee": true}, "ok": {}}),
@@ -577,8 +565,7 @@ fn restart_without_the_request_stops_and_asks_for_a_new_start() {
 
 #[test]
 fn a_terminated_event_with_restart_passes_its_value_on() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({}));
         steps.extend([
             json!({"event": "terminated", "body": {"restart": {"port": 9229}}}),
@@ -596,8 +583,7 @@ fn a_terminated_event_with_restart_passes_its_value_on() {
 
 #[test]
 fn exited_then_terminated_ends_the_session_once() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({}));
         steps.extend([
             json!({"event": "exited", "body": {"exitCode": 3}}),
@@ -613,8 +599,7 @@ fn exited_then_terminated_ends_the_session_once() {
 
 #[test]
 fn an_adapter_that_dies_ends_the_session_once_and_is_reaped() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({}));
         steps.push(json!({"die": true}));
         let mut r = run(start_of(Request::Launch, json!({})), steps, Exit::OnTerm);
@@ -634,8 +619,7 @@ fn an_adapter_that_dies_ends_the_session_once_and_is_reaped() {
 
 #[test]
 fn run_in_terminal_is_handed_up_and_answered_with_the_pid() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({}));
         steps.extend([
         json!({"reverse": "runInTerminal", "arguments": {"kind": "integrated", "cwd": "/p", "args": ["python3", "a.py"]},
@@ -666,8 +650,7 @@ fn run_in_terminal_is_handed_up_and_answered_with_the_pid() {
 
 #[test]
 fn start_debugging_is_handed_up_and_answered() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({}));
         steps.extend([
         json!({"reverse": "startDebugging", "arguments": {"request": "launch", "configuration": {"__pendingTargetId": "t1"}},
@@ -698,8 +681,7 @@ fn start_debugging_is_handed_up_and_answered() {
 
 #[test]
 fn dropping_the_handle_stops_the_session() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let mut steps = launch_steps(json!({}));
         steps.extend([
             json!({"expect": "disconnect", "ok": {}}),
@@ -729,8 +711,7 @@ fn dropping_the_handle_stops_the_session() {
 /// `variables` calls go, breadth first, and the rest are capped (closed, "expand again").
 #[test]
 fn the_view_fetches_open_paths_within_the_cap() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         use crate::view::debug::fill;
         use crate::view::debug::model::{Opened, SessionView, Tree};
         let mut locals: Vec<Value> = (0..250)

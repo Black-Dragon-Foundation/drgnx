@@ -120,8 +120,7 @@ fn has(bytes: &[u8], needle: &str) -> bool {
 
 #[test]
 fn a_run_is_sealed_on_disk_and_reads_back_after_a_restart() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let d = tempfile::tempdir().unwrap();
         let key = memory(|_| {});
         let store = Arc::new(Store::default());
@@ -176,8 +175,7 @@ fn a_run_is_sealed_on_disk_and_reads_back_after_a_restart() {
 
 #[test]
 fn a_locked_keyring_leaves_recording_off_and_says_why() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let d = tempfile::tempdir().unwrap();
         let key = memory(|s| s.locked = true);
         let (ev, _, run) = record_one(d.path(), key.clone()).await;
@@ -204,8 +202,7 @@ fn a_locked_keyring_leaves_recording_off_and_says_why() {
 
 #[test]
 fn no_keyring_leaves_recording_off_and_says_why() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let d = tempfile::tempdir().unwrap();
         let (ev, _, run) = record_one(d.path(), memory(|s| s.absent = true)).await;
         assert_eq!(run, "");
@@ -220,8 +217,7 @@ fn no_keyring_leaves_recording_off_and_says_why() {
 
 #[test]
 fn with_the_key_gone_runs_cannot_be_read_and_prune_still_works() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let d = tempfile::tempdir().unwrap();
         let (_, dbg, run) = record_one(d.path(), memory(|_| {})).await;
         let stop = dbg.records().unwrap().run(&run).unwrap().stops[0].index;
@@ -248,8 +244,7 @@ fn with_the_key_gone_runs_cannot_be_read_and_prune_still_works() {
 
 #[test]
 fn a_sent_run_opens_with_its_code_read_only_under_the_other_keyring() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let d = tempfile::tempdir().unwrap();
         let (_, dbg, run) = record_one(&d.path().join("a"), memory(|_| {})).await;
         assert!(!run.is_empty(), "the run was recorded");

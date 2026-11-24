@@ -92,8 +92,7 @@ fn an_oversized_a_malformed_or_a_cut_frame_is_a_named_failure_and_no_body_is_rea
 
 #[test]
 fn a_request_is_answered_with_notifications_and_server_requests_around_it() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let (client, mut server_in, mut server_out) = pair();
         let ask = crate::clock::spawn("test:lsp-client", {
             let c = client.clone();
@@ -132,8 +131,7 @@ fn a_request_is_answered_with_notifications_and_server_requests_around_it() {
 
 #[test]
 fn an_error_answer_a_silent_server_and_a_server_that_exits_each_end_the_request_with_a_name() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         // the server refuses
         let (client, mut server_in, mut server_out) = pair();
         let c = client.clone();
@@ -188,8 +186,7 @@ fn an_error_answer_a_silent_server_and_a_server_that_exits_each_end_the_request_
 
 #[test]
 fn an_oversized_frame_in_the_middle_fails_the_waiting_request_without_reading_it() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let (client, mut server_in, mut server_out) = pair();
         let c = client.clone();
         let ask = crate::clock::spawn("test:lsp-client", async move {
@@ -206,8 +203,7 @@ fn an_oversized_frame_in_the_middle_fails_the_waiting_request_without_reading_it
 
 #[test]
 fn ready_comes_from_language_status_and_fails_when_the_server_ends_or_never_says_it() {
-    saman::block_on_current(async move {
-        tokio::time::pause();
+    saman::block_on_paused(async move {
         let (client, _server_in, mut server_out) = pair();
         let c = client.clone();
         let waiting = crate::clock::spawn("test:lsp-client", async move {
