@@ -544,4 +544,34 @@ mod tests {
             );
         }
     }
+
+    /// The cost of `measure` on a tree the size of a 100 GB build folder: 100 build dirs of 1000 files each (a cargo
+    /// target of 100 GB holds about 100 000 files). The walk's cost is one `lstat` per entry, whatever the bytes, so
+    /// the files are small. On the real clock: the hand-over's figure. Run by hand (`--ignored --nocapture`).
+    #[test]
+    #[ignore = "a timing figure, run by hand"]
+    fn measure_cost_on_a_100k_file_tree() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        let mut r = Register::open(root).unwrap();
+        for d in 0..100 {
+            let rel = format!("slots-target/s{d}");
+            let dir = root.join(&rel);
+            fs::create_dir_all(&dir).unwrap();
+            for f in 0..1000 {
+                crate::fsio::write(dir.join(f.to_string()), b"x").unwrap();
+            }
+            r.add(
+                item(&format!("build:s{d}"), ItemKind::BuildDir),
+                Path::new(&rel),
+            )
+            .unwrap();
+        }
+        let start = stund::Instant::now();
+        let sized = r.measure(Duration::from_secs(3600));
+        let took = start.elapsed();
+        crate::eline!("measure: {sized} items, 100000 files in {took:?}");
+        assert_eq!(sized, 100);
+        assert!(took < Duration::from_secs(60), "{took:?}");
+    }
 }

@@ -39462,6 +39462,196 @@
     },
     {
       "classes": [
+        "user",
+        "agent"
+      ],
+      "doc": "each runner's disk as it last reported it: free, total, what drgnx keeps, the owner's quota, btrfs's unallocated, the use per kind and every item with its state",
+      "name": "runners/disk",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/disk`'s params: one machine's disk, or every machine's.",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "DiskParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DiskClass": {
+            "additionalProperties": false,
+            "description": "One kind's use of a machine's disk.",
+            "properties": {
+              "bytes": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "evictable_bytes": {
+                "description": "What may go now (past its age, not pinned or in use).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "items": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "description": "`job-folder`, `output`, `artifact`, `build-dir`, `slot`, `cache`, `image`, … (`forseti::disk::ItemKind`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "items",
+              "bytes",
+              "evictable_bytes"
+            ],
+            "type": "object"
+          },
+          "DiskEntry": {
+            "additionalProperties": false,
+            "description": "One item on a machine's disk.",
+            "properties": {
+              "bytes": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "last_used": {
+                "description": "Seconds since the epoch.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "state": {
+                "description": "`active`, `idle`, `evictable` or `pinned`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "owner",
+              "bytes",
+              "last_used",
+              "state"
+            ],
+            "type": "object"
+          },
+          "MachineDisk": {
+            "additionalProperties": false,
+            "description": "One machine's disk, as its runner last reported it (bytes; GB is 10⁹).",
+            "properties": {
+              "btrfs_unallocated": {
+                "description": "btrfs's unallocated bytes, on a btrfs.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "classes": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/DiskClass"
+                },
+                "type": "array"
+              },
+              "free": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "items": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/DiskEntry"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "ours": {
+                "description": "What drgnx keeps there.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "quota": {
+                "description": "The owner's cap there, when one is set.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "total": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "free",
+              "total",
+              "ours"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/disk`'s answer.",
+        "properties": {
+          "machines": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/MachineDisk"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Disks",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
         "user"
       ],
       "doc": "a container feature (sandbox, udmabuf, render, kvm) allowed or not on a runner, for one project's jobs; offered only while the runner is mine",
@@ -39986,6 +40176,51 @@
       "classes": [
         "user"
       ],
+      "doc": "an item on a runner's disk kept (on) or let go: a pinned item goes only to the owner's quota",
+      "name": "runners/pin",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/pin`'s params: item ID on runner NAME kept (ON) or let go.",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "name": {
+            "$ref": "#/$defs/Id"
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "id",
+          "on"
+        ],
+        "title": "PinParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "what applies to a host's connection (ssh -G under the generated config) and what the host is, or everything the runner contract finds missing, each with its fix; the host is not recorded",
       "name": "runners/probe-host",
       "params": {
@@ -40132,6 +40367,60 @@
           "effective"
         ],
         "title": "Probed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a runner's items past their age and not pinned or in use ordered removed (dry_run: only listed); each is re-checked on the runner first",
+      "name": "runners/reclaim",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/reclaim`'s params.",
+        "properties": {
+          "dry_run": {
+            "description": "List what would go; remove nothing.",
+            "type": "boolean"
+          },
+          "name": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ReclaimParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/reclaim`'s answer: the items ordered removed (or, dry, that would be), in order.",
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Reclaimed",
         "type": "object"
       },
       "writes": false

@@ -31,6 +31,10 @@
 //!   projects it is enabled in) ([`crate::plugins`]). Approvals live here and in no settings file, so a settings file
 //!   copied to another machine never approves code.
 //!
+//! - the disk register (12): `disk_items` (each machine's items as its last report had them: kind, owner, bytes, last
+//!   use, state, who pinned it) and `disk_evictions` (every eviction, carried out or refused, with its reason)
+//!   ([`crate::runners::disk`]).
+//!
 //! A file of a newer schema (left by a newer binary before an `update --back`) is moved aside, with its `-wal` and
 //! `-shm`, as `runtime.db.newer-N-UNIXTIME`, and a new one made.  From migration 2 that loses the sessions it held:
 //! their sockets do not come back after the restart, which is accepted (installs are disposable).
@@ -109,6 +113,14 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
          primary key(plugin, key));",
     ),
     (11, "alter table asession add column machine text;"),
+    (
+        12,
+        "create table disk_items(machine text not null, id text not null, kind text not null, owner text not null, \
+         bytes integer not null, last_used integer not null, state text not null, pinned_by text, \
+         primary key(machine, id)); \
+         create table disk_evictions(machine text not null, id text not null, kind text not null, \
+         owner text not null, bytes integer not null, why text not null, at integer not null, refused text);",
+    ),
 ];
 
 /// Open (or make) `runtime.db` in HUB_DIR on its own store thread.
@@ -185,7 +197,7 @@ mod tests {
             "{names:?}"
         );
         let fresh = urdr::open_readonly(&file).unwrap();
-        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("11"));
+        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("12"));
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600
@@ -288,6 +300,26 @@ mod tests {
                 ],
             ),
             ("plugin_kv", &["plugin", "key", "value"]),
+            // the disk register (12, editing-model design §4.8)
+            (
+                "disk_items",
+                &[
+                    "machine",
+                    "id",
+                    "kind",
+                    "owner",
+                    "bytes",
+                    "last_used",
+                    "state",
+                    "pinned_by",
+                ],
+            ),
+            (
+                "disk_evictions",
+                &[
+                    "machine", "id", "kind", "owner", "bytes", "why", "at", "refused",
+                ],
+            ),
         ];
         for (table, cols) in want {
             let mut st = c

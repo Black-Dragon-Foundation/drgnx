@@ -1,0 +1,17 @@
+{"scenario": "runners/disk-user-only", "requires": ["v1", "test-hooks"], "doc": "[B] runners/disk answers the user's connection and an agent's (no runner has reported yet: no machine); runners/reclaim and runners/pin are the user's only, not-allowed on an agent's connection, and on the user's an unknown runner is invalid-params."}
+{"do": "root"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "runners/disk", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"machines": []}}, "within_ms": 10000}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "runners/disk", "params": {"name": "desktop"}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "result": {"machines": []}}, "within_ms": 10000}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "runners/reclaim", "params": {"name": "desktop"}}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "error": {"code": "not-allowed"}}, "within_ms": 10000}
+{"do": "send", "conn": "a", "json": {"id": 3, "method": "runners/pin", "params": {"name": "desktop", "id": "build:s1", "on": true}}}
+{"do": "expect", "conn": "a", "json": {"id": 3, "error": {"code": "not-allowed"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "runners/reclaim", "params": {"name": "desktop", "dry_run": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "runners/pin", "params": {"name": "desktop", "id": "build:s1", "on": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params"}}, "within_ms": 10000}

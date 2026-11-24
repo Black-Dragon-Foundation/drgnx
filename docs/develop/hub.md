@@ -1604,11 +1604,14 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `runners/audit` | user | `{job?: Id, key?: KeyName}` | `{rows?: [AuditRow]}` | no |
 | `runners/bench` | user | `{name: Id}` | `Runner` | yes |
 | `runners/check` | user | `{name: Id}` | `Runner` | yes |
+| `runners/disk` | user, agent | `{name?: Id}` | `{machines?: [MachineDisk]}` | no |
 | `runners/feature` | user | `{feature: string, name: Id, on: boolean, project: string}` | `Runner` | yes |
 | `runners/keys` | user | `{keys: RunnerKeys}` | `boolean` | no |
 | `runners/keys-held` | user | `{}` | `{names?: [KeyName]}` | no |
 | `runners/list` | user | `{}` | `{runners?: [Runner]}` | no |
+| `runners/pin` | user | `{id: string, name: Id, on: boolean}` | `boolean` | no |
 | `runners/probe-host` | user | `{host: string}` | `{effective: Effective, facts?: HostFacts, missing?: [Missing]}` | no |
+| `runners/reclaim` | user | `{dry_run?: boolean, name: Id}` | `{dry_run?: boolean, ids?: [string]}` | no |
 | `runners/remove` | user | `{confirm: boolean, name: Id}` | `{name: string}` | yes |
 | `runners/set` | user | `{accept?: "all" \| "heavy", island?: string, name: Id, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
 | `runners/unbench` | user | `{name: Id}` | `Runner` | yes |
@@ -4876,6 +4879,46 @@ of rotation, its reason on a line of its own. `runner remove` without `--yes` on
 Tests: `norn::write::runners::` [D]; `runners::registry::` and `runner_cli::` [D]; `work::machines::` [D]; conformance
 `runners/methods-are-user-only` [B]; `tests/fleet_registry.rs` [C]: add (probe, copy, pull, bench, link), the contract's
 refusal with its list, the hub's own machine, a removal that leaves nothing of ours.
+
+## Runners: the disk
+
+`runners/disk.rs`, `runners/queue.rs`, `runners/local.rs` (editing-model design §4.8; the runner's half is
+docs/develop/sleipnir.md, "The disk guard in serve"). The queue holds a `DiskRegister`: per machine its last `disk`
+report, its items, the pins it was sent and the user's pins.
+
+- **Reports.** A runner sends `disk` after `hello-ok` (every item) and after each guard pass (what changed, what is
+  gone). `report` keeps them and writes `disk_items` in `runtime.db` (migration 12: machine, id, kind, owner, bytes,
+  last used, state, who pinned it).
+- **Pins.** After `hello-ok` and after each report the runner hears `pins`: active, what its open attempts use (their
+  folders `jobs/<job>.<attempt>`, and `slot:`/`build:` of their slot id, `sleipnir::sync::slot::SlotId`); pinned, the
+  slots queued jobs will check out, and the user's pins (`pins_for`).
+- **Orders.** After a report, below the evict floor or over the owner's quota (`forseti::disk::owners_quota`: the
+  smaller of the runner's `runner.conf` quota and the hub's), `order` plans from the register and the runner hears
+  `evict` with a number; `runner reclaim` orders every item past its age and not pinned or in use. The runner re-checks
+  each item and answers `evicted`; `evicted` records each outcome in `disk_evictions` (machine, id, kind, owner, bytes,
+  why, when, the refusal) and drops the removed items. An `unknown` item (a folder the runner's register doesn't hold)
+  is reported and never ordered.
+- **Sources.** A hub-side producer (streams, backups, recordings) reports its bytes through `DiskSource`
+  (`Queue::add_disk_source`, one line per source in `server.rs`; none yet). Every ten minutes the queue plans the hub's
+  own disk (the exec folder's file system) over them as machine `hub`: each item is asked `live` first and removed only
+  through the source's `remove`, never by path.
+- **The laptop** (`local`). `local_limits`: the workstation profile with light jobs only (`light_only`: a heavy job
+  waits with `Mode`), 2 GiB kept for its user and the app gate. Every tick its ladder (`LocalRunner::ladder`,
+  `forseti::ladder_level` and `ladder_actions`) may stop our newest job in danger; the job is requeued through
+  `Ticked::evict`, as the user's own load (never `infra: killed`). Every ten minutes `LocalRunner::disk_pass` runs the
+  runner's guard in process over the exec folder (the same `Register`, `plan` and `apply`) and its report goes into
+  the register as machine `local`. Only a machine admitted live does either.
+
+Methods (`runstav::methods::runners`): `runners/disk {name?}` reads (the user and agents); `runners/reclaim {name,
+dry_run}` and `runners/pin {name, id, on}` are the user's alone. A pin on an `unknown` item or a source's item is
+refused; one on an item the hub hasn't heard of is not found. The CLI: `runner disk [NAME] [--json]` (per machine its
+free space, what drgnx keeps, the quota and btrfs's unallocated space; per kind its size and what may go; every item
+with its size and state), `runner reclaim NAME [--dry-run]`, `runner pin NAME ID on|off`.
+
+Tests: `runners::disk::` [D] (reports and orders, pins, every eviction recorded, a source item removed only through
+its source after `live`, a report-only item never ordered); `runners::local::` [D] (light jobs only, the 2 GiB and the
+app gate, the ladder, the local pass never removing what is in use); `runner_cli::runner_disk_prints_classes_sizes_and_states`
+[D]; conformance `runners/disk-user-only` [B]; `fleet_drills::drill::fleet_guard_evicts_an_idle_build_dir_on_order` [C].
 
 ## Extensions
 

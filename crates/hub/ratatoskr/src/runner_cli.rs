@@ -12,6 +12,9 @@
 //! runner feature NAME sandbox|udmabuf|render|kvm on|off --project P   (a container feature for one project's jobs there)
 //! runner remove NAME [--yes]
 //! runner audit [--key K] [--job J]          (the keys sent to jobs and read by them, oldest first)
+//! runner disk [NAME] [--json]               (each runner's disk: free, the quota, btrfs, per kind, every item)
+//! runner reclaim NAME [--dry-run]           (its items past their age, not pinned or in use, removed)
+//! runner pin NAME ID on|off                 (an item kept, or let go)
 //! runner cloud setup aws --regions R[,R…] --sizes S[,S…] [--hub ID]     (prints the role's policy; no hub call)
 //! runner cloud setup gcp --project P [--member user:EMAIL] [--hub ID]   (prints the role and its binding; no hub call)
 //! runner cloud cost | rotate-ca | off [--yes]
@@ -45,6 +48,11 @@ const ACCEPTS: [&str; 2] = ["all", "heavy"];
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunnerCommand {
     List {
+        json: bool,
+    },
+    /// `disk`: one runner's disk or every runner's, as text ([`format_disk`]) or JSON.
+    Disk {
+        name: Option<String>,
         json: bool,
     },
     /// One call to the hub: its method and params.
@@ -117,13 +125,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<RunnerCo
         Some(other) => return Err(villa::Error::invalid(other.unexpected().to_string())),
         None => {
             return Err(villa::Error::invalid(
-                "runner needs a subcommand (list, add, check, bench, trust, profile, unbench, remove, audit, cloud)",
+                "runner needs a subcommand (list, add, check, bench, trust, profile, unbench, remove, audit, disk, \
+                 reclaim, pin, cloud)",
             ));
         }
     };
     let mut words: Vec<String> = Vec::new();
     let mut opts: Vec<(&'static str, String)> = Vec::new();
-    let (mut json_out, mut yes) = (false, false);
+    let (mut json_out, mut yes, mut dry_run) = (false, false, false);
     // `add`'s allowances: a Mac account other than drgnx-runner, an administrator's account
     let mut allowed: Vec<&'static str> = Vec::new();
     let known: &[&'static str] = match sub.as_str() {
@@ -143,8 +152,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<RunnerCo
         "feature" => &["project"],
         "remove" => &["yes"],
         "audit" => &["key", "job"],
+        "disk" => &["json"],
+        "reclaim" => &["dry-run"],
         "cloud" => &["hub", "regions", "sizes", "project", "member", "yes"],
-        "check" | "bench" | "trust" | "unbench" => &[],
+        "check" | "bench" | "trust" | "unbench" | "pin" => &[],
         other => {
             return Err(villa::Error::invalid(format!(
                 "unknown runner subcommand {other:?}"
@@ -156,12 +167,18 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<RunnerCo
             Word(v) => words.push(v.string().map_err(e)?),
             Long("json") if known.contains(&"json") => json_out = true,
             Long("yes") if known.contains(&"yes") => yes = true,
+            Long("dry-run") if known.contains(&"dry-run") => dry_run = true,
             Long("allow-own-account") if known.contains(&"allow-own-account") => {
                 allowed.push("allow_own_account")
             }
             Long("allow-admin") if known.contains(&"allow-admin") => allowed.push("allow_admin"),
             Long(name) => match known.iter().find(|k| **k == name) {
-                Some(k) if !matches!(*k, "json" | "yes" | "allow-own-account" | "allow-admin") => {
+                Some(k)
+                    if !matches!(
+                        *k,
+                        "json" | "yes" | "dry-run" | "allow-own-account" | "allow-admin"
+                    ) =>
+                {
                     opts.push((k, p.value().map_err(e)?.string().map_err(e)?))
                 }
                 _ => {
@@ -323,6 +340,32 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> villa::Result<RunnerCo
                 params: Value::Object(params),
             })
         }
+        "disk" => {
+            if words.len() > 1 {
+                return Err(villa::Error::invalid("usage: runner disk [NAME] [--json]"));
+            }
+            Ok(RunnerCommand::Disk {
+                name: words.first().cloned(),
+                json: json_out,
+            })
+        }
+        "reclaim" => {
+            want(1, "reclaim NAME [--dry-run]")?;
+            Ok(RunnerCommand::Call {
+                method: "runners/reclaim",
+                params: json!({"name": words[0], "dry_run": dry_run}),
+            })
+        }
+        "pin" => {
+            want(3, "pin NAME ID on|off")?;
+            let on = one_of("on|off", words[2].clone(), &["on", "off"])
+                .map_err(|e| villa::Error::invalid(e.to_string()))?
+                == "on";
+            Ok(RunnerCommand::Call {
+                method: "runners/pin",
+                params: json!({"name": words[0], "id": words[1], "on": on}),
+            })
+        }
         "cloud" => {
             let usage = "usage: runner cloud setup aws --regions R[,R…] --sizes S[,S…] [--hub ID]\n       \
                          runner cloud setup gcp --project P [--member user:EMAIL] [--hub ID]";
@@ -468,6 +511,65 @@ pub fn format_list(list: &Value) -> String {
     out
 }
 
+/// BYTES in GB (10⁹), one decimal.
+fn gb(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / 1e9)
+}
+
+/// `runner disk` as text of at most [`WIDTH`] columns: per runner its free space, what drgnx keeps, the owner's quota
+/// and btrfs's unallocated space when there are any, the use per kind with what may go now, and every item with its
+/// size and state (`active`, `idle`, `evictable`, `pinned`).
+pub fn format_disk(v: &Value) -> String {
+    let machines = v["machines"].as_array().cloned().unwrap_or_default();
+    if machines.is_empty() {
+        return "no disk reports yet: a runner reports its disk when it connects\n".into();
+    }
+    let mut out = String::new();
+    let mut line = |l: String| {
+        out.push_str(&l.chars().take(WIDTH).collect::<String>());
+        out.push('\n');
+    };
+    for m in &machines {
+        let n = |k: &str| m[k].as_u64().unwrap_or(0);
+        line(format!(
+            "{} · {} free of {} · ours {}",
+            m["name"].as_str().unwrap_or(""),
+            gb(n("free")),
+            gb(n("total")),
+            gb(n("ours"))
+        ));
+        let mut extra = Vec::new();
+        if let Some(q) = m["quota"].as_u64() {
+            extra.push(format!("quota {}", gb(q)));
+        }
+        if let Some(b) = m["btrfs_unallocated"].as_u64() {
+            extra.push(format!("btrfs unallocated {}", gb(b)));
+        }
+        if !extra.is_empty() {
+            line(format!("  {}", extra.join(" · ")));
+        }
+        for c in m["classes"].as_array().cloned().unwrap_or_default() {
+            let n = |k: &str| c[k].as_u64().unwrap_or(0);
+            line(format!(
+                "  {:<15} {:>3} {:>9} {:>9} evictable",
+                c["kind"].as_str().unwrap_or(""),
+                n("items"),
+                gb(n("bytes")),
+                gb(n("evictable_bytes"))
+            ));
+        }
+        for i in m["items"].as_array().cloned().unwrap_or_default() {
+            let id: String = i["id"].as_str().unwrap_or("").chars().take(28).collect();
+            line(format!(
+                "    {id:<28} {:>9} {}",
+                gb(i["bytes"].as_u64().unwrap_or(0)),
+                i["state"].as_str().unwrap_or("")
+            ));
+        }
+    }
+    out
+}
+
 /// What `remove` without `--yes` says.
 fn remove_note(name: &str) -> String {
     format!(
@@ -487,6 +589,13 @@ fn cloud_off_note() -> String {
 pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
     let (method, params, within, json_out) = match cmd {
         RunnerCommand::List { json } => ("runners/list", json!({}), CALL, json),
+        RunnerCommand::Disk { name, json } => {
+            let params = match name {
+                Some(n) => json!({"name": n}),
+                None => json!({}),
+            };
+            ("runners/disk", params, CALL, json)
+        }
         RunnerCommand::Call { method, params } => (
             method,
             params,
@@ -542,8 +651,10 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
             if let Some(why) = a["no_room"].as_str() {
                 crate::soft::err_line(&(wrap(why, 0).join("\n")).to_string());
             }
-            if json_out || method != "runners/list" {
+            if json_out || !matches!(method, "runners/list" | "runners/disk") {
                 crate::soft::out_line(&a.to_string());
+            } else if method == "runners/disk" {
+                crate::soft::out_text(&format_disk(&a));
             } else {
                 crate::soft::out_text(&format_list(&a));
             }
@@ -595,6 +706,68 @@ mod tests {
         );
         assert!(lines[4].starts_with("  benched: image pull"), "{text}");
         assert!(format_list(&json!({"runners": []})).starts_with("no runners"));
+    }
+
+    /// [D] golden: `runner disk` prints each runner's free space, what drgnx keeps, the quota and btrfs's unallocated
+    /// space, the use per kind with what may go, and every item with its size and state, within the width; the
+    /// arguments become `runners/disk`, `runners/reclaim` and `runners/pin`.
+    #[test]
+    fn runner_disk_prints_classes_sizes_and_states() {
+        let text = format_disk(&json!({"machines": [{
+            "name": "desk", "free": 412_000_000_000u64, "total": 1_000_000_000_000u64, "ours": 88_200_000_000u64,
+            "quota": 200_000_000_000u64, "btrfs_unallocated": 3_000_000_000u64,
+            "classes": [
+                {"kind": "build-dir", "items": 2, "bytes": 10_500_000_000u64, "evictable_bytes": 5_000_000_000u64},
+                {"kind": "slot", "items": 1, "bytes": 1_200_000_000u64, "evictable_bytes": 0}
+            ],
+            "items": [
+                {"id": "build:p-0a1b2c3d-private", "kind": "build-dir", "owner": "p", "bytes": 5_000_000_000u64,
+                 "last_used": 1, "state": "evictable"},
+                {"id": "slot:p-0a1b2c3d-private-and-a-long-tail", "kind": "slot", "owner": "p",
+                 "bytes": 1_200_000_000u64, "last_used": 2, "state": "active"}
+            ]
+        }]}));
+        let want = "\
+desk · 412.0 GB free of 1000.0 GB · ours 88.2 GB
+  quota 200.0 GB · btrfs unallocated 3.0 GB
+  build-dir         2   10.5 GB    5.0 GB evictable
+  slot              1    1.2 GB    0.0 GB evictable
+    build:p-0a1b2c3d-private        5.0 GB evictable
+    slot:p-0a1b2c3d-private-and-    1.2 GB active
+";
+        assert_eq!(text, want);
+        for l in text.lines() {
+            assert!(l.chars().count() <= WIDTH, "{l:?} is over {WIDTH} columns");
+        }
+        assert!(format_disk(&json!({"machines": []})).starts_with("no disk reports"));
+        assert_eq!(
+            p(&["disk"]),
+            Ok(RunnerCommand::Disk {
+                name: None,
+                json: false
+            })
+        );
+        assert_eq!(
+            p(&["disk", "desk", "--json"]),
+            Ok(RunnerCommand::Disk {
+                name: Some("desk".into()),
+                json: true
+            })
+        );
+        assert_eq!(
+            p(&["reclaim", "desk", "--dry-run"]),
+            Ok(RunnerCommand::Call {
+                method: "runners/reclaim",
+                params: json!({"name": "desk", "dry_run": true})
+            })
+        );
+        assert_eq!(
+            p(&["pin", "desk", "build:s1", "off"]),
+            Ok(RunnerCommand::Call {
+                method: "runners/pin",
+                params: json!({"name": "desk", "id": "build:s1", "on": false})
+            })
+        );
     }
 
     /// Pattern D: a workstation's set reserve is shown with its profile, and a runner whose floor and reserve leave no
@@ -748,6 +921,11 @@ mod tests {
             &["remove", "desk", "--json"],
             &["audit", "x1"],
             &["audit", "--since", "1d"],
+            &["disk", "a", "b"],
+            &["reclaim"],
+            &["reclaim", "desk", "--yes"],
+            &["pin", "desk", "build:s1", "maybe"],
+            &["pin", "desk", "build:s1"],
         ] {
             assert!(p(bad).is_err(), "{bad:?} should not parse");
         }

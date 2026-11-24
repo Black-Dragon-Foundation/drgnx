@@ -1,14 +1,16 @@
 //! The `runners/*` methods: the handlers over the hub's [`Registry`] (docs/develop/hub.md, "Runners: the registry"),
 //! and the job keys' handover and audit (`runners/keys`, `runners/keys-held`, `runners/audit`; "Runners: keys").
-//! All are the user's alone (the method registry's classes). A change sends `runners-changed` with the whole list and
-//! tells the machine registry which runners there are.
+//! All are the user's alone (the method registry's classes) but `runners/disk`, which an agent may read; the disk's
+//! (`runners/disk`, `runners/reclaim`, `runners/pin`) go to the queue's disk register ("Runners: the disk"). A change
+//! sends `runners-changed` with the whole list and tells the machine registry which runners there are.
 
 use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Empty;
 use runstav::methods::runners::{
-    AddParams, Audit, AuditParams, ByName, FeatureParams, KeyNames, KeysParams, ProbeParams,
-    Probed, RemoveParams, Removed, Runner, Runners, SetParams,
+    AddParams, Audit, AuditParams, ByName, DiskClass, DiskEntry, DiskParams, Disks, FeatureParams,
+    KeyNames, KeysParams, MachineDisk, PinParams, ProbeParams, Probed, ReclaimParams, Reclaimed,
+    RemoveParams, Removed, Runner, Runners, SetParams,
 };
 use runstav::wire::{Error, ErrorCode};
 #[cfg(all(unix, not(target_os = "android")))]
@@ -352,6 +354,79 @@ pub async fn remove(f: &Front, _: &Caller, p: RemoveParams) -> Result<Removed, E
     Ok(Removed {
         name: p.name.as_str().to_string(),
     })
+}
+
+/// A disk error as the wire says it.
+fn disk_error(e: villa::Error) -> Error {
+    let code = match e.kind() {
+        villa::Kind::NotFound | villa::Kind::Refused | villa::Kind::Invalid => {
+            ErrorCode::InvalidParams
+        }
+        _ => ErrorCode::Internal,
+    };
+    error(code, e.message())
+}
+
+/// `runners/disk`: each runner's disk as it last reported it (the disk register, editing-model design §4.8).
+pub async fn disk(f: &Front, _: &Caller, p: DiskParams) -> Result<Disks, Error> {
+    let q = crate::exec::queue(f)?;
+    let now = crate::clock::wall_secs() as u64;
+    let machines = q
+        .disk_view(p.name.as_ref().map(|n| n.as_str()), now)
+        .into_iter()
+        .map(|v| MachineDisk {
+            name: v.machine,
+            free: v.free,
+            total: v.total,
+            ours: v.ours,
+            quota: v.quota,
+            btrfs_unallocated: v.btrfs_unallocated,
+            classes: v
+                .classes
+                .iter()
+                .map(|c| DiskClass {
+                    kind: c.kind.name().into(),
+                    items: c.items,
+                    bytes: c.bytes,
+                    evictable_bytes: c.evictable_bytes,
+                })
+                .collect(),
+            items: v
+                .items
+                .iter()
+                .map(|(i, s)| DiskEntry {
+                    id: i.id.clone(),
+                    kind: i.kind.name().into(),
+                    owner: i.owner.clone(),
+                    bytes: i.bytes,
+                    last_used: i.last_used,
+                    state: crate::runners::disk::state_word(*s).into(),
+                })
+                .collect(),
+        })
+        .collect();
+    Ok(Disks { machines })
+}
+
+/// `runners/reclaim`: a runner's items past their age, not pinned or in use, ordered removed (or listed, dry).
+pub async fn reclaim(f: &Front, _: &Caller, p: ReclaimParams) -> Result<Reclaimed, Error> {
+    let q = crate::exec::queue(f)?;
+    let now = crate::clock::wall_secs() as u64;
+    let plan = q
+        .disk_reclaim(p.name.as_str(), p.dry_run, now)
+        .map_err(disk_error)?;
+    Ok(Reclaimed {
+        ids: plan.into_iter().map(|e| e.id).collect(),
+        dry_run: p.dry_run,
+    })
+}
+
+/// `runners/pin`: an item on a runner's disk kept or let go; the runner hears its pins again.
+pub async fn pin(f: &Front, _: &Caller, p: PinParams) -> Result<bool, Error> {
+    let q = crate::exec::queue(f)?;
+    q.disk_pin(p.name.as_str(), p.id.as_str(), p.on)
+        .map_err(disk_error)?;
+    Ok(true)
 }
 
 /// `runners/keys`: job keys to the hub's memory, nowhere else (refused, taking nothing, while the hub can't keep other

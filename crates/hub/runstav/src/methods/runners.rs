@@ -1,6 +1,7 @@
 //! The runners' methods (runners plan, Task 19; `docs/guide/runners.md`, `docs/develop/hub.md`, "Runners: the
-//! registry"): the machines that run the hub's jobs, kept in the hub's registry.  Every method is the user's: an
-//! agent can't add, bench or remove a machine.  The event `runners-changed` carries the list again when it changed.
+//! registry"): the machines that run the hub's jobs, kept in the hub's registry.  Every method is the user's but
+//! `runners/disk`, which an agent may read: an agent can't add, bench or remove a machine, reclaim its disk or pin an
+//! item there.  The event `runners-changed` carries the list again when it changed.
 
 use super::{Empty, invalid, method};
 use crate::registry::Method;
@@ -293,6 +294,98 @@ pub struct Audit {
     pub rows: Vec<AuditRow>,
 }
 
+/// `runners/disk`'s params: one machine's disk, or every machine's.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiskParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<Id>,
+}
+
+/// One kind's use of a machine's disk.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiskClass {
+    /// `job-folder`, `output`, `artifact`, `build-dir`, `slot`, `cache`, `image`, … (`forseti::disk::ItemKind`).
+    pub kind: String,
+    pub items: u32,
+    pub bytes: u64,
+    /// What may go now (past its age, not pinned or in use).
+    pub evictable_bytes: u64,
+}
+
+/// One item on a machine's disk.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiskEntry {
+    pub id: String,
+    pub kind: String,
+    pub owner: String,
+    pub bytes: u64,
+    /// Seconds since the epoch.
+    pub last_used: u64,
+    /// `active`, `idle`, `evictable` or `pinned`.
+    pub state: String,
+}
+
+/// One machine's disk, as its runner last reported it (bytes; GB is 10⁹).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MachineDisk {
+    pub name: String,
+    pub free: u64,
+    pub total: u64,
+    /// What drgnx keeps there.
+    pub ours: u64,
+    /// The owner's cap there, when one is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota: Option<u64>,
+    /// btrfs's unallocated bytes, on a btrfs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub btrfs_unallocated: Option<u64>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub classes: Vec<DiskClass>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub items: Vec<DiskEntry>,
+}
+
+/// `runners/disk`'s answer.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Disks {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub machines: Vec<MachineDisk>,
+}
+
+/// `runners/reclaim`'s params.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReclaimParams {
+    pub name: Id,
+    /// List what would go; remove nothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dry_run: bool,
+}
+
+/// `runners/reclaim`'s answer: the items ordered removed (or, dry, that would be), in order.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Reclaimed {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dry_run: bool,
+}
+
+/// `runners/pin`'s params: item ID on runner NAME kept (ON) or let go.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PinParams {
+    pub name: Id,
+    pub id: Bounded<String, 512>,
+    pub on: bool,
+}
+
 fn check_remove(p: &RemoveParams) -> Result<(), Error> {
     if p.confirm {
         Ok(())
@@ -335,6 +428,21 @@ pub(crate) fn methods() -> Vec<Method> {
             "runners/set", RunnersSet(SetParams) -> Runner,
             classes: [User], writes: true,
             doc: "a runner's trust, profile or accept changed",
+        ),
+        method!(
+            "runners/disk", RunnersDisk(DiskParams) -> Disks,
+            classes: [User, Agent], writes: false,
+            doc: "each runner's disk as it last reported it: free, total, what drgnx keeps, the owner's quota, btrfs's unallocated, the use per kind and every item with its state",
+        ),
+        method!(
+            "runners/reclaim", RunnersReclaim(ReclaimParams) -> Reclaimed,
+            classes: [User], writes: false,
+            doc: "a runner's items past their age and not pinned or in use ordered removed (dry_run: only listed); each is re-checked on the runner first",
+        ),
+        method!(
+            "runners/pin", RunnersPin(PinParams) -> bool,
+            classes: [User], writes: false,
+            doc: "an item on a runner's disk kept (on) or let go: a pinned item goes only to the owner's quota",
         ),
         method!(
             "runners/feature", RunnersFeature(FeatureParams) -> Runner,
