@@ -409,13 +409,6 @@ fn inside() -> Option<Inside> {
     None
 }
 
-impl<R> Blocking<R> {
-    /// Whether the blocking call has ended.
-    pub(crate) fn is_finished(&self) -> bool {
-        self.join.is_finished()
-    }
-}
-
 impl<R> Future for Blocking<R> {
     type Output = villa::Result<R>;
 
