@@ -27,8 +27,8 @@ use norn::store::{CoordError, WTx};
 use norn::write::cards::{MatrixAsk, matrix_card, matrix_card_get};
 use runstav::events::CardChoice;
 use runstav::methods::matrix::{
-    CellRow, CheckAnswer, CheckParams, EffectiveRow, Facts, GetParams, MatrixView, PresenceParams,
-    WhoParam,
+    CellRow, CheckAnswer, CheckParams, EffectiveRow, Facts, GetParams, MatrixView, OutsideCaps,
+    PresenceParams, WhoParam,
 };
 use runstav::types::Bounded;
 use runstav::wire::{Error, ErrorCode};
@@ -771,6 +771,10 @@ impl MatrixGate {
             time_presets: time,
             cells,
             effective: eff,
+            outside: OutsideCaps {
+                never: norn::matrix::OUTSIDE_NEVER.to_vec(),
+                ask_at_most: norn::matrix::OUTSIDE_ASK_AT_MOST.to_vec(),
+            },
         }
     }
 

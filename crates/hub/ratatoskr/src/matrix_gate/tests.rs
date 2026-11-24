@@ -751,6 +751,60 @@ fn the_view_shows_the_project_and_the_plan_overrides() {
     })
 }
 
+/// `matrix/get` shows the caps on outside agents, read from the constants the gate uses.
+#[test]
+fn matrix_get_lists_the_outside_caps_from_the_gates_constants() {
+    saman::block_on_current(async move {
+        let (_d, db) = db();
+        let g = MatrixGate::default();
+        let p: GetParams = serde_json::from_value(json!({})).unwrap();
+        let v = db.read(move |c| Ok(g.view(c, &p, 1.0))).await.unwrap();
+        assert_eq!(v.outside.never, norn::matrix::OUTSIDE_NEVER.to_vec());
+        assert_eq!(
+            v.outside.ask_at_most,
+            norn::matrix::OUTSIDE_ASK_AT_MOST.to_vec()
+        );
+        // the design's rows by name: a row dropped from the constant is caught here too
+        for a in [Action::TaskDone, Action::PushMain, Action::SettingsChange] {
+            assert!(v.outside.never.contains(&a), "{}", a.id());
+        }
+        assert_eq!(v.outside.ask_at_most, [Action::GraphChange]);
+    })
+}
+
+/// What the gate does to an outside agent is what `matrix/get` lists: with every row Allow, the rows
+/// `outside_effective` turns Never are `outside.never`, and the rows it turns Ask (on another's record) are
+/// `outside.ask_at_most`, so a row added to the gate's logic without the constants shows up here.
+#[test]
+fn a_new_outside_never_action_appears_in_matrix_get() {
+    saman::block_on_current(async move {
+        let (_d, db) = db();
+        let g = MatrixGate::default();
+        let p: GetParams = serde_json::from_value(json!({})).unwrap();
+        let v = db.read(move |c| Ok(g.view(c, &p, 1.0))).await.unwrap();
+        let allow = Cell {
+            verdict: Verdict::Allow,
+            limit: None,
+        };
+        let open = Effective {
+            cells: Action::ALL.into_iter().map(|a| (a, allow)).collect(),
+        };
+        let capped = norn::matrix::outside_effective(&open, false);
+        let with = |verdict| -> Vec<Action> {
+            Action::ALL
+                .into_iter()
+                .filter(|a| capped.cell(*a).verdict == verdict)
+                .collect()
+        };
+        let sorted = |mut l: Vec<Action>| {
+            l.sort();
+            l
+        };
+        assert_eq!(sorted(v.outside.never.clone()), with(Verdict::Never));
+        assert_eq!(sorted(v.outside.ask_at_most.clone()), with(Verdict::Ask));
+    })
+}
+
 #[test]
 fn the_gate_reads_the_front_settings_and_announces_a_new_card() {
     saman::block_on_current(async move {
