@@ -5,16 +5,17 @@
 //! Linux container anyway.
 #![cfg(target_os = "linux")]
 
+use std::ffi::OsString;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::os::fd::AsRawFd;
-use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ferja::frame::{Decoder, Frame, Kind, MAX_STREAMS, Ready, encode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
-use tokio::process::{Child, ChildStdin, Command};
+use tokio::process::ChildStdin;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
@@ -30,15 +31,52 @@ enum Got {
     Bad(String),
 }
 
-/// The sidecar and the test's end of its channel.
+/// The sidecar's spec: `--listen 127.0.0.2:0 --job-ip 127.0.0.3` and `extra`, an empty environment, and its stderr
+/// at `stderr_to` (a pipe nobody reads) when given, else the pipe `draugr` drains.
+fn spec(extra: &[&str], stderr_to: Option<Arc<std::os::fd::OwnedFd>>) -> draugr::Spec {
+    let mut args: Vec<OsString> = ["--listen", "127.0.0.2:0", "--job-ip", "127.0.0.3"]
+        .into_iter()
+        .chain(extra.iter().copied())
+        .map(OsString::from)
+        .collect();
+    let Some(fd) = stderr_to else {
+        return draugr::Spec {
+            program: PX.into(),
+            args,
+            env: Vec::new(),
+            cwd: None,
+            stdin_null: false,
+            pass_fds: Vec::new(),
+            new_session: false,
+        };
+    };
+    // the sidecar's own stderr is the passed pipe: a shell moves it there before it execs the sidecar
+    let mut all: Vec<OsString> = vec!["-c".into(), "exec \"$0\" \"$@\" 2>&3".into(), PX.into()];
+    all.append(&mut args);
+    draugr::Spec {
+        program: "/bin/sh".into(),
+        args: all,
+        env: Vec::new(),
+        cwd: None,
+        stdin_null: false,
+        pass_fds: vec![draugr::PassFd { fd, target: 3 }],
+        new_session: false,
+    }
+}
+
+/// The sidecar and the test's end of its channel. Dropped, its process group is killed.
 struct Px {
-    child: Child,
+    child: draugr::Child,
     stdin: Option<ChildStdin>,
     got: mpsc::UnboundedReceiver<Got>,
-    /// what the sidecar wrote to a piped stderr (read by the test-hooks tests)
-    #[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
-    stderr: Option<tokio::task::JoinHandle<Vec<u8>>>,
     listen: SocketAddr,
+}
+
+impl Drop for Px {
+    fn drop(&mut self) {
+        // SAFETY: kill(2) on the group the child leads; ESRCH (already gone and reaped) is the answer to ignore.
+        unsafe { libc::kill(-self.child.id(), libc::SIGKILL) };
+    }
 }
 
 fn ip(s: &str) -> IpAddr {
@@ -48,59 +86,48 @@ fn ip(s: &str) -> IpAddr {
 impl Px {
     /// Starts the sidecar with `--listen 127.0.0.2:0 --job-ip 127.0.0.3` and `extra`, and reads its `READY`.
     async fn start(extra: &[&str]) -> Px {
-        Px::start_with(extra, Stdio::piped()).await
+        Px::start_with(spec(extra, None)).await
     }
 
-    async fn start_with(extra: &[&str], stderr: Stdio) -> Px {
-        let mut child = Command::new(PX)
-            .args(["--listen", "127.0.0.2:0", "--job-ip", "127.0.0.3"])
-            .args(extra)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(stderr)
-            .kill_on_drop(true)
-            .spawn()
-            .expect("drgnx-px starts");
-        let mut stdout = child.stdout.take().expect("stdout");
+    async fn start_with(spec: draugr::Spec) -> Px {
+        let mut child = draugr::spawn(spec).await.expect("drgnx-px starts");
+        let mut stdout = child.take_stdout().expect("stdout");
         let (tx, got) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
+        // the reader ends at stdout's end, with the sidecar
+        saman::spawn("px-stdout", async move {
             let mut dec = Decoder::new();
             let mut buf = vec![0u8; 64 * 1024];
             loop {
                 match stdout.read(&mut buf).await {
                     Ok(0) | Err(_) => {
-                        let _ = tx.send(Got::Eof {
-                            buffered: dec.buffered(),
-                        });
+                        saman::delivered(
+                            tx.send(Got::Eof {
+                                buffered: dec.buffered(),
+                            }),
+                            "the sidecar's stdout end",
+                        );
                         return;
                     }
                     Ok(n) => match dec.push(&buf[..n]) {
                         Ok(frames) => {
                             for f in frames {
-                                let _ = tx.send(Got::Frame(f));
+                                saman::delivered(tx.send(Got::Frame(f)), "a sidecar frame");
                             }
                         }
                         Err(v) => {
-                            let _ = tx.send(Got::Bad(v.to_string()));
+                            saman::delivered(tx.send(Got::Bad(v.to_string())), "a bad frame");
                             return;
                         }
                     },
                 }
             }
-        });
-        let stderr = child.stderr.take().map(|mut e| {
-            tokio::spawn(async move {
-                let mut all = Vec::new();
-                let _ = e.read_to_end(&mut all).await;
-                all
-            })
-        });
-        let stdin = child.stdin.take();
+        })
+        .detach("the reader ends with the sidecar's stdout");
+        let stdin = child.take_stdin();
         let mut px = Px {
             child,
             stdin,
             got,
-            stderr,
             listen: "0.0.0.0:0".parse().unwrap(),
         };
         let ready = px.next().await;
@@ -154,6 +181,7 @@ impl Px {
             .await
             .expect("the sidecar exits")
             .expect("its status")
+            .expect("its first wait")
             .code()
     }
 
@@ -172,15 +200,8 @@ impl Px {
     }
 
     #[cfg(feature = "test-hooks")]
-    async fn stderr(&mut self) -> String {
-        let h = self.stderr.take().expect("stderr piped");
-        String::from_utf8_lossy(
-            &timeout(BOUND, h)
-                .await
-                .expect("stderr ends")
-                .expect("the reader"),
-        )
-        .into_owned()
+    fn stderr(&self) -> String {
+        self.child.stderr_tail()
     }
 }
 
@@ -220,7 +241,9 @@ async fn the_sidecar_relays_and_checks_the_source() {
     let mut foreign = connect_from("127.0.0.4", px.listen).await;
     assert_eq!(px.next().await, Frame::event(ip("127.0.0.4")));
     // closed: an end or a reset, never bytes
-    let _ = read_err(&mut foreign).await;
+    if let Ok(n) = read_err(&mut foreign).await {
+        assert_eq!(n, 0, "an end, no bytes");
+    }
     px.close_stdin();
     assert_eq!(px.exit().await, Some(0));
 }
@@ -236,7 +259,7 @@ async fn the_65th_connection_waits_for_a_free_stream() {
         assert_eq!(px.next().await, Frame::empty(2 * i + 1, Kind::Open));
     }
     let _waiting = connect_from("127.0.0.3", px.listen).await;
-    tokio::task::spawn_blocking(|| {
+    saman::spawn_blocking("window-65th", || {
         skuld::window(Duration::from_millis(300), "no OPEN for the 65th")
     })
     .await
@@ -322,7 +345,7 @@ async fn nothing_but_frames_on_stdout() {
         (vec![], 0),
         "nothing after READY, no partial frame"
     );
-    let err = px.stderr().await;
+    let err = px.stderr();
     assert!(
         err.contains("panicked") && err.contains("test hook"),
         "stderr: {err}"
@@ -385,17 +408,17 @@ fn small_pipe() -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
 async fn a_full_stderr_never_stalls_the_relay() {
     const TOTAL: usize = 4 << 20;
     let (_unread, w) = small_pipe();
-    let mut px = Px::start_with(&["--test-log-frames"], Stdio::from(w)).await;
+    let mut px = Px::start_with(spec(&["--test-log-frames"], Some(Arc::new(w)))).await;
     let job = connect_from("127.0.0.3", px.listen).await;
     let (mut jr, mut jw) = job.into_split();
     let pattern: Vec<u8> = (0..TOTAL).map(|i| (i % 251) as u8).collect();
     let sent = pattern.clone();
-    let writer = tokio::spawn(async move {
+    let writer = saman::spawn("job-writer", async move {
         jw.write_all(&sent).await.unwrap();
         jw.shutdown().await.unwrap();
         jw
     });
-    let reader = tokio::spawn(async move {
+    let reader = saman::spawn("job-reader", async move {
         let mut back = Vec::new();
         jr.read_to_end(&mut back).await.unwrap();
         back
@@ -441,19 +464,29 @@ async fn a_full_stderr_never_stalls_the_relay() {
 /// `drgnx-px --version` names itself and the crate's version, and starts no relay.
 #[test]
 fn it_prints_its_version() {
-    let out = std::process::Command::new(PX)
-        .arg("--version")
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let out = run_px(&["--version"]);
+    assert!(out.status.success(), "{}", out.stderr);
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
         concat!("drgnx-px ", env!("CARGO_PKG_VERSION"), "\n")
     );
+}
+
+/// `drgnx-px ARGS` to its end, for the tests that only look at what it printed and how it ended.
+fn run_px(args: &[&str]) -> draugr::Output {
+    draugr::run(
+        draugr::Spec {
+            program: PX.into(),
+            args: args.iter().map(OsString::from).collect(),
+            env: Vec::new(),
+            cwd: None,
+            stdin_null: true,
+            pass_fds: Vec::new(),
+            new_session: false,
+        },
+        BOUND,
+    )
+    .expect("drgnx-px runs")
 }
 
 /// A name of the keys' listener this test alone uses (the tests share the host's network namespace).
@@ -507,30 +540,19 @@ async fn a_keyed_sidecar_opens_a_key_stream_per_key_connection() {
 async fn a_squatted_keys_name_exits_2_before_ready() {
     let name = key_name("squat");
     let _squat = std::os::unix::net::UnixListener::bind_addr(&abstract_addr(&name)).unwrap();
-    let mut child = Command::new(PX)
-        .args([
-            "--listen",
-            "127.0.0.2:0",
-            "--job-ip",
-            "127.0.0.3",
-            "--keys",
-            &name,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
+    let mut child = draugr::spawn(spec(&["--keys", &name], None)).await.unwrap();
     let mut out = Vec::new();
     child
-        .stdout
-        .take()
+        .take_stdout()
         .unwrap()
         .read_to_end(&mut out)
         .await
         .unwrap();
-    let st = timeout(BOUND, child.wait()).await.unwrap().unwrap();
+    let st = timeout(BOUND, child.wait())
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("its first wait");
     assert_eq!(st.code(), Some(2));
     assert!(out.is_empty(), "the sidecar wrote {} bytes", out.len());
 
@@ -547,8 +569,12 @@ async fn a_squatted_keys_name_exits_2_before_ready() {
 #[tokio::test]
 async fn the_sidecar_has_no_core_dump() {
     let mut px = Px::start(&[]).await;
-    let pid = px.child.id().unwrap();
-    let limits = std::fs::read_to_string(format!("/proc/{pid}/limits")).unwrap_or_default();
+    let pid = px.child.id();
+    let limits = eitri::read_string(
+        std::path::Path::new(&format!("/proc/{pid}/limits")),
+        1 << 20,
+    )
+    .unwrap_or_default();
     let core = limits
         .lines()
         .find(|l| l.starts_with("Max core file size"))
@@ -575,14 +601,8 @@ async fn the_sidecar_has_no_core_dump() {
 #[test]
 fn without_test_hooks_their_flags_are_refused() {
     for flag in ["--test-log-frames", "--test-panic-on-beat"] {
-        let out = std::process::Command::new(PX)
-            .args(["--listen", "127.0.0.2:0", "--job-ip", "127.0.0.3", flag])
-            .output()
-            .unwrap();
+        let out = run_px(&["--listen", "127.0.0.2:0", "--job-ip", "127.0.0.3", flag]);
         assert_eq!(out.status.code(), Some(1), "{flag}");
-        assert!(
-            String::from_utf8_lossy(&out.stderr).contains("unknown argument"),
-            "{flag}"
-        );
+        assert!(out.stderr.contains("unknown argument"), "{flag}");
     }
 }

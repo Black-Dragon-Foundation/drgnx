@@ -19,9 +19,16 @@ libc.workspace = true
 gleipnir = { path = "../gleipnir", version = "0.1.0" }
 sha2.workspace = true
 zeroize.workspace = true
+villa.workspace = true
+saman.workspace = true
+stund.workspace = true
+draugr.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 hlaup = { path = "../hlaup", version = "0.1.0" }  # stand-in scripts written and run, never busy (ETXTBSY)
+eitri.workspace = true
+stig.workspace = true
 skuld = { path = "../skuld", version = "0.1.0" }
 tempfile.workspace = true
 

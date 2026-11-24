@@ -5,10 +5,8 @@
 //! reused by accident. `podman import` makes the image from the tar on stdin; a host that has it already imports nothing.
 
 use std::ffi::OsString;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
@@ -71,7 +69,7 @@ pub fn ensure_image(
     limit: Duration,
 ) -> Result<String, String> {
     let image = image_ref(tar);
-    let start = Instant::now();
+    let start = stund::Instant::now();
     let exists = podman_run(podman, env, &["image", "exists", &image], &[], limit)?;
     if exists.0 {
         return Ok(image);
@@ -89,7 +87,8 @@ pub fn ensure_image(
     }
 }
 
-/// Runs `podman ARGS` with exactly ENV and STDIN; (success, stderr). Killed when it outlives LIMIT.
+/// Runs `podman ARGS` with exactly ENV and STDIN; (success, stderr). Its whole process group is killed when it outlives
+/// LIMIT. Blocks this thread (`draugr::run`), so never from a runtime's thread.
 fn podman_run(
     podman: &Path,
     env: &[(OsString, OsString)],
@@ -97,48 +96,27 @@ fn podman_run(
     stdin: &[u8],
     limit: Duration,
 ) -> Result<(bool, String), String> {
-    let mut child = Command::new(podman)
-        .args(args)
-        .env_clear()
-        .envs(env.iter().map(|(k, v)| (k, v)))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("podman: {e}"))?;
-    // stdin and stderr move on threads: a full pipe on either side must not stall the clock below
-    let mut pipe = child.stdin.take().expect("piped");
-    let body = stdin.to_vec();
-    let feed = std::thread::spawn(move || {
-        let _ = pipe.write_all(&body);
-    });
-    let mut err = child.stderr.take().expect("piped");
-    let drain = std::thread::spawn(move || {
-        let mut text = String::new();
-        let _ = err.by_ref().take(4096).read_to_string(&mut text);
-        let _ = std::io::copy(&mut err, &mut std::io::sink());
-        text
-    });
-    let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break Ok(st),
-            Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(10)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break Err(format!(
-                    "podman {} took longer than {}s",
-                    args.first().copied().unwrap_or(""),
-                    limit.as_secs().max(1)
-                ));
-            }
-            Err(e) => break Err(format!("podman: {e}")),
-        }
+    let spec = draugr::Spec {
+        program: podman.to_path_buf(),
+        args: args.iter().map(OsString::from).collect(),
+        env: env.to_vec(),
+        cwd: None,
+        stdin_null: stdin.is_empty(),
+        pass_fds: Vec::new(),
+        new_session: false,
     };
-    let _ = feed.join();
-    let text = drain.join().unwrap_or_default();
-    status.map(|st| (st.success(), text))
+    let out = draugr::run_with_input(spec, stdin.to_vec(), limit).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::TimedOut {
+            format!(
+                "podman {} took longer than {}s",
+                args.first().copied().unwrap_or(""),
+                limit.as_secs().max(1)
+            )
+        } else {
+            format!("podman: {e}")
+        }
+    })?;
+    Ok((out.status.success(), out.stderr))
 }
 
 #[cfg(test)]
@@ -264,7 +242,7 @@ mod tests {
         let tar = image_tar(b"px");
         let got = ensure_image(&p, &[], &tar, Duration::from_secs(20)).unwrap();
         assert_eq!(got, image_ref(&tar));
-        let lines: Vec<String> = std::fs::read_to_string(&log)
+        let lines: Vec<String> = eitri::read_string(&log, 1 << 20)
             .unwrap()
             .lines()
             .map(String::from)
@@ -287,7 +265,10 @@ mod tests {
         );
         let tar = image_tar(b"px");
         ensure_image(&p, &[], &tar, Duration::from_secs(20)).unwrap();
-        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+        assert_eq!(
+            eitri::read_string(&log, 1 << 20).unwrap().lines().count(),
+            1
+        );
     }
 
     #[test]
@@ -322,29 +303,34 @@ mod tests {
         };
         let px = std::fs::read(binary_for(&dir, arch)).unwrap();
         let tar = image_tar(&px);
-        let env: Vec<(OsString, OsString)> = ["PATH", "HOME", "XDG_RUNTIME_DIR"]
+        let env: Vec<(OsString, OsString)> = ["PATH", stig::HOME_VAR, stig::SYSTEM_RUNTIME_VAR]
             .iter()
             .filter_map(|k| std::env::var_os(k).map(|v| (OsString::from(k), v)))
             .collect();
         let r = ensure_image(Path::new("podman"), &env, &tar, Duration::from_secs(120)).unwrap();
-        let out = Command::new("podman")
-            .args(["run", "--rm", "--pull=never", &r, "--version"])
-            .envs(env.iter().map(|(k, v)| (k, v)))
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        let podman = |args: &[&str]| {
+            draugr::run(
+                draugr::Spec {
+                    program: "podman".into(),
+                    args: args.iter().map(OsString::from).collect(),
+                    env: env.clone(),
+                    cwd: None,
+                    stdin_null: true,
+                    pass_fds: Vec::new(),
+                    new_session: false,
+                },
+                Duration::from_secs(120),
+            )
+            .unwrap()
+        };
+        let out = podman(&["run", "--rm", "--pull=never", &r, "--version"]);
+        assert!(out.status.success(), "{}", out.stderr);
         assert!(
             String::from_utf8_lossy(&out.stdout).contains("drgnx-px"),
             "{}",
             String::from_utf8_lossy(&out.stdout)
         );
-        let _ = Command::new("podman")
-            .args(["rmi", &r])
-            .envs(env.iter().map(|(k, v)| (k, v)))
-            .output();
+        // the clean-up: whether the image could go matters to no one
+        podman(&["rmi", &r]);
     }
 }

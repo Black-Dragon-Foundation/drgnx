@@ -4,8 +4,8 @@
 //! [`wait_ready`] reads the sidecar's `READY` and checks the address it names; [`run`] then carries the channel on the
 //! shell with `Side::Owner` until it ends, sending a `BEAT` every `beat`. Nothing the reader does waits: a new stream
 //! goes to the proxy by `try_send` (a full or closed channel resets it), and so does each foreign-source event (a full
-//! channel counts it). [`Sidecar`] starts the sidecar's container through podman, drains its stderr as it comes, and
-//! stops it.
+//! channel counts it). [`Sidecar`] starts the sidecar's container through podman (`draugr`, which drains its stderr
+//! as it comes) and stops it.
 //!
 //! A keyed job's channel ([`run_keyed`]) also carries key streams (an `OPEN` with the key mark: a connection to the
 //! sidecar's `@drgnx-key`). Each is answered by the [`KeySource`]: one request line of at most [`KEY_REQUEST`] bytes,
@@ -13,16 +13,14 @@
 //! answer is read straight from the source's buffer (locked memory in the job helper), never through a pipe of its
 //! own. A key stream on an unkeyed channel is a violation that ends it.
 
-use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::future::Future;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::pin::Pin;
-use std::process::Stdio;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
@@ -30,9 +28,8 @@ use gleipnir::net::proxy::Relayed;
 use tokio::io::{
     AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, BufReader, DuplexStream, ReadBuf,
 };
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio::task::JoinHandle;
 
 use crate::frame::{Decoder, Frame, HEADER, Kind, MAX_DATA, MAX_STREAMS, Ready};
 use crate::mux::{Out, Side};
@@ -46,8 +43,6 @@ pub const READY_LIMIT: Duration = Duration::from_secs(10);
 pub const BEAT: Duration = Duration::from_secs(10);
 /// How long [`Sidecar::stop`] waits for the sidecar to exit once its stdin is closed.
 pub const STOP_LIMIT: Duration = Duration::from_secs(10);
-/// The sidecar's stderr kept for refusal texts: its last 4 KiB.
-pub const STDERR_KEEP: usize = 4096;
 /// The longest key request, its newline included.
 pub const KEY_REQUEST: usize = 512;
 
@@ -393,61 +388,51 @@ async fn beats(shell: &Shell<Stream>, every: Duration) {
     }
 }
 
-/// The sidecar's container, run by podman with its stdio piped.
+/// The sidecar's container, run by podman with its stdio piped. Dropped before [`Sidecar::stop`] has ended it, its
+/// whole process group is killed.
 pub struct Sidecar {
-    child: Child,
+    child: draugr::Child,
     io: Option<(ChildStdin, ChildStdout)>,
-    stderr: Arc<Mutex<VecDeque<u8>>>,
-    drain: JoinHandle<()>,
+    /// Whether the child was waited for to its end: its pid is no longer ours to signal.
+    reaped: bool,
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+impl Drop for Sidecar {
+    fn drop(&mut self) {
+        if !self.reaped {
+            // SAFETY: kill(2) on the group the child leads (`draugr::spawn` made it): its pid is the group's id, and
+            // `reaped` says the pid has not been waited for, so it names no other process.
+            unsafe { libc::kill(-self.child.id(), libc::SIGKILL) };
+        }
+    }
 }
 
 impl Sidecar {
-    /// Runs `podman` with `argv` (the caller's, `--detach-keys=` among them) and `env` added to this process's. A task
-    /// reads its stderr as it comes, keeping the last [`STDERR_KEEP`] bytes, so the sidecar never blocks on it.
+    /// Runs `podman` with `argv` (the caller's, `--detach-keys=` among them) and exactly `env`. `draugr` reads its
+    /// stderr as it comes, keeping its tail ([`Sidecar::stderr`]), so the sidecar never blocks on it.
     pub async fn start(
         podman: &Path,
         argv: Vec<OsString>,
         env: &[(OsString, OsString)],
     ) -> Result<Sidecar, String> {
-        let mut child = Command::new(podman)
-            .args(argv)
-            .envs(env.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| format!("starting {}: {e}", podman.display()))?;
-        let (Some(inp), Some(out), Some(mut err)) =
-            (child.stdin.take(), child.stdout.take(), child.stderr.take())
-        else {
+        let mut child = draugr::spawn(draugr::Spec {
+            program: podman.to_path_buf(),
+            args: argv,
+            env: env.to_vec(),
+            cwd: None,
+            stdin_null: false,
+            pass_fds: Vec::new(),
+            new_session: false,
+        })
+        .await
+        .map_err(|e| format!("starting {}: {e}", podman.display()))?;
+        let (Some(inp), Some(out)) = (child.take_stdin(), child.take_stdout()) else {
             return Err("the sidecar's stdio isn't piped".into());
         };
-        let stderr = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_KEEP)));
-        let ring = stderr.clone();
-        let drain = tokio::spawn(async move {
-            let mut buf = vec![0u8; 4096];
-            loop {
-                match err.read(&mut buf).await {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => {
-                        let mut r = lock(&ring);
-                        r.extend(&buf[..n]);
-                        let over = r.len().saturating_sub(STDERR_KEEP);
-                        r.drain(..over);
-                    }
-                }
-            }
-        });
         Ok(Sidecar {
             child,
             io: Some((inp, out)),
-            stderr,
-            drain,
+            reaped: false,
         })
     }
 
@@ -456,11 +441,9 @@ impl Sidecar {
         self.io.take()
     }
 
-    /// The last [`STDERR_KEEP`] bytes the sidecar (or podman) wrote to stderr: a refusal's text, the sidecar's log.
+    /// The tail of what the sidecar (or podman) wrote to stderr: a refusal's text, the sidecar's log.
     pub fn stderr(&self) -> String {
-        let r = lock(&self.stderr);
-        let (a, b) = r.as_slices();
-        String::from_utf8_lossy(&[a, b].concat()).into_owned()
+        self.child.stderr_tail()
     }
 
     /// Closes the sidecar's stdin (and stdout, if never taken), waits up to [`STOP_LIMIT`] for it to exit, then runs
@@ -474,24 +457,38 @@ impl Sidecar {
     ) -> Option<i32> {
         use std::os::unix::process::ExitStatusExt;
         self.io = None;
-        let code = tokio::time::timeout(STOP_LIMIT, self.child.wait())
+        let status = stund::timeout(STOP_LIMIT, self.child.wait())
             .await
             .ok()
             .and_then(Result::ok)
-            .and_then(|s| s.code().or_else(|| s.signal().map(|n| 128 + n)));
-        let exited = code.is_some();
-        let _ = Command::new(podman)
-            .args(["rm", "-f", name])
-            .envs(env.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-        if !exited {
-            let _ = self.child.kill().await;
+            .flatten();
+        let code = status.and_then(|s| s.code().or_else(|| s.signal().map(|n| 128 + n)));
+        self.reaped = status.is_some();
+        let remove = draugr::spawn(draugr::Spec {
+            program: podman.to_path_buf(),
+            args: ["rm", "-f", name].map(OsString::from).into(),
+            env: env.to_vec(),
+            cwd: None,
+            stdin_null: true,
+            pass_fds: Vec::new(),
+            new_session: false,
+        })
+        .await;
+        match remove {
+            Ok(mut rm) => {
+                if let Err(e) = rm.wait_deadline(STOP_LIMIT).await {
+                    tracing::warn!(error = %e, container = name, "podman rm did not finish");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, container = name, "podman rm did not start"),
         }
-        self.drain.abort();
+        if !self.reaped {
+            // a deadline already passed: the group is killed and the child reaped
+            if let Err(e) = self.child.wait_deadline(Duration::ZERO).await {
+                tracing::warn!(error = %e, container = name, "the sidecar was not reaped");
+            }
+            self.reaped = true;
+        }
         code
     }
 }

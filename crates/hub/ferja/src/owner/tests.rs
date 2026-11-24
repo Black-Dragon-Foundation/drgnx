@@ -118,7 +118,7 @@ struct Owner {
     streams: mpsc::Receiver<Relayed>,
     events: mpsc::Receiver<OwnerEvent>,
     log: Log,
-    end: JoinHandle<End>,
+    end: saman::Task<End>,
 }
 
 impl Owner {
@@ -156,7 +156,10 @@ async fn start(back: usize, beat: Duration, stall: Duration, events: usize) -> (
     let (stx, streams) = mpsc::channel(STREAMS_ROOM);
     let (etx, events) = mpsc::channel(events);
     let log = Log::default();
-    let end = tokio::spawn(run(out, inp, stx, etx, beat, stall, log.clone()));
+    let end = saman::spawn(
+        "owner-run",
+        run(out, inp, stx, etx, beat, stall, log.clone()),
+    );
     (
         stand,
         Owner {
@@ -178,14 +181,17 @@ async fn echo() -> SocketAddr {
         .await
         .unwrap();
     let a = l.local_addr().unwrap();
-    tokio::spawn(async move {
+    saman::spawn("echo-upstream", async move {
         while let Ok((mut c, _)) = l.accept().await {
-            tokio::spawn(async move {
+            saman::spawn("echoed-connection", async move {
                 let (mut r, mut w) = tokio::net::TcpStream::split(&mut c);
-                let _ = tokio::io::copy(&mut r, &mut w).await;
-            });
+                // a connection the proxy reset ends in an error: the bytes echoed before it are all that is counted
+                tokio::io::copy(&mut r, &mut w).await.unwrap_or_default();
+            })
+            .detach("an echoed connection ends with its peer");
         }
-    });
+    })
+    .detach("the echo upstream lives as long as the test's runtime");
     a
 }
 
@@ -339,7 +345,7 @@ async fn a_lagging_event_consumer_never_stalls_the_reader() {
     }
     stand.send(Frame::empty(1, Kind::Open)).await;
     let mut r = owner.relayed().await;
-    let reader = tokio::spawn(async move {
+    let reader = saman::spawn("the stream's reader", async move {
         let mut got = vec![0u8; TOTAL];
         r.io.read_exact(&mut got).await.map(|_| got)
     });
@@ -432,7 +438,8 @@ async fn stop_finishes_while_the_sidecar_floods() {
     let podman = dir.path().join("podman");
     hlaup::write(
         &podman,
-        "#!/bin/sh\ncase \"$1\" in\nrun) while :; do echo flood; echo flood >&2; done ;;\nrm) exit 0 ;;\nesac\n",
+        // the loop ends when a write fails: draugr's children ignore SIGPIPE, so a closed stdout is an error, not a signal
+        "#!/bin/sh\ncase \"$1\" in\nrun) while echo flood && echo flood >&2; do :; done ;;\nrm) exit 0 ;;\nesac\n",
     )
     .unwrap();
     let mut sc = Sidecar::start(&podman, vec!["run".into()], &[])
@@ -495,16 +502,10 @@ async fn keyed() -> (Stand, Owner, Arc<AtomicU64>) {
     let log = Log::default();
     let calls = Arc::new(AtomicU64::new(0));
     let src: Arc<dyn KeySource> = Arc::new(Echoing(calls.clone()));
-    let end = tokio::spawn(run_keyed(
-        out,
-        inp,
-        stx,
-        src,
-        etx,
-        BEAT,
-        shell::STALL,
-        log.clone(),
-    ));
+    let end = saman::spawn(
+        "owner-run-keyed",
+        run_keyed(out, inp, stx, src, etx, BEAT, shell::STALL, log.clone()),
+    );
     (
         stand,
         Owner {

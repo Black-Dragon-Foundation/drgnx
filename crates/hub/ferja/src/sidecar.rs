@@ -60,7 +60,10 @@ pub struct Args {
 }
 
 /// `--listen <ip:port> --job-ip <ip> [--keys NAME]`.
-pub fn parse_args(args: Vec<OsString>) -> Result<Args, String> {
+pub fn parse_args(args: Vec<OsString>) -> villa::Result<Args> {
+    fn invalid(what: impl Into<String>) -> villa::Error {
+        villa::Error::invalid("The sidecar's arguments are wrong.").with_detail(what)
+    }
     let mut listen = None;
     let mut job_ip = None;
     let mut keys = None;
@@ -68,25 +71,28 @@ pub fn parse_args(args: Vec<OsString>) -> Result<Args, String> {
     let (mut log_frames, mut panic_on_beat) = (false, false);
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
-        let a = a.to_str().ok_or("an argument that isn't UTF-8")?.to_owned();
-        let mut value = |name: &str| -> Result<String, String> {
+        let a = a
+            .to_str()
+            .ok_or_else(|| invalid("an argument that isn't UTF-8"))?
+            .to_owned();
+        let mut value = |name: &str| -> villa::Result<String> {
             it.next()
                 .and_then(|v| v.into_string().ok())
-                .ok_or(format!("{name} needs a value"))
+                .ok_or_else(|| invalid(format!("{name} needs a value")))
         };
         match a.as_str() {
             "--listen" => {
                 let v = value("--listen")?;
                 listen = Some(
                     v.parse()
-                        .map_err(|_| format!("--listen: not an ip:port: {v}"))?,
+                        .map_err(|_| invalid(format!("--listen: not an ip:port: {v}")))?,
                 );
             }
             "--job-ip" => {
                 let v = value("--job-ip")?;
                 job_ip = Some(
                     v.parse()
-                        .map_err(|_| format!("--job-ip: not an address: {v}"))?,
+                        .map_err(|_| invalid(format!("--job-ip: not an address: {v}")))?,
                 );
             }
             "--keys" => {
@@ -97,7 +103,7 @@ pub fn parse_args(args: Vec<OsString>) -> Result<Args, String> {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
                 {
-                    return Err(format!("--keys: not a plain name: {v}"));
+                    return Err(invalid(format!("--keys: not a plain name: {v}")));
                 }
                 keys = Some(v);
             }
@@ -105,12 +111,12 @@ pub fn parse_args(args: Vec<OsString>) -> Result<Args, String> {
             "--test-log-frames" => log_frames = true,
             #[cfg(feature = "test-hooks")]
             "--test-panic-on-beat" => panic_on_beat = true,
-            other => return Err(format!("unknown argument {other}")),
+            other => return Err(invalid(format!("unknown argument {other}"))),
         }
     }
     Ok(Args {
-        listen: listen.ok_or("--listen is required")?,
-        job_ip: job_ip.ok_or("--job-ip is required")?,
+        listen: listen.ok_or_else(|| invalid("--listen is required"))?,
+        job_ip: job_ip.ok_or_else(|| invalid("--job-ip is required"))?,
         keys,
         #[cfg(feature = "test-hooks")]
         log_frames,
@@ -147,7 +153,10 @@ pub fn main(args: Vec<OsString>) -> i32 {
     let args = match parse_args(args) {
         Ok(a) => a,
         Err(e) => {
-            write_now(2, format!("drgnx-px: {e}\n").as_bytes());
+            write_now(
+                2,
+                format!("drgnx-px: {e}: {}\n", e.detail().unwrap_or_default()).as_bytes(),
+            );
             return EXIT_SETUP;
         }
     };
@@ -157,10 +166,7 @@ pub fn main(args: Vec<OsString>) -> i32 {
             return EXIT_SETUP;
         }
     }
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
+    let rt = match saman::Executor::new(1) {
         Ok(rt) => rt,
         Err(e) => {
             write_now(2, format!("drgnx-px: the runtime: {e}\n").as_bytes());
@@ -285,7 +291,7 @@ async fn key_accept_loop(shell: &Shell<Conn>, listener: &UnixListener) {
             Ok((s, _)) => s,
             Err(e) => {
                 shell.log().line(&format!("accept @keys: {e}"));
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                stund::sleep(Duration::from_millis(100)).await;
                 continue;
             }
         };
@@ -309,10 +315,9 @@ pub fn listen_abstract(name: &str) -> io::Result<UnixListener> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = name;
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "abstract sockets are Linux's",
+            format!("abstract sockets (@{name}) are Linux's"),
         ))
     }
 }
@@ -346,7 +351,7 @@ async fn accept_loop(shell: &Shell<Conn>, listener: &TcpListener, job_ip: IpAddr
             Ok(x) => x,
             Err(e) => {
                 shell.log().line(&format!("accept: {e}"));
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                stund::sleep(Duration::from_millis(100)).await;
                 continue;
             }
         };
@@ -435,7 +440,11 @@ impl Consumer for Conn {
                     l_onoff: 1,
                     l_linger: 0,
                 };
-                let _ = setsockopt(fd.as_raw_fd(), libc::SOL_SOCKET, libc::SO_LINGER, &linger);
+                if let Err(e) =
+                    setsockopt(fd.as_raw_fd(), libc::SOL_SOCKET, libc::SO_LINGER, &linger)
+                {
+                    tracing::debug!(error = %e, "a job socket's reset-on-close was not set");
+                }
             }
         });
         (Box::new(r), Box::new(w), abort)
@@ -460,8 +469,8 @@ fn write_now(fd: RawFd, bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    // SAFETY: `bytes` is live for the call.
-    let _ = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
+    // SAFETY: `bytes` is live for the call. The count written is not read: whatever doesn't fit is lost.
+    unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
 }
 
 /// An fd number this process keeps open (0, 1, 2); `AsyncFd` registers it and never closes it.
