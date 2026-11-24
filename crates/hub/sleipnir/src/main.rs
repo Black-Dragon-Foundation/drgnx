@@ -23,6 +23,7 @@ const USAGE: &str = "usage: sleipnir serve --root DIR --prefix P --hub-id H --pr
                      sleipnir job-helper --dir D [--hub-allow FILE]\n       \
                      sleipnir bench --root DIR --image DIGEST\n       \
                      sleipnir tools --root DIR PIN...\n       \
+                     sleipnir setup io --root DIR\n       \
                      sleipnir git-receive --root ROOT REPO\n       \
                      sleipnir credential-helper SOCKET OP";
 
@@ -52,6 +53,7 @@ fn main() -> ExitCode {
         ["watchdog", ref rest @ ..] => watchdog(rest),
         ["bench", "--root", root, "--image", image] => bench(root, image),
         ["tools", "--root", root, ref pins @ ..] => tools(root, pins),
+        ["setup", "io", "--root", root] => setup_io(root),
         #[cfg(feature = "sync")]
         ["git-receive", "--root", root, repo] => sync::git_receive(root, repo),
         #[cfg(feature = "sync")]
@@ -77,6 +79,27 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// `sleipnir setup io`: turns io.cost on for the runner folder's disk, so IO weights act (needs root).
+#[cfg(all(feature = "runner", target_os = "linux"))]
+fn setup_io(root: &str) -> ExitCode {
+    match sleipnir::linux::io::setup_system(std::path::Path::new(root)) {
+        Ok(said) => {
+            sleipnir::oline!("{said}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            sleipnir::eline!("sleipnir setup io: {e} (run it as root)");
+            ExitCode::from(1)
+        }
+    }
+}
+
+#[cfg(not(all(feature = "runner", target_os = "linux")))]
+fn setup_io(_root: &str) -> ExitCode {
+    sleipnir::eline!("sleipnir setup io: only on Linux");
+    ExitCode::from(1)
 }
 
 #[cfg(all(feature = "runner", any(target_os = "linux", target_os = "macos")))]
@@ -218,6 +241,7 @@ fn job_setup_failed(dir: &std::path::Path, why: &str) -> ExitCode {
         wall_s: 0.0,
         cpu_s: 0.0,
         mem_peak_mib: 0,
+        io_mib: 0,
         mem_overshoot_mib: None,
         disturbed: false,
         log: spec.log.display().to_string(),

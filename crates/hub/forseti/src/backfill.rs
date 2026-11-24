@@ -314,6 +314,7 @@ mod tests {
             minutes: 10.0,
             cpu: 0.0,
             mem_p95_mib: None,
+            io_p95_mbps: None,
         };
         let mut j = j;
         j.spec.cores.min = 2;

@@ -14,14 +14,18 @@ pub const START_GAP_S: u64 = 10;
 /// A job whose history peaks under this is small: two small jobs in a row start with no gap.
 pub const SMALL_PEAK_MIB: u64 = 1024;
 
-/// The memory one cargo compile unit is given ([`cargo_jobs`]).
-pub const CARGO_UNIT_MIB: u64 = 2560;
+/// The memory one unit of a job's work is given when its pack names none ([`jobs_for`]).
+pub const DEFAULT_UNIT_MIB: u64 = 1024;
 
-/// `CARGO_BUILD_JOBS` for a job of GRANT (design §3 #4): one unit per [`CARGO_UNIT_MIB`] of its cap, never more than
-/// its cores, at least one.
-pub fn cargo_jobs(grant: &Grant) -> u32 {
-    let by_mem = u32::try_from(grant.mem_cap_mib / CARGO_UNIT_MIB).unwrap_or(u32::MAX);
-    by_mem.min(grant.cores).max(1)
+/// `{jobs}` for a job of CORES and a memory cap of CAP_MIB whose units take UNIT_MIB each: one unit per UNIT_MIB of the
+/// cap, never more than its cores, at least one. The job's `unit_mib` ([`crate::Derived::unit_mib`]) is the pack's
+/// word; [`DEFAULT_UNIT_MIB`] without one.
+pub fn jobs_for(cores: u32, cap_mib: u64, unit_mib: u64) -> u32 {
+    let by_memory = cap_mib / unit_mib.max(1);
+    u32::try_from(by_memory)
+        .unwrap_or(u32::MAX)
+        .min(cores)
+        .max(1)
 }
 
 /// Whether EXP's history says the job peaks under [`SMALL_PEAK_MIB`].
@@ -193,7 +197,7 @@ pub fn admit(
     ) {
         return Err(WaitReason::DiskLow);
     }
-    Ok(())
+    crate::io::fits(limits, &m.running, exp)
 }
 
 /// The grant at start (jobq §5.4):
@@ -267,17 +271,18 @@ mod tests {
     use crate::model::Profile;
 
     #[test]
-    fn cargo_jobs_follow_the_grant() {
-        // [D] pure (design §3 #4): a compile unit per 2.5 GiB of the cap, never more than the cores, at least one
-        let g = |cores, cap| Grant {
-            cores,
-            mem_cap_mib: cap,
-            reserve_mib: cap,
-        };
-        assert_eq!(cargo_jobs(&g(12, 6144)), 2);
-        assert_eq!(cargo_jobs(&g(2, 65_536)), 2);
-        assert_eq!(cargo_jobs(&g(12, 1024)), 1);
-        assert_eq!(cargo_jobs(&g(0, 0)), 1);
+    fn jobs_follow_the_grant_and_unit() {
+        // [D] pure (design §3 #4): a unit per UNIT_MIB of the cap, never more than the cores, at least one
+        assert_eq!(jobs_for(12, 6144, 2560), 2);
+        assert_eq!(jobs_for(12, 6144, 1024), 6);
+        assert_eq!(
+            jobs_for(12, 512, 1024),
+            1,
+            "a cap under one unit still runs one"
+        );
+        assert_eq!(jobs_for(2, 65_536, 2560), 2, "never more than the cores");
+        assert_eq!(jobs_for(0, 0, 0), 1, "a zero unit is never divided by");
+        assert_eq!(DEFAULT_UNIT_MIB, 1024);
     }
     use crate::model::Island;
     use crate::testkit::{job, machine, running};
@@ -287,6 +292,7 @@ mod tests {
             minutes: 10.0,
             cpu,
             mem_p95_mib: Some(p95),
+            io_p95_mbps: None,
         }
     }
 
@@ -360,7 +366,8 @@ mod tests {
                 &Expected {
                     minutes: 10.0,
                     cpu: 10.0,
-                    mem_p95_mib: Some(512)
+                    mem_p95_mib: Some(512),
+                    io_p95_mbps: None
                 },
                 &m,
                 &b,
@@ -706,6 +713,7 @@ mod tests {
             minutes: 10.0,
             cpu: 1.0,
             mem_p95_mib: None,
+            io_p95_mbps: None,
         };
         assert_eq!(
             admit(&j, Priority::P3, &unknown, &m, &b, &lim),
@@ -772,6 +780,7 @@ mod tests {
             minutes: 10.0,
             cpu: 0.0,
             mem_p95_mib: None,
+            io_p95_mbps: None,
         };
         let g = size(&j, &unknown, &b, 1);
         assert_eq!((g.mem_cap_mib, g.reserve_mib), (8192, 1024));
@@ -833,6 +842,42 @@ mod tests {
         assert_eq!(
             admit(&j, Priority::P3, &known(1.0, 512), &m, &b, &lim),
             Err(WaitReason::Threads)
+        );
+    }
+
+    #[test]
+    fn admission_counts_expected_io() {
+        // [D] pure (Task 10b): the running jobs' expected IO and this one's must fit what the device moves; a machine
+        // whose device is unknown counts nothing, and a job with no history counts nothing
+        let mut lim = Limits::for_profile(Profile::Dedicated, 32768, 24);
+        let mut m = machine(Profile::Dedicated);
+        let mut busy = running("r1", Priority::P3, m.now - 60, 512, 512);
+        busy.expected.io_p95_mbps = Some(80.0);
+        m.running = vec![busy];
+        let b = budget(&m, &lim);
+        let j = job("j", Priority::P3, 0);
+        let io = |mbps| Expected {
+            io_p95_mbps: Some(mbps),
+            ..known(1.0, 512)
+        };
+        assert_eq!(
+            admit(&j, Priority::P3, &io(30.0), &m, &b, &lim),
+            Ok(()),
+            "the device is unknown: nothing is counted"
+        );
+        lim.io_device_mbps = Some(100.0);
+        assert_eq!(
+            admit(&j, Priority::P3, &io(30.0), &m, &b, &lim),
+            Err(WaitReason::IoBandwidth {
+                need_mbps: 30.0,
+                free_mbps: 20.0
+            })
+        );
+        assert_eq!(admit(&j, Priority::P3, &io(15.0), &m, &b, &lim), Ok(()));
+        assert_eq!(
+            admit(&j, Priority::P3, &known(1.0, 512), &m, &b, &lim),
+            Ok(()),
+            "a job with no IO history is not held back"
         );
     }
 }

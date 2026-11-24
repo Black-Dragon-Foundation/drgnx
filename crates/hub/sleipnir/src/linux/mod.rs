@@ -20,7 +20,11 @@ pub mod shim;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod disk;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod io;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod jobexec;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod jobserver;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod probe;
 /// the progress guard reads cgroups through the probe where there is one; elsewhere (Android) no slice can be read

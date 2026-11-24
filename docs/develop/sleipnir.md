@@ -528,15 +528,30 @@ run.
 
 ### Slots (`sync::slot`)
 
-A slot is one checkout per slot key (project, source worktree, trust, toolchain); the trust is
-`forseti::JobTrust`, hashed as its word (`public`, `private`, `private+keys`). Its three directories are
-siblings under the runner folder, named by 32 hex digits of the key's hash:
+A slot family is a `SlotFamily`: project, trust (`forseti::JobTrust`, hashed as its word: `public`, `private`,
+`private+keys`), toolchain, cone and role (an author's run or a gate's: a gate never takes an author's slot or build
+dir). It names no worktree: two worktrees of one project share a family. The family's id is 32 hex digits of the
+key's hash, and the family has instances `<id>-<n>`, each one checkout held at one tree's inputs. An instance's three
+directories are siblings under the runner folder:
 
 | Path | What | Jobs see it |
 |---|---|---|
-| `slots/<id>/` | the checkout | read-only (a writer gets a private copy) |
-| `slots-git/<id>/` | its git dir: index, config, `used`, the locks; objects come from the mirror (`objects/info/alternates`) | never |
-| `slots-target/<id>/` | its `CARGO_TARGET_DIR` | read-write, one job at a time |
+| `slots/<id>-<n>/` | the checkout | read-only (a writer gets a private copy) |
+| `slots-git/<id>-<n>/` | its git dir: index, config, `used`, `worktree`, the locks; objects come from the mirror (`objects/info/alternates`) | never |
+| `slots-target/<id>-<n>/` | its `CARGO_TARGET_DIR` | read-write, one job at a time |
+
+`lease(root, key, inputs, worktree, limit, move_to)` picks the instance, in order: one already at `inputs` (the
+same tree shares it); the one `worktree` last leased (its build dir is warm); a new instance while the family has
+fewer than `limit`; the least recently used one no job reads. A job with no worktree (a commit-only job) takes the
+least recently used free instance first, then a new one. It moves the instance with `move_to` under its update lock
+and returns the number, the paths and the read lock (`hold`). `None`: every instance is read at other inputs and the
+family is at its limit; the job waits and holds nothing (`wait_for` names the job it waits for, and `serve` refuses
+the offer with `WaitReason::State{dir, holder}`). `slot_limit(free_above_floor, slot_p95, build_p95, max_slots)` is
+`free ÷ (slot + build)` clamped to 2 and `max_slots` (`runner.conf` `[slots] max_slots`, 16 by default); the sizes are
+`Register::p95(kind)` (`st_blocks`, never `du`), and an instance not sized yet counts as 1 GiB.
+
+The hub names a job's slot by its family (`SlotFamily::of(spec).id()`, in `slot:<id>` and `build:<id>` pins); the runner's
+register items are the instances, and a pin on a family covers its instances (`forseti::disk::names`).
 
 `update(paths, mirror, commit, overlay)`:
 
@@ -579,8 +594,35 @@ Locks can't be handed to job-exec: a systemd-run unit inherits no file descripto
 child forked by another thread shares until it execs: a `try_*` can see a lock held a moment after its holder let it
 go. So the locks' test (`tests/slot_locks.rs`) runs alone in its own binary, where no other thread spawns git.
 
-`register(reg, paths, key, now)` puts the slot (`slot:<id>`, at `slots/<id>`) and its build dir (`build:<id>`, at
-`slots-target/<id>`) in the disk register on lease, and touches both on every use. The disk guard removes them
+`register(reg, paths, key, n, now)` puts the instance's slot (`slot:<id>-<n>`, at `slots/<id>-<n>`) and its build dir
+(`build:<id>-<n>`, at `slots-target/<id>-<n>`) in the disk register on lease, and touches both on every use.
+
+A job whose pack says `git = "ro"` (`Derived::git_ro`) gets a git dir outside the slot (`slot::git_ro`, in the attempt's
+folder): `HEAD` at the commit, a copy of the slot's index, the mirror's objects by `objects/info/alternates` and its
+packed refs and tags, every file mode 0444 (folders stay removable). It is mounted read-only at `/gitdir` with
+`GIT_DIR=/gitdir` and `GIT_WORK_TREE=/work`, so `git describe` and `git status` work and no job can change history.
+Every job gets `GIT_NO_LAZY_FETCH=1`.
+
+### The jobserver and IO as budgets (`linux::jobserver`, `linux::io`)
+
+A job's parallelism is sized twice: once at its start (`{jobs}` = `forseti::admit::jobs_for(cores, cap_mib, unit_mib)`,
+the smaller of the cores and the cap over the pack's `unit_mib`, 1024 by default), and while it runs by the machine's
+jobserver. The jobserver is one fifo (`<root>/jobserver/pool`) that a job whose pack says `jobserver` gets mounted at
+`/jobserver`, with `MAKEFLAGS` and `CARGO_MAKEFLAGS` naming it (`--jobserver-auth=fifo:/jobserver`). On every `ready`
+`serve` sizes the pool with `forseti::jobserver::tokens`: the smaller of the CPU and the memory over `unit_mib` that the
+machine can give the pool (its budget plus what the pool's jobs hold), less the cores a refused P1-P2 offer needs, at
+least 1. A rise writes tokens; a fall reads back only the tokens in the fifo and leaves the rest owed until the jobs
+return them, so no work is killed. `tests/jobserver_cargo.rs` runs a real build against a pool that grows mid-build.
+
+IO is a budget too. Each running job's `IOWeight` follows its priority (`forseti::io::weight_of`: 1000, 500, 200, 100,
+50), set through systemd like the CPU weight. Weights act only under `io.cost` or BFQ: `linux::io::probe` reads which
+the runner's disk has (the longest mount point in `/proc/self/mountinfo`, the partition's disk in `/sys/class/block`),
+`report` says so in words, and a disk with neither is reported, never silently ignored. `sleipnir setup io --root DIR`
+(as root) turns `io.cost` on for the disk under DIR. Admission counts the running jobs' expected MiB/s
+(`Expected::io_p95_mbps`, the p95 of `io_mib ÷ wall_s` from the history; `result.json` carries `io_mib` from the
+cgroup's `io.stat`) against `[io] device_mbps` of `runner.conf` (`WaitReason::IoBandwidth`); no figure, nothing counted.
+Under IO pressure (`io full avg10` above its limit) `forseti::io::steps` caps the lowest-priority `io_heavy` job at half
+its expected IO (50 MiB/s without history), one job a tick, in its `io.max`, and lifts the caps at half the limit. The disk guard removes them
 (below).
 
 ### The escape rows
@@ -875,7 +917,7 @@ reservation (`drgnx-<hub id>`, job `<id>-<attempt>`) before it lets go, so two s
 memory. The answer is `admit {grant}` or `refuse {why, reason}`. An offer whose folder exists is answered again from
 it when it is the same placement (hub and nonce), and refused otherwise. While the memory ladder is above normal, no
 offer is admitted. `forseti`'s 10 s gap between starts counts from this hub's latest start in the folder, so it
-holds across `serve` processes. An offer whose slot (`SlotKey` of its project, the hub's worktree and its trust) a
+holds across `serve` processes. An offer whose slot (`SlotFamily` of its project, the hub's worktree and its trust) a
 running job reads at another input key is refused: a slot moves only between jobs (a job that writes the tree reads
 its own copy). This check sees this hub's jobs only; the slot's read locks (`slot::hold`, at `start`) are what keep a
 slot still under every job.
@@ -898,9 +940,9 @@ inputs ends the attempt `infra: setup`) and runs the job on the slot, or on `slo
 `tree/` when it writes the tree; it records the slot's id in `attempt.json`. Then it writes `job.json` (the shared
 podman argv, `RunnerArgs::runner(prefix, hub id, slice)`, in the job's
 slice `drgnx-runner-work-<id>.slice`, which gets `MemoryHigh` at the grant's reservation plus a fifth (at most the cap)
-and `MemoryMax` at its cap, `slices::job_props`; job-exec reverts them at the job's end; the container gets
-`CARGO_BUILD_JOBS = max(1, min(cores, cap / 2.5 GiB))`, `forseti::admit::cargo_jobs`, as a job on the hub's own machine
-does, in its environment or, for a container job, its container's `-e`, unless the job sets it) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
+and `MemoryMax` at its cap, `slices::job_props`; job-exec reverts them at the job's end; no build tool's
+variable is set: a job's parallelism is `{jobs}` = `forseti::admit::jobs_for(cores, cap, unit_mib)` in its command, and
+the jobserver's tokens) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
 `RuntimeMaxSec` = the timeout + 60 s (job-exec's own timeout writes the verdict first). The reservation passes to the
 unit's main pid, so it outlives `serve`. Then `started`. Every attempt gets its job helper (the disk watch); a keyed
 one also its key mounts and `drgnx-key exec` (its spec's key names, each into the variable of that name), and one

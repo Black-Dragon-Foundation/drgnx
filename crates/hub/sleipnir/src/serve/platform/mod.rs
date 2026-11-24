@@ -30,13 +30,37 @@ pub(in crate::serve) use linux::{job_caps, mount_of, net_helper, unallocated};
 /// Only that one shape is read (a TOML subset); anything else is ignored. The hub's value can lower it, never raise it
 /// ([`forseti::disk::owners_quota`]).
 pub fn disk_quota_gb(text: &str) -> Option<u64> {
-    let mut in_disk = false;
+    conf_number(text, "disk", "quota_gb")
+}
+
+/// How many instances of one slot family the runner's own `runner.conf` allows: `max_slots = N` under `[slots]`;
+/// [`crate::sync::slot::DEFAULT_MAX_SLOTS`] without it.
+pub fn max_slots(text: &str) -> u32 {
+    conf_number(text, "slots", "max_slots")
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(crate::sync::slot::DEFAULT_MAX_SLOTS)
+}
+
+/// What the runner's disk can move, MiB/s: `device_mbps = N` under `[io]` of its `runner.conf`; none: unknown (admission
+/// counts no IO and the machine's state says so).
+pub fn io_device_mbps(text: &str) -> Option<f64> {
+    conf_number(text, "io", "device_mbps")
+        .map(|n| n as f64)
+        .filter(|n| *n > 0.0)
+}
+
+/// The number KEY is set to under `[SECTION]` of a `runner.conf` (a TOML subset: `key = N` lines under a table header);
+/// anything else is ignored.
+fn conf_number(text: &str, section: &str, key: &str) -> Option<u64> {
+    let header = format!("[{section}]");
+    let mut inside = false;
     for line in text.lines().map(str::trim) {
         if line.starts_with('[') {
-            in_disk = line == "[disk]";
-        } else if in_disk
+            inside = line == header;
+        } else if inside
             && let Some(v) = line
-                .strip_prefix("quota_gb")
+                .strip_prefix(key)
                 .map(str::trim_start)
                 .and_then(|r| r.strip_prefix('='))
         {
@@ -57,6 +81,10 @@ pub struct LaunchReq<'a> {
     pub net_hosts: &'a [String],
     pub pins: Pins,
     pub parser: &'a str,
+    /// The read-only git dir of a `git = "ro"` job (outside its slot), mounted read-only as `GIT_DIR`.
+    pub git_ro: Option<&'a Path>,
+    /// The machine's jobserver fifo, for a job that takes part in it.
+    pub jobserver: Option<&'a Path>,
 }
 
 /// The machine under `serve`. Every call is blocking and short; none prompts.
@@ -99,6 +127,14 @@ pub trait Platform {
     fn weight_unit(&self, id: &str) -> Option<String>;
     /// Sets the CPU weight of UNIT.
     fn set_weight(&self, unit: &str, w: u32) -> villa::Result<()>;
+    /// Sets the IO weight of UNIT (`IOWeight`); a platform with none says so once and does nothing.
+    fn set_io_weight(&self, _unit: &str, _w: u32) -> villa::Result<()> {
+        Ok(())
+    }
+    /// Caps job ID's IO at MBPS MiB/s (`io.max`), or lifts the cap (none).
+    fn io_cap(&self, _id: &str, _mbps: Option<f64>) -> villa::Result<()> {
+        Ok(())
+    }
     /// Hands key NAME's VALUE to the job helper of the attempt in DIR. `NotFound` or `ConnectionRefused`: the helper
     /// isn't listening yet (the key waits); any other error ends the key.
     fn hand_key(&self, dir: &Path, name: &str, value: &[u8]) -> io::Result<()>;
@@ -131,6 +167,14 @@ pub trait Platform {
     }
     /// The machine owner's cap on what drgnx keeps here, GB (`runner.conf` `[disk] quota_gb`); none: no cap of its own.
     fn disk_quota_gb(&self) -> Option<u64> {
+        None
+    }
+    /// The most instances one slot family may have here (`runner.conf` `[slots] max_slots`).
+    fn max_slots(&self) -> u32 {
+        crate::sync::slot::DEFAULT_MAX_SLOTS
+    }
+    /// What the runner's disk can move, MiB/s (`runner.conf` `[io] device_mbps`); none: unknown.
+    fn io_device_mbps(&self) -> Option<f64> {
         None
     }
 }

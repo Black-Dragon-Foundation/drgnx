@@ -199,6 +199,22 @@ impl Register {
         &self.root
     }
 
+    /// The p95 (nearest rank) of the sizes `measure` found for the items of KIND, bytes; 0 when none was measured.
+    /// The slot limit reads the slot and build-dir sizes here, never `du` ([`super::slot::slot_limit`]).
+    pub fn p95(&self, kind: ItemKind) -> u64 {
+        let mut v: Vec<u64> = self
+            .entries
+            .values()
+            .filter(|e| e.item.kind == kind && e.item.bytes > 0)
+            .map(|e| e.item.bytes)
+            .collect();
+        v.sort_unstable();
+        match (v.len() * 95).div_ceil(100) {
+            0 => 0,
+            rank => v[rank - 1],
+        }
+    }
+
     /// The items removed from the register by `reconcile` since the last call (their folders were gone).
     pub fn take_gone(&mut self) -> Vec<String> {
         std::mem::take(&mut self.gone)
@@ -514,6 +530,37 @@ mod tests {
         fn now(&self) -> Duration {
             Duration::from_secs(self.0.fetch_add(1, Ordering::SeqCst))
         }
+    }
+
+    /// [D] (Task 9) the slot limit's sizes are the register's: the p95 of what `measure` found for a kind; an item
+    /// not sized yet (0 bytes) counts for nothing, and a kind with none sized has 0.
+    #[test]
+    fn slot_sizes_come_from_the_register() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        let mut r = Register::open(root).unwrap();
+        assert_eq!(r.p95(ItemKind::Slot), 0);
+        for (i, kib) in [64usize, 128, 192, 256].into_iter().enumerate() {
+            let rel = format!("slots/s{i}");
+            fs::create_dir_all(root.join(&rel)).unwrap();
+            crate::fsio::write(root.join(&rel).join("f"), vec![1u8; kib << 10]).unwrap();
+            r.add(item(&format!("slot:s{i}"), ItemKind::Slot), Path::new(&rel))
+                .unwrap();
+        }
+        assert_eq!(r.p95(ItemKind::Slot), 0, "nothing is sized yet");
+        assert_eq!(r.measure(Duration::from_secs(3600)), 4);
+        let biggest = r.get("slot:s3").unwrap().0.bytes;
+        assert!(biggest >= 256 << 10, "{biggest}");
+        assert_eq!(
+            r.p95(ItemKind::Slot),
+            biggest,
+            "nearest rank of four is the largest"
+        );
+        assert_eq!(r.p95(ItemKind::BuildDir), 0, "no build dir is sized");
+        // a fifth, never sized, is no zero in the figures
+        r.add(item("slot:new", ItemKind::Slot), Path::new("slots/new"))
+            .unwrap();
+        assert_eq!(r.p95(ItemKind::Slot), biggest);
     }
 
     /// [D] sizes come from `st_blocks`, lazily: a round stops at its budget and the next starts with the items not

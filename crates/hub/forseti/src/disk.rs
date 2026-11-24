@@ -199,6 +199,22 @@ pub struct DiskItem {
     pub trust: JobTrust,
 }
 
+/// Whether SET (a set of pins) names item ID. The hub knows a job's slot by its family (`slot:F`, `build:F`: the project,
+/// trust, toolchain and cone), the runner leases it as instances (`slot:F-0`, `slot:F-1`, …): a pin on the family
+/// covers every instance. Any other id is named by itself alone.
+pub fn names(set: &BTreeSet<String>, id: &str) -> bool {
+    if set.contains(id) {
+        return true;
+    }
+    let Some((head, n)) = id.rsplit_once('-') else {
+        return false;
+    };
+    (head.starts_with("slot:") || head.starts_with("build:"))
+        && !n.is_empty()
+        && n.bytes().all(|b| b.is_ascii_digit())
+        && set.contains(head)
+}
+
 /// I's state at NOW: active beats pinned beats age; the age is [`rule_of`]'s.
 pub fn state_of(
     i: &DiskItem,
@@ -207,12 +223,12 @@ pub fn state_of(
     pinned: &BTreeSet<String>,
     r: &DiskRules,
 ) -> ItemState {
-    if active.contains(&i.id) {
+    if names(active, &i.id) {
         return ItemState::Active;
     }
     let limit = match rule_of(i.kind) {
         KindRule::Pinned => return ItemState::Pinned,
-        _ if pinned.contains(&i.id) => return ItemState::Pinned,
+        _ if names(pinned, &i.id) => return ItemState::Pinned,
         KindRule::BuildAge => r.build_idle_s,
         KindRule::OtherAge => r.other_idle_s,
         KindRule::RecordingAge => r.recording_idle_s,
@@ -463,6 +479,30 @@ mod tests {
                 format!("\"{}\"", k.name())
             );
         }
+    }
+
+    /// [D] pure (Task 9): the hub pins a slot by its family; the runner's instances of it are all kept. Only slot and
+    /// build ids are families: `jobs/a.1` is itself, and one family never names another's instances.
+    #[test]
+    fn a_pin_on_a_slots_family_covers_its_instances() {
+        let fam: BTreeSet<String> = ["slot:abc".to_string(), "build:abc".to_string()].into();
+        for id in ["slot:abc", "slot:abc-0", "slot:abc-12", "build:abc-3"] {
+            assert!(names(&fam, id), "{id}");
+        }
+        for id in [
+            "slot:abd-0",
+            "slot:ab",
+            "slot:abc-x",
+            "slot:abc-",
+            "jobs/abc-0",
+            "build:ab-1",
+        ] {
+            assert!(!names(&fam, id), "{id}");
+        }
+        let old = item("slot:abc-1", ItemKind::Slot, 0);
+        assert_eq!(state(&old, &["slot:abc"], &[]), ItemState::Active);
+        assert_eq!(state(&old, &[], &["slot:abc"]), ItemState::Pinned);
+        assert_eq!(state(&old, &["slot:other"], &[]), ItemState::Evictable);
     }
 
     /// [D] pure: active beats pinned beats age.

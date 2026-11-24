@@ -790,6 +790,7 @@ mod tests {
             at: 1,
             warm: true,
             disk_gib: None,
+            io_mib: 0,
         };
         let mut c = cand("laptop", RunnerTrust::Mine);
         c.speed = 1.5;

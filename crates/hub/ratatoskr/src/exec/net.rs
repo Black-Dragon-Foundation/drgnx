@@ -237,7 +237,7 @@ pub async fn prepare_net(
         .map(|h| host::parse_target(h))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| setup(format!("the allow-list: {e:?}")))?;
-    let ra = container::placement(owner_tag, None, 0);
+    let ra = container::placement(owner_tag, None);
     let names = container::net_names(&ra, id).map_err(|r| setup(r.message))?;
     let env = container::podman_env(shell);
     let binary = ferja::image::binary_for(px_dir, podman_arch());
@@ -408,8 +408,7 @@ mod tests {
                 ),
                 web: job_web(None),
                 sidecar: Some(sidecar),
-                names: container::net_names(&container::placement("ffffffff", None, 0), "x1")
-                    .unwrap(),
+                names: container::net_names(&container::placement("ffffffff", None), "x1").unwrap(),
                 job: container::name_of("x1").unwrap(),
                 // the channel holds the sidecar's stdio while the relay runs
                 channel: crate::clock::spawn_untracked(module_path!(), async move {

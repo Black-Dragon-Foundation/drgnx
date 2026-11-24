@@ -4640,7 +4640,7 @@ between machines from each new row (`Learned::observe_run`). A bundle the runner
 over the time from its sending to the runner's next `sync-need` (`Learned::observe_transfer`), and a candidate's
 transfer counts its overlay's bytes unless an attempt there synced the same inputs (the queue remembers the last 64
 input keys per runner). A start is warm on a runner whose last `ready` lists the job's slot
-(`sleipnir::sync::slot::SlotKey::of(spec)`) and holds its image; `serve` lists the slot folders under its root and the
+(`sleipnir::sync::slot::SlotFamily::of(spec)`) and holds its image; `serve` lists the slot folders under its root and the
 images its attempts ran in. Every candidate's estimate reads the job's history on every machine, and the pick is
 `forseti::pick_with` with what was learned and each candidate's warmth. After a restart `queue::kept` reads `rq_rows`
 and `rq_history` (oldest first) and `Queue::restore_kept` puts the rows back and learns again in the same order, so
@@ -4900,7 +4900,7 @@ report, its items, the pins it was sent and the user's pins.
   gone). `report` keeps them and writes `disk_items` in `runtime.db` (migration 12: machine, id, kind, owner, bytes,
   last used, state, who pinned it).
 - **Pins.** After `hello-ok` and after each report the runner hears `pins`: active, what its open attempts use (their
-  folders `jobs/<job>.<attempt>`, and `slot:`/`build:` of their slot id, `sleipnir::sync::slot::SlotId`); pinned, the
+  folders `jobs/<job>.<attempt>`, and `slot:`/`build:` of their slot family, `sleipnir::sync::slot::SlotFamily::of(spec).id()`; a pin on a family covers its instances `<family>-<n>`); pinned, the
   slots queued jobs will check out, and the user's pins (`pins_for`).
 - **Orders.** After a report, below the evict floor or over the owner's quota (`forseti::disk::owners_quota`: the
   smaller of the runner's `runner.conf` quota and the hub's), `order` plans from the register and the runner hears

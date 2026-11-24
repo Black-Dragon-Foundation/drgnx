@@ -27,16 +27,21 @@ use super::git::{Git, line, run, spawn};
 use super::register::Register;
 use super::{Result, SyncError, check_path, hex, refused};
 
-/// What a slot is shared by: jobs of one project, source worktree, trust and toolchain.
+/// What a slot family is shared by: jobs of one project, trust, toolchain, cone and role. Not the worktree: two
+/// worktrees of one project share a family, and each of its instances ([`lease`]) is held at one tree's inputs.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct SlotId {
+pub struct SlotFamily {
     pub project: String,
-    pub worktree: String,
     pub trust: JobTrust,
+    /// The toolchain's identity; empty until toolchains are images by digest.
     pub toolchain: String,
+    /// The part of the tree the slot holds; empty: all of it.
+    pub cone: String,
+    /// An author's run or a gate's: a gate never takes an author's slot or build dir.
+    pub role: forseti::Role,
 }
 
-/// Where one slot's three directories are.
+/// Where one slot instance's three directories are.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SlotPaths {
     pub slot: PathBuf,
@@ -75,33 +80,49 @@ pub enum CopyKind {
     Plain,
 }
 
-impl SlotId {
-    /// The slot key of a job: its project, the hub's worktree, its trust; one toolchain for now. The runner names a
-    /// slot by it, and the hub knows from it whether a runner's `ready` lists the job's slot.
-    pub fn of(spec: &forseti::JobSpec) -> SlotId {
-        SlotId {
+impl SlotFamily {
+    /// The slot key of a job: its project, trust and role; one toolchain and the whole tree for now. The runner names
+    /// its slots by it, and the hub knows from it whether a runner's `ready` lists the job's slot family.
+    pub fn of(spec: &forseti::JobSpec) -> SlotFamily {
+        SlotFamily {
             project: spec.project.as_str().to_string(),
-            worktree: spec.tree.display().to_string(),
             trust: spec.trust,
             toolchain: String::new(),
+            cone: String::new(),
+            role: spec.role,
         }
     }
 
-    /// The slot's directory name: 32 hex digits of sha256 over the four words (the trust as the design's word),
-    /// each length-prefixed.
+    /// The family's id: 32 hex digits of sha256 over the five words (the trust as the design's word), each
+    /// length-prefixed.
     pub fn id(&self) -> String {
         let mut h = Sha256::new();
         for w in [
             self.project.as_str(),
-            self.worktree.as_str(),
             trust_word(self.trust),
             self.toolchain.as_str(),
+            self.cone.as_str(),
+            self.role.name(),
         ] {
             h.update((w.len() as u64).to_le_bytes());
             h.update(w.as_bytes());
         }
         hex(&h.finalize()[..16])
     }
+
+    /// Instance N's name: the family's id and the number, `<id>-<n>` (the directory name, the register's `slot:` and
+    /// `build:` ids).
+    pub fn instance_id(&self, n: u32) -> String {
+        format!("{}-{n}", self.id())
+    }
+}
+
+/// The family id and instance number of the instance named NAME (`<id>-<n>`).
+pub fn split_instance(name: &str) -> Option<(&str, u32)> {
+    let (family, n) = name.rsplit_once('-')?;
+    (family.len() == 32 && family.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| n.parse().ok().map(|n| (family, n)))
+        .flatten()
 }
 
 /// The job trust's word: `public`, `private` or `private+keys`.
@@ -113,28 +134,192 @@ pub(crate) fn trust_word(t: JobTrust) -> &'static str {
     }
 }
 
-/// The ids of the slots under the runner folder `root`, sorted (what `ready` lists as present).
+/// The ids of the slot families under the runner folder `root`, sorted, each once (what `ready` lists as present).
 pub fn present(root: &Path) -> Vec<String> {
     let mut ids: Vec<String> = fs::read_dir(root.join("slots"))
         .map(|rd| {
             rd.flatten()
                 .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
                 .filter_map(|e| e.file_name().into_string().ok())
+                .filter_map(|n| split_instance(&n).map(|(family, _)| family.to_string()))
                 .collect()
         })
         .unwrap_or_default();
     ids.sort();
+    ids.dedup();
     ids
 }
 
-/// The slot's directories under the runner folder `root`.
-pub fn paths(root: &Path, key: &SlotId) -> SlotPaths {
-    let id = key.id();
+/// Instance N of KEY's family: its directories under the runner folder `root`.
+pub fn paths(root: &Path, key: &SlotFamily, n: u32) -> SlotPaths {
+    paths_of(root, &key.instance_id(n))
+}
+
+/// The directories of the instance named ID (`<family>-<n>`).
+pub fn paths_of(root: &Path, id: &str) -> SlotPaths {
     SlotPaths {
-        slot: root.join("slots").join(&id),
-        git_dir: root.join("slots-git").join(&id),
-        target: root.join("slots-target").join(&id),
+        slot: root.join("slots").join(id),
+        git_dir: root.join("slots-git").join(id),
+        target: root.join("slots-target").join(id),
     }
+}
+
+/// One leased-before instance of a family: its number, the worktree that last leased it and when it was last used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SlotInstance {
+    pub n: u32,
+    pub worktree: Option<PathBuf>,
+    /// Epoch seconds of its `used` mark.
+    pub last_used: u64,
+}
+
+/// The slot limit: as many instances as the free disk above the evict floor holds at their p95 size (a slot and its
+/// build dir), at least 2 and at most MAX_SLOTS (the runner's setting, 16 by default). A size of 0 (nothing measured
+/// yet) counts as [`MIN_INSTANCE_BYTES`], so a fresh runner does not read an unlimited disk.
+pub fn slot_limit(
+    free_above_floor: u64,
+    slot_bytes_p95: u64,
+    build_bytes_p95: u64,
+    max_slots: u32,
+) -> u32 {
+    let each = slot_bytes_p95
+        .saturating_add(build_bytes_p95)
+        .max(MIN_INSTANCE_BYTES);
+    let n = u32::try_from(free_above_floor / each).unwrap_or(u32::MAX);
+    n.max(2).min(max_slots)
+}
+
+/// What an instance counts as when nothing has been measured, bytes.
+pub const MIN_INSTANCE_BYTES: u64 = 1 << 30;
+
+/// The default of the runner's `max-slots`.
+pub const DEFAULT_MAX_SLOTS: u32 = 16;
+
+/// The instance to reuse among the FREE ones: the one WORKTREE last leased, else the least recently used (the lowest
+/// number among equals); an index into FREE, none when it is empty.
+pub fn pick_instance(free: &[SlotInstance], worktree: Option<&Path>) -> Option<usize> {
+    if let Some(w) = worktree
+        && let Some(i) = free.iter().position(|f| f.worktree.as_deref() == Some(w))
+    {
+        return Some(i);
+    }
+    free.iter()
+        .enumerate()
+        .min_by_key(|(_, f)| (f.last_used, f.n))
+        .map(|(i, _)| i)
+}
+
+/// What an instance's lease is: its number and directories, and the read lock that keeps it at its inputs.
+pub struct Lease {
+    pub n: u32,
+    pub paths: SlotPaths,
+    pub held: Held,
+}
+
+/// The instances KEY's family has under ROOT, by number.
+pub fn instances(root: &Path, key: &SlotFamily) -> Vec<SlotInstance> {
+    let family = key.id();
+    let mut out: Vec<SlotInstance> = fs::read_dir(root.join("slots-git"))
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| {
+                    let name = e.file_name().into_string().ok()?;
+                    let (f, n) = split_instance(&name)?;
+                    (f == family).then_some((n, e.path()))
+                })
+                .map(|(n, dir)| SlotInstance {
+                    n,
+                    worktree: crate::fsio::read_to_string(dir.join(WORKTREE))
+                        .ok()
+                        .map(PathBuf::from),
+                    last_used: fs::metadata(dir.join("used"))
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |d| d.as_secs()),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort_by_key(|i| i.n);
+    out
+}
+
+/// The file in an instance's git dir that names the worktree that last leased it.
+const WORKTREE: &str = "worktree";
+
+/// A read lock on an instance of KEY's family held at INPUTS, for a job from WORKTREE (none: a commit-only job).
+/// In order: an instance already at INPUTS (the same tree shares it); the one WORKTREE last leased (its build dir is
+/// warm); a new instance while the family has fewer than LIMIT; the least recently used one no job reads. MOVE_TO
+/// moves an instance to INPUTS under its update lock ([`hold`]). `None` when every instance is read at other inputs
+/// and the family is at its limit: the job waits and holds nothing (no folder is made for it).
+pub fn lease(
+    root: &Path,
+    key: &SlotFamily,
+    inputs: &str,
+    worktree: Option<&Path>,
+    limit: u32,
+    mut move_to: impl FnMut(&SlotPaths) -> Result<()>,
+) -> Result<Option<Lease>> {
+    let all = instances(root, key);
+    let take =
+        |n: u32, move_to: &mut dyn FnMut(&SlotPaths) -> Result<()>| -> Result<Option<Lease>> {
+            let paths = paths(root, key, n);
+            let Some(held) = hold(&paths, inputs, || move_to(&paths))? else {
+                return Ok(None);
+            };
+            if let Some(w) = worktree {
+                crate::fsio::write(paths.git_dir.join(WORKTREE), w.as_os_str().as_bytes())?;
+            }
+            Ok(Some(Lease { n, paths, held }))
+        };
+    // the same inputs share an instance
+    for i in &all {
+        if holds(&paths(root, key, i.n).git_dir, inputs)
+            && let Some(l) = take(i.n, &mut move_to)?
+        {
+            return Ok(Some(l));
+        }
+    }
+    // the instances no job reads (an update lock is free); a race is settled by `hold` again
+    let free: Vec<SlotInstance> = all
+        .iter()
+        .filter(|i| {
+            Locks::of(&paths(root, key, i.n))
+                .try_update()
+                .is_ok_and(|l| l.is_some())
+        })
+        .cloned()
+        .collect();
+    let under_limit = (all.len() as u32) < limit;
+    let own = worktree.is_some_and(|w| free.iter().any(|f| f.worktree.as_deref() == Some(w)));
+    let pick = if own || !under_limit || worktree.is_none() {
+        pick_instance(&free, worktree).map(|i| free[i].n)
+    } else {
+        None
+    };
+    let n = match pick {
+        Some(n) => n,
+        None if under_limit => (0..).find(|n| !all.iter().any(|i| i.n == *n)).unwrap_or(0),
+        None => return Ok(None),
+    };
+    take(n, &mut move_to)
+}
+
+/// The job to wait for when INPUTS can't be leased: among HOLDERS (the running jobs that read the family's slots, each
+/// its job id and inputs), none when INPUTS is among their inputs or fewer than LIMIT distinct inputs are held;
+/// else the job holding the first of them.
+pub fn wait_for<'a>(holders: &[(&'a str, &str)], inputs: &str, limit: u32) -> Option<&'a str> {
+    if holders.iter().any(|(_, i)| *i == inputs) {
+        return None;
+    }
+    let mut distinct: Vec<&str> = holders.iter().map(|(_, i)| *i).collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    if (distinct.len() as u32) < limit {
+        return None;
+    }
+    holders.first().map(|(j, _)| *j)
 }
 
 /// Every attribute that changes bytes between git and the checkout, unset for every path: the slot holds exactly
@@ -534,10 +719,17 @@ pub fn hold_for_job(dir: &Path) -> villa::Result<Option<Held>> {
     Ok(Some(held))
 }
 
-/// Slot KEY (its directories P, under REG's runner folder) and its build dir in the disk register, used at NOW: on
-/// lease and on every use, so the guard ages them from their last job (`slot:<id>`, `build:<id>`).
-pub fn register(reg: &mut Register, p: &SlotPaths, key: &SlotId, now: u64) -> villa::Result<()> {
-    let id = key.id();
+/// Instance N of slot family KEY (its directories P, under REG's runner folder) and its build dir in the disk
+/// register, used at NOW: on lease and on every use, so the guard ages them from their last job
+/// (`slot:<id>-<n>`, `build:<id>-<n>`).
+pub fn register(
+    reg: &mut Register,
+    p: &SlotPaths,
+    key: &SlotFamily,
+    n: u32,
+    now: u64,
+) -> villa::Result<()> {
+    let id = key.instance_id(n);
     for (kind, item_id, dir) in [
         (ItemKind::Slot, format!("slot:{id}"), &p.slot),
         (ItemKind::BuildDir, format!("build:{id}"), &p.target),
@@ -565,6 +757,59 @@ pub fn register(reg: &mut Register, p: &SlotPaths, key: &SlotId, now: u64) -> vi
     Ok(())
 }
 
+/// A read-only git dir for a job whose pack says `git = "ro"`, made at DEST (which must not exist), outside the slot:
+/// `HEAD` at COMMIT, a copy of the slot P's index, the mirror's objects through `objects/info/alternates` and its tags,
+/// and no file writable (its folders stay removable, so the attempt's cleanup needs no chmod). The job gets it as `GIT_DIR` (with `GIT_WORK_TREE` the slot), mounted
+/// read-only, so `git describe` and `git status` work and nothing a job does can change history. Through the alternates
+/// it can read every object of its project's mirror at its trust.
+pub fn git_ro(dest: &Path, p: &SlotPaths, mirror_git: &Path, commit: &str) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let oid_ok = matches!(commit.len(), 40 | 64)
+        && commit
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if !oid_ok {
+        return Err(refused(commit.as_bytes(), "not an object id"));
+    }
+    // never over an existing folder
+    fs::create_dir(dest)?;
+    fs::create_dir_all(dest.join("objects/info"))?;
+    fs::create_dir_all(dest.join("refs/tags"))?;
+    fs::create_dir_all(dest.join("info"))?;
+    let mut files: Vec<(PathBuf, Vec<u8>)> = vec![
+        (dest.join("HEAD"), format!("{commit}\n").into_bytes()),
+        (dest.join("index"), fs::read(p.git_dir.join("index"))?),
+        (
+            dest.join("config"),
+            fs::read(p.git_dir.join("config")).unwrap_or_default(),
+        ),
+        (dest.join("info/attributes"), ATTRIBUTES.as_bytes().to_vec()),
+    ];
+    let mut alternates = mirror_git.join("objects").into_os_string().into_vec();
+    alternates.push(b'\n');
+    files.push((dest.join("objects/info/alternates"), alternates));
+    if let Ok(packed) = fs::read(mirror_git.join("packed-refs")) {
+        files.push((dest.join("packed-refs"), packed));
+    }
+    // the mirror's loose tags
+    if let Ok(rd) = fs::read_dir(mirror_git.join("refs/tags")) {
+        for e in rd
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        {
+            files.push((
+                dest.join("refs/tags").join(e.file_name()),
+                fs::read(e.path())?,
+            ));
+        }
+    }
+    for (path, body) in files {
+        crate::fsio::write(&path, body)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444))?;
+    }
+    Ok(())
+}
+
 fn touch(path: &Path) -> io::Result<()> {
     let f = crate::fsio::open_lock(path, 0o666)?;
     f.set_modified(stund::wall())
@@ -588,12 +833,13 @@ mod tests {
     use super::super::testutil::{self, DirBlobs, HOOKS, marker_script, user_git, write};
     use super::*;
 
-    fn key(n: &str) -> SlotId {
-        SlotId {
-            project: "p".into(),
-            worktree: n.into(),
+    fn key(project: &str) -> SlotFamily {
+        SlotFamily {
+            project: project.into(),
             trust: JobTrust::Private,
             toolchain: "t".into(),
+            cone: String::new(),
+            role: forseti::Role::Author,
         }
     }
 
@@ -628,7 +874,7 @@ mod tests {
         let (repo, _) = testutil::repo(t.path(), &files);
         write(&repo, b"b", b"b in the overlay\n");
         write(&repo, b"x", b"untracked\n");
-        let p = paths(&t.path().join("runner"), &key("w"));
+        let p = paths(&t.path().join("runner"), &key("w"), 0);
         sync(t.path(), &repo, &p);
 
         let old = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
@@ -666,7 +912,7 @@ mod tests {
     fn darwin_private_copies_are_clones() {
         let t = tempfile::tempdir().unwrap();
         let (repo, _) = testutil::repo(t.path(), &[(b"a", b"a\n")]);
-        let p = paths(&t.path().join("runner"), &key("w"));
+        let p = paths(&t.path().join("runner"), &key("w"), 0);
         sync(t.path(), &repo, &p);
         let dest = t.path().join("job/tree");
         fs::create_dir_all(dest.parent().unwrap()).unwrap();
@@ -687,7 +933,7 @@ mod tests {
         symlink("a", repo.join("ln")).unwrap();
         testutil::commit_all(&repo, "two");
         write(&repo, b"overlay", b"o\n");
-        let p = paths(&t.path().join("runner"), &key("w"));
+        let p = paths(&t.path().join("runner"), &key("w"), 0);
         sync(t.path(), &repo, &p);
 
         let dest = t.path().join("job/tree");
@@ -733,7 +979,7 @@ mod tests {
     /// Returns the slot's paths and the marker every planted program would append to.
     fn plant_then_sync(t: &Path, plant: impl FnOnce(&SlotPaths, &Path)) -> SlotPaths {
         let (repo, _) = testutil::repo(t, &[(b"a", b"a\n"), (b"dir/file", b"f\n")]);
-        let p = paths(&t.join("runner"), &key("w"));
+        let p = paths(&t.join("runner"), &key("w"), 0);
         sync(t, &repo, &p);
         let marker = t.join("marker");
         plant(&p, &marker);
@@ -884,7 +1130,7 @@ mod tests {
     fn update_refuses_what_it_never_writes() {
         let t = tempfile::tempdir().unwrap();
         let (repo, commit) = testutil::repo(t.path(), &[(b"a", b"a\n")]);
-        let p = paths(&t.path().join("runner"), &key("w"));
+        let p = paths(&t.path().join("runner"), &key("w"), 0);
         sync(t.path(), &repo, &p);
         let before = testutil::tree(&p.slot);
         let blobs = DirBlobs {
@@ -946,11 +1192,11 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let root = t.path().join("runner");
         let k = key("w");
-        let p = paths(&root, &k);
+        let p = paths(&root, &k, 1);
         let mut reg = Register::open(&root).unwrap();
-        register(&mut reg, &p, &k, 100).unwrap();
-        register(&mut reg, &p, &k, 500).unwrap();
-        let id = k.id();
+        register(&mut reg, &p, &k, 1, 100).unwrap();
+        register(&mut reg, &p, &k, 1, 500).unwrap();
+        let id = k.instance_id(1);
         let (slot, rel) = reg.get(&format!("slot:{id}")).unwrap();
         assert_eq!(
             (slot.kind, slot.created, slot.last_used, slot.trust),
@@ -961,48 +1207,332 @@ mod tests {
         assert_eq!((build.kind, build.last_used), (ItemKind::BuildDir, 500));
         assert_eq!(rel, Path::new("slots-target").join(&id));
         // a slot whose paths are not under the register's folder is refused
-        let elsewhere = paths(&t.path().join("other"), &k);
-        assert!(register(&mut reg, &elsewhere, &k, 600).is_err());
+        let elsewhere = paths(&t.path().join("other"), &k, 1);
+        assert!(register(&mut reg, &elsewhere, &k, 1, 600).is_err());
     }
 
     // [D] pure
     #[test]
     fn slot_keys_name_their_own_directories() {
         let root = Path::new("/r");
-        let a = paths(root, &key("w"));
-        assert_eq!(a, paths(root, &key("w")));
-        let other = SlotId {
+        let a = paths(root, &key("w"), 0);
+        assert_eq!(a, paths(root, &key("w"), 0));
+        let other = SlotFamily {
             trust: JobTrust::PrivateKeys,
             ..key("w")
         };
         assert_ne!(
             a.slot,
-            paths(root, &other).slot,
+            paths(root, &other, 0).slot,
             "trust levels never share a slot"
         );
         assert_ne!(
             a.target,
-            paths(root, &key("w2")).target,
-            "worktrees never share a target dir"
+            paths(root, &key("w2"), 0).target,
+            "projects never share a target dir"
+        );
+        assert_ne!(
+            a.target,
+            paths(root, &key("w"), 1).target,
+            "instances differ"
         );
         assert_eq!(a.slot.parent().unwrap(), root.join("slots"));
         assert_eq!(a.git_dir.parent().unwrap(), root.join("slots-git"));
         assert_eq!(a.target.parent().unwrap(), root.join("slots-target"));
+        assert_eq!(
+            a.slot.file_name().unwrap().to_str().unwrap(),
+            key("w").instance_id(0)
+        );
     }
 
-    // [D] pure (a folder): the slots present are the folders under `slots/`, by id; a stray file is none, and a root
-    // with no slots has none
+    // [D] pure (a folder): the slot families present are the folders under `slots/`, by family id, once each; a
+    // stray file or a folder that is no instance is none, and a root with no slots has none
     #[test]
     fn present_lists_the_slot_folders() {
         let d = tempfile::tempdir().unwrap();
         assert!(present(d.path()).is_empty());
-        let (a, b) = (paths(d.path(), &key("w")), paths(d.path(), &key("w2")));
-        for p in [&b, &a] {
+        let (a, a1, b) = (
+            paths(d.path(), &key("w"), 0),
+            paths(d.path(), &key("w"), 1),
+            paths(d.path(), &key("w2"), 0),
+        );
+        for p in [&b, &a1, &a] {
             fs::create_dir_all(&p.slot).unwrap();
         }
+        fs::create_dir_all(d.path().join("slots/not-an-instance")).unwrap();
         crate::fsio::write(d.path().join("slots/stray"), b"").unwrap();
         let mut want = vec![key("w").id(), key("w2").id()];
         want.sort();
         assert_eq!(present(d.path()), want);
+    }
+
+    fn lease_at(
+        root: &Path,
+        k: &SlotFamily,
+        inputs: &str,
+        worktree: Option<&str>,
+        limit: u32,
+    ) -> Option<Lease> {
+        lease(root, k, inputs, worktree.map(Path::new), limit, |_| Ok(())).unwrap()
+    }
+
+    /// Makes instance P's `used` mark SECS past the epoch, so the order of use is the test's, not the clock's.
+    fn used_at(p: &SlotPaths, secs: u64) {
+        crate::fsio::open_lock(p.git_dir.join("used"), 0o666)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    // [D] pure (a folder): jobs at one tree's inputs share one instance, each with its own read lock
+    #[test]
+    fn same_tree_shares_a_slot() {
+        let t = tempfile::tempdir().unwrap();
+        let k = key("w");
+        let a = lease_at(t.path(), &k, "i1", Some("/wt/a"), 4).expect("a free family leases");
+        let b = lease_at(t.path(), &k, "i1", Some("/wt/a"), 4).expect("the same inputs share");
+        assert_eq!((a.n, b.n), (0, 0));
+        assert_eq!(a.paths, b.paths);
+        assert!(
+            Locks::of(&a.paths).try_update().unwrap().is_none(),
+            "two readers hold it"
+        );
+        assert_eq!(instances(t.path(), &k).len(), 1);
+    }
+
+    // [D] pure (a folder) (RF4): another tree never moves a slot under a running job: it takes another instance
+    #[test]
+    fn another_tree_takes_another_slot() {
+        let t = tempfile::tempdir().unwrap();
+        let k = key("w");
+        let a = lease_at(t.path(), &k, "i1", Some("/wt/a"), 4).unwrap();
+        let b = lease_at(t.path(), &k, "i2", Some("/wt/b"), 4).expect("a free number");
+        assert_eq!((a.n, b.n), (0, 1));
+        assert_ne!(a.paths.slot, b.paths.slot);
+        assert_ne!(a.paths.target, b.paths.target, "each has its own build dir");
+        assert_eq!(
+            crate::fsio::read_to_string(a.paths.git_dir.join(INPUTS)).unwrap(),
+            "i1",
+            "the first is still at its own inputs"
+        );
+    }
+
+    // [D] pure (a folder): at the limit with every instance read at other inputs a job waits, holding nothing: no
+    // folder, no lock; the moment a reader is gone it takes that instance
+    #[test]
+    fn past_the_limit_waits_as_state_holding_nothing() {
+        let t = tempfile::tempdir().unwrap();
+        let k = key("w");
+        let a = lease_at(t.path(), &k, "i1", Some("/wt/a"), 2).unwrap();
+        let b = lease_at(t.path(), &k, "i2", Some("/wt/b"), 2).unwrap();
+        assert!(lease_at(t.path(), &k, "i3", Some("/wt/c"), 2).is_none());
+        assert_eq!(
+            instances(t.path(), &k).len(),
+            2,
+            "no third instance was made"
+        );
+        assert_eq!(
+            fs::read_dir(t.path().join("slots-git")).unwrap().count(),
+            2,
+            "and no folder for the waiting job"
+        );
+        // the job it waits for: the first holder; nothing to wait for when its inputs are held or the limit is not met
+        let holders = [("j1", "i1"), ("j2", "i2"), ("j3", "i1")];
+        assert_eq!(wait_for(&holders, "i3", 2), Some("j1"));
+        assert_eq!(wait_for(&holders, "i2", 2), None, "its own inputs share");
+        assert_eq!(wait_for(&holders, "i3", 3), None, "a free number");
+        assert_eq!(wait_for(&[], "i3", 2), None);
+        drop(a);
+        let c = lease_at(t.path(), &k, "i3", Some("/wt/c"), 2).expect("the freed instance moves");
+        assert_eq!(c.n, 0);
+        drop(b);
+    }
+
+    // [D] pure (a folder): a commit-only job (no worktree) takes the instance a worktree job left warm, not a new one
+    #[test]
+    fn a_commit_only_job_takes_the_warm_build_dir() {
+        let t = tempfile::tempdir().unwrap();
+        let k = key("w");
+        let warm = lease_at(t.path(), &k, "worktree-inputs", Some("/wt/a"), 4).unwrap();
+        let (n, target) = (warm.n, warm.paths.target.clone());
+        drop(warm);
+        let commit_only = lease_at(t.path(), &k, "commit-inputs", None, 4).unwrap();
+        assert_eq!(commit_only.n, n);
+        assert_eq!(commit_only.paths.target, target);
+        assert_eq!(instances(t.path(), &k).len(), 1);
+    }
+
+    // [D] pure (a folder): a worktree goes back to the instance it last used, its build dir warm, while another is
+    // older: the one it left is not the least recently used
+    #[test]
+    fn a_worktree_returns_to_its_last_slot_instance() {
+        let t = tempfile::tempdir().unwrap();
+        let k = key("w");
+        let a = lease_at(t.path(), &k, "i1", Some("/wt/a"), 4).unwrap();
+        let b = lease_at(t.path(), &k, "i2", Some("/wt/b"), 4).unwrap();
+        assert_eq!((a.n, b.n), (0, 1));
+        let (pa, pb) = (a.paths.clone(), b.paths.clone());
+        drop((a, b));
+        // instance 0 is the older; /wt/b's is the more recent
+        used_at(&pa, 1000);
+        used_at(&pb, 2000);
+        let back = lease_at(t.path(), &k, "i3", Some("/wt/b"), 4).unwrap();
+        assert_eq!(back.n, 1, "not the least recently used one");
+        drop(back);
+        // pick_instance, alone: the worktree's own, else the least recently used (the lowest number among equals)
+        let free = [
+            SlotInstance {
+                n: 0,
+                worktree: Some("/wt/a".into()),
+                last_used: 50,
+            },
+            SlotInstance {
+                n: 1,
+                worktree: Some("/wt/b".into()),
+                last_used: 90,
+            },
+            SlotInstance {
+                n: 2,
+                worktree: None,
+                last_used: 50,
+            },
+        ];
+        assert_eq!(pick_instance(&free, Some(Path::new("/wt/b"))), Some(1));
+        assert_eq!(pick_instance(&free, Some(Path::new("/wt/zz"))), Some(0));
+        assert_eq!(pick_instance(&free, None), Some(0));
+        assert_eq!(pick_instance(&[], None), None);
+    }
+
+    // [D] pure (RF2, review S4.1): an instance's number comes from the disk the runner has left
+    #[test]
+    fn the_slot_limit_follows_free_disk() {
+        const G: u64 = 1 << 30;
+        // free 40 GiB, a slot of 2 and a build dir of 8: four
+        assert_eq!(slot_limit(40 * G, 2 * G, 8 * G, 16), 4);
+        // little left: two, never fewer
+        assert_eq!(slot_limit(5 * G, 2 * G, 8 * G, 16), 2);
+        assert_eq!(slot_limit(0, 2 * G, 8 * G, 16), 2);
+        // a lot: the setting
+        assert_eq!(slot_limit(1 << 40, 2 * G, 8 * G, 16), 16);
+        assert_eq!(slot_limit(1 << 40, 2 * G, 8 * G, 6), 6);
+        // nothing measured yet: an instance counts as a GiB, never a divide by zero
+        assert_eq!(slot_limit(8 * G, 0, 0, 16), 8);
+        // a setting under two is the setting
+        assert_eq!(slot_limit(1 << 40, 2 * G, 8 * G, 1), 1);
+    }
+
+    // [D] pure (a folder): a gate never leases an instance (or its build dir) an author's run has
+    #[test]
+    fn a_gate_never_leases_an_author_build_dir() {
+        let t = tempfile::tempdir().unwrap();
+        let author = key("w");
+        let gate = SlotFamily {
+            role: forseti::Role::Gate,
+            ..key("w")
+        };
+        assert_ne!(author.id(), gate.id());
+        let a = lease_at(t.path(), &author, "i1", Some("/wt/a"), 4).unwrap();
+        let g = lease_at(t.path(), &gate, "i1", Some("/wt/a"), 4).unwrap();
+        assert_ne!(a.paths.target, g.paths.target);
+        assert_ne!(a.paths.slot, g.paths.slot);
+        drop(a);
+        // even with the author's instance idle, and the same inputs, the gate has its own family
+        let g2 = lease_at(t.path(), &gate, "i1", Some("/wt/a"), 4).unwrap();
+        assert_eq!(g2.paths.target, g.paths.target);
+        assert_eq!(instances(t.path(), &author).len(), 1);
+        assert_eq!(instances(t.path(), &gate).len(), 1);
+    }
+
+    /// A bare mirror of a repository with one commit tagged `v1` and one more commit on top, and the slot at the tip.
+    fn mirror_and_slot(t: &Path) -> (PathBuf, SlotPaths, String) {
+        let (repo, _) = testutil::repo(t, &[(b"a", b"a\n")]);
+        user_git(&repo, &["tag", "-a", "-m", "one", "v1"]);
+        write(&repo, b"b", b"b\n");
+        testutil::commit_all(&repo, "two");
+        let mirror = t.join("mirror.git");
+        user_git(
+            t,
+            &[
+                "clone",
+                "-q",
+                "--mirror",
+                repo.to_str().unwrap(),
+                mirror.to_str().unwrap(),
+            ],
+        );
+        let p = paths(&t.join("runner"), &key("w"), 0);
+        sync(t, &repo, &p);
+        let tip = String::from_utf8(user_git(&repo, &["rev-parse", "HEAD"]))
+            .unwrap()
+            .trim()
+            .to_string();
+        (mirror, p, tip)
+    }
+
+    // [D] pure (real git): a `git = "ro"` job's git dir answers `git describe` from the slot's files, with the tag
+    #[test]
+    fn a_git_ro_job_runs_git_describe() {
+        let t = tempfile::tempdir().unwrap();
+        let (mirror, p, tip) = mirror_and_slot(t.path());
+        let dest = t.path().join("job/git");
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        git_ro(&dest, &p, &mirror, &tip).unwrap();
+        let ro = super::super::git::Git {
+            git_dir: dest.clone(),
+            work_tree: Some(p.slot.clone()),
+        };
+        let out = super::super::git::run("describe", ro.cmd(["describe"]), None).unwrap();
+        assert!(
+            String::from_utf8_lossy(&out).starts_with("v1-1-g"),
+            "{}",
+            String::from_utf8_lossy(&out)
+        );
+        let head = super::super::git::run("head", ro.cmd(["rev-parse", "HEAD"]), None).unwrap();
+        assert_eq!(super::super::git::line(&head), tip);
+        let status =
+            super::super::git::run("status", ro.cmd(["status", "--porcelain"]), None).unwrap();
+        assert!(
+            status.is_empty(),
+            "the slot is clean: {}",
+            String::from_utf8_lossy(&status)
+        );
+        assert!(
+            fs::symlink_metadata(p.slot.join(".git")).is_err(),
+            "the slot keeps no .git"
+        );
+    }
+
+    // [D] pure (a folder): no file in the git dir is writable (the mount is read-only too: the podman argv's row;
+    // its folders stay removable, so the attempt's cleanup needs no chmod)
+    #[test]
+    fn a_git_ro_dir_is_read_only() {
+        let t = tempfile::tempdir().unwrap();
+        let (mirror, p, tip) = mirror_and_slot(t.path());
+        let dest = t.path().join("job/git");
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        git_ro(&dest, &p, &mirror, &tip).unwrap();
+        let mut seen = 0;
+        let mut stack = vec![dest.clone()];
+        while let Some(d) = stack.pop() {
+            let meta = fs::symlink_metadata(&d).unwrap();
+            if meta.is_dir() {
+                stack.extend(fs::read_dir(&d).unwrap().map(|e| e.unwrap().path()));
+            } else {
+                let mode = meta.permissions().mode();
+                assert_eq!(mode & 0o222, 0, "{} is writable ({mode:o})", d.display());
+                seen += 1;
+            }
+        }
+        assert!(
+            seen >= 3,
+            "HEAD, the index and the alternates at least: {seen}"
+        );
+        assert!(
+            git_ro(&dest, &p, &mirror, &tip).is_err(),
+            "never over an existing folder"
+        );
+        // the mirror's objects only by alternates: the job's dir holds none of its own
+        let alt = crate::fsio::read_to_string(dest.join("objects/info/alternates")).unwrap();
+        assert_eq!(alt.trim(), mirror.join("objects").display().to_string());
     }
 }

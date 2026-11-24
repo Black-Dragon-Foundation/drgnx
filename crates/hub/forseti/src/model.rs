@@ -279,6 +279,17 @@ pub struct Derived {
     /// ([`crate::admit::admit`]'s IO gate). The pack declares it.
     #[serde(default)]
     pub io_heavy: bool,
+    /// The job gets a read-only git dir made outside its slot (`GIT_DIR`, `GIT_WORK_TREE`): `git describe` and the like
+    /// work, and nothing it does can change the slot's history. The pack declares it (`git = "ro"`).
+    #[serde(default)]
+    pub git_ro: bool,
+    /// The job takes part in the machine's jobserver ([`crate::jobserver`]): it gets its fifo and `MAKEFLAGS`, so its
+    /// build parallelism follows the budget while it runs. The pack declares it.
+    #[serde(default)]
+    pub jobserver: bool,
+    /// The memory one unit of the job's work takes, MiB ([`crate::admit::jobs_for`]); none: the default.
+    #[serde(default)]
+    pub unit_mib: Option<u64>,
 }
 
 /// The history class of a tree of BYTES: `floor(log2(MiB))`, 0 below 2 MiB.
@@ -335,6 +346,9 @@ pub struct Expected {
     pub minutes: f64,
     pub cpu: f64,
     pub mem_p95_mib: Option<u64>,
+    /// The p95 of the job's IO bandwidth over its runs, MiB/s (reads and writes together); none: not measured.
+    #[serde(default)]
+    pub io_p95_mbps: Option<f64>,
 }
 
 impl Expected {
@@ -509,6 +523,11 @@ pub enum WaitReason {
     /// Its tree is in no registered project (or its clone is shallow, or matches two): no runner takes it. The text
     /// says why and what to do (`jobs/project-add`, `git fetch --unshallow`).
     NotRegistered(String),
+    /// The running jobs' expected IO, with this one's, is more than the runner's disk can move.
+    IoBandwidth {
+        need_mbps: f64,
+        free_mbps: f64,
+    },
 }
 
 /// The pressure names [`WaitReason::Pressure`] carries.
@@ -566,6 +585,10 @@ pub struct Limits {
     /// The least time between two starts, unless both are small ([`crate::admit::small`]).
     #[serde(default = "default_start_gap_s")]
     pub start_gap_s: u64,
+    /// What the runner's disk can move, MiB/s (the runner's setting `io-mbps`): admission counts the running jobs'
+    /// expected IO against it ([`crate::io::fits`]). None: unknown, nothing is counted and `jobs why` says so.
+    #[serde(default)]
+    pub io_device_mbps: Option<f64>,
 }
 
 fn default_start_gap_s() -> u64 {
@@ -601,6 +624,7 @@ impl Limits {
                 no_jobs_on_battery: false,
                 fixed_slots: None,
                 start_gap_s: crate::admit::START_GAP_S,
+                io_device_mbps: None,
             },
             Profile::Workstation => Limits {
                 floor_mib: 1536,
@@ -619,6 +643,7 @@ impl Limits {
                 no_jobs_on_battery: true,
                 fixed_slots: None,
                 start_gap_s: crate::admit::START_GAP_S,
+                io_device_mbps: None,
             },
         }
     }
@@ -681,6 +706,7 @@ impl Limits {
             no_jobs_on_battery: false,
             fixed_slots: Some(n),
             start_gap_s: crate::admit::START_GAP_S,
+            io_device_mbps: None,
         }
     }
 }

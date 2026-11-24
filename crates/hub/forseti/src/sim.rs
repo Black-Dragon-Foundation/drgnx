@@ -172,6 +172,7 @@ mod tests {
             minutes,
             cpu: 1.0,
             mem_p95_mib: Some(1024),
+            io_p95_mbps: None,
         }
     }
 

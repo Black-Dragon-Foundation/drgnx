@@ -15,6 +15,8 @@ pub mod drain;
 pub mod evict;
 pub mod fair;
 pub mod history;
+pub mod io;
+pub mod jobserver;
 pub mod learn;
 pub mod model;
 pub mod place;
@@ -27,7 +29,7 @@ pub mod split;
 #[cfg(test)]
 mod testkit;
 
-pub use admit::{Budget, admit, budget, head_protection, oom_rerun, size};
+pub use admit::{Budget, admit, budget, head_protection, jobs_for, oom_rerun, size};
 // `backfill::Reservation` stays in its module: at the root it would shadow the two schedulers' `Reservation`.
 pub use backfill::{Need, backfill_ok, budget_at, expected_end, reservation};
 pub use classify::{ExitEvidence, classify};

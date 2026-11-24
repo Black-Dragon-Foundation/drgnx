@@ -38,6 +38,10 @@ pub struct LinuxPlatform {
     kvm_projects: Vec<String>,
     /// The owner's disk cap its own `runner.conf` sets, GB (`[disk] quota_gb`).
     disk_quota_gb: Option<u64>,
+    /// The most instances one slot family may have (`[slots] max_slots`).
+    max_slots: u32,
+    /// What the disk can move, MiB/s (`[io] device_mbps`).
+    io_device_mbps: Option<f64>,
     /// The timing slice's partition fallback was said (once per runner).
     partition_said: AtomicBool,
 }
@@ -70,6 +74,8 @@ impl LinuxPlatform {
                 .collect(),
             kvm_projects: podman::kvm_projects(&conf),
             disk_quota_gb: super::disk_quota_gb(&conf),
+            max_slots: super::max_slots(&conf),
+            io_device_mbps: super::io_device_mbps(&conf),
             exe: exe.to_path_buf(),
             partition_said: AtomicBool::new(false),
         })
@@ -88,6 +94,8 @@ impl LinuxPlatform {
             exe: PathBuf::from("/nonexistent/sleipnir"),
             kvm_projects: vec![],
             disk_quota_gb: None,
+            max_slots: crate::sync::slot::DEFAULT_MAX_SLOTS,
+            io_device_mbps: None,
             features: vec![],
             partition_said: AtomicBool::new(false),
         }
@@ -328,7 +336,8 @@ impl Platform for LinuxPlatform {
                 writes_tree: meta.spec.writes_tree,
                 target: dir.join("target"),
                 caches: vec![],
-                cargo_jobs: forseti::admit::cargo_jobs(&meta.grant),
+                git_ro: req.git_ro.map(Path::to_path_buf),
+                jobserver: req.jobserver.map(Path::to_path_buf),
             }),
         };
         let container =
@@ -455,6 +464,29 @@ impl Platform for LinuxPlatform {
         resize::set_weight(unit, w)
     }
 
+    fn set_io_weight(&self, unit: &str, w: u32) -> villa::Result<()> {
+        crate::linux::slices::set(unit, &[("IOWeight", w.to_string())])
+    }
+
+    fn io_cap(&self, id: &str, mbps: Option<f64>) -> villa::Result<()> {
+        let mountinfo = crate::fsio::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+        let sys = crate::linux::io::Sys {
+            mountinfo: &mountinfo,
+            sysfs: Path::new("/sys"),
+            cgroup: Path::new("/sys/fs/cgroup"),
+        };
+        let dev = crate::linux::io::device_of(&sys, &self.root).ok_or_else(|| {
+            villa::Error::unavailable("the runner's folder is on no block device".to_string())
+        })?;
+        let (max, _) = crate::linux::io::files(&resize::container_cgroup(&self.container(id))?);
+        let line = match mbps {
+            Some(m) => crate::linux::io::max_line(&dev, m),
+            None => crate::linux::io::lift_line(&dev),
+        };
+        crate::fsio::write_in_place(&max, line)
+            .map_err(|e| villa::Error::io(format!("{}: {e}", max.display())))
+    }
+
     fn hand_key(&self, dir: &Path, name: &str, value: &[u8]) -> io::Result<()> {
         crate::helper::keys::hand(&dir.join(HELPER_SOCK), name, value)
     }
@@ -542,6 +574,14 @@ impl Platform for LinuxPlatform {
 
     fn disk_quota_gb(&self) -> Option<u64> {
         self.disk_quota_gb
+    }
+
+    fn max_slots(&self) -> u32 {
+        self.max_slots
+    }
+
+    fn io_device_mbps(&self) -> Option<f64> {
+        self.io_device_mbps
     }
 }
 

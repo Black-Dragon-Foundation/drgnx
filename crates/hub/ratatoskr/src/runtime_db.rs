@@ -22,7 +22,7 @@
 //! - `delegation` (8): the cells a manager handed a worker (`sid` → JSON), so a restarted worker never runs wider than
 //!   its manager delegated ([`crate::manager`]); a worker whose row is missing gets nothing and a card.
 //!
-//! - the queue (9): `rq_job`, `rq_attempt`, `rq_offer`, `rq_admission`, `rq_detached`, `rq_input`, `rq_history`
+//! - the queue (9; `rq_history.io_mib` 15): `rq_job`, `rq_attempt`, `rq_offer`, `rq_admission`, `rq_detached`, `rq_input`, `rq_history`
 //!   and `rq_rows`, the runners design's §7.4 columns (`rq_input.commit_sha` is its `commit`, a word SQL keeps)
 //!   ([`crate::runners::queue`]).
 //!
@@ -130,6 +130,10 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
          roots text not null); \
          create table project_clones(common_dir text primary key, project text not null, root text not null);",
     ),
+    (
+        15,
+        "alter table rq_history add column io_mib integer not null default 0;",
+    ),
 ];
 
 /// Open (or make) `runtime.db` in HUB_DIR on its own store thread.
@@ -206,7 +210,7 @@ mod tests {
             "{names:?}"
         );
         let fresh = urdr::open_readonly(&file).unwrap();
-        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("12"));
+        assert_eq!(urdr::meta(&fresh, "schema").unwrap().as_deref(), Some("15"));
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
             0o600
@@ -300,7 +304,7 @@ mod tests {
             (
                 "rq_history",
                 &[
-                    "key", "machine", "warm", "wall", "cpu", "peak_mib", "verdict", "at",
+                    "key", "machine", "warm", "wall", "cpu", "peak_mib", "verdict", "at", "io_mib",
                 ],
             ),
             ("rq_rows", &["job", "attempt", "row", "verdict", "machine"]),

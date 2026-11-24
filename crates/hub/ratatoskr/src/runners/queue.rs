@@ -710,6 +710,7 @@ fn hist_row(spec: &JobSpec, machine: &str, result: &Value, now: u64) -> Option<H
         warm: result["warm"].as_bool() == Some(true),
         // the runner measures the job's folder at its end (build dir and outputs)
         disk_gib: result["disk_gib"].as_u64(),
+        io_mib: result["io_mib"].as_u64().unwrap_or(0),
     })
 }
 
@@ -781,7 +782,7 @@ pub async fn kept(db: &urdr::Handle) -> Kept {
     let history = db
         .read(|c| {
             let mut st = c.prepare(
-                "select key, machine, warm, wall, cpu, peak_mib, verdict, at from rq_history order by at, rowid",
+                "select key, machine, warm, wall, cpu, peak_mib, verdict, at, io_mib from rq_history order by at, rowid",
             )?;
             let rows = st
                 .query_map([], |r| {
@@ -794,6 +795,7 @@ pub async fn kept(db: &urdr::Handle) -> Kept {
                         r.get::<_, Option<i64>>(5)?,
                         r.get::<_, String>(6)?,
                         r.get::<_, f64>(7)?,
+                        r.get::<_, i64>(8)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -805,7 +807,7 @@ pub async fn kept(db: &urdr::Handle) -> Kept {
             vec![]
         })
         .into_iter()
-        .filter_map(|(key, machine, warm, wall_s, cpu_s, peak, verdict, at)| {
+        .filter_map(|(key, machine, warm, wall_s, cpu_s, peak, verdict, at, io_mib)| {
             Some(HistRow {
                 key,
                 machine,
@@ -818,6 +820,7 @@ pub async fn kept(db: &urdr::Handle) -> Kept {
                 at: at.max(0.0) as u64,
                 warm,
                 disk_gib: None,
+                io_mib: io_mib.max(0) as u64,
             })
         })
         .collect();
@@ -1006,6 +1009,10 @@ pub fn wait_text(r: &WaitReason) -> String {
         WaitReason::State { dir, holder } => {
             format!("{} is held by job {holder}", dir.display())
         }
+        WaitReason::IoBandwidth {
+            need_mbps,
+            free_mbps,
+        } => format!("needs {need_mbps:.0} MiB/s of disk bandwidth; {free_mbps:.0} MiB/s is free"),
         WaitReason::IslandBusy => "the timing island is busy".into(),
         WaitReason::NoIsland => {
             "its machine has no timing island (a whole-machine run asks for whole_machine)".into()
@@ -1693,7 +1700,7 @@ impl Queue {
             return;
         };
         let verdict = serde_json::to_string(&row.verdict).unwrap_or_default();
-        let (key, machine, warm, wall, cpu, peak, at) = (
+        let (key, machine, warm, wall, cpu, peak, at, io_mib) = (
             row.key.clone(),
             row.machine.clone(),
             row.warm,
@@ -1701,12 +1708,13 @@ impl Queue {
             row.cpu_s,
             row.mem_peak_mib as i64,
             row.at as f64,
+            row.io_mib as i64,
         );
         self.persist(Box::new(move |c| {
             c.execute(
-                "insert into rq_history(key, machine, warm, wall, cpu, peak_mib, verdict, at) \
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                (key, machine, warm, wall, cpu, peak, verdict, at),
+                "insert into rq_history(key, machine, warm, wall, cpu, peak_mib, verdict, at, io_mib) \
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                (key, machine, warm, wall, cpu, peak, verdict, at, io_mib),
             )?;
             Ok(())
         }));
@@ -1729,11 +1737,6 @@ impl Queue {
         for (sid, machine) in k.prefs {
             st.prefs.insert(sid, Machine::parse(Some(&machine)));
         }
-    }
-
-    /// The cores job ID was granted here, while it runs here.
-    pub fn local_cores(&self, id: &str) -> Option<u32> {
-        self.lock().local_running.get(id).map(|rj| rj.cores)
     }
 
     /// Count what each job here uses from now on, as READ says (design §0.3 R2, C1): the hub gives its jobs' slices.
@@ -2692,7 +2695,7 @@ impl Queue {
         // the pick (with what placement learned and how warm each start would be; no history: the static rule), the
         // head's reservation, then this machine's own admission: held or refused on one machine, the job may still go
         // to another
-        let slot = sleipnir::sync::slot::SlotId::of(&job.spec).id();
+        let slot = sleipnir::sync::slot::SlotFamily::of(&job.spec).id();
         let image = q.s.place.image.clone();
         let warmth = |c: &Candidate| Self::warmth(st, &slot, image.as_deref(), c);
         let expect =
@@ -3439,7 +3442,7 @@ impl Queue {
             let sid =
                 j.s.inputs
                     .is_some()
-                    .then(|| sleipnir::sync::slot::SlotId::of(&j.s.spec).id());
+                    .then(|| sleipnir::sync::slot::SlotFamily::of(&j.s.spec).id());
             match st.attempts.current(id) {
                 Some((n, a)) if a.runner == runner && a.state.open() => {
                     running.insert(format!("jobs/{id}.{n}"));
@@ -4231,6 +4234,7 @@ fn need_of(job: &Job) -> forseti::Need {
         minutes: forseti::history::DEFAULT_MINUTES,
         cpu: f64::from(job.spec.cores.min),
         mem_p95_mib: None,
+        io_p95_mbps: None,
     };
     forseti::Need::of(job, &unknown)
 }
@@ -4291,6 +4295,7 @@ impl OnMachine {
                 minutes: self.expected_s / 60.0,
                 cpu: f64::from(self.cores),
                 mem_p95_mib: None,
+                io_p95_mbps: None,
             },
             restartable: self.restartable,
             evicted_once: false,
@@ -4328,6 +4333,7 @@ fn running(id: &str, eff: Priority, now: u64, reserve_mib: u64, cores: u32) -> R
             minutes: forseti::history::DEFAULT_MINUTES,
             cpu: f64::from(cores),
             mem_p95_mib: None,
+            io_p95_mbps: None,
         },
         restartable: true,
         evicted_once: false,
@@ -4593,7 +4599,7 @@ mod tests {
             assert!(fresh.lock().history.is_empty());
             let mut spec = blank_spec("x1");
             spec.command = vec!["make".into(), "check".into()];
-            let ran = |verdict: &str, wall: f64, disturbed: bool| json!({"verdict": verdict, "wall_s": wall, "cpu_s": wall, "mem_peak_mib": 100, "disturbed": disturbed});
+            let ran = |verdict: &str, wall: f64, disturbed: bool| json!({"verdict": verdict, "wall_s": wall, "cpu_s": wall, "mem_peak_mib": 100, "io_mib": 1200, "disturbed": disturbed});
             let q = queue(Some(db.clone()));
             {
                 let mut st = q.lock();
@@ -4611,7 +4617,26 @@ mod tests {
             let st = again.lock();
             assert_eq!(st.learned, live);
             assert_eq!(st.history_of(&forseti::history_key(&spec)).len(), 2);
+            assert!(
+                st.history_of(&forseti::history_key(&spec))
+                    .iter()
+                    .all(|r| r.io_mib == 1200),
+                "the IO a job read and wrote survives a restart"
+            );
         })
+    }
+
+    // [D] pure (Task 10b): what a result says its cgroup read and wrote becomes the job's expected IO, per runner
+    #[test]
+    fn an_offer_carries_the_jobs_expected_io() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        let spec = blank_spec("x1");
+        let ran = |io: u64| json!({"verdict": "Pass", "wall_s": 60.0, "cpu_s": 60.0, "mem_peak_mib": 100, "io_mib": io});
+        let mut st = q.lock();
+        assert_eq!(st.expected_on(&spec, "r1").io_p95_mbps, None);
+        q.record_run(&mut st, &spec, "r1", &ran(1200), 10);
+        assert_eq!(st.expected_on(&spec, "r1").io_p95_mbps, Some(20.0));
     }
 
     // [D] pure (design §0.3 R6): admission reads the job's history. A runner's offer carries what the job's runs there
@@ -5775,7 +5800,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let (q, _rx) = test_queue(dir.path(), None, true);
             let j = job("x1", Priority::P3, 64);
-            let slot = sleipnir::sync::slot::SlotId::of(&j.spec).id();
+            let slot = sleipnir::sync::slot::SlotFamily::of(&j.spec).id();
             for r in ["r1", "r2"] {
                 add(&q, r, 600);
                 hello(&q, r, true, 100);
