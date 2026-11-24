@@ -215,19 +215,21 @@ pub fn machine_ports(
 
 /// `podman machine inspect` of the default machine and its config file (`<ConfigDir.Path>/<Name>.json`), read now.
 #[cfg(target_os = "macos")]
-fn read_machine_ports() -> Result<Vec<u16>, String> {
+fn read_machine_ports() -> villa::Result<Vec<u16>> {
     let out = crate::proc::Command::new("podman")
         .args(["machine", "inspect"])
         .stdin(std::process::Stdio::null())
         .output()
-        .map_err(|e| format!("podman machine inspect: {e}"))?;
-    let all: serde_json::Value =
-        serde_json::from_slice(&out.stdout).map_err(|e| format!("podman machine inspect: {e}"))?;
+        .map_err(|e| villa::Error::unavailable(format!("podman machine inspect: {e}")))?;
+    let all: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| villa::Error::invalid(format!("podman machine inspect: {e}")))?;
     let m = all.get(0).unwrap_or(&all);
     let config = m["ConfigDir"]["Path"]
         .as_str()
         .zip(m["Name"].as_str())
-        .and_then(|(d, n)| std::fs::read(std::path::Path::new(d).join(format!("{n}.json"))).ok())
+        .and_then(|(d, n)| {
+            crate::fsio::read(std::path::Path::new(d).join(format!("{n}.json"))).ok()
+        })
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
     machine_ports(m, config.as_ref())
 }
