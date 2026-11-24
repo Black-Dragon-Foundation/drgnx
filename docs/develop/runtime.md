@@ -1890,7 +1890,8 @@ hub's clock) without one, and started again, once, when it dies inside a request
   Documents go plain and questions carry `Instruct: <task>\nQuery:<q>` as the hub's do. `--query-source SRC` embeds the
   questions with another source (the same model on another machine, for a parity check); with `--state DIR` the chunk
   vectors already in DIR are reused and no document text is sent. The report JSON has `source` and
-  `embed_seconds_per_chunk`. `eval run ROOT --dump-chunks N --out FILE` only indexes and writes N of the project's chunk
+  `embed_seconds_per_chunk`. The run prints `embedded N chunks, Ns` after every embed batch of 256 keys, so a slow
+  embedder (TEI on the CPU) shows life. `eval run ROOT --dump-chunks N --out FILE` only indexes and writes N of the project's chunk
   texts (evenly spread; documents plain, as tier 2 embeds them) to FILE as `{"texts": [...]}`, opening no model: the
   engine's parity check and its self-check reference come from such a dump.
 - **The MCP tools (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets

@@ -727,6 +727,12 @@ async fn sample_names(
     Ok(spread(unique_code_names(all), limit))
 }
 
+/// The line each embed batch prints: how many chunks are in and since when, so a slow embedder (TEI on the CPU) can be
+/// told from a stuck run.
+fn embed_progress(embedded: u64, secs: f64) -> String {
+    format!("embedded {embedded} chunks, {secs:.0}s")
+}
+
 /// The definitions of code files whose name is at least 4 characters and defined once in the whole project, by name.
 fn unique_code_names(all: Vec<(String, String, String, String)>) -> Vec<(String, String, String)> {
     let mut count: HashMap<&str, u32> = HashMap::new();
@@ -879,18 +885,15 @@ fn run_set(
                     .map_err(|e| e.to_string())?;
             }
         }
-        let before = embedded;
         // the chunks (what the report's `chunks_embedded` says); the path vectors ride along
         embedded += todo
             .iter()
             .filter(|(kind, _, _)| *kind == hrafn::KeyKind::Chunk)
             .count() as u64;
-        if embedded / 2048 > before / 2048 {
-            eprintln!(
-                "embedded {embedded} chunks, {:.0}s",
-                begun.elapsed().as_secs_f64()
-            );
-        }
+        eprintln!(
+            "{}",
+            embed_progress(embedded, begun.elapsed().as_secs_f64())
+        );
     }
     let embed_seconds = begun.elapsed().as_secs_f64();
 
@@ -1179,6 +1182,14 @@ mod tests {
         assert_eq!((s.n, s.max), (6, 4.0));
         assert_eq!(s.p50, 0.2);
         assert_eq!(s.p95, 4.0);
+    }
+
+    /// Pattern D. Every embed batch (256 keys) prints where the run is, not one in 2,048 chunks: a CPU embedder takes
+    /// minutes over 2,048 chunks, which the slot guard read as a hang.
+    #[test]
+    fn every_embed_batch_says_how_far_it_is() {
+        assert_eq!(embed_progress(256, 31.4), "embedded 256 chunks, 31s");
+        assert_eq!(embed_progress(15239, 259.0), "embedded 15239 chunks, 259s");
     }
 
     /// Pattern D. The exact-symbol sample is names defined once, in code files, of 4 characters or more, spread evenly.
