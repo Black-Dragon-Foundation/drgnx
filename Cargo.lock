@@ -1755,6 +1755,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "eykt"
+version = "0.1.0"
+dependencies = [
+ "eitri",
+ "gleipnir",
+ "libc",
+ "norn",
+ "rustix",
+ "saman",
+ "skuld",
+ "stofn",
+ "stund",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "urdr",
+ "villa",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5754,6 +5774,7 @@ dependencies = [
  "bytes",
  "draugr",
  "eitri",
+ "eykt",
  "fastwebsockets",
  "ferja",
  "flate2",

@@ -11,6 +11,7 @@ crates above it in this table, and `standards.toml` (`[[layer]]`) fails a back-e
 | Crate | What | Depends on |
 |---|---|---|
 | `stofn` | the standards shims (`soft`, `fsio`, `proc`), `shell_env`, the wire error helpers, `Origin`, `Caller` and `peer_allowed`, a checkout's git folders (`gitdirs`), the running executable's path (`exe`), a debug session's port blocks (`ports`), the archive unpacker (`unpack`); nothing that needs a clock | `annall`, `draugr`, `eitri`, `runstav`, `saman`, `stig`, `villa` |
+| `eykt` | the clock (virtual in a test build, one per process; every crate reaches it as `eykt::clock`), the stall watchdog, stage timestamps, the ordered disk writer (`disk`), the step snapshots (`snapshot`) and `project::project_of` | `eitri`, `gleipnir`, `norn`, `saman`, `stofn`, `stund`, `urdr`, `villa` |
 
 ## Processes
 

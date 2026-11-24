@@ -167,14 +167,11 @@ async fn resolve(dirs: Vec<PathBuf>) -> Result<ProjectCache, Error> {
     .map_err(internal)
 }
 
-/// The project of DIR (`norn::project::resolve`, on a blocking thread): `None` outside a repository; an error naming
-/// git when git cannot answer, which a caller never reads as "no project".
+/// The project of DIR, its error as the sentence the callers carry (`eykt::project::project_of`).
 pub(crate) async fn project_of(dir: &Path) -> Result<Option<project::ProjectRef>, String> {
-    let at = dir.to_path_buf();
-    crate::clock::blocking(move || project::resolve(&at))
+    eykt::project::project_of(dir)
         .await
-        .map_err(|e| format!("the project of {}: {e}", dir.display()))?
-        .map_err(|e| format!("the project of {}: {e}", dir.display()))
+        .map_err(|e| e.to_string())
 }
 
 /// F in one request of WRITER after its `tx` row from META; a writer that is not open runs its tick (the opening

@@ -57,6 +57,7 @@ eitri = { clean = true }
 draugr = { clean = true }
 ratatoskr = { clean = true }
 stofn = { clean = true }
+eykt = { clean = true }
 vegvisir = { clean = true }
 hrafn-embed = { clean = true }
 hermod = { clean = true }
@@ -242,3 +243,13 @@ may_not_depend = ["huginn"]
 crate = "stofn"
 may_not_depend = ["ratatoskr", "eykt", "vitni", "hattr", "kall", "spegill", "las", "kanna", "dromi", "safn", "muninn", "skyggna", "bok", "leidangr", "stjorn", "starf", "fylgja", "einherjar"]
 dev = true
+
+[[layer]]
+crate = "eykt"
+may_not_depend = ["ratatoskr", "vitni", "hattr", "kall", "spegill", "las", "kanna", "dromi", "safn", "muninn", "skyggna", "bok", "leidangr", "stjorn", "starf", "fylgja", "einherjar"]
+dev = true
+
+# norn sits under eykt (`eykt::project_of` asks it which project a folder is in): it never depends on a split crate.
+[[layer]]
+crate = "norn"
+may_not_depend = ["ratatoskr", "stofn", "eykt", "vitni", "hattr", "kall", "spegill", "las", "kanna", "dromi", "safn", "muninn", "skyggna", "bok", "leidangr", "stjorn", "starf", "fylgja", "einherjar"]
