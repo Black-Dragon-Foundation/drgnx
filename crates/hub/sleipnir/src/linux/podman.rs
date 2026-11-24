@@ -85,10 +85,33 @@ pub struct JobNet {
     pub sidecar: String,
 }
 
-/// What a job asks: an image name from the allow-list, a command, its source, the network granted.
+/// The image a job runs in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImageRef {
+    /// A name on the allow-list ([`Caps::images`]): the hub's own jobs, and a runner's `job` image.
+    Name(String),
+    /// `repository@sha256:<digest>`, which the allow-list must hold as it is (a pull by digest, never a tag).
+    Digest(String),
+    /// An image made for an artifact (an `image` artifact, a toolchain), run by its ID, and only when the label it
+    /// carries ([`crate::artifact::LABEL`]) is the artifact's key. The caller reads the label from the image
+    /// (`podman image inspect`); none read counts as a mismatch.
+    Id {
+        id: String,
+        key: forseti::ArtifactKey,
+        label: Option<String>,
+    },
+}
+
+impl From<&str> for ImageRef {
+    fn from(name: &str) -> ImageRef {
+        ImageRef::Name(name.to_string())
+    }
+}
+
+/// What a job asks: an image, a command, its source, the network granted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContainerReq {
-    pub image: String,
+    pub image: ImageRef,
     pub argv: Vec<String>,
     /// The source: the session's worktree locally; the slot, or a writer's private copy, on a runner.
     pub worktree: PathBuf,
@@ -123,6 +146,40 @@ pub struct RunnerMounts {
     /// The machine's jobserver fifo, for a job that takes part: bind-mounted at [`JOBSERVER_INSIDE`], with `MAKEFLAGS`
     /// and `CARGO_MAKEFLAGS` naming it.
     pub jobserver: Option<PathBuf>,
+    /// The artifacts the job uses, each read-only at its own path under [`ART_INSIDE`].
+    pub uses: Vec<UseMount>,
+    /// An artifact build's `.part` folder: `rw,Z` at [`OUT_INSIDE`].
+    pub out: Option<PathBuf>,
+    /// The job's own variables (a pack's `env`, the caches' variables), placeholders already expanded. A name of the
+    /// builder's own, or one that is not a plain name, is refused. Never a key: keys come through `drgnx-key`.
+    pub env: Vec<(String, String)>,
+}
+
+/// The variables the argv builder sets itself: a job's `env` never names one.
+const RESERVED_ENV: [&str; 7] = [
+    "CARGO_TARGET_DIR",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_NO_LAZY_FETCH",
+    "MAKEFLAGS",
+    "CARGO_MAKEFLAGS",
+    DEADLINE_ENV,
+];
+
+/// Where a job sees the artifacts it uses (`{art:NAME}` is `/art/NAME`).
+pub const ART_INSIDE: &str = "/art";
+/// Where an artifact build's `{out}` appears.
+pub const OUT_INSIDE: &str = "/out";
+/// Where an author's job sees the gate's partition of a cache, read-only (`{gate:NAME}` is `/cache-gate/NAME`).
+pub const GATE_CACHE_INSIDE: &str = "/cache-gate";
+
+/// One read-only use of an artifact.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UseMount {
+    /// A `command` artifact's committed folder: a read-only bind at `/art/NAME`.
+    Dir { host: PathBuf, name: String },
+    /// An `image` artifact used `ro`: the image mounted read-only at `/art/NAME` (`--mount type=image`), by ID.
+    Image { id: String, name: String },
 }
 
 /// Where a `git = "ro"` job sees its git dir.
@@ -136,6 +193,9 @@ pub const JOBSERVER_INSIDE: &str = "/jobserver";
 pub struct CacheMount {
     pub host: PathBuf,
     pub inside: String,
+    /// An author's job also sees the gate's partition of the cache, read-only, at `/cache-gate/<name>`: its host
+    /// folder and the cache's name. A gate's job has none: it sees its own partition only.
+    pub gate_ro: Option<(PathBuf, String)>,
 }
 
 /// The job's own copy of the `drgnx-key` binary on the host, and the keys it reads: each `(key name, variable)`. The
@@ -398,6 +458,59 @@ pub fn resolve<'a>(caps: &'a Caps, name: &str) -> Result<&'a str, Refusal> {
     Ok(&found.image)
 }
 
+/// The image word of the `podman run` line for IMAGE: a name's reference from the allow-list, a digest reference the
+/// allow-list holds as it is, or an image ID whose label names its artifact's key.
+fn image_arg(caps: &Caps, image: &ImageRef) -> Result<String, Refusal> {
+    match image {
+        ImageRef::Name(n) => resolve(caps, n).map(str::to_string),
+        ImageRef::Digest(d) => {
+            let ok = d.contains("@sha256:")
+                && !d.starts_with('-')
+                && caps.images.iter().any(|i| &i.image == d);
+            if ok {
+                Ok(d.clone())
+            } else {
+                Err(refuse(format!(
+                    "image {d:?} is not on the project's image allow-list, pinned by digest"
+                )))
+            }
+        }
+        ImageRef::Id { id, key, label } => {
+            if !image_id_ok(id) {
+                return Err(refuse(format!("{id:?} is not an image ID")));
+            }
+            // the label is the proof the image is this artifact's: an image under another label, or none, never runs
+            if label.as_deref() != Some(key.0.as_str()) {
+                return Err(refuse(format!(
+                    "image {id} does not carry the label of the artifact {} (it has {:?})",
+                    key.0, label
+                )));
+            }
+            Ok(id.clone())
+        }
+    }
+}
+
+/// An image ID podman reads as an ID: 12 to 64 lowercase hex digits.
+pub fn image_id_ok(id: &str) -> bool {
+    (12..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// A path inside the container that is one plain absolute path under PARENT (`/art/NAME`): no `..`, no `:` or `,`.
+fn under(parent: &str, inside: &str) -> bool {
+    inside
+        .strip_prefix(parent)
+        .and_then(|r| r.strip_prefix('/'))
+        .is_some_and(|r| {
+            !r.is_empty()
+                && !inside.contains([':', ',', '\n', '\0'])
+                && r.split('/').all(|p| !p.is_empty() && p != "." && p != "..")
+        })
+}
+
 /// A mount source podman reads as one path (a `:` or `,` would add mount options).
 fn mount_source(path: &Path) -> Result<String, Refusal> {
     let s = path
@@ -439,6 +552,9 @@ pub enum Feature {
     BuildNet,
     /// `--device=/dev/kvm`.
     Kvm,
+    /// `--cap-add=SYS_PTRACE`: a debugger attaches to the job's own processes (the debug adapters' tests). Like
+    /// `sandbox`, only on a `mine` runner where the user enabled it for the project.
+    Ptrace,
 }
 
 impl Feature {
@@ -449,6 +565,7 @@ impl Feature {
             "render" => Feature::Render,
             "build-net" => Feature::BuildNet,
             "kvm" => Feature::Kvm,
+            "ptrace" => Feature::Ptrace,
             _ => return None,
         })
     }
@@ -460,6 +577,7 @@ impl Feature {
             Feature::Render => "render",
             Feature::BuildNet => "build-net",
             Feature::Kvm => "kvm",
+            Feature::Ptrace => "ptrace",
         }
     }
 }
@@ -531,6 +649,7 @@ fn feature_args(req: &ContainerReq, ra: &RunnerArgs) -> Result<Vec<OsString>, Re
             Feature::Sandbox => "--security-opt=unmask=ALL".into(),
             Feature::Udmabuf => "--device=/dev/udmabuf".into(),
             Feature::Kvm => "--device=/dev/kvm".into(),
+            Feature::Ptrace => "--cap-add=SYS_PTRACE".into(),
             Feature::Render => {
                 let node = ra
                     .render_node
@@ -557,7 +676,7 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
     if req.argv.is_empty() || req.argv[0].is_empty() {
         return Err(refuse("a container job needs a command"));
     }
-    let image = resolve(caps, &req.image)?;
+    let image = image_arg(caps, &req.image)?;
     let source = mount_source(&req.worktree)?;
     if !ok_memory(&caps.memory) || caps.cpus == 0 || caps.pids == 0 {
         return Err(refuse(
@@ -686,9 +805,17 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
                 if !inside.starts_with('/')
                     || inside.contains([':', ',', '\n', '\0'])
                     || inside.split('/').any(|p| p == "..")
-                    || [WORK, TARGET, "/run/drgnx", "/tmp"]
-                        .iter()
-                        .any(|t| inside == t || inside.starts_with(&format!("{t}/")))
+                    || [
+                        WORK,
+                        TARGET,
+                        "/run/drgnx",
+                        "/tmp",
+                        ART_INSIDE,
+                        OUT_INSIDE,
+                        GATE_CACHE_INSIDE,
+                    ]
+                    .iter()
+                    .any(|t| inside == t || inside.starts_with(&format!("{t}/")))
                 {
                     return Err(refuse(format!(
                         "a cache's path inside the container is not a plain absolute path of its own: {inside:?}"
@@ -696,6 +823,64 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
                 }
                 a.push("-v".into());
                 a.push(format!("{}:{inside}:rw,Z", mount_source(&c.host)?).into());
+                // an author's job reads the gate's partition, never writes it
+                if let Some((gate, name)) = &c.gate_ro {
+                    let at = format!("{GATE_CACHE_INSIDE}/{name}");
+                    if !under(GATE_CACHE_INSIDE, &at) {
+                        return Err(refuse(format!(
+                            "a cache's name is not a plain word: {name:?}"
+                        )));
+                    }
+                    a.push("-v".into());
+                    a.push(format!("{}:{at}:ro,z", mount_source(gate)?).into());
+                }
+            }
+            // the artifacts the job uses: read-only, each at its own path
+            for u in &m.uses {
+                match u {
+                    UseMount::Dir { host, name } => {
+                        let at = format!("{ART_INSIDE}/{name}");
+                        if !under(ART_INSIDE, &at) {
+                            return Err(refuse(format!(
+                                "an artifact's name is not a plain word: {name:?}"
+                            )));
+                        }
+                        a.push("-v".into());
+                        a.push(format!("{}:{at}:ro,z", mount_source(host)?).into());
+                    }
+                    UseMount::Image { id, name } => {
+                        let at = format!("{ART_INSIDE}/{name}");
+                        if !under(ART_INSIDE, &at) || !image_id_ok(id) {
+                            return Err(refuse(format!(
+                                "an image use is an image ID at a plain name: {id:?} {name:?}"
+                            )));
+                        }
+                        a.push("--mount".into());
+                        a.push(format!("type=image,source={id},destination={at},rw=false").into());
+                    }
+                }
+            }
+            if let Some(out) = &m.out {
+                a.push("-v".into());
+                a.push(format!("{}:{OUT_INSIDE}:rw,Z", mount_source(out)?).into());
+            }
+            for (k, v) in &m.env {
+                let name_ok = k
+                    .bytes()
+                    .next()
+                    .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+                    && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+                if !name_ok
+                    || RESERVED_ENV.contains(&k.as_str())
+                    || k.starts_with("DRGNX_")
+                    || v.contains(['\0', '\n'])
+                {
+                    return Err(refuse(format!(
+                        "a job's variable is a plain name of its own, not {k:?}"
+                    )));
+                }
+                a.push("-e".into());
+                a.push(format!("{k}={v}").into());
             }
         }
     }
@@ -748,6 +933,93 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
     a.extend(keyed.into_iter().skip(1));
     a.extend(req.argv.iter().map(OsString::from));
     Ok(a)
+}
+
+/// An `image` artifact's build: `podman build` of CONTAINERFILE in CONTEXT, labelled with the artifact's key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuildReq {
+    pub key: forseti::ArtifactKey,
+    pub containerfile: PathBuf,
+    pub context: PathBuf,
+    /// The dnf cache of this build alone: two builds on one cache fail.
+    pub dnf_cache: PathBuf,
+    /// Where podman writes the built image's ID (`--iidfile`).
+    pub iidfile: PathBuf,
+    /// The build reaches the network (the Containerfile installs its tools). Only a runner that allows `build-net` for
+    /// the project ([`RunnerArgs::allowed`]) builds with it; the others build with `--network=none`.
+    pub net: bool,
+    /// The proxy a networked build goes through (`HTTP_PROXY` and the like, as build arguments); none: no proxy variable.
+    pub proxy: Option<String>,
+}
+
+/// The `podman build` arguments (without the program) for B on RA: `--pull=never` (the base is the runner's own),
+/// `--layers`, the artifact's label, this build's dnf cache, no network unless `build-net` is allowed for the project.
+pub fn build_argv(b: &BuildReq, ra: &RunnerArgs) -> Result<Vec<OsString>, Refusal> {
+    if !(b.key.0.len() == 64
+        && b.key
+            .0
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)))
+    {
+        return Err(refuse(format!(
+            "an artifact's key is 64 hex digits, not {:?}",
+            b.key.0
+        )));
+    }
+    if b.net && !ra.allowed.contains(&Feature::BuildNet) {
+        return Err(refuse(
+            "this build needs the network, which this runner does not allow for its project (build-net)",
+        ));
+    }
+    let mut a: Vec<OsString> = ["build", "--pull=never", "--layers", "--label"]
+        .iter()
+        .map(OsString::from)
+        .collect();
+    a.push(format!("org.drgnx.artifact={}", b.key.0).into());
+    if !b.net {
+        a.push("--network=none".into());
+    }
+    if let Some(p) = &b.proxy
+        && b.net
+    {
+        if p.starts_with('-') || p.contains(['\n', '\0', ' ']) {
+            return Err(refuse(format!("a proxy URL is one plain word: {p:?}")));
+        }
+        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            a.push("--build-arg".into());
+            a.push(format!("{k}={p}").into());
+        }
+    }
+    a.push("--volume".into());
+    a.push(format!("{}:/var/cache/dnf:Z", mount_source(&b.dnf_cache)?).into());
+    a.push("--iidfile".into());
+    a.push(mount_source(&b.iidfile)?.into());
+    a.push("-f".into());
+    a.push(mount_source(&b.containerfile)?.into());
+    a.push(mount_source(&b.context)?.into());
+    Ok(a)
+}
+
+/// The `podman pull` arguments for REFERENCE, which is `repository@sha256:<64 hex>`: a pull is by digest only (the
+/// project's allow-list is `sync::guard::check_pull`'s business).
+pub fn pull_argv(reference: &str) -> Result<Vec<OsString>, Refusal> {
+    let ok = reference.split_once("@sha256:").is_some_and(|(repo, d)| {
+        !repo.is_empty()
+            && !repo.starts_with('-')
+            && !repo.contains([' ', '\n', '\0'])
+            && d.len() == 64
+            && d.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    });
+    if !ok {
+        return Err(refuse(format!(
+            "an image is pulled by digest only (repository@sha256:<64 hex>), not {reference:?}"
+        )));
+    }
+    Ok(["pull", "-q", reference]
+        .iter()
+        .map(OsString::from)
+        .collect())
 }
 
 /// Runs `podman ARGS` with exactly ENV; kills it and says so when it outlives LIMIT.
@@ -1082,9 +1354,13 @@ mod tests {
                 caches: vec![CacheMount {
                     host: "/r/cache/p/public/cargo".into(),
                     inside: "/cache/cargo".into(),
+                    gate_ro: None,
                 }],
                 git_ro: None,
                 jobserver: None,
+                uses: vec![],
+                out: None,
+                env: vec![],
             }),
             keys: Some(KeyMounts {
                 helper: "/r/bin/0.1.0/drgnx-key".into(),
@@ -2125,5 +2401,197 @@ mod tests {
             e.message().contains("no session") && e.message().contains("refused"),
             "{e}"
         );
+    }
+
+    const KEY: &str = "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12";
+    const IMG_ID: &str = "0123456789abcdef0123456789abcdef";
+
+    fn key() -> forseti::ArtifactKey {
+        forseti::ArtifactKey(KEY.into())
+    }
+
+    fn with_runner(f: impl FnOnce(&mut RunnerMounts)) -> ContainerReq {
+        let mut r = runner_req(&["ls"]);
+        r.keys = None;
+        f(r.runner.as_mut().unwrap());
+        r
+    }
+
+    /// [D] A command artifact is a read-only mount at its `/art/NAME`, relabelled shared (`z`).
+    #[test]
+    fn a_command_artifact_mounts_read_only_at_its_placeholder() {
+        let r = with_runner(|m| {
+            m.uses = vec![UseMount::Dir {
+                host: "/r/artifacts/p@gate@command@k".into(),
+                name: "hub-bin".into(),
+            }]
+        });
+        let a = on_runner(&r, &rcaps()).unwrap();
+        assert!(
+            a.iter()
+                .any(|s| s == "/r/artifacts/p@gate@command@k:/art/hub-bin:ro,z"),
+            "{a:?}"
+        );
+        // a name that is not a plain word is refused
+        for bad in ["a/b", "..", "a:b", "", "a,b"] {
+            let r = with_runner(|m| {
+                m.uses = vec![UseMount::Dir {
+                    host: "/r/artifacts/x".into(),
+                    name: bad.into(),
+                }]
+            });
+            assert!(on_runner(&r, &rcaps()).is_err(), "{bad:?}");
+        }
+    }
+
+    /// [D] An image used `ro` is mounted from the image store read-only.
+    #[test]
+    fn an_image_ro_use_mounts_the_image_read_only() {
+        let r = with_runner(|m| {
+            m.uses = vec![UseMount::Image {
+                id: IMG_ID.into(),
+                name: "tc".into(),
+            }]
+        });
+        let a = on_runner(&r, &rcaps()).unwrap();
+        let want = format!("type=image,source={IMG_ID},destination=/art/tc,rw=false");
+        assert!(a.iter().any(|s| s == &want), "{a:?}");
+        let r = with_runner(|m| {
+            m.uses = vec![UseMount::Image {
+                id: "not-an-id".into(),
+                name: "tc".into(),
+            }]
+        });
+        assert!(on_runner(&r, &rcaps()).is_err());
+    }
+
+    /// [D] A job runs an image by ID only when the image's label names the artifact's key.
+    #[test]
+    fn a_mismatched_label_is_refused() {
+        let mut r = runner_req(&["ls"]);
+        r.keys = None;
+        for label in [None, Some("f".repeat(64))] {
+            r.image = ImageRef::Id {
+                id: IMG_ID.into(),
+                key: key(),
+                label,
+            };
+            let e = on_runner(&r, &rcaps()).unwrap_err();
+            assert!(e.message.contains("label"), "{e:?}");
+        }
+        r.image = ImageRef::Id {
+            id: IMG_ID.into(),
+            key: key(),
+            label: Some(KEY.into()),
+        };
+        let a = on_runner(&r, &rcaps()).unwrap();
+        assert!(a.iter().any(|s| s == IMG_ID), "{a:?}");
+    }
+
+    /// [D] A networked build is refused unless the runner allows `build-net` for the project; `--pull=never` always.
+    #[test]
+    fn build_net_for_another_project_is_refused() {
+        let b = |net| BuildReq {
+            key: key(),
+            containerfile: "/w/Containerfile".into(),
+            context: "/w".into(),
+            dnf_cache: "/r/jobs/x/dnf".into(),
+            iidfile: "/r/jobs/x/image.id".into(),
+            net,
+            proxy: None,
+        };
+        let plain = RunnerArgs::runner("drgnx-run", "hub1", "s.slice");
+        assert!(
+            build_argv(&b(true), &plain).is_err(),
+            "no opt-in for this project"
+        );
+        let a = strs(build_argv(&b(false), &plain).unwrap());
+        assert!(
+            a.contains(&"--pull=never".to_string()) && a.contains(&"--network=none".to_string()),
+            "{a:?}"
+        );
+        assert!(
+            a.iter().any(|s| s == &format!("org.drgnx.artifact={KEY}")),
+            "{a:?}"
+        );
+        let mut allowed = plain;
+        allowed.allowed = vec![Feature::BuildNet];
+        let a = strs(build_argv(&b(true), &allowed).unwrap());
+        assert!(!a.contains(&"--network=none".to_string()), "{a:?}");
+    }
+
+    /// [D] A pull is by digest only.
+    #[test]
+    fn a_pull_is_by_digest_only() {
+        assert!(pull_argv("registry.example/x:latest").is_err());
+        assert!(pull_argv(&format!("registry.example/x@sha256:{}", "a".repeat(64))).is_ok());
+        assert!(pull_argv("-x@sha256:aa").is_err());
+    }
+
+    /// [D] `ptrace` maps to the one capability.
+    #[test]
+    fn ptrace_adds_only_the_ptrace_capability() {
+        let mut r = runner_req(&["ls"]);
+        r.keys = None;
+        r.features = vec![Feature::Ptrace];
+        let a = on_runner(&r, &rcaps()).unwrap();
+        assert!(a.iter().any(|s| s == "--cap-add=SYS_PTRACE"), "{a:?}");
+        assert!(
+            !a.iter()
+                .any(|s| s.contains("privileged") || s.contains("seccomp=unconfined"))
+        );
+        assert_eq!(Feature::parse("ptrace"), Some(Feature::Ptrace));
+        let r = ContainerReq {
+            features: vec![],
+            ..r
+        };
+        assert!(
+            !on_runner(&r, &rcaps())
+                .unwrap()
+                .iter()
+                .any(|s| s.contains("PTRACE"))
+        );
+    }
+
+    /// [D] A job's variables are plain names of its own: the argv builder's and drgnx's are refused, and no `DRGNX_`
+    /// name is ever written by the builder itself.
+    #[test]
+    fn no_drgnx_env_name_in_the_argv_builder() {
+        let r = with_runner(|m| m.env = vec![("RUSTFLAGS".into(), "-Dwarnings".into())]);
+        let a = on_runner(&r, &rcaps()).unwrap();
+        assert!(a.iter().any(|s| s == "RUSTFLAGS=-Dwarnings"), "{a:?}");
+        for bad in ["DRGNX_X", "MAKEFLAGS", "CARGO_TARGET_DIR", "A B", "1A", ""] {
+            let r = with_runner(|m| m.env = vec![(bad.into(), "v".into())]);
+            assert!(on_runner(&r, &rcaps()).is_err(), "{bad:?}");
+        }
+        let r = with_runner(|m| m.env = vec![("OK".into(), "a\nb".into())]);
+        assert!(on_runner(&r, &rcaps()).is_err(), "a newline in a value");
+        let src = include_str!("podman.rs");
+        let body = src.split("#[cfg(test)]").next().unwrap();
+        let writes_drgnx = body
+            .lines()
+            .any(|l| l.contains("\"-e\"") && l.contains("DRGNX_"));
+        assert!(!writes_drgnx);
+    }
+
+    /// [D] The gate's partition of a cache is mounted read-only beside the author's own, and the consts agree with the
+    /// artifact module's.
+    #[test]
+    fn the_gate_cache_is_read_only_and_the_consts_agree() {
+        let r = with_runner(|m| {
+            m.caches = vec![CacheMount {
+                host: "/r/cache/p/public/author/cargo".into(),
+                inside: "/cache/cargo".into(),
+                gate_ro: Some(("/r/cache/p/public/gate/cargo".into(), "cargo".into())),
+            }]
+        });
+        let a = on_runner(&r, &rcaps()).unwrap();
+        assert!(
+            a.iter()
+                .any(|s| s == "/r/cache/p/public/gate/cargo:/cache-gate/cargo:ro,z"),
+            "{a:?}"
+        );
+        assert_eq!(OUT_INSIDE, crate::artifact::OUT_INSIDE);
+        assert!(ART_INSIDE.starts_with('/') && GATE_CACHE_INSIDE.starts_with('/'));
     }
 }

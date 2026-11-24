@@ -108,6 +108,9 @@ pub fn argv(image: &str, src: &Path, target: &Path) -> villa::Result<Vec<String>
             caches: vec![],
             git_ro: None,
             jobserver: None,
+            uses: vec![],
+            out: None,
+            env: vec![],
         }),
     };
     let ra = RunnerArgs {

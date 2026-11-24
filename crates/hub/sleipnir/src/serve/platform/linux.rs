@@ -233,9 +233,30 @@ impl Platform for LinuxPlatform {
                 "variables for the container aren't carried yet",
             ));
         }
-        let image = req.image.clone().ok_or_else(|| {
-            villa::Error::invalid("a runner job is a container job: it needs an image")
-        })?;
+        let mut ra0 = RunnerArgs::runner(&self.prefix, &self.hub_id, "job.slice");
+        ra0.allowed = podman::allowed_for(
+            meta.spec.project.as_str(),
+            &self.features,
+            &self.kvm_projects,
+        );
+        let plan = super::artifacts::prepare(
+            &self.root,
+            dir,
+            req.src,
+            &meta.spec,
+            &meta.grant,
+            &format!("{id}.{}", meta.r.attempt),
+            &ra0,
+        )?;
+        let image = match (&plan, req.image.clone()) {
+            (super::artifacts::Plan::Host { .. }, i) => i.unwrap_or_default(),
+            (_, Some(i)) => i,
+            (_, None) => {
+                return Err(villa::Error::invalid(
+                    "a runner job is a container job: it needs an image",
+                ));
+            }
+        };
         if let Some(why) = crate::linux::confined::refusal() {
             return Err(villa::Error::refused(why));
         }
@@ -256,12 +277,15 @@ impl Platform for LinuxPlatform {
         } else {
             Some(podman::KeyMounts {
                 helper: own_copy("drgnx-key")?,
-                vars: meta
-                    .spec
-                    .keys
-                    .iter()
-                    .map(|k| (k.clone(), k.clone()))
-                    .collect(),
+                vars: match &plan {
+                    super::artifacts::Plan::Run(r) if !r.key_vars.is_empty() => r.key_vars.clone(),
+                    _ => meta
+                        .spec
+                        .keys
+                        .iter()
+                        .map(|k| (k.clone(), k.clone()))
+                        .collect(),
+                },
             })
         };
         let hub_allow = if req.net_hosts.is_empty() {
@@ -316,8 +340,14 @@ impl Platform for LinuxPlatform {
                 .iter()
                 .filter_map(|f| podman::Feature::parse(f))
                 .collect(),
-            image: "job".into(),
-            argv: meta.spec.command.clone(),
+            image: match &plan {
+                super::artifacts::Plan::Run(r) => r.image.clone(),
+                super::artifacts::Plan::Host { .. } => "job".into(),
+            },
+            argv: match &plan {
+                super::artifacts::Plan::Run(r) => r.argv.clone(),
+                super::artifacts::Plan::Host { .. } => vec![],
+            },
             worktree: req.src.to_path_buf(),
             subdir: if meta.spec.cwd == Path::new(".") {
                 PathBuf::new()
@@ -330,19 +360,40 @@ impl Platform for LinuxPlatform {
             runner: Some(RunnerMounts {
                 writes_tree: meta.spec.writes_tree,
                 target: dir.join("target"),
-                caches: vec![],
+                caches: match &plan {
+                    super::artifacts::Plan::Run(r) => r.caches.clone(),
+                    _ => vec![],
+                },
                 git_ro: req.git_ro.map(Path::to_path_buf),
                 jobserver: req.jobserver.map(Path::to_path_buf),
+                uses: match &plan {
+                    super::artifacts::Plan::Run(r) => r.uses.clone(),
+                    _ => vec![],
+                },
+                out: match &plan {
+                    super::artifacts::Plan::Run(r) => r.out.clone(),
+                    _ => None,
+                },
+                env: match &plan {
+                    super::artifacts::Plan::Run(r) => r.env.clone(),
+                    _ => vec![],
+                },
             }),
         };
         let container =
             podman::name_of(&ra.name_prefix, id).map_err(|r| villa::Error::invalid(r.message))?;
         let mut argv = vec!["podman".to_string()];
-        for a in podman::argv(&creq, &caps, &ra).map_err(|r| villa::Error::invalid(r.message))? {
-            argv.push(
-                a.into_string()
-                    .map_err(|_| villa::Error::invalid("a podman argument is not UTF-8"))?,
-            );
+        if let super::artifacts::Plan::Host { argv: host } = &plan {
+            argv = host.clone();
+        } else {
+            for a in
+                podman::argv(&creq, &caps, &ra).map_err(|r| villa::Error::invalid(r.message))?
+            {
+                argv.push(
+                    a.into_string()
+                        .map_err(|_| villa::Error::invalid("a podman argument is not UTF-8"))?,
+                );
+            }
         }
         let log = dir.join(LOG);
         JobExec {
@@ -569,6 +620,15 @@ impl Platform for LinuxPlatform {
 
     fn disk_quota_gb(&self) -> Option<u64> {
         self.disk_quota_gb
+    }
+
+    fn artifact_done(
+        &self,
+        dir: &Path,
+        spec: &forseti::JobSpec,
+        passed: bool,
+    ) -> villa::Result<()> {
+        super::artifacts::done(&self.root, dir, spec, passed)
     }
 
     fn max_slots(&self) -> u32 {

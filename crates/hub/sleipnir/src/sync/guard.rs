@@ -1039,6 +1039,22 @@ mod tests {
         );
     }
 
+    // [D] pure: an image artifact's pull of a repository the project's list lacks is refused, naming the list
+    #[test]
+    fn a_pull_outside_the_allow_list_is_refused() {
+        let d = "b".repeat(64);
+        let e = check_pull(
+            &format!("evil.example/x@sha256:{d}"),
+            &["good.example/x".to_string()],
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("allow-list"), "{e}");
+        assert!(
+            check_pull(&format!("good.example/x@sha256:{d}"), &[]).is_err(),
+            "an empty list allows nothing"
+        );
+    }
+
     // [D] pure
     #[test]
     fn pulls_take_digests_from_the_allow_list_only() {

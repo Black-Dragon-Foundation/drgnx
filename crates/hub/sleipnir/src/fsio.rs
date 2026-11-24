@@ -45,6 +45,10 @@ pub fn rename_socket(from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result
 pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
     eitri::rename_file(from.as_ref(), to.as_ref()).map_err(io_error)
 }
+/// The folder FROM moved to TO (absolute paths; a link in either is refused; TO is replaced only when empty).
+pub fn rename_dir(from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
+    eitri::rename_dir(from.as_ref(), to.as_ref()).map_err(io_error)
+}
 /// The log at PATH opened for appending, made first (mode 0o644, less the umask) when CREATE and absent; a link at
 /// PATH is refused.
 pub fn append(path: impl AsRef<Path>, create: bool) -> io::Result<std::fs::File> {

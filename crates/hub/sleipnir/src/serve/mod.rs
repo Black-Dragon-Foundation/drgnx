@@ -2106,6 +2106,19 @@ impl<W: Write> Serve<W> {
                 ),
             );
         }
+        if meta.spec.derived.build.is_some() {
+            // an artifact build's output is committed only when the job passed (a failure leaves nothing)
+            let passed = result["verdict"].as_str() == Some("Pass");
+            if let Err(e) = self.platform.artifact_done(dir, &meta.spec, passed)
+                && let Some(o) = result.as_object_mut()
+            {
+                note("artifact commit", Err::<(), _>(&e));
+                if passed {
+                    o.insert("verdict".into(), serde_json::json!({ "Infra": "artifact" }));
+                    o.insert("infra".into(), serde_json::json!("infra: artifact"));
+                }
+            }
+        }
         if self.give_back(&meta.r, dir, &meta.spec) == Next::Stop {
             return Err(());
         }
